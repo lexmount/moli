@@ -8,6 +8,7 @@ pub(crate) fn start_protocol_neutral_runtime_inspector_command(
     command: AutomationCommand,
     params: Value,
     command_id: u64,
+    cleanup_group: Option<String>,
 ) -> Result<RuntimeCommandTaskStep> {
     let method = match &command {
         AutomationCommand::EvaluateScript(_) => "Runtime.evaluate",
@@ -17,8 +18,9 @@ pub(crate) fn start_protocol_neutral_runtime_inspector_command(
     };
     let parsed =
         ParsedCdpCommand::parse_str(runtime_inspector_command_json(command_id, method, &params))?;
-    let cmd =
-        Cmd::from_parsed(&parsed).expect("a synthesized Runtime command has a domain separator");
+    let cmd = Cmd::from_parsed(&parsed)
+        .expect("a synthesized Runtime command has a domain separator")
+        .with_abandoned_object_group_cleanup(cleanup_group.as_deref());
     if matches!(&command, AutomationCommand::TerminateExecution(_)) {
         let cmd = cmd.with_terminal_response_delivery_override(Some(
             RendererInspectorResponseDelivery::AdapterReply,
@@ -32,8 +34,7 @@ pub(crate) fn start_protocol_neutral_runtime_inspector_command(
             conn, &cmd, action, owner,
         ));
     }
-    let json =
-        prepare_pending_devtools_runtime_inspector_json_for_owner(conn, &cmd, &owner, &command)?;
+    let json = cmd.json.to_owned();
     Ok(start_devtools_runtime_command_for_owner(
         conn,
         &cmd,

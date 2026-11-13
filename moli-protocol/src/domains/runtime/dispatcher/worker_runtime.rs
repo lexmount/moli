@@ -275,22 +275,13 @@ pub(super) fn start_pending_shared_worker_runtime_inspector_command(
 
     let action = command.action();
     let await_promise = runtime_command_awaits_promise(cmd, action);
-    let inspector_json =
-        prepare_runtime_inspector_payload(conn, cmd, command.payload_preparation())?;
-    let object_group = None::<String>;
-    let release_object_ids = Vec::<String>::new();
-    let release_object_group = if action == RuntimeAction::ReleaseObjectGroup {
-        runtime_object_group_from_params(cmd.params).map(str::to_owned)
-    } else {
-        None
-    };
+    let inspector_json = cmd.json.to_owned();
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pre_registered_await = pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
         &owner_scope,
-        object_group.as_deref(),
         action.label(),
     )?;
     let response_delivery = cmd.terminal_response_delivery();
@@ -312,9 +303,7 @@ pub(super) fn start_pending_shared_worker_runtime_inspector_command(
             command_id: cmd.id,
             action: action.label(),
             owner_scope,
-            object_group,
-            release_object_ids,
-            release_object_group,
+
             await_promise,
             wait_for_deferred_reply: await_promise,
             pending: PendingRuntimeCommandKind::SharedWorkerInspector {
@@ -336,22 +325,13 @@ pub(super) fn start_pending_service_worker_runtime_inspector_command(
 
     let action = command.action();
     let await_promise = runtime_command_awaits_promise(cmd, action);
-    let inspector_json =
-        prepare_runtime_inspector_payload(conn, cmd, command.payload_preparation())?;
-    let object_group = None::<String>;
-    let release_object_ids = Vec::<String>::new();
-    let release_object_group = if action == RuntimeAction::ReleaseObjectGroup {
-        runtime_object_group_from_params(cmd.params).map(str::to_owned)
-    } else {
-        None
-    };
+    let inspector_json = cmd.json.to_owned();
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pre_registered_await = pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
         &owner_scope,
-        object_group.as_deref(),
         action.label(),
     )?;
     let response_delivery = cmd.terminal_response_delivery();
@@ -372,9 +352,7 @@ pub(super) fn start_pending_service_worker_runtime_inspector_command(
             command_id: cmd.id,
             action: action.label(),
             owner_scope,
-            object_group,
-            release_object_ids,
-            release_object_group,
+
             await_promise,
             wait_for_deferred_reply: await_promise,
             pending: PendingRuntimeCommandKind::ServiceWorkerInspector { pending },

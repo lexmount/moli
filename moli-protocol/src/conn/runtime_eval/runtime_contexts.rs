@@ -1,37 +1,34 @@
 use super::*;
 
 impl CdpConnection {
-    pub(crate) fn clear_runtime_remote_object_tracking_for_session_owner(
+    pub(crate) fn clear_runtime_context_metadata_for_session_owner(
         &mut self,
         session_id: Option<&str>,
     ) {
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
         {
-            target.clear_runtime_remote_object_tracking(owner_session_id);
+            target.clear_runtime_context_metadata(owner_session_id);
             return;
         }
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.service_worker_target_for_session_mut(session_id)
         {
-            target.clear_runtime_remote_object_tracking(owner_session_id);
+            target.clear_runtime_context_metadata(owner_session_id);
             return;
         }
         let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.clear_runtime_remote_object_tracking();
+            state.clear_runtime_context_metadata();
         });
     }
-    pub(crate) fn clear_runtime_remote_object_tracking_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) {
+    pub(crate) fn clear_runtime_context_metadata_for_owner(&mut self, owner: &CommandOwnerScope) {
         if owner.session_id().is_some() {
-            self.clear_runtime_remote_object_tracking_for_session_owner(owner.session_id());
+            self.clear_runtime_context_metadata_for_session_owner(owner.session_id());
             return;
         }
         let _ = self.with_target_devtools_session_state_for_owner_mut(
             owner,
-            DevToolsSessionState::clear_runtime_remote_object_tracking,
+            DevToolsSessionState::clear_runtime_context_metadata,
         );
     }
     pub(crate) fn record_runtime_contexts_reported_for_session_owner(
@@ -139,7 +136,7 @@ impl CdpConnection {
             self.record_runtime_context_protocol_event_for_session_owner(owner.session_id(), event);
         }
     }
-    pub(crate) fn clear_runtime_remote_objects_for_realm_for_session_owner(
+    pub(crate) fn clear_bidi_references_for_realm_for_session_owner(
         &mut self,
         session_id: Option<&str>,
         realm_id: &str,
@@ -147,33 +144,30 @@ impl CdpConnection {
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
         {
-            target.clear_runtime_remote_objects_for_realm(owner_session_id, realm_id);
+            target.clear_bidi_references_for_realm(owner_session_id, realm_id);
             return;
         }
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.service_worker_target_for_session_mut(session_id)
         {
-            target.clear_runtime_remote_objects_for_realm(owner_session_id, realm_id);
+            target.clear_bidi_references_for_realm(owner_session_id, realm_id);
             return;
         }
         let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.clear_runtime_remote_objects_for_realm(realm_id);
+            state.clear_bidi_references_for_realm(realm_id);
         });
     }
-    pub(crate) fn clear_runtime_remote_objects_for_realm_for_owner(
+    pub(crate) fn clear_bidi_references_for_realm_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         realm_id: &str,
     ) {
         if owner.session_id().is_some() {
-            self.clear_runtime_remote_objects_for_realm_for_session_owner(
-                owner.session_id(),
-                realm_id,
-            );
+            self.clear_bidi_references_for_realm_for_session_owner(owner.session_id(), realm_id);
             return;
         }
         let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            state.clear_runtime_remote_objects_for_realm(realm_id)
+            state.clear_bidi_references_for_realm(realm_id)
         });
     }
 }

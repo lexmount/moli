@@ -571,3 +571,5 @@ fn inspector_response_id_reads_opaque_metadata_and_tracks_explicit_mutation() {
     message.value_mut()["id"] = json!(i64::MAX);
     assert_eq!(message.renderer_call_id(), None);
 }
+
+mod native_cleanup;

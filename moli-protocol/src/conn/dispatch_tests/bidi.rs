@@ -14,7 +14,7 @@ async fn bidi_node_arguments_release_temporary_handles_on_success_and_error() {
         ctx.with_fixture(|conn| {
             conn.target_devtools_session_state_for_owner(&owner)
                 .unwrap()
-                .runtime_remote_object_ids
+                .bidi_handles
                 .clone()
         })
     };
@@ -482,7 +482,7 @@ async fn bidi_node_remote_value_registers_renderer_shared_node_binding() {
         "BiDi node remote value should carry renderer-owned backend id"
     );
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
 
     let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
     let renderer_binding = {
@@ -648,7 +648,7 @@ async fn bidi_node_remote_value_registers_child_shared_node_bindings() {
         .unwrap_or_else(|| panic!("serialized child should expose sharedId: {node_value}"))
         .to_owned();
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
 
     let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
     let renderer_binding = {
@@ -769,6 +769,131 @@ async fn set_file_input_files_shared_id_uses_renderer_binding_without_protocol_r
         remote_value.value,
         json!(format!("1:renderer-binding.txt:{}", upload_bytes.len()))
     );
+}
+
+#[tokio::test]
+async fn locate_nodes_start_nodes_reject_native_ids_and_keep_exported_references() {
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let (context, canonical, _) = materialize_bidi_target_node_for_test(
+        &mut ctx,
+        "<section id='target'><a>Inside</a></section><a>Outside</a>",
+        "#target",
+    )
+    .await;
+    let value = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+                context: context.clone(),
+                realm_id: None,
+                world_name: None,
+                expression: "document.querySelector('#target')".into(),
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::Root,
+                preserve_remote_metadata: false,
+                materialize_bidi_script_result: true,
+                serialization_options: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let value = expect_script_value_result(value, "root node export");
+    let handle = value.handle.unwrap();
+    let realm = value.realm.unwrap();
+    let (native, alias) = ctx.with_fixture(|conn| {
+        let owner = conn
+            .command_owner_scope_for_devtools_context(&context)
+            .unwrap();
+        let native = conn
+            .resolve_bidi_handle(&owner, handle.as_str(), Some(realm.as_str()))
+            .unwrap();
+        assert!(conn.bidi_node_alias(&owner, &native).is_none());
+        let alias = conn.export_bidi_node_reference(&owner, native.clone(), realm.as_str(), None);
+        (native, alias)
+    });
+    let owner = ctx.with_fixture(|conn| {
+        conn.command_owner_scope_for_devtools_context(&context)
+            .unwrap()
+    });
+    let query = ctx
+        .state
+        .with_state(|state| {
+            state.prepare_runtime_object_node_query(&owner, native.clone(), 0, false)
+        })
+        .unwrap()
+        .unwrap();
+    assert!(
+        ctx.finish_fixture_query(query).await.unwrap().is_some(),
+        "the unexported native ID is a valid node in this exact session"
+    );
+    let locate = |node| {
+        AutomationCommand::LocateNodes(DevToolsLocateNodesCommand {
+            context: context.clone(),
+            locator: DevToolsLocateNodesLocator::Css("a".into()),
+            max_node_count: None,
+            start_nodes: vec![node],
+            start_node_references: Vec::new(),
+            serialization_options: None,
+        })
+    };
+    for node in [
+        json!({"type":"node","sharedId":canonical.as_str()}),
+        json!({"type":"node","sharedId":alias}),
+        json!({"type":"node","handle":handle.as_str()}),
+    ] {
+        let AutomationResult::LocateNodes(result) = ctx
+            .execute_automation_command_through_renderer_fence_for_test(locate(node))
+            .await
+            .unwrap()
+        else {
+            panic!("locateNodes result");
+        };
+        assert_eq!(
+            result.nodes.len(),
+            1,
+            "the exported start node bounds the search"
+        );
+    }
+    for (node, expected) in [
+        (
+            json!({"type":"node","sharedId":native}),
+            DevToolsErrorKind::NoSuchNode,
+        ),
+        (
+            json!({"type":"node","sharedId":"unknown-node"}),
+            DevToolsErrorKind::NoSuchNode,
+        ),
+        (
+            json!({"type":"node","handle":native}),
+            DevToolsErrorKind::NoSuchHandle,
+        ),
+    ] {
+        let error = ctx
+            .execute_automation_command_through_renderer_fence_for_test(locate(node))
+            .await
+            .expect_err("frontend references must have been exported");
+        assert_eq!(error.kind, expected);
+    }
+    ctx.execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+        DevToolsNavigateCommand {
+            context: context.clone(),
+            url: "data:text/html,<a>Replacement</a>".into(),
+            referrer: None,
+            wait: DevToolsNavigationWait::Load,
+        },
+    ))
+    .await
+    .unwrap();
+    for shared in [canonical.as_str(), alias.as_str()] {
+        let error = ctx
+            .execute_automation_command_through_renderer_fence_for_test(locate(
+                json!({"type":"node","sharedId":shared}),
+            ))
+            .await
+            .expect_err("a replaced Document invalidates the reference");
+        assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
+    }
 }
 
 #[tokio::test]
@@ -979,7 +1104,7 @@ async fn bidi_exports_reject_raw_cdp_ids_and_retire_after_disown_and_navigation(
         DevToolsErrorKind::NoSuchHandle
     );
     let stale = ctx.with_fixture(|conn| {
-        conn.export_bidi_handle(&owner, native.clone(), realm.as_str())
+        conn.export_bidi_handle(&owner, native.clone(), realm.as_str(), None)
             .unwrap()
     });
     ctx.install_navigation_fixture_for_session_owner("about:blank", owner.session_id())

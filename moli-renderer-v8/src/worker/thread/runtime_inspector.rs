@@ -29,6 +29,9 @@ use super::dispatch::perform_worker_microtask_checkpoint_and_report_pending_prom
 const WORKER_INSPECTOR_CONTEXT_GROUP_ID: i32 = 1;
 const DEFAULT_WORKER_INSPECTOR_SESSION_KEY: &str = "";
 
+#[cfg(test)]
+mod pause_detach_tests;
+
 #[derive(Default)]
 struct WorkerInspectorOutboundState {
     pending_notifications: VecDeque<WorkerInspectorPendingMessage>,
@@ -389,8 +392,8 @@ impl v8::inspector::V8InspectorClientImpl for WorkerInspectorClient {
 }
 
 struct WorkerInspectorSession {
-    // Field order is deliberate: complete the teardown receipt only after the
-    // native destructor has discarded injected scripts and Inspector roots.
+    // Field order is deliberate: complete native retirement (separate from
+    // frontend stop acknowledgement) after releasing all Inspector roots.
     native: v8::inspector::V8InspectorSession,
     retirement: WorkerInspectorSessionRetirement,
 }
@@ -613,10 +616,12 @@ impl WorkerRuntimeInspector {
             .get(&key)
             .is_some_and(|session| session.retirement.0.matches(lifetime))
         {
-            // Drop the map's owner, not an in-flight dispatch's Rc. Its final
-            // owner completes the receipt through the native destructor.
-            sessions.remove(&key);
+            let session = sessions.remove(&key).expect("matching native session");
             drop(sessions);
+            // Stop only this session's debugger. V8 exits the pause loop if
+            // no remaining agent accepts it, preserving other frontends'
+            // pause ownership. Never resume/terminate the whole Worker here.
+            session.stop();
             self.outbound
                 .0
                 .borrow_mut()
@@ -627,9 +632,14 @@ impl WorkerRuntimeInspector {
                     .unwrap_or(moli_page_types::DevToolsSessionKey::Primary),
             );
             self.update_user_agent_override();
+            // A suspended synchronous dispatch may still own an Rc until a
+            // peer resumes execution. Its destructor remains responsible for
+            // final Inspector roots; frontend detachment must not wait on it.
+            drop(session);
         } else if !lifetime.native_was_created() {
             lifetime.complete_retirement(Ok(()));
         }
+        lifetime.complete_detachment(Ok(()));
     }
 
     #[cfg(test)]
@@ -696,12 +706,12 @@ impl WorkerRuntimeInspector {
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let session_key = worker_inspector_session_key(inspector_session_id);
         anyhow::ensure!(lifetime.is_active(), WorkerInspectorError::Detached);
+        let dispatch_scope = self.outbound.push_dispatch_scope(&session_key, None);
+        let session = self.ensure_session(&session_key, lifetime);
         if let Some(callback) = deferred_response {
             self.outbound
                 .register_response_callback(&session_key, callback);
         }
-        let dispatch_scope = self.outbound.push_dispatch_scope(&session_key, None);
-        let session = self.ensure_session(&session_key, lifetime);
         if let Some(response) = self.dispatch_emulation(inspector_session_id, raw_json) {
             if let Some(call_id) = response["id"]
                 .as_i64()
@@ -886,11 +896,18 @@ impl WorkerRuntimeInspector {
         session_key: &str,
         lifetime: &WorkerInspectorSessionLifetime,
     ) -> Rc<WorkerInspectorSession> {
-        let mut sessions = self.sessions.borrow_mut();
-        if let Some(session) = sessions.get(session_key)
-            && session.retirement.0.matches(lifetime)
-        {
-            return session.clone();
+        let existing = self.sessions.borrow().get(session_key).cloned();
+        if let Some(session) = existing {
+            if session.retirement.0.matches(lifetime) {
+                return session;
+            }
+            // Attach can overtake a queued detach after ingress was revoked.
+            // Stop the old incarnation before installing the new callback or
+            // session; its paused dispatch may still own a native Rc.
+            self.detach_session_incarnation(
+                worker_inspector_session_id_from_key(session_key).as_deref(),
+                &session.retirement.0,
+            );
         }
         let session = self.inspector.connect(
             WORKER_INSPECTOR_CONTEXT_GROUP_ID,
@@ -908,7 +925,9 @@ impl WorkerRuntimeInspector {
             native: session,
             retirement: WorkerInspectorSessionRetirement(lifetime.clone()),
         });
-        sessions.insert(session_key.to_owned(), session.clone());
+        self.sessions
+            .borrow_mut()
+            .insert(session_key.to_owned(), session.clone());
         session
     }
 
@@ -1762,7 +1781,7 @@ mod tests {
         );
     }
     #[test]
-    fn worker_detach_receipt_follows_last_native_owner_and_frees_inspector_roots() {
+    fn worker_native_retirement_receipt_follows_last_owner_and_frees_inspector_roots() {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);

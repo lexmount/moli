@@ -153,7 +153,7 @@ pub(crate) fn apply_runtime_context_protocol_event_side_effects(
 ) {
     match event["method"].as_str() {
         Some("Runtime.executionContextsCleared") => {
-            conn.clear_runtime_remote_object_tracking_for_session_owner(session_id);
+            conn.clear_runtime_context_metadata_for_session_owner(session_id);
             conn.record_runtime_contexts_cleared_for_session_owner(session_id);
         }
         Some("Runtime.executionContextCreated") => {
@@ -161,7 +161,7 @@ pub(crate) fn apply_runtime_context_protocol_event_side_effects(
         }
         Some("Runtime.executionContextDestroyed") => {
             if let Some(realm_id) = event["params"]["executionContextUniqueId"].as_str() {
-                conn.clear_runtime_remote_objects_for_realm_for_session_owner(session_id, realm_id);
+                conn.clear_bidi_references_for_realm_for_session_owner(session_id, realm_id);
             }
         }
         _ => {}
@@ -176,7 +176,7 @@ pub(crate) fn apply_runtime_context_protocol_event_side_effects_typed(
     conn.record_runtime_context_protocol_event_for_session_owner(session_id, event);
     match event {
         RuntimeContextProtocolEvent::Cleared(_) => {
-            conn.clear_runtime_remote_object_tracking_for_session_owner(session_id);
+            conn.clear_runtime_context_metadata_for_session_owner(session_id);
             conn.record_runtime_contexts_cleared_for_session_owner(session_id);
         }
         RuntimeContextProtocolEvent::Created(event) => {
@@ -185,7 +185,7 @@ pub(crate) fn apply_runtime_context_protocol_event_side_effects_typed(
         }
         RuntimeContextProtocolEvent::Destroyed(event) => {
             if let Some(realm_id) = event.realm_id.as_ref() {
-                conn.clear_runtime_remote_objects_for_realm_for_session_owner(
+                conn.clear_bidi_references_for_realm_for_session_owner(
                     session_id,
                     realm_id.as_str(),
                 );
@@ -206,7 +206,7 @@ pub(crate) fn apply_runtime_context_protocol_event_side_effects_for_owner_typed(
     conn.record_runtime_context_protocol_event_for_owner(owner, event);
     match event {
         RuntimeContextProtocolEvent::Cleared(_) => {
-            conn.clear_runtime_remote_object_tracking_for_owner(owner);
+            conn.clear_runtime_context_metadata_for_owner(owner);
             conn.record_runtime_contexts_cleared_for_owner(owner);
         }
         RuntimeContextProtocolEvent::Created(event) => {
@@ -215,7 +215,7 @@ pub(crate) fn apply_runtime_context_protocol_event_side_effects_for_owner_typed(
         }
         RuntimeContextProtocolEvent::Destroyed(event) => {
             if let Some(realm_id) = event.realm_id.as_ref() {
-                conn.clear_runtime_remote_objects_for_realm_for_owner(owner, realm_id.as_str());
+                conn.clear_bidi_references_for_realm_for_owner(owner, realm_id.as_str());
             }
         }
     }
@@ -805,10 +805,10 @@ mod tests {
         context.with_fixture(|conn| {
             let owner = crate::conn::CommandOwnerScope::capture(conn, None);
             let first = conn
-                .export_bidi_handle(&owner, "object-realm-1".into(), "realm-1")
+                .export_bidi_handle(&owner, "object-realm-1".into(), "realm-1", None)
                 .unwrap();
             let second = conn
-                .export_bidi_handle(&owner, "object-realm-2".into(), "realm-2")
+                .export_bidi_handle(&owner, "object-realm-2".into(), "realm-2", None)
                 .unwrap();
 
             super::apply_runtime_context_protocol_event_side_effects(
@@ -832,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_contexts_cleared_clears_shared_worker_remote_object_tracking() {
+    fn runtime_contexts_cleared_marks_worker_inventory_unreported() {
         let mut conn = CdpConnection::new();
         let mut browser_context = BrowserContext::new("BID-shared-runtime-context".to_owned());
         let mut target = SharedWorkerTargetState::new(
@@ -846,16 +846,16 @@ mod tests {
         target.attach_session("SID-shared-worker".to_owned());
         browser_context.insert_shared_worker_target(target);
         conn.install_browser_context_fixture_for_test(browser_context);
-        conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
-            Some("SID-shared-worker"),
-            vec!["worker-object".to_owned()],
-            "worker-realm",
-        );
-        assert!(conn.runtime_remote_object_id_known_for_session_owner(
-            Some("SID-shared-worker"),
-            "worker-object"
-        ));
 
+        conn.record_runtime_contexts_reported_for_session_owner(Some("SID-shared-worker"));
+        assert!(
+            conn.shared_worker_target_for_session(Some("SID-shared-worker"))
+                .unwrap()
+                .session_state("SID-shared-worker")
+                .unwrap()
+                .runtime_session_state
+                .runtime_contexts_reported_to_frontend
+        );
         super::apply_runtime_context_protocol_event_side_effects(
             &mut conn,
             &json!({
@@ -864,10 +864,14 @@ mod tests {
             }),
             Some("SID-shared-worker"),
         );
-
-        assert!(!conn.runtime_remote_object_id_known_for_session_owner(
-            Some("SID-shared-worker"),
-            "worker-object"
-        ));
+        assert!(
+            !conn
+                .shared_worker_target_for_session(Some("SID-shared-worker"))
+                .unwrap()
+                .session_state("SID-shared-worker")
+                .unwrap()
+                .runtime_session_state
+                .runtime_contexts_reported_to_frontend
+        );
     }
 }

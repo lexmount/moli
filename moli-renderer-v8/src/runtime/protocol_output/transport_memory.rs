@@ -48,9 +48,6 @@ fn native_terminal_charge_bytes(terminal: &super::RendererNativeCommandTerminal)
                         .map_or(0, string_charge),
                 ),
             super::RendererNativeProtocolStateUpdate::WebMcpEnabled(_) => 0,
-            super::RendererNativeProtocolStateUpdate::RemoteObjects { object_group } => {
-                object_group.as_deref().map_or(0, string_charge)
-            }
             super::RendererNativeProtocolStateUpdate::DomRemoteObjectNode { object_id, node } => {
                 string_charge(object_id).saturating_add(json_charge(node))
             }

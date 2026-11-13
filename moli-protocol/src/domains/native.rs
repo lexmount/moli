@@ -386,7 +386,6 @@ pub(crate) fn project_terminal_for_owner(
                     state.web_mcp_enabled = enabled
                 });
             }
-            (_, moli_core::RendererNativeProtocolStateUpdate::RemoteObjects { .. }) => {}
             (
                 Some(owner),
                 moli_core::RendererNativeProtocolStateUpdate::DomRemoteObjectNode {

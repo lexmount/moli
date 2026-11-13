@@ -1,42 +1,17 @@
 use crate::domains::actions::RuntimeAction;
 
-/// Inspector payload work that must happen after the Runtime action has been
-/// classified, but before the command is registered with a renderer owner.
-///
-/// This enum deliberately contains no dispatch-family decisions. Main Page,
-/// SharedWorker, and ServiceWorker classification each select one preparation
-/// exactly once; the dispatcher only executes the selected operation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RuntimeInspectorPayloadPreparation {
-    Passthrough,
-    ValidateObjectOwner,
-    ValidatePrototypeOwner,
-    PrepareCallFunctionOn,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct MainRuntimeInspectorCommand {
     action: RuntimeAction,
-    payload_preparation: RuntimeInspectorPayloadPreparation,
 }
 
 impl MainRuntimeInspectorCommand {
-    const fn new(
-        action: RuntimeAction,
-        payload_preparation: RuntimeInspectorPayloadPreparation,
-    ) -> Self {
-        Self {
-            action,
-            payload_preparation,
-        }
+    const fn new(action: RuntimeAction) -> Self {
+        Self { action }
     }
 
     pub(super) const fn action(self) -> RuntimeAction {
         self.action
-    }
-
-    pub(super) const fn payload_preparation(self) -> RuntimeInspectorPayloadPreparation {
-        self.payload_preparation
     }
 }
 
@@ -88,10 +63,6 @@ pub(super) enum MainRuntimeCommand {
 
 impl MainRuntimeCommand {
     pub(super) const fn classify(action: RuntimeAction) -> Self {
-        use RuntimeInspectorPayloadPreparation::{
-            Passthrough, ValidateObjectOwner, ValidatePrototypeOwner,
-        };
-
         match action {
             RuntimeAction::Enable => Self::Enable,
             RuntimeAction::Disable => Self::Disable,
@@ -104,19 +75,17 @@ impl MainRuntimeCommand {
                 Self::DevToolsScript(RuntimeDevToolsScriptCommand::CallFunctionOn)
             }
             RuntimeAction::TerminateExecution => {
-                Self::Inspector(MainRuntimeInspectorCommand::new(action, Passthrough))
+                Self::Inspector(MainRuntimeInspectorCommand::new(action))
             }
             RuntimeAction::GetProperties
             | RuntimeAction::AwaitPromise
             | RuntimeAction::GetExceptionDetails
-            | RuntimeAction::ReleaseObject => Self::Inspector(MainRuntimeInspectorCommand::new(
-                action,
-                ValidateObjectOwner,
-            )),
-            RuntimeAction::QueryObjects => Self::Inspector(MainRuntimeInspectorCommand::new(
-                action,
-                ValidatePrototypeOwner,
-            )),
+            | RuntimeAction::ReleaseObject => {
+                Self::Inspector(MainRuntimeInspectorCommand::new(action))
+            }
+            RuntimeAction::QueryObjects => {
+                Self::Inspector(MainRuntimeInspectorCommand::new(action))
+            }
             RuntimeAction::CompileScript
             | RuntimeAction::RunScript
             | RuntimeAction::GlobalLexicalScopeNames
@@ -126,7 +95,7 @@ impl MainRuntimeCommand {
             | RuntimeAction::SetAsyncCallStackDepth
             | RuntimeAction::SetCustomObjectFormatterEnabled
             | RuntimeAction::SetMaxCallStackSizeToCapture => {
-                Self::Inspector(MainRuntimeInspectorCommand::new(action, Passthrough))
+                Self::Inspector(MainRuntimeInspectorCommand::new(action))
             }
         }
     }
@@ -154,34 +123,28 @@ pub(super) enum WorkerRuntimeCommandKind {
 pub(super) struct WorkerRuntimeCommand {
     action: RuntimeAction,
     kind: WorkerRuntimeCommandKind,
-    payload_preparation: RuntimeInspectorPayloadPreparation,
     binding: Option<RuntimeBindingCommand>,
 }
 
 impl WorkerRuntimeCommand {
     pub(super) const fn classify(action: RuntimeAction) -> Self {
-        use RuntimeInspectorPayloadPreparation::{
-            Passthrough, PrepareCallFunctionOn, ValidateObjectOwner, ValidatePrototypeOwner,
-        };
         use WorkerRuntimeCommandKind::{
             Disable, DiscardConsoleEntries, Enable, Inspector, RunIfWaitingForDebugger,
         };
 
-        let (kind, payload_preparation, binding) = match action {
-            RuntimeAction::Enable => (Enable, Passthrough, None),
-            RuntimeAction::Disable => (Disable, Passthrough, None),
-            RuntimeAction::DiscardConsoleEntries => (DiscardConsoleEntries, Passthrough, None),
-            RuntimeAction::RunIfWaitingForDebugger => (RunIfWaitingForDebugger, Passthrough, None),
-            RuntimeAction::AddBinding => (Inspector, Passthrough, Some(RuntimeBindingCommand::Add)),
-            RuntimeAction::RemoveBinding => {
-                (Inspector, Passthrough, Some(RuntimeBindingCommand::Remove))
-            }
-            RuntimeAction::CallFunctionOn => (Inspector, PrepareCallFunctionOn, None),
+        let (kind, binding) = match action {
+            RuntimeAction::Enable => (Enable, None),
+            RuntimeAction::Disable => (Disable, None),
+            RuntimeAction::DiscardConsoleEntries => (DiscardConsoleEntries, None),
+            RuntimeAction::RunIfWaitingForDebugger => (RunIfWaitingForDebugger, None),
+            RuntimeAction::AddBinding => (Inspector, Some(RuntimeBindingCommand::Add)),
+            RuntimeAction::RemoveBinding => (Inspector, Some(RuntimeBindingCommand::Remove)),
+            RuntimeAction::CallFunctionOn => (Inspector, None),
             RuntimeAction::GetProperties
             | RuntimeAction::AwaitPromise
             | RuntimeAction::GetExceptionDetails
-            | RuntimeAction::ReleaseObject => (Inspector, ValidateObjectOwner, None),
-            RuntimeAction::QueryObjects => (Inspector, ValidatePrototypeOwner, None),
+            | RuntimeAction::ReleaseObject => (Inspector, None),
+            RuntimeAction::QueryObjects => (Inspector, None),
             RuntimeAction::CompileScript
             | RuntimeAction::TerminateExecution
             | RuntimeAction::RunScript
@@ -192,12 +155,11 @@ impl WorkerRuntimeCommand {
             | RuntimeAction::ReleaseObjectGroup
             | RuntimeAction::SetAsyncCallStackDepth
             | RuntimeAction::SetCustomObjectFormatterEnabled
-            | RuntimeAction::SetMaxCallStackSizeToCapture => (Inspector, Passthrough, None),
+            | RuntimeAction::SetMaxCallStackSizeToCapture => (Inspector, None),
         };
         Self {
             action,
             kind,
-            payload_preparation,
             binding,
         }
     }
@@ -208,10 +170,6 @@ impl WorkerRuntimeCommand {
 
     pub(super) const fn kind(self) -> WorkerRuntimeCommandKind {
         self.kind
-    }
-
-    pub(super) const fn payload_preparation(self) -> RuntimeInspectorPayloadPreparation {
-        self.payload_preparation
     }
 
     pub(super) const fn binding(self) -> Option<RuntimeBindingCommand> {
@@ -244,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn main_owned_object_commands_have_explicit_preparation() {
+    fn main_object_commands_route_to_the_native_inspector() {
         let MainRuntimeCommand::Inspector(terminate) =
             MainRuntimeCommand::classify(RuntimeAction::TerminateExecution)
         else {
@@ -257,27 +215,17 @@ mod tests {
         else {
             panic!("getProperties must be an Inspector command");
         };
-        assert_eq!(
-            get_properties.payload_preparation(),
-            RuntimeInspectorPayloadPreparation::ValidateObjectOwner
-        );
+        assert_eq!(get_properties.action(), RuntimeAction::GetProperties);
     }
 
     #[test]
-    fn worker_call_function_and_binding_keep_distinct_payload_preparation() {
+    fn worker_call_function_and_binding_keep_distinct_dispatch_semantics() {
         let call_function = WorkerRuntimeCommand::classify(RuntimeAction::CallFunctionOn);
         assert_eq!(call_function.kind(), WorkerRuntimeCommandKind::Inspector);
-        assert_eq!(
-            call_function.payload_preparation(),
-            RuntimeInspectorPayloadPreparation::PrepareCallFunctionOn
-        );
 
         let add_binding = WorkerRuntimeCommand::classify(RuntimeAction::AddBinding);
         assert_eq!(add_binding.kind(), WorkerRuntimeCommandKind::Inspector);
-        assert_eq!(
-            add_binding.payload_preparation(),
-            RuntimeInspectorPayloadPreparation::Passthrough
-        );
+
         assert_eq!(add_binding.binding(), Some(RuntimeBindingCommand::Add));
     }
 }

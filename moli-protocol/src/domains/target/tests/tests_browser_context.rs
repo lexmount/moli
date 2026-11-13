@@ -523,7 +523,6 @@ async fn dispose_browser_context_tears_down_worker_sessions_and_targets() {
                 &shared_worker_session_id,
                 9_001,
                 Some(&shared_worker_session_id),
-                None,
             )
     });
     let service_worker_session_id = target_sessions[1].1.clone();
@@ -534,7 +533,6 @@ async fn dispose_browser_context_tears_down_worker_sessions_and_targets() {
                 &service_worker_session_id,
                 9_002,
                 Some(&service_worker_session_id),
-                None,
             )
     });
     ctx.sent.clear();

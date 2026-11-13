@@ -78,8 +78,7 @@ use super::{
     },
     command_classification::{
         MainRuntimeCommand, MainRuntimeInspectorCommand, RuntimeBindingCommand,
-        RuntimeDevToolsScriptCommand, RuntimeInspectorPayloadPreparation, WorkerRuntimeCommand,
-        WorkerRuntimeCommandKind,
+        RuntimeDevToolsScriptCommand, WorkerRuntimeCommand, WorkerRuntimeCommandKind,
     },
     evaluate::can_dispatch,
     native::apply_runtime_disable_projection_after_success_for_owner,
@@ -124,9 +123,7 @@ pub(crate) struct PendingRuntimeCommandDispatch {
     command_id: Option<u64>,
     action: &'static str,
     owner_scope: CommandOwnerScope,
-    object_group: Option<String>,
-    release_object_ids: Vec<String>,
-    release_object_group: Option<String>,
+
     await_promise: bool,
     wait_for_deferred_reply: bool,
     pending: PendingRuntimeCommandKind,
@@ -136,9 +133,7 @@ pub(crate) struct CompletedRuntimeCommandDispatch {
     command_id: Option<u64>,
     action: &'static str,
     owner_scope: CommandOwnerScope,
-    object_group: Option<String>,
-    release_object_ids: Vec<String>,
-    release_object_group: Option<String>,
+
     await_promise: bool,
     wait_for_deferred_reply: bool,
     completed: CompletedRuntimeCommandKind,
@@ -383,9 +378,7 @@ struct RuntimeCommandCompletionMeta {
     command_id: Option<u64>,
     action: &'static str,
     owner_scope: CommandOwnerScope,
-    object_group: Option<String>,
-    release_object_ids: Vec<String>,
-    release_object_group: Option<String>,
+
     await_promise: bool,
     wait_for_deferred_reply: bool,
 }
@@ -396,9 +389,7 @@ impl From<&CompletedRuntimeCommandDispatch> for RuntimeCommandCompletionMeta {
             command_id: completed.command_id,
             action: completed.action,
             owner_scope: completed.owner_scope.clone(),
-            object_group: completed.object_group.clone(),
-            release_object_ids: completed.release_object_ids.clone(),
-            release_object_group: completed.release_object_group.clone(),
+
             await_promise: completed.await_promise,
             wait_for_deferred_reply: completed.wait_for_deferred_reply,
         }
@@ -544,9 +535,7 @@ impl PendingRuntimeCommandDispatch {
             command_id: self.command_id,
             action: self.action,
             owner_scope,
-            object_group: self.object_group,
-            release_object_ids: self.release_object_ids,
-            release_object_group: self.release_object_group,
+
             await_promise: self.await_promise,
             wait_for_deferred_reply: self.wait_for_deferred_reply,
             completed,
@@ -575,9 +564,7 @@ impl PendingRuntimeCommandDispatch {
             command_id: self.command_id,
             action: self.action,
             owner_scope: self.owner_scope,
-            object_group: self.object_group,
-            release_object_ids: self.release_object_ids,
-            release_object_group: self.release_object_group,
+
             await_promise: self.await_promise,
             wait_for_deferred_reply: self.wait_for_deferred_reply,
             completed: match self.pending {
@@ -701,9 +688,7 @@ pub(crate) fn try_start_worker_emulation_command_dispatch(
             command_id: cmd.id,
             action,
             owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
-            object_group: None,
-            release_object_ids: Vec::new(),
-            release_object_group: None,
+
             await_promise: false,
             wait_for_deferred_reply: false,
             pending,
@@ -816,9 +801,7 @@ pub(crate) fn start_profiler_inspector_command_dispatch(
         command_id: cmd.id,
         action,
         owner_scope,
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -886,7 +869,6 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
     }
 
     let method = heap_profiler_action_protocol_method(action);
-    let object_group = heap_profiler_object_group_for_command_result(cmd, action);
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
         conn,
@@ -905,9 +887,7 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
         command_id: cmd.id,
         action: method,
         owner_scope,
-        object_group,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: true,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -972,9 +952,7 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
         command_id: cmd.id,
         action: "Debugger.inspectorCommand",
         owner_scope,
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -1027,9 +1005,7 @@ pub(crate) fn start_console_inspector_command_dispatch(
         command_id: cmd.id,
         action: console_action_protocol_method(action),
         owner_scope,
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -1053,9 +1029,7 @@ pub(crate) fn start_moli_diagnostics_command_dispatch(
         command_id: cmd.id,
         action: "moliDiagnostics",
         owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::MoliDiagnostics(pending),
@@ -1688,26 +1662,6 @@ mod protocol_neutral_tests {
                 &mut references,
             );
             assert!(references.is_empty());
-        });
-    }
-
-    #[test]
-    fn devtools_remote_reference_collection_uses_protocol_depth_cap() {
-        run_deep_protocol_value_test("devtools-remote-reference-depth-cap", || {
-            let mut object_ids = Vec::new();
-            super::collect_devtools_remote_object_ids(
-                &json!({ "outer": [{ "objectId": "OBJECT-1" }] }),
-                &mut object_ids,
-            );
-            assert_eq!(object_ids, vec!["OBJECT-1"]);
-
-            let deep_value = deeply_nested_plain_value(
-                json!({ "objectId": "TOO-DEEP" }),
-                MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH + 8,
-            );
-            object_ids.clear();
-            super::collect_devtools_remote_object_ids(&deep_value, &mut object_ids);
-            assert!(object_ids.is_empty());
         });
     }
 
@@ -2554,10 +2508,9 @@ mod protocol_neutral_tests {
         browser_context.set_active_target_id("TID-duplicate".to_owned());
         browser_context.attach_active_session("SID-duplicate".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
-        conn.try_register_pending_inspector_await_with_object_group_for_owner(
+        conn.try_register_pending_inspector_await_for_owner(
             77,
             &CommandOwnerScope::for_session("SID-duplicate"),
-            Some("original-group"),
         )
         .unwrap();
 

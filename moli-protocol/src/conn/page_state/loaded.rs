@@ -268,7 +268,7 @@ impl PageTargetHost {
         self.owner_state
             .commit_document_title(committed_document_title);
         for session in self.devtools_sessions.states_mut() {
-            session.clear_runtime_remote_object_tracking();
+            session.clear_runtime_context_metadata();
         }
         self.clear_loaded_document_context_state();
     }

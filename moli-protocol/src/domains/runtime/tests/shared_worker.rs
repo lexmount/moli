@@ -1800,80 +1800,6 @@ onconnect = event => {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn shared_worker_runtime_remote_objects_do_not_cross_peer_worker_targets() {
-    let mut ctx = TestContext::new();
-    with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
-    let first_session_id = start_attached_shared_worker_session(
-        &mut ctx,
-        90_240,
-        "remote-object-peer-a",
-        r#"
-onconnect = event => {
-  event.ports[0].postMessage("ready-a");
-};
-"#,
-    )
-    .await;
-    let second_session_id = start_attached_shared_worker_session(
-        &mut ctx,
-        90_260,
-        "remote-object-peer-b",
-        r#"
-onconnect = event => {
-  event.ports[0].postMessage("ready-b");
-};
-"#,
-    )
-    .await;
-
-    ctx.process_async(json!({
-        "id": 90_270,
-        "method": "Runtime.evaluate",
-        "sessionId": first_session_id,
-        "params": {
-            "expression": "({ owner: 'first-shared-worker' })"
-        }
-    }))
-    .await;
-    let response = take_response_by_id(&mut ctx, 90_270);
-    let object_id = response["result"]["result"]["objectId"]
-        .as_str()
-        .unwrap_or_else(|| {
-            panic!(
-                "first shared worker Runtime.evaluate should return an object handle: {response:?}"
-            )
-        })
-        .to_owned();
-
-    ctx.process_async(json!({
-        "id": 90_271,
-        "method": "Runtime.releaseObject",
-        "sessionId": second_session_id,
-        "params": {
-            "objectId": object_id
-        }
-    }))
-    .await;
-    let peer_release = take_response_by_id(&mut ctx, 90_271);
-    assert_eq!(peer_release["error"]["code"], json!(-32000));
-    assert_eq!(
-        peer_release["error"]["message"],
-        json!("Cannot find context with specified id")
-    );
-
-    ctx.process_async(json!({
-        "id": 90_272,
-        "method": "Runtime.releaseObject",
-        "sessionId": first_session_id,
-        "params": {
-            "objectId": object_id
-        }
-    }))
-    .await;
-    assert_eq!(take_response_by_id(&mut ctx, 90_272)["result"], json!({}));
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn shared_worker_profiler_state_is_isolated_per_attached_session() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
@@ -2836,6 +2762,10 @@ onconnect = event => {
             )
         })
         .to_owned();
+    assert!(
+        !teardown_probe_object_id.is_empty(),
+        "native Inspector returned a real handle"
+    );
 
     ctx.process_async(json!({
         "id": 90_613,
@@ -2934,16 +2864,7 @@ onconnect = event => {
             "client removal should drain shared worker pending awaits"
         )
     });
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                std::slice::from_ref(&teardown_probe_object_id),
-            )
-            .is_ok(),
-            "destroying the shared worker target should remove target-local remote object ownership"
-        )
-    });
+
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context

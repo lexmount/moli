@@ -2821,11 +2821,6 @@ async fn detach_from_service_worker_target_disposes_session_runtime_state() {
                 "SID-service-worker",
                 14_001,
                 Some("SID-service-worker"),
-                None,
-            );
-            target.register_runtime_remote_object_ids_for_session(
-                "SID-service-worker",
-                ["service-worker-object".to_owned()],
             );
         });
     }
@@ -2858,16 +2853,7 @@ async fn detach_from_service_worker_target_disposes_session_runtime_state() {
 
     ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some("SID-service-worker")), None));
     ctx.with_fixture(|conn| assert!(!conn.has_pending_inspector_awaits()));
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                &["service-worker-object".to_owned()],
-            )
-            .is_ok(),
-            "service worker remote-object ownership must be retired with its session"
-        )
-    });
+
     ctx.with_fixture(|conn| assert!(!conn.service_worker_pause_on_start_for_devtools()));
     ctx.with_fixture(|conn| {
         let target = {
@@ -3269,16 +3255,6 @@ async fn set_auto_attach_false_cleans_shared_worker_runtime_state_before_detache
                 "SID-shared-worker",
                 991,
                 Some("SID-shared-worker"),
-                Some("shared-cleanup-group"),
-            );
-            target.register_runtime_remote_object_ids_for_session(
-                "SID-shared-worker",
-                ["shared-ungrouped-object".to_owned()],
-            );
-            target.register_runtime_remote_object_ids_with_group(
-                "SID-shared-worker",
-                ["shared-grouped-object".to_owned()],
-                "shared-cleanup-group",
             );
         });
     }
@@ -3308,19 +3284,7 @@ async fn set_auto_attach_false_cleans_shared_worker_runtime_state_before_detache
 
     ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some("SID-shared-worker")), None));
     ctx.with_fixture(|conn| assert!(!conn.has_pending_inspector_awaits()));
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                &[
-                    "shared-ungrouped-object".to_owned(),
-                    "shared-grouped-object".to_owned(),
-                ],
-            )
-            .is_ok(),
-            "auto-attach reset should clear shared worker target-local remote object ownership"
-        )
-    });
+
     ctx.with_fixture(|conn| {
         let target = {
             let bc = conn.browser_context.as_ref().unwrap();

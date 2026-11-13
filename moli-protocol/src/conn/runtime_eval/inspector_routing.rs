@@ -269,8 +269,8 @@ impl CdpConnection {
                     );
                     return false;
                 }
-                // These notifications have no RemoteObject fields. Unknown
-                // methods still take the conservative ownership scan.
+                // Context lifecycle notifications have typed side effects.
+                // Other notifications stay opaque through forwarding.
 
                 if matches!(
                     message.method(),
@@ -519,7 +519,6 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         dispatched_attachment_id: Option<RendererAgentAttachmentId>,
         messages: &mut Vec<RendererRuntimeInspectorMessage>,
-        _project_runtime_object_ownership: bool,
     ) {
         let session_id = owner.session_id().map(str::to_owned);
         messages.retain_mut(|message| {
@@ -673,6 +672,7 @@ impl CdpConnection {
             );
             return BidiChannelListenerRoute::Consumed;
         }
+        let reply_group = residence.reply_group();
         let listener = residence.listener();
         let message = response.message.value();
         if let Some(error) = message.get("error") {
@@ -681,6 +681,9 @@ impl CdpConnection {
                 channel = %listener.properties().channel,
                 "BiDi channel listener stopped after inspector error"
             );
+            if let Some(group) = reply_group {
+                self.publish_bidi_channel_object_group_release(owner.clone(), group);
+            }
             self.publish_bidi_channel_object_group_release(
                 owner,
                 listener.channel_object_group().to_owned(),
@@ -694,6 +697,9 @@ impl CdpConnection {
                 channel = %listener.properties().channel,
                 "BiDi channel listener stopped after JavaScript exception"
             );
+            if let Some(group) = reply_group {
+                self.publish_bidi_channel_object_group_release(owner.clone(), group);
+            }
             self.publish_bidi_channel_object_group_release(
                 owner,
                 listener.channel_object_group().to_owned(),
@@ -714,8 +720,27 @@ impl CdpConnection {
                     owner.command_owner(),
                     native.as_str().to_owned(),
                     realm_id.as_str(),
+                    reply_group,
                 )
                 .map(Into::into);
+        }
+        if data.remote_subtype.as_deref() == Some("node")
+            && let Some(shared) = &mut data.shared_id
+            && !crate::automation::is_webdriver_bidi_node_shared_id(shared.as_str())
+        {
+            *shared = self
+                .export_bidi_node_reference(
+                    owner.command_owner(),
+                    shared.as_str().to_owned(),
+                    realm_id.as_str(),
+                    reply_group,
+                )
+                .into();
+        }
+        if let Some(group) = reply_group
+            && !self.bidi_retains_object_group(owner.command_owner(), group)
+        {
+            self.publish_bidi_channel_object_group_release(owner.clone(), group);
         }
         let event = BackgroundProtocolEvent::automation_only(AutomationEvent::ScriptMessage(
             ScriptMessageEvent {

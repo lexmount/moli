@@ -120,6 +120,7 @@ impl BidiChannelPageOwner {
 pub(crate) struct BidiChannelListenerResidence {
     owner: BidiChannelPageOwner,
     listener: Box<PendingBidiChannelListener>,
+    reply_group: Option<String>,
 }
 
 impl BidiChannelListenerResidence {
@@ -127,7 +128,17 @@ impl BidiChannelListenerResidence {
         Self {
             owner,
             listener: Box::new(listener),
+            reply_group: None,
         }
+    }
+
+    pub(crate) fn with_reply_group(mut self, group: String) -> Self {
+        self.reply_group = Some(group);
+        self
+    }
+
+    pub(crate) fn reply_group(&self) -> Option<&str> {
+        self.reply_group.as_deref()
     }
 
     pub(crate) fn owner(&self) -> &BidiChannelPageOwner {
@@ -163,6 +174,7 @@ pub(crate) struct BidiChannelOwnerAction {
 pub(crate) enum BidiChannelOwnerActionBody {
     StartListener(Box<PendingBidiChannelListener>),
     ReleaseObjectGroup(String),
+    ReleaseObjectGroupAfterOwner(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,12 +202,23 @@ impl BidiChannelOwnerAction {
         }
     }
 
+    pub(crate) fn release_object_group_after_owner(
+        owner: BidiChannelPageOwner,
+        group: String,
+    ) -> Self {
+        Self {
+            owner,
+            body: BidiChannelOwnerActionBody::ReleaseObjectGroupAfterOwner(group),
+        }
+    }
+
     pub(crate) fn kind(&self) -> BidiChannelOwnerActionKind {
         match self.body {
             BidiChannelOwnerActionBody::StartListener(_) => {
                 BidiChannelOwnerActionKind::StartListener
             }
-            BidiChannelOwnerActionBody::ReleaseObjectGroup(_) => {
+            BidiChannelOwnerActionBody::ReleaseObjectGroup(_)
+            | BidiChannelOwnerActionBody::ReleaseObjectGroupAfterOwner(_) => {
                 BidiChannelOwnerActionKind::ReleaseObjectGroup
             }
         }

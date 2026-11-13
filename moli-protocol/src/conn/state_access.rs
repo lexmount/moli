@@ -170,6 +170,13 @@ impl ProtocolWorkflowState<'_> {
         super::BidiChannelObjectGroupLease::allocate(self.connection, owner)
     }
 
+    pub(crate) fn prepare_bidi_channel_owner_action(
+        self,
+        action: super::BidiChannelOwnerAction,
+    ) -> Option<super::PreparedBidiChannelAction> {
+        super::PreparedBidiChannelAction::prepare(self.connection, action)
+    }
+
     pub(crate) fn prepare_bidi_channel_listener(
         self,
         lease: super::BidiChannelObjectGroupLease,
@@ -215,20 +222,20 @@ impl ProtocolWorkflowState<'_> {
         self,
         identity: super::RuntimeHelperIdentity,
         command_id: u64,
-        object_group: Option<String>,
+
         completed: super::CompletedRuntimeProtocolMessageDispatch,
     ) -> Result<Option<super::BackgroundCommandResponsePayload>> {
-        identity.finish_dispatch(self.connection, command_id, object_group, completed)
+        identity.finish_dispatch(self.connection, command_id, completed)
     }
 
     pub(crate) fn finish_runtime_helper_response(
         self,
         identity: super::RuntimeHelperIdentity,
         command_id: u64,
-        object_group: Option<String>,
+
         response: moli_core::RendererRuntimeInspectorAsyncCompletion,
     ) -> Result<super::BackgroundCommandResponsePayload> {
-        identity.finish_response(self.connection, command_id, object_group, response)
+        identity.finish_response(self.connection, command_id, response)
     }
 
     pub(crate) fn prepare_runtime_realm_inventory(

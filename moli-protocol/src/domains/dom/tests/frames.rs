@@ -2995,7 +2995,7 @@ async fn get_document_registers_renderer_frontend_bindings_for_node_consumers() 
         "DOM.getDocument element backend id should be renderer-owned: {target}"
     );
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 3,
@@ -3057,7 +3057,7 @@ async fn request_child_nodes_registers_renderer_frontend_bindings_for_node_consu
     );
     ctx.expect_result(3, json!({}), None);
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 4,

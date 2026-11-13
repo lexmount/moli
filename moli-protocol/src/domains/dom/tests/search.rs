@@ -1756,7 +1756,7 @@ async fn get_search_results_preserves_renderer_frontend_binding_for_node_consume
     .await;
     ctx.expect_result(32, json!({ "searchId": "0", "resultCount": 1 }), None);
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 33,
@@ -1766,7 +1766,7 @@ async fn get_search_results_preserves_renderer_frontend_binding_for_node_consume
     .await;
     ctx.expect_result(33, json!({ "nodeIds": [frontend_node_id] }), None);
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 34,

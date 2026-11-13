@@ -227,17 +227,6 @@ mod tests {
                 .is_none(),
             "the exact response must consume the correlation"
         );
-        assert_eq!(
-            handle
-                .with_state(|state| state.fixture(|conn| conn
-                    .runtime_remote_object_group_for_session_owner(
-                        Some("SID-retiring-output"),
-                        "retired-object",
-                    )))
-                .unwrap(),
-            None,
-            "retired objects must not be registered on the replacement document"
-        );
 
         project_renderer_output_records_for_owner(
             &handle,

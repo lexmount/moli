@@ -111,12 +111,13 @@ async fn listener_hands_off_its_promise_without_blocking_peer_commands() {
             .unwrap()
             .unwrap();
         let id = prepared
+            .dispatch()
             .cancellation
             .identity
             .correlation
             .frontend_command_id()
             .get();
-        let settled = prepared.cancellation.identity.settled.clone();
+        let settled = prepared.dispatch().cancellation.identity.settled.clone();
         let events = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             prepared.run(&mut driver),
@@ -194,17 +195,18 @@ async fn listener_hands_off_its_promise_without_blocking_peer_commands() {
 }
 
 #[tokio::test]
-async fn listener_cancellation_before_poll_and_after_native_ready_releases_its_exact_group_once() {
+async fn listener_cancellation_releases_proxy_and_reply_groups_once() {
     for native_ready in [false, true] {
         let (_owner, access, command_owner, _replies) = fixture().await;
         let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
-        let handle = listener.channel_handle().as_str().to_owned();
+        let proxy = listener.channel_handle().as_str().to_owned();
         let mut prepared = driver
             .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
             .unwrap()
             .unwrap();
         let id = prepared
+            .dispatch()
             .cancellation
             .identity
             .correlation
@@ -213,7 +215,16 @@ async fn listener_cancellation_before_poll_and_after_native_ready_releases_its_e
         if native_ready {
             // Keep the native result ready while dropping its original owner,
             // before any synchronous state completion/handoff can take it.
-            drop(prepared.pending.take().unwrap().wait().await.unwrap());
+            drop(
+                prepared
+                    .dispatch_mut()
+                    .pending
+                    .take()
+                    .unwrap()
+                    .wait()
+                    .await
+                    .unwrap(),
+            );
         }
         drop(prepared);
         let pending_owner = command_owner.clone();
@@ -224,24 +235,38 @@ async fn listener_cancellation_before_poll_and_after_native_ready_releases_its_e
                     .renderer_call_for_frontend(id)
                     .is_none()
             );
-            let mut work = release_work(conn);
-            assert_eq!(work.len(), 1);
-            work.pop().unwrap()
-        });
-        let task = driver
-            .with_state(move |state| state.try_start_owned_protocol_scheduler_work(work))
-            .unwrap()
-            .unwrap_or_else(|_| panic!("cleanup must use the original owner-work supervisor"))
-            .unwrap();
-        let completed = task.wait().await;
-        driver
-            .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
-            .unwrap();
-        inspect(&access, move |conn| {
-            assert!(
-                conn.runtime_remote_object_group_for_session_owner(Some("SID-bidi-owned"), &handle)
-                    .is_none()
+            let work = release_work(conn);
+            assert_eq!(
+                work.len(),
+                2,
+                "proxy and per-reply storage have independent owners"
             );
+            work
+        });
+        for work in work {
+            let task = driver
+                .with_state(move |state| state.try_start_owned_protocol_scheduler_work(work))
+                .unwrap()
+                .unwrap_or_else(|_| panic!("cleanup uses the original owner supervisor"))
+                .unwrap();
+            let completed = task.wait().await;
+            driver
+                .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
+                .unwrap();
+        }
+        let response = dispatch_runtime_helper_using(
+            &mut driver,
+            command_owner.clone(),
+            "Runtime.getProperties",
+            json!({"objectId":proxy}),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            response,
+            BackgroundCommandResponsePayload::Error { code: -32000, .. }
+        ));
+        inspect(&access, move |conn| {
             assert!(
                 release_work(conn).is_empty(),
                 "finishing a release cannot publish another release"
@@ -397,7 +422,6 @@ async fn closing_rejects_new_channel_listeners_but_preserves_group_cleanup() {
         let (_owner, access, command_owner, _replies) = fixture().await;
         let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
-        let handle = listener.channel_handle().as_str().to_owned();
         let live_owner = lease.owner.clone();
         let closing_owner = command_owner.clone();
         inspect(&access, move |conn| {
@@ -459,10 +483,6 @@ async fn closing_rejects_new_channel_listeners_but_preserves_group_cleanup() {
             .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
             .unwrap();
         inspect(&access, move |conn| {
-            assert!(
-                conn.runtime_remote_object_group_for_session_owner(Some("SID-bidi-owned"), &handle)
-                    .is_none()
-            );
             assert!(release_work(conn).is_empty());
         });
     }
@@ -478,7 +498,7 @@ async fn deferred_channel_reply_cannot_consume_a_rebound_session_call_with_ident
             .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
             .unwrap()
             .unwrap();
-        let correlation = prepared.cancellation.identity.correlation;
+        let correlation = prepared.dispatch().cancellation.identity.correlation;
         let command_id = correlation.frontend_command_id().get();
         let output = prepared.run(&mut driver).await;
         assert!(output.predecessor.is_some());
@@ -526,4 +546,93 @@ async fn deferred_channel_reply_cannot_consume_a_rebound_session_call_with_ident
         });
     };
     tokio::task::LocalSet::new().run_until(test).await;
+}
+
+#[tokio::test]
+async fn cancelled_group_cleanup_waits_for_accepted_native_node_queries() {
+    use futures_util::FutureExt as _;
+    let mut ctx = TestContext::new();
+    let mut browser = BrowserContext::new("BID-node-cleanup".into());
+    browser.set_active_target_id("TID-node-cleanup");
+    browser.attach_active_session("SID-node-cleanup");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-node-cleanup"))
+        .await;
+    ctx.process_async(json!({"id":1,"method":"DOM.getDocument","sessionId":"SID-node-cleanup"}))
+        .await;
+    let backend = ctx
+        .sent
+        .iter()
+        .find(|message| message["id"] == json!(1))
+        .unwrap()["result"]["root"]["backendNodeId"]
+        .as_u64()
+        .unwrap() as u32;
+    let owner = CommandOwnerScope::for_session("SID-node-cleanup");
+    let mut driver = ProtocolWorkflowDriver::new(ctx.handle());
+    let lease = ctx.with_fixture(|conn| {
+        let page = BidiChannelPageOwner::capture_for_owner(conn, owner.clone()).unwrap();
+        BidiChannelObjectGroupLease::allocate(conn, page).unwrap()
+    });
+    let group = lease.name().to_owned();
+    let gate = ctx.hold_fixture_renderer(Some("SID-node-cleanup")).await;
+    let pending = ctx.with_fixture(|conn| {
+        let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
+        conn.loaded_page_mut_for_session_owner(Some("SID-node-cleanup"))
+            .unwrap()
+            .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                session,
+                backend,
+                None,
+                Some(&group),
+            )
+            .unwrap()
+    });
+    drop(lease);
+    let work = ctx.with_fixture(|conn| {
+        let mut work = release_work(conn);
+        assert_eq!(work.len(), 1);
+        work.pop().unwrap()
+    });
+    let task = driver
+        .with_state(move |state| state.try_start_owned_protocol_scheduler_work(work))
+        .unwrap()
+        .unwrap_or_else(|_| panic!("group cleanup belongs to its original owner supervisor"))
+        .unwrap();
+    let mut cleanup = Box::pin(task.wait());
+    assert!(
+        cleanup.as_mut().now_or_never().is_none(),
+        "cancel cleanup cannot overtake the held owner query"
+    );
+    drop(gate);
+    let (completed_cleanup, completed_query) = tokio::join!(cleanup, pending.wait());
+    let resolution = ctx
+        .with_fixture(|conn| {
+            conn.loaded_page_mut_for_session_owner(Some("SID-node-cleanup"))
+                .unwrap()
+                .finish_resolve_runtime_object_for_backend_node_id(completed_query.unwrap())
+        })
+        .unwrap();
+    driver
+        .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed_cleanup))
+        .unwrap();
+    let moli_core::page::DocumentNodeRuntimeObjectResolution::Found(object) = resolution else {
+        panic!("the accepted node query must produce its native object")
+    };
+    let object = object.into_protocol_value();
+    let id = object["objectId"].as_str().unwrap().to_owned();
+    let response = dispatch_runtime_helper_using(
+        &mut driver,
+        owner,
+        "Runtime.getProperties",
+        json!({"objectId":id}),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(
+            response,
+            BackgroundCommandResponsePayload::Error { code: -32000, .. }
+        ),
+        "a late node wrapper cannot retain a root after cancelled group cleanup: {response:?}"
+    );
 }

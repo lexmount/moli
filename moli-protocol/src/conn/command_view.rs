@@ -14,6 +14,7 @@ use crate::{
 /// Ephemeral view of the current in-flight protocol command.
 /// Passed to every domain handler.
 pub struct Cmd<'a> {
+    abandoned_object_group: Option<&'a str>,
     pub id: Option<u64>,
     pub method: &'a str,
     /// The part of the method after the first dot, e.g. "getVersion".
@@ -69,7 +70,26 @@ impl<'a> Cmd<'a> {
             json: command.json(),
             renderer_policy: command.renderer_policy(),
             terminal_response_delivery_override: None,
+            abandoned_object_group: None,
         })
+    }
+
+    pub(crate) fn with_abandoned_object_group_cleanup(mut self, group: Option<&'a str>) -> Self {
+        self.abandoned_object_group = group;
+        self
+    }
+
+    pub(crate) fn renderer_command_descriptor(
+        &self,
+        json: String,
+        delivery: RendererInspectorResponseDelivery,
+    ) -> crate::conn::RendererCommandDescriptor {
+        crate::conn::RendererCommandDescriptor::from_frontend_policy(
+            json,
+            self.renderer_policy(),
+            delivery,
+        )
+        .with_abandoned_object_group_cleanup(self.abandoned_object_group.map(str::to_owned))
     }
 
     pub(crate) fn with_terminal_response_delivery_override(
@@ -116,6 +136,7 @@ impl<'a> Cmd<'a> {
             json,
             renderer_policy: parsed.renderer_policy(),
             terminal_response_delivery_override: None,
+            abandoned_object_group: None,
         }
     }
 

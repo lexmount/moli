@@ -981,7 +981,7 @@ impl BrowserContext {
             "defaultDocumentStartScriptCount": self.context_preload_scripts.len(),
             "startupDocumentStartScriptCount": self.startup_document_start_scripts.len(),
             "domRemoteObjectNodeCacheCount": active_target
-                .map_or(0, |target| target.dom_remote_object_node_cache.len()),
+                .map_or(0, |target| target.devtools_sessions.states().map(|state| state.dom_remote_object_node_cache.len()).sum()),
             "sharedWorkerTargetCount": self.shared_worker_targets.len(),
             "serviceWorkerTargetCount": self.service_worker_targets.len(),
             "pendingInspectorAwaitCount": page_target_pending_inspector_await_count

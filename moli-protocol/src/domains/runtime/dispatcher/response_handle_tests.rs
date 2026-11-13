@@ -44,7 +44,10 @@ fn routed_output_keeps_unknown_notifications_raw() {
     }});
     let raw = InspectorJson::from_slice(notification.to_string().as_bytes()).unwrap();
     let output = RuntimeInspectorRoutedOutput {
-        events: vec![BackgroundProtocolEvent::inspector_message(raw.clone(), None)],
+        events: vec![BackgroundProtocolEvent::inspector_message(
+            raw.clone(),
+            None,
+        )],
         ..Default::default()
     };
     let mut plan = CommandOutputPlan::default();

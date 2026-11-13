@@ -7,6 +7,11 @@ using namespace support;
 
 extern "C" {
 
+void v8_inspector__V8InspectorSession__stop(
+    v8_inspector::V8InspectorSession* self) {
+  self->stop();
+}
+
 void v8_inspector__V8InspectorSession__setSkipAllPauses(
     v8_inspector::V8InspectorSession* self, bool skip) {
   self->setSkipAllPauses(skip);

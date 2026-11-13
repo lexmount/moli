@@ -249,11 +249,15 @@ pub(super) async fn locate_nodes_start_node_inputs_using(
             {
                 inputs.push(LocateNodesStartNodeInput::Reference(reference));
             } else {
-                if let Some(native) = workflow
+                let native = workflow
                     .state(|state| state.resolve_runtime_node_reference(&owner, shared_id))?
-                {
-                    node["sharedId"] = Value::String(native);
-                }
+                    .ok_or_else(|| {
+                        DevToolsError::new(
+                            DevToolsErrorKind::NoSuchNode,
+                            "Could not find node with given id",
+                        )
+                    })?;
+                node["sharedId"] = Value::String(native);
                 inputs.push(LocateNodesStartNodeInput::Raw(node));
             }
             continue;

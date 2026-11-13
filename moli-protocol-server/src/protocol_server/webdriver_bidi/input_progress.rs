@@ -32,6 +32,8 @@ enum InputPhase {
     Origin {
         setup: InputSetup,
         classic_id: String,
+        shared_id: String,
+        reference: Box<moli_protocol::WebDriverNodeReference>,
     },
     Actions {
         sequence: Option<InputSequence>,
@@ -449,7 +451,41 @@ impl BidiSocketActor {
             InputPhase::Origin {
                 mut setup,
                 classic_id,
+                shared_id,
+                reference,
             } => {
+                let origin_context = context(
+                    command
+                        .completion
+                        .command_context
+                        .session_id
+                        .as_ref()
+                        .unwrap()
+                        .as_str(),
+                    &input.context,
+                );
+                let error = match scheduler.webdriver_node_reference(
+                    &origin_context,
+                    &shared_id,
+                    moli_protocol::automation::WebDriverNodeKind::Element,
+                ) {
+                    Ok(Some(current)) if current == *reference => None,
+                    Ok(_) => Some(DevToolsError::new(
+                        DevToolsErrorKind::NoSuchNode,
+                        "DOM reference belongs to a replaced Document",
+                    )),
+                    Err(error) => Some(error),
+                };
+                if let Some(error) = error {
+                    return self
+                        .fail_input_command(
+                            scheduler,
+                            receivers,
+                            command,
+                            BidiInputPreparationError::DevTools(error),
+                        )
+                        .await;
+                }
                 let AutomationResult::DomGeometry(geometry) = result else {
                     return self
                         .fail_input_command(
@@ -505,21 +541,47 @@ impl BidiSocketActor {
     ) -> bool {
         let input = command.input.as_mut().expect("input");
         if let Some((shared_id, classic_id)) = setup.origins.pop_front() {
-            let native = AutomationCommand::DomObjectReference(DevToolsDomObjectReferenceCommand {
-                context: context(
-                    command
-                        .completion
-                        .command_context
-                        .session_id
-                        .as_ref()
-                        .unwrap()
-                        .as_str(),
-                    &input.top_level,
-                ),
-                object_id: DevToolsRemoteHandleId::from(shared_id.as_str()),
-                operation: DevToolsDomObjectReferenceOperation::GetBoxModel,
+            let session = command
+                .completion
+                .command_context
+                .session_id
+                .as_ref()
+                .unwrap()
+                .as_str();
+            let reference = match scheduler.webdriver_node_reference(
+                &context(session, &input.context),
+                &shared_id,
+                moli_protocol::automation::WebDriverNodeKind::Element,
+            ) {
+                Ok(Some(reference)) => reference,
+                result => {
+                    let error = result.err().unwrap_or_else(|| {
+                        DevToolsError::new(
+                            DevToolsErrorKind::NoSuchNode,
+                            "Could not find node with given id",
+                        )
+                    });
+                    return self
+                        .fail_input_command(
+                            scheduler,
+                            receivers,
+                            command,
+                            BidiInputPreparationError::DevTools(error),
+                        )
+                        .await;
+                }
+            };
+            let native = AutomationCommand::DomGeometry(DevToolsDomGeometryCommand {
+                context: context(session, &input.top_level),
+                reference: DevToolsDomNodeReference::BackendNodeId(reference.backend_node_id),
+                operation: DevToolsDomGeometryOperation::GetBoxModel,
             });
-            input.phase = InputPhase::Origin { setup, classic_id };
+            input.phase = InputPhase::Origin {
+                setup,
+                classic_id,
+                shared_id,
+                reference: Box::new(reference),
+            };
             return self
                 .start_input_native(scheduler, receivers, command, native)
                 .await;

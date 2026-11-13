@@ -178,6 +178,20 @@ impl ProtocolWorkflowState<'_> {
         )
     }
 
+    pub(crate) fn finish_runtime_object_group(
+        self,
+        mut lease: crate::conn::BidiChannelObjectGroupLease,
+    ) {
+        if self
+            .connection
+            .bidi_retains_object_group(lease.owner().command_owner(), lease.name())
+        {
+            lease.transfer_to_exports();
+        } else {
+            lease.release(self.connection);
+        }
+    }
+
     pub(crate) fn release_runtime_object_group(
         self,
         mut lease: crate::conn::BidiChannelObjectGroupLease,
@@ -271,12 +285,14 @@ impl ProtocolWorkflowState<'_> {
         owner: &CommandOwnerScope,
         result: &mut crate::automation::AutomationResult,
         realm: Option<&crate::automation::DevToolsRealmId>,
+        group: Option<&str>,
     ) {
         crate::domains::runtime::export_devtools_script_result_handles(
             self.connection,
             owner,
             result,
             realm,
+            group,
         );
     }
 
@@ -286,21 +302,28 @@ impl ProtocolWorkflowState<'_> {
         object_id: String,
         realm: Option<crate::automation::DevToolsRealmId>,
         shared_id: Option<String>,
+        group: Option<&str>,
     ) -> Option<String> {
         let realm = realm?;
         if let Some(shared_id) = shared_id {
+            if crate::automation::is_webdriver_bidi_node_shared_id(&shared_id) {
+                return Some(shared_id);
+            }
             self.connection.register_bidi_node_alias(
                 owner,
                 shared_id.clone(),
                 object_id,
                 realm.as_str().to_owned(),
+                group,
             );
             Some(shared_id)
         } else {
-            Some(
-                self.connection
-                    .export_bidi_node_reference(owner, object_id, realm.as_str()),
-            )
+            Some(self.connection.export_bidi_node_reference(
+                owner,
+                object_id,
+                realm.as_str(),
+                group,
+            ))
         }
     }
     pub(crate) fn runtime_route_candidates(
@@ -357,7 +380,7 @@ impl ProtocolWorkflowState<'_> {
         owner: &CommandOwnerScope,
         handle: &str,
         realm: Option<&crate::automation::DevToolsRealmId>,
-    ) -> Option<String> {
+    ) -> Option<crate::conn::BidiHandleRelease> {
         self.connection.disown_bidi_handle(
             owner,
             handle,

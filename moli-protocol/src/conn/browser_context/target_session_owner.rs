@@ -541,14 +541,14 @@ fn target_navigation_initiator_url(target_url: &str, loaded_page: Option<&Page>)
     url.host_str().is_some().then_some(url)
 }
 
-fn clear_page_runtime_remote_object_tracking(state: &mut crate::conn::state::PageTargetHost) {
+fn clear_page_runtime_context_metadata(state: &mut crate::conn::state::PageTargetHost) {
     for session in state.devtools_sessions.states_mut() {
-        session.clear_runtime_remote_object_tracking();
+        session.clear_runtime_context_metadata();
     }
 }
 
 fn clear_page_loaded_document_session_state(state: &mut crate::conn::state::PageTargetHost) {
-    clear_page_runtime_remote_object_tracking(state);
+    clear_page_runtime_context_metadata(state);
     state.clear_loaded_document_context_state();
 }
 
@@ -2426,15 +2426,6 @@ impl CdpConnection {
         self.target_owner_identity_for_session(session_id)
     }
 
-    #[cfg(test)]
-    pub(crate) fn target_devtools_attached_session_id_for_session(
-        &self,
-        session_id: Option<&str>,
-    ) -> Option<Option<String>> {
-        let owner = self.target_session_owner(session_id)?;
-        Some(owner.session_key.wire_session_id().map(str::to_owned))
-    }
-
     pub(crate) fn runtime_session_owner_slot_mut(
         &mut self,
         session_id: Option<&str>,
@@ -4175,7 +4166,7 @@ mod tests {
         })
         .expect("active target owner state should be mutable");
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-background"), |state| {
-            state.register_runtime_remote_object_ids(["background-object".to_owned()]);
+            state.runtime_session_state.runtime_frontend_enabled = true;
         })
         .expect("background DevTools session state should be mutable");
 
@@ -4187,17 +4178,14 @@ mod tests {
             .target_runtime_session_state_for_session(Some("SID-background"))
             .expect("background runtime state should be readable");
         assert!(background_runtime_state.inspector_enabled);
+        assert!(background_runtime_state.runtime_frontend_enabled);
         assert!(
             conn.target_owner_state_for_session(Some("SID-active"))
                 .expect("active owner state should be readable")
                 .target_crash_state
                 .is_crashed()
         );
-        assert!(
-            conn.target_devtools_session_state_for_session(Some("SID-background"))
-                .expect("background DevTools session state should be readable")
-                .has_runtime_remote_object_id("background-object")
-        );
+
         assert!(
             conn.with_target_owner_state_for_session_mut(Some("SID-missing"), |_| ())
                 .is_none()

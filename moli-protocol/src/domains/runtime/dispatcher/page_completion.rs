@@ -459,9 +459,7 @@ mod tests {
                         command_id: Some(1801),
                         action: "evaluate",
                         owner_scope: owner.clone(),
-                        object_group: None,
-                        release_object_ids: Vec::new(),
-                        release_object_group: None,
+
                         await_promise: false,
                         wait_for_deferred_reply: false,
                     },

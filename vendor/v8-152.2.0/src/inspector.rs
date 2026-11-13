@@ -82,6 +82,7 @@ unsafe extern "C" {
   );
 
   fn v8_inspector__V8InspectorSession__DELETE(this: *mut RawV8InspectorSession);
+  fn v8_inspector__V8InspectorSession__stop(session: *mut RawV8InspectorSession);
   fn v8_inspector__V8InspectorSession__resume(
     session: *mut RawV8InspectorSession,
     terminate_on_resume: bool,
@@ -971,6 +972,12 @@ impl V8InspectorSession {
         detail,
       );
     }
+  }
+
+  /// Stops this session's debugger agent without resuming other sessions that
+  /// still accept a pause. Inspector objects are released on session drop.
+  pub fn stop(&self) {
+    unsafe { v8_inspector__V8InspectorSession__stop(self.raw.as_ptr()) };
   }
 
   /// Resumes paused execution, optionally terminating it as it unwinds.

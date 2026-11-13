@@ -78,7 +78,6 @@ pub(crate) struct PreparedRuntimeHelper {
     command_id: u64,
     pending: Option<PendingRuntimeProtocolMessageDispatch>,
     cancellation: RuntimeHelperCancellation,
-    object_group: Option<String>,
 }
 
 impl PreparedRuntimeHelper {
@@ -97,7 +96,8 @@ impl PreparedRuntimeHelper {
             .map(str::to_owned);
         let descriptor = RendererCommandDescriptor::for_document_helper(
             json!({"id":command_id,"method":method,"params":params}).to_string(),
-        )?;
+        )?
+        .with_abandoned_object_group_cleanup(object_group.clone());
         let owner = scope.owner();
         let action = method.split_once('.').map_or(method, |(_, action)| action);
         let pending = conn.start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
@@ -114,7 +114,6 @@ impl PreparedRuntimeHelper {
                 identity: RuntimeHelperIdentity { scope, correlation },
                 access: Some(access),
             },
-            object_group,
         })
     }
 
@@ -163,9 +162,8 @@ impl PreparedRuntimeHelper {
         let receiver = completed.take_deferred_response_receiver();
         let identity = self.cancellation.identity.clone();
         let command_id = self.command_id;
-        let object_group = self.object_group.clone();
         let direct = driver.with_state(move |state| {
-            state.finish_runtime_helper_dispatch(identity, command_id, object_group, completed)
+            state.finish_runtime_helper_dispatch(identity, command_id, completed)
         })??;
         if let Some(response) = direct {
             return Ok(response);
@@ -178,9 +176,8 @@ impl PreparedRuntimeHelper {
             fence.merge_into_same_stream_tail(predecessor);
         }
         let identity = self.cancellation.identity.clone();
-        let object_group = self.object_group.clone();
         driver.with_state(move |state| {
-            state.finish_runtime_helper_response(identity, command_id, object_group, response)
+            state.finish_runtime_helper_response(identity, command_id, response)
         })?
     }
 }
@@ -204,7 +201,7 @@ impl RuntimeHelperIdentity {
         &self,
         conn: &mut CdpConnection,
         command_id: u64,
-        _object_group: Option<String>,
+
         completed: CompletedRuntimeProtocolMessageDispatch,
     ) -> Result<Option<BackgroundCommandResponsePayload>> {
         anyhow::ensure!(self.scope.is_current(conn), NoDocumentLoaded);
@@ -221,7 +218,7 @@ impl RuntimeHelperIdentity {
         &self,
         conn: &mut CdpConnection,
         command_id: u64,
-        _object_group: Option<String>,
+
         response: moli_core::RendererRuntimeInspectorAsyncCompletion,
     ) -> Result<BackgroundCommandResponsePayload> {
         anyhow::ensure!(self.scope.is_current(conn), NoDocumentLoaded);

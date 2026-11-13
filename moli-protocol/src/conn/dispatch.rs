@@ -431,11 +431,17 @@ impl CdpConnection {
         command: crate::automation::AutomationCommand,
         params: serde_json::Value,
         id: u64,
+        cleanup_group: Option<String>,
         context: &mut CommandDispatchContext,
     ) -> CdpCommandTaskStep {
         let session_id = owner.session_id().map(str::to_owned);
         match crate::domains::runtime::start_protocol_neutral_runtime_inspector_command(
-            self, owner, command, params, id,
+            self,
+            owner,
+            command,
+            params,
+            id,
+            cleanup_group,
         ) {
             Ok(crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending)) => {
                 self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
