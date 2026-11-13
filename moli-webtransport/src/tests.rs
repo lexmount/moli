@@ -1,3 +1,5 @@
+mod terminal_reader;
+
 use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
