@@ -304,17 +304,25 @@ impl RuntimeInspectorRoutedOutput {
             if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
                 event.command_response_payload_ref()
             {
-                conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                conn.register_runtime_remote_object_ids_from_response_result_for_owner(
                     owner,
                     result,
-                    object_group,
+                    Some(object_group),
                 );
-            } else if let Some(message) = event.protocol_message() {
-                conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                    owner,
-                    message,
-                    object_group,
-                );
+            } else if let Some(message) = event.protocol_json() {
+                if message.id_u64().is_some() {
+                    conn.register_runtime_remote_object_ids_from_response_for_owner(
+                        owner,
+                        message,
+                        Some(object_group),
+                    );
+                } else {
+                    conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                        owner,
+                        message.value(),
+                        object_group,
+                    );
+                }
             }
         }
     }
@@ -2840,6 +2848,9 @@ pub(crate) use worker_binding_replay::{
 
 mod worker_completion;
 pub(crate) use worker_completion::{PreparedWorkerRuntimeCommand, WorkerRuntimeContinuation};
+
+#[cfg(test)]
+mod response_handle_tests;
 
 #[cfg(test)]
 fn worker_workflow_fixture() -> CdpConnection {
