@@ -61,6 +61,7 @@ async def run_text_overflow_group(
         page = await context.new_page()
         await _check_positioned_descendants(page, font, results)
         await _check_shared_inline_descendants(page, font, results)
+        await _check_truncated_text_masks(page, font, results)
         for name, content, reference, extra in CASES:
             html = f"""<!doctype html><style>
               @font-face{{font-family:OverflowTest;src:url(data:font/ttf;base64,{font})}}
@@ -233,3 +234,52 @@ async def _check_shared_inline_descendants(page: Any, font: str,
                 commands=["Page.captureScreenshot", "Runtime.evaluate"],
                 observed={"siblingPixels": sibling_difference,
                           "independentPixels": independent_difference})
+
+
+async def _check_truncated_text_masks(page: Any, font: str,
+                                     results: list[dict[str, Any]]) -> None:
+    cases = (
+        ("relative-ifc", "position:relative;display:inline-block", False),
+        ("absolute-ifc", "position:absolute;left:0;top:0", False),
+        ("opacity-ifc", "display:inline-block;opacity:.5", False),
+        ("own-inline-mask", "position:relative;background:red;background-clip:text;"
+         "-webkit-background-clip:text", True),
+    )
+    for name, css, own_mask in cases:
+        ancestor_mask = "" if own_mask else "background:red;background-clip:text;-webkit-background-clip:text;color:transparent"
+        html = f"""<!doctype html><style>
+          @font-face{{font-family:OverflowTest;src:url(data:font/ttf;base64,{font})}}
+          body{{margin:0;background:white}}
+          #probe{{position:relative;width:90px;overflow:hidden;text-overflow:ellipsis;
+            font:20px/24px OverflowTest;white-space:nowrap;{ancestor_mask}}}
+          .atomic{{position:relative;display:inline-block;width:80px;height:24px;
+            vertical-align:top;color:transparent}}
+          .inner{{{css}}}
+        </style><div id="probe">ABC<span class="atomic"><span class="inner">INNER</span></span>XYZ</div>"""
+        await page.goto("data:text/html;base64," + base64.b64encode(html.encode()).decode(),
+                        wait_until="load")
+        await page.evaluate("document.fonts.ready")
+        capture = {"x": 0, "y": 0, "width": 200, "height": 100}
+        actual_png = await page.screenshot(clip=capture)
+        actual = decode_png(actual_png)
+        red = sum(actual.rgba[i:i+4] == bytes((255, 0, 0, 255))
+                  for i in range(0, len(actual.rgba), 4))
+        await page.evaluate("document.querySelector('.inner').style.visibility = 'hidden'")
+        hidden_png = await page.screenshot(clip=capture)
+        hidden = decode_png(hidden_png)
+        different = sum(actual.rgba[i:i+4] != hidden.rgba[i:i+4]
+                        for i in range(0, len(actual.rgba), 4))
+        if (different > 0) != own_mask or not red:
+            write_artifact(f"text-overflow-mask-{name}", {
+                "actualPng": base64.b64encode(actual_png).decode(),
+                "hiddenPng": base64.b64encode(hidden_png).decode(),
+                "differentPixels": different, "redPixels": red,
+            })
+        assert_equal(red > 0, True, f"{name}: the requested text mask still paints")
+        assert_equal(different > 0, own_mask,
+                     f"{name}: independent text participates in its own mask, outside the ancestor mask")
+        record_contract(results, f"text_overflow_mask_{name}",
+            contract="Ancestor text masks prune truncated atomic subtrees; independent inlines retain their own masks.",
+            source="Blink PaintInlineItems MoveToNextSkippingChildren and inline_box_cursor_",
+            commands=["Page.captureScreenshot", "Runtime.evaluate"],
+            observed={"differentPixels": different, "redPixels": red, "ownMask": own_mask})

@@ -906,9 +906,11 @@ fn project_background_text_clip_mask<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    if let TextClipMaskScope::InlineBox(target) = scope
-        && projection.text_overflow_visibility.is_hidden(target)
-    {
+    let mask_root = match scope {
+        TextClipMaskScope::AllGlyphs => root,
+        TextClipMaskScope::InlineBox(target) => target,
+    };
+    if projection.text_overflow_visibility.is_hidden(mask_root) {
         return;
     }
     project_box_text_clip_mask(projection, root, scope, cull, metrics, snapshot);
@@ -916,21 +918,19 @@ fn project_background_text_clip_mask<N>(
     // A block/background root owns every descendant IFC. A flattened inline
     // instead selects its runs from the shared root IFC, then includes only
     // independent IFCs rooted inside that inline's box subtree.
-    let mut stack: Vec<LayoutBoxId> = match scope {
-        TextClipMaskScope::AllGlyphs => projection.world.boxes[root.index()]
-            .children
-            .iter()
-            .rev()
-            .copied()
-            .collect(),
-        TextClipMaskScope::InlineBox(target) => projection.world.boxes[target.index()]
-            .children
-            .iter()
-            .rev()
-            .copied()
-            .collect(),
-    };
+    let mut stack: Vec<LayoutBoxId> = projection.world.boxes[mask_root.index()]
+        .children
+        .iter()
+        .rev()
+        .copied()
+        .collect();
     while let Some(id) = stack.pop() {
+        // Blink's text-clip cursor skips the entire truncated box item.
+        // Independent descendants may paint separately, but cannot rejoin
+        // this ancestor's mask through their foreground visibility exception.
+        if projection.text_overflow_visibility.is_hidden(id) {
+            continue;
+        }
         let layout_box = &projection.world.boxes[id.index()];
         stack.extend(layout_box.children.iter().rev().copied());
         project_box_text_clip_mask(
@@ -954,10 +954,16 @@ fn project_box_text_clip_mask<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
-    if projection.text_overflow_visibility.is_hidden(id) || !layout_box.style.is_visible() {
+    let target = match scope {
+        TextClipMaskScope::AllGlyphs => id,
+        TextClipMaskScope::InlineBox(target) => target,
+    };
+    if !projection.world.boxes[target.index()].style.is_visible() {
         return;
     }
+    // An independently painted inline may own a mask in a hidden host IFC.
+    // Its explicit scope selects only that inline's glyphs from the shared layout.
+    let layout_box = &projection.world.boxes[id.index()];
     let geometry = &projection.boxes[id.index()];
     let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
