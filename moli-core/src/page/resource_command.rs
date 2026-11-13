@@ -74,6 +74,9 @@ impl CompletedResourceCommand {
 }
 
 impl super::PageDocumentCommandTarget {
+    pub fn native_response_body(&self) -> Option<&crate::network::ResourceInterceptionBody> {
+        self.network_pause.as_ref()?.response_body()
+    }
     pub fn update_native_interception_policy(
         &self,
         enabled: bool,

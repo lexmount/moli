@@ -1938,14 +1938,21 @@ async fn rust_cdp_p0_xhr_response_stage_stream_body_then_continue() {
     .await;
     let request_id = paused_request_id(&paused);
 
-    let chunk = read_paused_response_stream(&mut ctx, &page, 152_008, 152_009, &request_id).await;
-    assert_eq!(
-        chunk["result"]["data"],
-        json!("response-stage body"),
-        "{chunk}"
-    );
-    assert_eq!(chunk["result"]["base64Encoded"], json!(false), "{chunk}");
-    assert_eq!(chunk["result"]["eof"], json!(true), "{chunk}");
+    let handle = open_paused_response_stream(&mut ctx, &page, 152_008, &request_id).await;
+    let mut body = String::new();
+    loop {
+        let chunk = read_response_stream(&mut ctx, &page, 152_009, &handle, None, None).await;
+        assert_eq!(chunk["result"]["base64Encoded"], json!(false), "{chunk}");
+        let data = chunk["result"]["data"].as_str().expect("stream bytes");
+        body.push_str(data);
+        assert!(body.len() <= "response-stage body".len(), "{chunk}");
+        // A live pipe may report EOF in a separate read after its last bytes.
+        if chunk["result"]["eof"] == true {
+            break;
+        }
+        assert!(!data.is_empty(), "a nonterminal read must make progress");
+    }
+    assert_eq!(body, "response-stage body");
 
     let continue_after_taken = page
         .command(

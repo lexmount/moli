@@ -4599,21 +4599,29 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
         None,
     );
 
-    ctx.process_async(json!({
-        "id": 459,
-        "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
-    }))
-    .await;
-    ctx.expect_result(
-        459,
-        json!({
-            "base64Encoded": false,
-            "data": "-xhr-response",
-            "eof": true
-        }),
-        None,
-    );
+    // A live pipe can return its last data before reporting EOF on the next
+    // read. Keep the byte and terminal assertions without assuming that they
+    // share a packet (the previous buffered-only fixture did).
+    let mut suffix = String::new();
+    loop {
+        ctx.process_async(json!({
+            "id": 459,
+            "method": "IO.read",
+            "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, 459);
+        let result = &response["result"];
+        assert_eq!(result["base64Encoded"], false, "{response}");
+        let chunk = result["data"].as_str().expect("stream bytes");
+        suffix.push_str(chunk);
+        assert!(suffix.len() <= "-xhr-response".len(), "{response}");
+        if result["eof"] == true {
+            break;
+        }
+        assert!(!chunk.is_empty(), "a nonterminal read must make progress");
+    }
+    assert_eq!(suffix, "-xhr-response");
 
     ctx.process_async(json!({
         "id": 460,

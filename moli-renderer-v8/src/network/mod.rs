@@ -55,7 +55,9 @@ pub(crate) fn request_resource_type_for_subresource(
     }
 }
 
+mod interception_body;
 pub(crate) mod interception_control;
+pub use interception_body::ResourceInterceptionBody;
 pub(crate) mod interception_output;
 pub use interception_control::{ResourceInterceptionPause, ResourceInterceptionReply};
 

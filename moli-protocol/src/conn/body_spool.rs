@@ -24,6 +24,47 @@ pub struct CapturedBody {
     inner: Arc<CapturedBodyInner>,
 }
 
+/// Body data and a pending native transfer have different readiness semantics.
+/// Keep that distinction through Fetch reads and IO rather than presenting an
+/// unfinished transfer as an empty immutable CapturedBody.
+#[derive(Clone, Debug)]
+pub(crate) enum ProtocolResponseBody {
+    Captured(CapturedBody),
+    Network(moli_core::network::ResourceInterceptionBody),
+}
+
+impl From<CapturedBody> for ProtocolResponseBody {
+    fn from(body: CapturedBody) -> Self {
+        Self::Captured(body)
+    }
+}
+
+impl ProtocolResponseBody {
+    pub(crate) fn captured(&self) -> Option<&CapturedBody> {
+        match self {
+            Self::Captured(body) => Some(body),
+            Self::Network(_) => None,
+        }
+    }
+
+    pub(crate) fn same_storage(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Captured(left), Self::Captured(right)) => left.same_storage(right),
+            (Self::Network(left), Self::Network(right)) => left == right,
+            _ => false,
+        }
+    }
+
+    pub(crate) async fn materialize(self, limit: usize) -> Result<CapturedBody> {
+        match self {
+            Self::Captured(body) => Ok(body),
+            Self::Network(body) => Ok(CapturedBody::from_subresource_response_body(
+                &body.capture(limit).await?,
+            )),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum CapturedBodyInner {
     Memory(bytes::Bytes),

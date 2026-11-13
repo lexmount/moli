@@ -1542,8 +1542,17 @@ impl PooledSubresourceResponseBody {
         Ok(bytes)
     }
 
-    fn read_exact_at(&self, mut offset: usize, mut buffer: &mut [u8]) -> io::Result<()> {
-        for chunk in &self.chunks {
+    fn read_exact_at(&self, offset: usize, buffer: &mut [u8]) -> io::Result<()> {
+        Self::read_chunks_at(&self.chunks, &self.trailing_bytes, offset, buffer)
+    }
+
+    fn read_chunks_at(
+        chunks: &[DiskData],
+        trailing_bytes: &[u8],
+        mut offset: usize,
+        mut buffer: &mut [u8],
+    ) -> io::Result<()> {
+        for chunk in chunks {
             if buffer.is_empty() {
                 break;
             }
@@ -1558,7 +1567,7 @@ impl PooledSubresourceResponseBody {
         }
 
         if !buffer.is_empty() {
-            let trailing = self.trailing_bytes.get(offset..).ok_or_else(|| {
+            let trailing = trailing_bytes.get(offset..).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "pooled resource body ended before its recorded length",
@@ -1625,6 +1634,28 @@ impl Default for SubresourceResponseBodyWriter {
 }
 
 impl SubresourceResponseBodyWriter {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Read bytes already captured without finishing or duplicating the body.
+    /// Pending Fetch response streams use the same disk backing as final bodies.
+    pub fn read_chunk(&self, offset: usize, max_len: usize) -> io::Result<Vec<u8>> {
+        let len = max_len.min(self.len.saturating_sub(offset));
+        let mut bytes = vec![0; len];
+        PooledSubresourceResponseBody::read_chunks_at(
+            &self.disk_chunks,
+            &self.memory,
+            offset,
+            &mut bytes,
+        )?;
+        Ok(bytes)
+    }
+
     pub fn new(memory_limit: usize) -> Self {
         Self::with_memory_limit_and_disk_pool(memory_limit, None)
     }
@@ -2446,8 +2477,8 @@ pub struct PendingSubresourceResponseInfo {
     pub network_request_headers: Option<Vec<(String, String)>>,
     pub response_status: u16,
     pub response_headers: Vec<(String, Vec<u8>)>,
-    /// Exact response bytes plus the lossy compatibility text view needed while
-    /// a response-stage Fetch pause is held.
+    /// Captured body for renderer-owned continuations. Native network pauses
+    /// carry their pending body capability separately; this is empty there.
     pub response_body: SubresourceResponseBody,
     pub from_cache: bool,
     pub cache_state: moli_fetch::ResponseCacheState,
@@ -2468,6 +2499,8 @@ pub struct PendingSubresourceAuthInfo {
     pub response_final_url: Url,
     pub response_status: u16,
     pub response_headers: Vec<(String, Vec<u8>)>,
+    /// Captured compatibility body; native network pauses retain the pending
+    /// transfer in their native decision port instead of waiting for EOF.
     pub response_body: SubresourceResponseBody,
     pub response_from_cache: bool,
     pub response_cache_state: moli_fetch::ResponseCacheState,
@@ -3555,6 +3588,22 @@ mod tests {
             memory_limit,
             Some(pool.clone()),
         )
+    }
+
+    #[test]
+    fn response_body_prefix_reads_survive_spilling_and_later_appends() {
+        let pool = DiskPool::new(None).unwrap();
+        let mut body = pooled_body_writer(4, &pool);
+        body.append(b"abc");
+        assert_eq!(body.read_chunk(1, 100).unwrap(), b"bc");
+        body.append(b"defghi");
+        assert_eq!(body.len(), 9);
+        assert_eq!(body.read_chunk(2, 6).unwrap(), b"cdefgh");
+        body.append(b"jkl");
+        assert_eq!(body.read_chunk(7, 20).unwrap(), b"hijkl");
+        assert!(body.read_chunk(20, 1).unwrap().is_empty());
+        let finished = body.finish();
+        assert_eq!(finished.materialize_bytes().unwrap(), b"abcdefghijkl");
     }
 
     #[test]

@@ -135,7 +135,9 @@ pub(crate) use bidi_channel_work::{
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelOwnerActionBody,
     BidiChannelPageOwner,
 };
-pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter, run_body_storage_work};
+pub(crate) use body_spool::{
+    CapturedBody, CapturedBodyWriter, ProtocolResponseBody, run_body_storage_work,
+};
 #[cfg(test)]
 pub(crate) use browser_context::{ClosedPageTarget, PendingPageTargetClose};
 pub(crate) use browser_context::{
