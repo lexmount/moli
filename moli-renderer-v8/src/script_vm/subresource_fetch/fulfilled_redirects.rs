@@ -4,6 +4,7 @@ use moli_fetch::{RedirectInfo, Request, RequestRedirectMode, ResponseHead};
 fn follow_fulfilled_redirect(
     mut request: Request,
     head: &ResponseHead,
+    document_url: &Url,
 ) -> Result<Option<(Request, RedirectInfo)>, String> {
     let Some(mut target) = crate::network_host::next_redirect_url(
         &head.final_url,
@@ -20,9 +21,20 @@ fn follow_fulfilled_redirect(
         RequestRedirectMode::Follow => {}
     }
     request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+    let includes_credentials = !target.username().is_empty() || target.password().is_some();
+    // Like Chromium's credentialed-subresource check, allow credentials already
+    // present in the same-origin embedding document. Fetch's CORS taint remains
+    // sticky even when a later hop returns to that origin.
+    let credentials_blocked = includes_credentials
+        && (request
+            .request_origin()
+            .is_none_or(|origin| !origin.same_origin(&(&target).into()))
+            || target.username() != document_url.username()
+            || target.password() != document_url.password()
+            || (request.request_mode == moli_fetch::RequestMode::Cors
+                && request.has_cross_origin_url(&head.final_url)));
     if !matches!(target.scheme(), "http" | "https")
-        || !target.username().is_empty()
-        || target.password().is_some()
+        || credentials_blocked
         || moli_fetch::should_request_be_blocked_due_to_bad_port(&target)
     {
         return Err(format!("fetch: invalid redirect target `{target}`"));
@@ -97,7 +109,7 @@ impl ScriptVm {
             cache_state: Default::default(),
             negotiated_http_version: None,
         };
-        let follow = follow_fulfilled_redirect(request, &head);
+        let follow = follow_fulfilled_redirect(request, &head, &pending.info.document_url);
         let mut entered_window_realm = false;
         let result = match follow {
             Ok(Some((request, redirect))) => {

@@ -3267,7 +3267,9 @@ fn cancelled_fetch_resource_timing(
     fetch.resolver()?;
     Some((
         pending.execution_context.context_global()?.clone(),
-        fetch.resource_timing().failed(&pending.info.url),
+        fetch
+            .resource_timing()
+            .failed(fetch.initial_request_url(&pending.info.url)),
     ))
 }
 
