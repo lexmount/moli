@@ -124,6 +124,7 @@ pub use isolate::IntoSharedError;
 pub use isolate::IntoSharedErrorKind;
 pub use isolate::Isolate;
 pub use isolate::IsolateHandle;
+pub use isolate::IsJSApiWrapperNativeErrorCallback;
 pub use isolate::MemoryPressureLevel;
 pub use isolate::MessageCallback;
 pub use isolate::MessageErrorLevel;
