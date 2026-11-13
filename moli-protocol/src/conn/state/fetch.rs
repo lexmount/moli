@@ -1125,7 +1125,10 @@ impl TargetFetchConfig {
     pub(crate) fn subresource_interception_config(
         &self,
     ) -> moli_core::page::SubresourceInterceptionClasses {
-        if self.auth_interception_can_match_any_url() {
+        if auth_interception_url_patterns(self.handle_auth_requests, &self.network_intercepts)
+            .next()
+            .is_some()
+        {
             // Auth challenges are matched by URL alone, regardless of the
             // resource classes named by Fetch.enable patterns. The renderer
             // must route every class through the protocol so no class scope
@@ -1133,28 +1136,6 @@ impl TargetFetchConfig {
             return moli_core::page::SubresourceInterceptionClasses::ALL;
         }
         fetch_subresource_interception_config_for_patterns(self.enabled, &self.patterns)
-    }
-
-    /// Whether `matches_auth_required` can hold for some URL. Auth matching
-    /// is URL-granular while the renderer channel is class-granular, so any
-    /// possible auth match widens interception to every class.
-    ///
-    /// This mirrors `matches_auth_required` exactly: the aggregate
-    /// `handle_auth_requests` flag only produces pauses when there are no
-    /// network intercepts at all, or when some intercept itself has
-    /// `handle_auth_requests` with non-empty `auth_url_patterns`. A
-    /// non-empty intercept map without such an intercept can never match,
-    /// so the class set must not widen for it.
-    fn auth_interception_can_match_any_url(&self) -> bool {
-        if !self.handle_auth_requests {
-            return false;
-        }
-        if self.network_intercepts.is_empty() {
-            return true;
-        }
-        self.network_intercepts.values().any(|intercept| {
-            intercept.handle_auth_requests && !intercept.auth_url_patterns.is_empty()
-        })
     }
 
     pub(crate) fn subresource_interception_snapshot(
@@ -1823,20 +1804,31 @@ fn matching_network_intercepts(
         .collect()
 }
 
+/// Effective auth URL patterns shared by renderer eligibility and per-request
+/// matching. Without network intercepts, enabled Fetch auth applies to any URL.
+fn auth_interception_url_patterns(
+    handle_auth_requests: bool,
+    intercepts: &BTreeMap<String, TargetNetworkInterceptConfig>,
+) -> impl Iterator<Item = &str> {
+    let all_urls = (handle_auth_requests && intercepts.is_empty()).then_some("*");
+    let enabled_intercepts = handle_auth_requests
+        .then_some(intercepts)
+        .into_iter()
+        .flat_map(|intercepts| intercepts.values());
+    all_urls.into_iter().chain(
+        enabled_intercepts
+            .filter(|intercept| intercept.handle_auth_requests)
+            .flat_map(|intercept| intercept.auth_url_patterns.iter().map(String::as_str)),
+    )
+}
+
 fn matches_auth_required(
     handle_auth_requests: bool,
     intercepts: &BTreeMap<String, TargetNetworkInterceptConfig>,
     url: &Url,
 ) -> bool {
-    if !handle_auth_requests {
-        return false;
-    }
-    if intercepts.is_empty() {
-        return true;
-    }
-    intercepts
-        .values()
-        .any(|intercept| network_intercept_matches_auth_required(intercept, url))
+    auth_interception_url_patterns(handle_auth_requests, intercepts)
+        .any(|pattern| url_pattern_matches(pattern, url.as_str()))
 }
 
 fn matching_auth_required_network_intercepts(

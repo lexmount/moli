@@ -844,6 +844,16 @@ fn fetch_session_auth_flag_without_matching_intercept_keeps_pattern_class_scope(
             request_stage: FetchRequestStage::Request,
         }],
     );
+    let any_url = Url::parse("https://example.test/protected/basic").unwrap();
+    let other_url = Url::parse("https://other.test/public").unwrap();
+    let config = owner.config_snapshot();
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::ALL
+    );
+    assert!(config.matches_auth_required(&any_url));
+    assert!(config.matches_auth_required(&other_url));
+
     owner.add_network_intercept(
         "intercept-no-auth".to_owned(),
         Some("BIDI-SID".to_owned()),
@@ -852,7 +862,6 @@ fn fetch_session_auth_flag_without_matching_intercept_keeps_pattern_class_scope(
         Vec::new(),
     );
 
-    let any_url = Url::parse("https://example.test/protected/basic").unwrap();
     let config = owner.config_snapshot();
     assert!(owner.handle_auth_requests());
     assert!(!config.matches_auth_required(&any_url));
@@ -860,6 +869,20 @@ fn fetch_session_auth_flag_without_matching_intercept_keeps_pattern_class_scope(
         owner.subresource_interception_config(),
         SubresourceInterceptionClasses::IMAGE,
         "unmatched session auth must not broaden the renderer class set"
+    );
+
+    owner.add_network_intercept(
+        "intercept-empty-auth".to_owned(),
+        Some("BIDI-SID".to_owned()),
+        true,
+        Vec::new(),
+        Vec::new(),
+    );
+    assert!(!owner.config_snapshot().matches_auth_required(&any_url));
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::IMAGE,
+        "an auth intercept without URL patterns must not broaden the class set"
     );
 
     // A matching auth intercept widens the set back to every class.
@@ -872,6 +895,7 @@ fn fetch_session_auth_flag_without_matching_intercept_keeps_pattern_class_scope(
     );
     let config = owner.config_snapshot();
     assert!(config.matches_auth_required(&any_url));
+    assert!(!config.matches_auth_required(&other_url));
     assert_eq!(
         owner.subresource_interception_config(),
         SubresourceInterceptionClasses::ALL

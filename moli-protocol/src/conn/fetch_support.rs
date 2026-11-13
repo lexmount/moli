@@ -121,49 +121,26 @@ impl FetchResourceTypeFilter {
         }
     }
 
-    pub fn subresource_type(self) -> Option<SubresourceResourceType> {
+    /// Renderer classes routed by this filter. An empty set marks filters
+    /// whose Fetch.enable interception path is not implemented yet.
+    pub const fn interception_classes(self) -> SubresourceInterceptionClasses {
         match self {
-            Self::Stylesheet | Self::TextTrack => None,
-            Self::Media => Some(SubresourceResourceType::Media),
-            Self::Font => Some(SubresourceResourceType::Font),
+            Self::Stylesheet | Self::TextTrack => SubresourceInterceptionClasses::NONE,
+            Self::Media => SubresourceInterceptionClasses::MEDIA,
+            Self::Font => SubresourceInterceptionClasses::FONT,
             // Top-level navigations pause in the protocol; child frame
             // navigations pause in the renderer like subresources.
-            Self::Document => Some(SubresourceResourceType::Document),
-            Self::Script => Some(SubresourceResourceType::Script),
-            Self::Image => Some(SubresourceResourceType::Image),
-            Self::Fetch => Some(SubresourceResourceType::Fetch),
-            Self::EventSource => Some(SubresourceResourceType::EventSource),
-            Self::Xhr => Some(SubresourceResourceType::Xhr),
-            Self::Ping => Some(SubresourceResourceType::Ping),
-            Self::CspViolationReport => Some(SubresourceResourceType::CspReport),
-            Self::WebSocket => Some(SubresourceResourceType::WebSocket),
-            // CDP exposes several Blink resource types through the broad
-            // "Other" token. Moli currently only produces this token for
-            // compression-dictionary link fetches, so narrowing an `Other`
-            // Fetch.enable pattern to Dictionary preserves the scheduler
-            // request kind when the client continues the paused request. If
-            // another internal resource starts reporting as "Other", this
-            // filter must become a small set instead of a single type.
-            Self::Other => Some(SubresourceResourceType::Dictionary),
+            Self::Document => SubresourceInterceptionClasses::DOCUMENT,
+            Self::Script => SubresourceInterceptionClasses::SCRIPT,
+            Self::Image => SubresourceInterceptionClasses::IMAGE,
+            Self::Fetch | Self::EventSource | Self::Xhr => {
+                SubresourceInterceptionClasses::FETCH_LIKE
+            }
+            Self::Ping => SubresourceInterceptionClasses::PING,
+            Self::CspViolationReport => SubresourceInterceptionClasses::CSP_VIOLATION_REPORT,
+            Self::WebSocket => SubresourceInterceptionClasses::WEBSOCKET,
+            Self::Other => SubresourceInterceptionClasses::OTHER,
         }
-    }
-
-    pub fn supports_fetch_enable(self) -> bool {
-        matches!(
-            self,
-            Self::Document
-                | Self::Script
-                | Self::Image
-                | Self::Media
-                | Self::Font
-                | Self::Fetch
-                | Self::EventSource
-                | Self::Xhr
-                | Self::Ping
-                | Self::CspViolationReport
-                | Self::WebSocket
-                | Self::Other
-        )
     }
 }
 
@@ -181,23 +158,17 @@ pub fn fetch_subresource_interception_config_for_patterns(
         return SubresourceInterceptionClasses::ALL;
     }
 
-    let mut classes = SubresourceInterceptionClasses::NONE;
-    for pattern in patterns {
-        let Some(filter) = pattern.resource_type_filter else {
-            // Type-less patterns can pause any resource class, including the
-            // document class, so the renderer must route everything through
-            // the protocol and let it match per request.
-            return SubresourceInterceptionClasses::ALL;
-        };
-        let Some(resource_type) = filter.subresource_type() else {
-            continue;
-        };
-        classes |= SubresourceInterceptionClasses::for_resource_type(resource_type);
-    }
-    // An empty set means no pattern named a routable class (for example
-    // Stylesheet-only patterns); the renderer then routes nothing and the
-    // protocol keeps matching on its own snapshot.
-    classes
+    // Type-less patterns route every class; typed patterns contribute only
+    // their supported classes. URL and stage matching stay in the protocol.
+    patterns
+        .iter()
+        .map(|pattern| {
+            pattern.resource_type_filter.map_or(
+                SubresourceInterceptionClasses::ALL,
+                FetchResourceTypeFilter::interception_classes,
+            )
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1875,18 +1846,29 @@ mod tests {
     }
 
     #[test]
-    fn fetch_resource_type_support_tracks_implemented_interception_paths() {
-        assert!(FetchResourceTypeFilter::Script.supports_fetch_enable());
-        assert_eq!(
-            FetchResourceTypeFilter::Script.subresource_type(),
-            Some(SubresourceResourceType::Script)
-        );
-        assert!(!FetchResourceTypeFilter::Stylesheet.supports_fetch_enable());
-        assert_eq!(FetchResourceTypeFilter::Stylesheet.subresource_type(), None);
-        assert!(!FetchResourceTypeFilter::TextTrack.supports_fetch_enable());
-        assert_eq!(FetchResourceTypeFilter::TextTrack.subresource_type(), None);
+    fn supported_filters_route_exactly_the_resource_types_the_protocol_matches() {
+        let resource_types = [
+            SubresourceResourceType::Document,
+            SubresourceResourceType::Script,
+            SubresourceResourceType::Stylesheet,
+            SubresourceResourceType::Image,
+            SubresourceResourceType::Font,
+            SubresourceResourceType::Audio,
+            SubresourceResourceType::Video,
+            SubresourceResourceType::Media,
+            SubresourceResourceType::TextTrack,
+            SubresourceResourceType::Fetch,
+            SubresourceResourceType::EventSource,
+            SubresourceResourceType::Xhr,
+            SubresourceResourceType::Ping,
+            SubresourceResourceType::CspReport,
+            SubresourceResourceType::Dictionary,
+            SubresourceResourceType::Manifest,
+            SubresourceResourceType::WebSocket,
+        ];
         for filter in [
             FetchResourceTypeFilter::Document,
+            FetchResourceTypeFilter::Script,
             FetchResourceTypeFilter::Image,
             FetchResourceTypeFilter::Media,
             FetchResourceTypeFilter::Font,
@@ -1898,7 +1880,20 @@ mod tests {
             FetchResourceTypeFilter::WebSocket,
             FetchResourceTypeFilter::Other,
         ] {
-            assert!(filter.supports_fetch_enable(), "{filter:?}");
+            let patterns = [FetchInterceptionPattern {
+                url_pattern: "*".to_owned(),
+                resource_type_filter: Some(filter),
+                request_stage: FetchRequestStage::Request,
+            }];
+            let classes = fetch_subresource_interception_config_for_patterns(true, &patterns);
+            assert!(!classes.is_empty(), "{filter:?}");
+            for resource_type in resource_types {
+                assert_eq!(
+                    classes.intercepts(resource_type),
+                    filter.matches_resource_type(resource_type.into()),
+                    "{filter:?} / {resource_type:?}"
+                );
+            }
         }
     }
 
@@ -2026,7 +2021,7 @@ mod tests {
     }
 
     #[test]
-    fn request_and_response_stage_patterns_of_one_type_share_a_class() {
+    fn request_and_response_stage_patterns_union_their_classes() {
         let patterns = [
             FetchInterceptionPattern {
                 url_pattern: "*/image".to_owned(),
@@ -2082,8 +2077,8 @@ mod tests {
             fetch_subresource_interception_config_for_patterns(false, &[]),
             SubresourceInterceptionClasses::NONE
         );
-        // Stylesheet and text-track filters have no renderer class yet, so a
-        // set built only from them cannot route anything through the protocol.
+        // Explicit Stylesheet and TextTrack filters are not supported by
+        // Fetch.enable, even though the renderer can represent their classes.
         for filter in [
             FetchResourceTypeFilter::Stylesheet,
             FetchResourceTypeFilter::TextTrack,
