@@ -399,7 +399,7 @@ fn register_pending_window_fetch_for_test(
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
-                        body_writer: Default::default(),
+                        body_capture: crate::types::StreamingSubresourceBody::new(None, None),
                         event_source_parser: None,
                         xhr_response: None,
                     },

@@ -891,6 +891,7 @@ pub(super) enum AsyncSubresourceFetchEvent {
     InterceptedXhrStreamingStarted {
         info: Box<PendingSubresourceFetchInfo>,
         started: Box<AsyncSubresourceStreamingStarted>,
+        body: crate::network::ResourceInterceptionBody,
     },
     Completion(Box<AsyncSubresourceFetchCompletion>),
     ObservedNetworkRecord(Box<SubresourceNetworkRecord>),
@@ -1069,6 +1070,42 @@ pub(super) struct ServiceWorkerControllerChangeCompletion {
     pub(super) target: ServiceWorkerWindowClientTarget,
 }
 
+/// Page-owned streams capture locally. Native XHR only tracks delivery and
+/// shares the transport capture, including on cancellation before EOF.
+pub(super) enum StreamingSubresourceBody {
+    Local(SubresourceResponseBodyWriter),
+    Native {
+        body: crate::network::ResourceInterceptionBody,
+        delivered: usize,
+    },
+}
+
+impl StreamingSubresourceBody {
+    pub(super) fn new(
+        disk_pool: Option<moli_disk_pool::DiskPool>,
+        native: Option<crate::network::ResourceInterceptionBody>,
+    ) -> Self {
+        match native {
+            Some(body) => Self::Native { body, delivered: 0 },
+            None => Self::Local(SubresourceResponseBodyWriter::with_disk_pool(disk_pool)),
+        }
+    }
+
+    pub(super) fn append(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Local(writer) => writer.append(bytes),
+            Self::Native { delivered, .. } => *delivered = delivered.saturating_add(bytes.len()),
+        }
+    }
+
+    pub(super) fn finish(self) -> SubresourceResponseBody {
+        match self {
+            Self::Local(writer) => writer.finish(),
+            Self::Native { body, delivered } => body.finish_capture(delivered),
+        }
+    }
+}
+
 pub(super) struct StreamingSubresourceFetchState {
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) pending: PendingSubresourceFetchState,
@@ -1079,7 +1116,7 @@ pub(super) struct StreamingSubresourceFetchState {
     pub(super) body_source_id: NetworkBodySourceId,
     pub(super) head: moli_fetch::ResponseHead,
     pub(super) network_request_headers: Option<Vec<(String, String)>>,
-    pub(super) body_writer: SubresourceResponseBodyWriter,
+    pub(super) body_capture: StreamingSubresourceBody,
     pub(super) event_source_parser: Option<crate::network_host::EventSourceParser>,
     pub(super) xhr_response: Option<XhrStreamingResponseState>,
 }

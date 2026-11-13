@@ -1919,7 +1919,7 @@ impl PageScriptHost {
             .values_mut()
             .find(|state| state.body_source_id == body_source_id)
         {
-            state.body_writer.append(bytes);
+            state.body_capture.append(bytes);
             true
         } else {
             false
@@ -1963,7 +1963,7 @@ impl PageScriptHost {
         let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
         let event_source = v8::Local::new(scope, event_source);
         let parser = state.event_source_parser.as_mut()?;
-        state.body_writer.append(bytes);
+        state.body_capture.append(bytes);
         let messages = parser.push(bytes);
         let delivery = crate::types::EventSourceStreamingChunkDelivery {
             context,
@@ -1992,7 +1992,7 @@ impl PageScriptHost {
             };
             let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
             let xhr = v8::Local::new(scope, xhr);
-            state.body_writer.append(bytes);
+            state.body_capture.append(bytes);
             let (decoded_text, loaded, total) = state.xhr_response.as_mut()?.append(bytes);
             crate::types::XhrStreamingChunkDelivery {
                 context,
@@ -2072,7 +2072,7 @@ impl PageScriptHost {
         error_text: String,
     ) {
         if let Some(handle) = streaming.pending.info.network_request_handle {
-            let partial_body = streaming.body_writer.finish();
+            let partial_body = streaming.body_capture.finish();
             self.record_subresource_response_started(
                 SubresourceResponseStarted::new(
                     handle,
@@ -2254,7 +2254,7 @@ impl PageScriptHost {
                 SubresourceBodyFinished::failed_with_partial_body(
                     handle,
                     error_text,
-                    streaming.body_writer.finish(),
+                    streaming.body_capture.finish(),
                 ),
             );
         } else {

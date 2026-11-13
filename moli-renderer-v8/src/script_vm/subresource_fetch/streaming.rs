@@ -426,7 +426,11 @@ impl ScriptVm {
                 output.drain();
                 Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
             }
-            AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted { info, started } => {
+            AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted {
+                info,
+                started,
+                body,
+            } => {
                 self._context_host
                     .borrow_mut()
                     .start_pending_subresource_native_stream(&info);
@@ -434,6 +438,7 @@ impl ScriptVm {
                 self.start_streaming_async_subresource_fetch_body_with_reported_redirects(
                     *started,
                     reported_redirects,
+                    Some(body),
                 )
             }
             AsyncSubresourceFetchEvent::InterceptedXhrCompleted(completed) => {
@@ -588,7 +593,7 @@ impl ScriptVm {
                 body_source_id: started.body_source_id,
                 head: started.head,
                 network_request_headers: started.network_request_headers,
-                body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
+                body_capture: crate::types::StreamingSubresourceBody::new(disk_pool, None),
                 event_source_parser: None,
                 xhr_response: None,
             });
@@ -614,13 +619,14 @@ impl ScriptVm {
         &mut self,
         started: crate::types::AsyncSubresourceStreamingStarted,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
-        self.start_streaming_async_subresource_fetch_body_with_reported_redirects(started, 0)
+        self.start_streaming_async_subresource_fetch_body_with_reported_redirects(started, 0, None)
     }
 
     fn start_streaming_async_subresource_fetch_body_with_reported_redirects(
         &mut self,
         started: crate::types::AsyncSubresourceStreamingStarted,
         reported_redirects: usize,
+        native_body: Option<crate::network::ResourceInterceptionBody>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let trace_fields = AsyncSubresourceTraceFields {
@@ -989,7 +995,7 @@ impl ScriptVm {
                         body_source_id: started.body_source_id,
                         head: started.head.clone(),
                         network_request_headers: started.network_request_headers.clone(),
-                        body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
+                        body_capture: crate::types::StreamingSubresourceBody::new(disk_pool, native_body),
                         event_source_parser: None,
                         xhr_response: Some(xhr_response),
                     });
@@ -1151,7 +1157,7 @@ impl ScriptVm {
                     body_source_id: started.body_source_id,
                     head: started.head.clone(),
                     network_request_headers: started.network_request_headers.clone(),
-                    body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
+                    body_capture: crate::types::StreamingSubresourceBody::new(disk_pool, None),
                     event_source_parser,
                     xhr_response: None,
                 },
@@ -1429,7 +1435,7 @@ impl ScriptVm {
                     .request_cookie_report
                     .clone()
                     .or_else(|| streaming.pending.info.request_cookie_report.clone());
-                let response_body = streaming.body_writer.finish();
+                let response_body = streaming.body_capture.finish();
                 let mut network_record = crate::types::SubresourceNetworkRecord::success_with_body(
                     streaming.pending.info.frame_id.clone(),
                     streaming.pending.info.document_url.clone(),
@@ -1466,7 +1472,7 @@ impl ScriptVm {
             Err(_) => {
                 let network_error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
                 if let Some(handle) = streaming.pending.info.network_request_handle {
-                    let partial_body = streaming.body_writer.finish();
+                    let partial_body = streaming.body_capture.finish();
                     self._context_host
                         .borrow_mut()
                         .record_subresource_response_started(
@@ -1651,7 +1657,7 @@ impl ScriptVm {
                             parser.reconnect_delay_ms(),
                         );
                     }
-                    let response_body = streaming.body_writer.finish();
+                    let response_body = streaming.body_capture.finish();
                     if let Some(handle) = streaming.pending.info.network_request_handle {
                         let body = match result {
                             Ok(()) => crate::types::SubresourceBodyFinished::ready_after_streaming(
@@ -1701,7 +1707,7 @@ impl ScriptVm {
                             .or_else(|| streaming.pending.info.request_cookie_report.clone());
                         let finish_body_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-                        let response_body = streaming.body_writer.finish();
+                        let response_body = streaming.body_capture.finish();
                         let response_body_size = response_body.len();
                         trace_async_subresource_stage(
                             "async_subresource_streaming_body_finished",
@@ -1933,7 +1939,7 @@ impl ScriptVm {
                         let network_error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
                         let request_handle = streaming.pending.info.network_request_handle;
                         if let Some(handle) = request_handle {
-                            let partial_body = streaming.body_writer.finish();
+                            let partial_body = streaming.body_capture.finish();
                             if !matches!(
                                 &streaming.pending.continuation,
                                 PendingSubresourceContinuation::Xhr { .. }

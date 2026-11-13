@@ -1513,6 +1513,7 @@ impl SubresourceBodyFinished {
 #[derive(Debug, Clone)]
 pub struct SubresourceResponseBody {
     inner: Arc<SubresourceResponseBodyInner>,
+    prefix_len: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -1598,6 +1599,9 @@ impl PooledSubresourceResponseBody {
 
 impl PartialEq for SubresourceResponseBody {
     fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
         if Arc::ptr_eq(&self.inner, &other.inner) {
             return true;
         }
@@ -1605,7 +1609,7 @@ impl PartialEq for SubresourceResponseBody {
             (
                 SubresourceResponseBodyInner::Memory(left),
                 SubresourceResponseBodyInner::Memory(right),
-            ) => left == right,
+            ) => left[..self.len()] == right[..other.len()],
             (
                 SubresourceResponseBodyInner::ParkableImage(left),
                 SubresourceResponseBodyInner::ParkableImage(right),
@@ -1729,6 +1733,7 @@ impl SubresourceResponseBodyWriter {
                 .saturating_add(self.memory.len());
             debug_assert_eq!(stored_len, self.len);
             return SubresourceResponseBody {
+                prefix_len: None,
                 inner: Arc::new(SubresourceResponseBodyInner::Disk {
                     storage: PooledSubresourceResponseBody {
                         chunks: std::mem::take(&mut self.disk_chunks),
@@ -1761,6 +1766,7 @@ impl SubresourceResponseBody {
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self {
             inner: Arc::new(SubresourceResponseBodyInner::Memory(bytes)),
+            prefix_len: None,
         }
     }
 
@@ -1769,6 +1775,16 @@ impl SubresourceResponseBody {
     pub fn from_parkable_image(image: ParkableImage) -> Self {
         Self {
             inner: Arc::new(SubresourceResponseBodyInner::ParkableImage(image)),
+            prefix_len: None,
+        }
+    }
+
+    /// A bounded view of the same capture. A cancelled consumer can retain
+    /// exactly its delivered prefix without copying or re-spooling the body.
+    pub fn prefix(&self, len: usize) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            prefix_len: Some(len.min(self.len())),
         }
     }
 
@@ -1796,11 +1812,11 @@ impl SubresourceResponseBody {
 
     pub fn try_bytes(&self) -> io::Result<Cow<'_, [u8]>> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory(bytes) => Ok(Cow::Borrowed(bytes)),
+            SubresourceResponseBodyInner::Memory(bytes) => Ok(Cow::Borrowed(&bytes[..self.len()])),
             SubresourceResponseBodyInner::Disk { .. } => self.materialize_bytes().map(Cow::Owned),
             SubresourceResponseBodyInner::ParkableImage(image) => image
                 .snapshot()
-                .map(|snapshot| Cow::Owned(snapshot.to_vec())),
+                .map(|snapshot| Cow::Owned(snapshot[..self.len()].to_vec())),
         }
     }
 
@@ -1845,20 +1861,11 @@ impl SubresourceResponseBody {
     }
 
     pub fn materialize_bytes_from(&self, offset: usize) -> io::Result<Vec<u8>> {
-        match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory(bytes) => {
-                Ok(bytes.get(offset..).map(<[u8]>::to_vec).unwrap_or_default())
-            }
-            SubresourceResponseBodyInner::Disk { storage, .. } => {
-                storage.read_range(offset, storage.len.saturating_sub(offset))
-            }
-            SubresourceResponseBodyInner::ParkableImage(image) => {
-                image.read_range(offset, image.len().saturating_sub(offset))
-            }
-        }
+        self.read_chunk(offset, self.len().saturating_sub(offset))
     }
 
     pub fn read_chunk(&self, offset: usize, max_len: usize) -> io::Result<Vec<u8>> {
+        let max_len = max_len.min(self.len().saturating_sub(offset));
         if max_len == 0 {
             return Ok(Vec::new());
         }
@@ -1878,6 +1885,15 @@ impl SubresourceResponseBody {
     }
 
     pub fn write_bytes_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        if self.prefix_len.is_some() {
+            let mut offset = 0;
+            while offset < self.len() {
+                let bytes = self.read_chunk(offset, 64 * 1024)?;
+                writer.write_all(&bytes)?;
+                offset += bytes.len();
+            }
+            return Ok(());
+        }
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory(bytes) => writer.write_all(bytes),
             SubresourceResponseBodyInner::Disk { storage, .. } => storage.write_to(writer),
@@ -1888,11 +1904,12 @@ impl SubresourceResponseBody {
     }
 
     pub fn len(&self) -> usize {
-        match self.inner.as_ref() {
+        let len = match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory(bytes) => bytes.len(),
             SubresourceResponseBodyInner::Disk { storage, .. } => storage.len,
             SubresourceResponseBodyInner::ParkableImage(image) => image.len(),
-        }
+        };
+        self.prefix_len.map_or(len, |prefix| prefix.min(len))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -4255,6 +4272,34 @@ mod tests {
         body.write_bytes_to(&mut copied)
             .expect("pooled body should stream-copy into writer");
         assert_eq!(copied, b"hello world");
+    }
+
+    #[test]
+    fn response_body_prefix_shares_storage_and_bounds_all_read_paths() {
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(4, &pool);
+        writer.append(b"hello world");
+        let pooled = writer.finish();
+        for body in [
+            SubresourceResponseBody::from_bytes(b"hello world".to_vec()),
+            pooled,
+        ] {
+            let prefix = body.prefix(5);
+            assert!(Arc::ptr_eq(&body.inner, &prefix.inner));
+            assert_eq!(prefix.len(), 5);
+            assert_ne!(body, prefix);
+            assert_eq!(prefix.try_bytes().unwrap().as_ref(), b"hello");
+            assert_eq!(prefix.materialize_bytes_from(3).unwrap(), b"lo");
+            assert_eq!(prefix.read_chunk(3, usize::MAX).unwrap(), b"lo");
+            assert!(prefix.read_chunk(5, usize::MAX).unwrap().is_empty());
+            let mut copied = Vec::new();
+            prefix.write_bytes_to(&mut copied).unwrap();
+            assert_eq!(copied, b"hello");
+            assert_eq!(prefix.prefix(usize::MAX), prefix);
+            assert!(prefix.prefix(0).is_empty());
+            assert_eq!(body.materialize_bytes().unwrap(), b"hello world");
+        }
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, 11);
     }
 
     #[test]

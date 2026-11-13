@@ -38,7 +38,6 @@ use crate::types::{
     PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion, RunningSubresourceFetchState,
     StreamingSubresourceFetchState, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
     SubresourceRequestInitiatorType, SubresourceResourceType, SubresourceResponseBody,
-    SubresourceResponseBodyWriter,
 };
 use crate::util::v8_string;
 

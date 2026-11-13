@@ -36,6 +36,7 @@ impl ControlledXhrStream {
         info: &PendingSubresourceFetchInfo,
         head: ResponseHead,
         network_request_headers: Option<Vec<(String, String)>>,
+        body: crate::network::ResourceInterceptionBody,
     ) -> Result<(), String> {
         let body_source_id = crate::network_host::new_network_body_source_id();
         let started = AsyncSubresourceStreamingStarted {
@@ -55,6 +56,7 @@ impl ControlledXhrStream {
                 AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted {
                     info: Box::new(info.clone()),
                     started: Box::new(started),
+                    body,
                 },
             )
             .map_err(|_| "XHR stream delivery owner is closed".to_owned())?;

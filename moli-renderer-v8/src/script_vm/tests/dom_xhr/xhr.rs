@@ -2505,7 +2505,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
-                        body_writer,
+                        body_capture: crate::types::StreamingSubresourceBody::Local(body_writer),
                         event_source_parser: None,
                         xhr_response: None,
                     });
@@ -2787,7 +2787,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
-                        body_writer,
+                        body_capture: crate::types::StreamingSubresourceBody::Local(body_writer),
                         event_source_parser: None,
                         xhr_response: None,
                     });
@@ -2951,7 +2951,7 @@ fn install_streaming_fetch_response_fixture(
                         negotiated_http_version: None,
                     },
                     network_request_headers: None,
-                    body_writer: Default::default(),
+                    body_capture: crate::types::StreamingSubresourceBody::new(None, None),
                     event_source_parser: None,
                     xhr_response: None,
                 });
@@ -3064,7 +3064,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
-                        body_writer: Default::default(),
+                        body_capture: crate::types::StreamingSubresourceBody::new(None, None),
                         event_source_parser: None,
                         xhr_response: None,
                     });
@@ -3724,7 +3724,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         negotiated_http_version: None,
                     },
                     network_request_headers: None,
-                    body_writer,
+                    body_capture: crate::types::StreamingSubresourceBody::Local(body_writer),
                     event_source_parser: None,
                     xhr_response: None,
                 });

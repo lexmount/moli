@@ -74,7 +74,12 @@ impl LoadedXhrResponse {
         network_request_headers: Option<Vec<(String, String)>>,
     ) -> Result<Option<Response>, String> {
         if let Some(stream) = stream {
-            stream.start(info, self.head.clone(), network_request_headers)?;
+            stream.start(
+                info,
+                self.head.clone(),
+                network_request_headers,
+                self.body.clone(),
+            )?;
             let mut offset = 0;
             loop {
                 let (bytes, eof) = self
