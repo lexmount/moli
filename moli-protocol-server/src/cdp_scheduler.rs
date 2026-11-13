@@ -1637,9 +1637,9 @@ impl CdpScheduler {
         context: &moli_protocol::automation::AutomationContext,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
-        // These commands settle or replace the request being waited on. They
-        // must reach their own owner without waiting for that request first.
-        if devtools_command_settles_pending_navigation(command) {
+        // Navigation controls and existing-dialog handling do not need a new
+        // Document. Waiting here could block the operation that lets it commit.
+        if devtools_command_bypasses_document_admission(command) {
             return Ok(out);
         }
         while self
@@ -3368,12 +3368,13 @@ fn renderer_output_transport_terminal_error(
     )
 }
 
-fn devtools_command_settles_pending_navigation(command: &AutomationCommand) -> bool {
+fn devtools_command_bypasses_document_admission(command: &AutomationCommand) -> bool {
     devtools_navigation_wait(command).is_some()
         || matches!(
             command,
             AutomationCommand::CloseTarget(_)
                 | AutomationCommand::RemoveBrowserContext(_)
+                | AutomationCommand::HandleJavaScriptDialog(_)
                 | AutomationCommand::ContinueInterceptedRequest(_)
                 | AutomationCommand::ContinueInterceptedResponse(_)
                 | AutomationCommand::ContinueWithAuth(_)

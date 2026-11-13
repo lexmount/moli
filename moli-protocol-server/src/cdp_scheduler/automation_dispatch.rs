@@ -208,7 +208,7 @@ impl CdpScheduler {
         let step = self
             .state
             .with_state(|state| {
-                if super::devtools_command_settles_pending_navigation(&command) {
+                if super::devtools_command_bypasses_document_admission(&command) {
                     Ok(
                         state.start_automation_command_dispatch_with_background_command_id(
                             command,
