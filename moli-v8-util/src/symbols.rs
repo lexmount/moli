@@ -42,7 +42,9 @@ pub fn set_symbol_to_string_tag(
 }
 
 pub fn private_key<'s>(scope: &mut PinScope<'s, '_>, name: &str) -> Option<Local<'s, Private>> {
-    let name = v8_string(scope, name)?;
+    // for_api interns its name anyway. Start with that canonical string rather
+    // than allocate and hash a fresh ordinary string on every slot lookup.
+    let name = v8::String::new_from_utf8(scope, name.as_bytes(), v8::NewStringType::Internalized)?;
     // V8 named API private symbols are isolate-wide, not context-local. They
     // are still invisible to JavaScript reflection, but native code must treat
     // the slot name as an isolate-level contract when objects cross contexts.
@@ -81,4 +83,45 @@ pub fn get_private_object<'s>(
     slot: &str,
 ) -> Option<Local<'s, Object>> {
     get_private_value(scope, object, slot).and_then(|value| Local::<Object>::try_from(value).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moli_v8_test_util::ensure_v8;
+    use std::pin::pin;
+
+    #[test]
+    fn internalized_slot_names_preserve_legacy_private_symbols_across_contexts() {
+        ensure_v8();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let first_context = v8::Context::new(scope, Default::default());
+        let second_context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, first_context);
+        for name in ["", "__moliDetachedNativeHandle", "slot\0雪🙂"] {
+            let object = Object::new(scope);
+            let legacy_name = v8_string(scope, name).unwrap();
+            let legacy_key = Private::for_api(scope, Some(legacy_name));
+            let value = v8::Number::new(scope, 7.0);
+            assert_eq!(
+                object.set_private(scope, legacy_key, value.into()),
+                Some(true)
+            );
+            let dynamic_name = name.to_owned();
+            assert_eq!(private_key(scope, &dynamic_name), Some(legacy_key));
+            assert!(
+                object
+                    .get(scope, legacy_name.into())
+                    .unwrap()
+                    .is_undefined()
+            );
+            let scope = &mut v8::ContextScope::new(scope, second_context);
+            assert_eq!(
+                get_private_value(scope, object, name).and_then(|value| value.number_value(scope)),
+                Some(7.0)
+            );
+        }
+    }
 }
