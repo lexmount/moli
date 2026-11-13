@@ -35,6 +35,19 @@ pub(crate) struct EllipsisLine {
 }
 
 impl EllipsisLine {
+    pub(crate) fn visible_ranges(
+        &self,
+        range: Range<usize>,
+    ) -> impl Iterator<Item = Range<usize>> + '_ {
+        let start = self
+            .visible_text
+            .partition_point(|visible| visible.end <= range.start);
+        self.visible_text[start..]
+            .iter()
+            .take_while(move |visible| visible.start < range.end)
+            .map(move |visible| visible.start.max(range.start)..visible.end.min(range.end))
+    }
+
     pub(crate) fn text_is_visible(&self, range: &Range<usize>) -> bool {
         let index = self
             .visible_text

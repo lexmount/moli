@@ -621,23 +621,57 @@ pub(super) fn range_selection_rects<N>(
     if range.is_empty() {
         return;
     }
-    let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
-    let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
-    Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
-        let rect = selection_rect(
-            context,
-            line_index,
-            layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
-            layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
-            rect.x0 as f32,
-            rect.y0 as f32,
-            (rect.x1 - rect.x0).max(0.0) as f32,
-            (rect.y1 - rect.y0).max(0.0) as f32,
-        );
-        if rect.width > 0.0 && rect.height > 0.0 {
-            emit(rect);
+    let mut project_range = |range: std::ops::Range<usize>, only_line: Option<usize>| {
+        let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
+        let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
+        Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
+            if only_line.is_some_and(|line| line != line_index) {
+                return;
+            }
+            let rect = selection_rect(
+                context,
+                line_index,
+                layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
+                layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
+                rect.x0 as f32,
+                rect.y0 as f32,
+                (rect.x1 - rect.x0).max(0.0) as f32,
+                (rect.y1 - rect.y0).max(0.0) as f32,
+            );
+            if rect.width > 0.0 && rect.height > 0.0 {
+                emit(rect);
+            }
+        });
+    };
+    let Some(overflow) = &context.text_overflow else {
+        project_range(range, None);
+        return;
+    };
+    // Start at the selected cluster's line rather than rescanning every line
+    // for each fragment-level paint event in a mixed IFC.
+    let first_line = parley::layout::Cluster::from_byte_index(text_layout, range.start)
+        .map_or(text_layout.len(), |cluster| cluster.path().line_index());
+    for line_index in first_line..text_layout.len() {
+        let line_range = text_layout.get(line_index).unwrap().text_range();
+        if line_range.start >= range.end {
+            break;
         }
-    });
+        let selected = range.start.max(line_range.start)..range.end.min(line_range.end);
+        if selected.is_empty() {
+            continue;
+        }
+        if let Some(ellipsis) = overflow.lines.get(line_index).and_then(Option::as_ref) {
+            // Bidi truncation may retain several disjoint logical ranges.
+            // Clip only the paint selection; DOM selection and CSSOM stay intact.
+            for visible in ellipsis.visible_ranges(selected) {
+                project_range(visible, Some(line_index));
+            }
+        } else {
+            // Keep Parley's explicit-newline and empty-line selection geometry
+            // even if this line has no drawable glyphs.
+            project_range(selected, Some(line_index));
+        }
+    }
 }
 
 /// Use the same caret ink for event culling and painting, independently of

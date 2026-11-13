@@ -24,6 +24,7 @@ struct Node {
     text: Option<&'static str>,
     children: Vec<usize>,
     scroll: LayoutPoint,
+    selection: Option<moli_layout::LayoutTextSelection>,
 }
 
 impl Node {
@@ -35,6 +36,7 @@ impl Node {
             text: None,
             children,
             scroll: LayoutPoint::ZERO,
+            selection: None,
         }
     }
 
@@ -46,6 +48,7 @@ impl Node {
             text: None,
             children,
             scroll: LayoutPoint::ZERO,
+            selection: None,
         }
     }
 
@@ -57,6 +60,7 @@ impl Node {
             text: Some(text),
             children: Vec::new(),
             scroll: LayoutPoint::ZERO,
+            selection: None,
         }
     }
 }
@@ -83,6 +87,10 @@ impl LayoutSource for Source {
 
     fn node_kind(&self, node: Self::NodeId) -> LayoutSourceKind {
         self.0[node].kind
+    }
+
+    fn text_selection(&self, node: Self::NodeId) -> Option<moli_layout::LayoutTextSelection> {
+        self.0[node].selection
     }
 
     fn element_semantics(&self, node: Self::NodeId) -> Option<LayoutElementSemantics> {
@@ -1442,6 +1450,115 @@ fn text_overflow_with_a_leading_atomic_keeps_nowrap_on_one_line() {
         lines, 1,
         "an atomic prefix cannot introduce a soft break in nowrap content"
     );
+}
+
+#[test]
+fn text_overflow_selection_paints_only_visible_source_ranges_in_bulk_and_mixed_ifcs() {
+    use style::properties::longhands::direction::computed_value::T as Direction;
+    let selected_color = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
+    for mixed in [false, true] {
+        for rtl in [false, true] {
+            for (selected, visible_width) in if rtl {
+                [(0..7, 0.0), (10..12, 19.2), (3..10, 19.2)]
+            } else {
+                [(5..12, 0.0), (0..2, 19.2), (3..10, 9.6)]
+            } {
+                let mut source = Source(vec![
+                    Node::element("root", if mixed { vec![2, 1] } else { vec![1] }),
+                    Node::text("text", "ABCDEFGHIJKL"),
+                    Node::element("atomic", vec![]),
+                ]);
+                source.0[1].selection = Some(moli_layout::LayoutTextSelection::new(
+                    selected.start,
+                    selected.end,
+                ));
+                let (style, mut services) = ellipsis_style(70.0, |computed| {
+                    if rtl {
+                        computed
+                            .mutate_inherited_box()
+                            .set_direction(Direction::Rtl);
+                    }
+                });
+                let output = build_layout_pass(
+                    &source,
+                    &mut Styles(HashMap::from([
+                        (0, style),
+                        (2, fixed_size(LayoutDisplay::InlineBlock, 0.0, 0.0)),
+                    ])),
+                    &mut services,
+                    LayoutPassRequest::with_paint(
+                        LayoutViewport::new(320, 240, 1.0),
+                        LayoutFlushReason::Print,
+                    ),
+                )
+                .unwrap();
+                let width = output
+                    .paint_snapshot()
+                    .unwrap()
+                    .fragments
+                    .iter()
+                    .filter_map(PaintFragment::solid_fill)
+                    .filter(|(_, color, _)| *color == selected_color)
+                    .map(|(rect, _, _)| rect.width)
+                    .sum::<f32>();
+                assert!(
+                    (width - visible_width).abs() < 0.02,
+                    "mixed={mixed}, rtl={rtl}, selected={selected:?}, width={width}, expected={visible_width}"
+                );
+                assert!(
+                    (output.text_range_rects(1, 0..12)[0].bounding_rect().width - 115.2).abs()
+                        < 0.01
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn text_overflow_selection_keeps_glyphless_lines_that_are_not_truncated() {
+    let selected_color = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
+    for mixed in [false, true] {
+        let mut source = Source(vec![
+            Node::element("root", if mixed { vec![2, 1] } else { vec![1] }),
+            Node::text("text", "ABCDEFGHIJKL\n\nX"),
+            Node::element("atomic", vec![]),
+        ]);
+        source.0[1].selection = Some(moli_layout::LayoutTextSelection::new(13, 14));
+        let (style, mut services) = ellipsis_style(70.0, |computed| {
+            computed.mutate_inherited_text().set_white_space_collapse(
+                style::properties::longhands::white_space_collapse::computed_value::T::Preserve,
+            );
+        });
+        let output = build_layout_pass(
+            &source,
+            &mut Styles(HashMap::from([
+                (0, style),
+                (2, fixed_size(LayoutDisplay::InlineBlock, 0.0, 0.0)),
+            ])),
+            &mut services,
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Print,
+            ),
+        )
+        .unwrap();
+        assert!(
+            painted_text(&output).contains("..."),
+            "fixture includes a truncated line"
+        );
+        assert!(
+            output
+                .paint_snapshot()
+                .unwrap()
+                .fragments
+                .iter()
+                .filter_map(PaintFragment::solid_fill)
+                .any(|(rect, color, _)| color == selected_color
+                    && rect.width > 0.0
+                    && rect.height > 0.0),
+            "the selected empty line still paints: mixed={mixed}"
+        );
+    }
 }
 
 #[test]

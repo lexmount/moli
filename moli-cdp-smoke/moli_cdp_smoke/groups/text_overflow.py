@@ -110,6 +110,48 @@ async def run_text_overflow_group(
                 source="Chromium 145.0.7632.116; Blink LineTruncator",
                 commands=["Page.captureScreenshot", "Runtime.evaluate"],
                 observed={"differentPixels": different, **original})
+        for mixed in (False, True):
+            for rtl, start, end, visible in (
+                (False, 5, 12, False), (True, 0, 7, False),
+                (False, 0, 2, True), (True, 10, 12, True),
+            ):
+                html = f"""<!doctype html><style>
+                  @font-face{{font-family:OverflowTest;src:url(data:font/ttf;base64,{font})}}
+                  body{{margin:0;background:white}}
+                  #probe{{position:absolute;left:20px;top:20px;width:90px;
+                    font:20px/24px OverflowTest;white-space:nowrap;overflow:hidden;
+                    text-overflow:ellipsis;direction:{'rtl' if rtl else 'ltr'}}}
+                </style><div id="probe">{'<span style="display:inline-block;width:0;height:0"></span>' if mixed else ''}ABCDEFGHIJKL</div>"""
+                await page.goto("data:text/html;base64," + base64.b64encode(html.encode()).decode(),
+                                wait_until="load")
+                await page.evaluate("document.fonts.ready")
+                capture = {"x": 0, "y": 0, "width": 200, "height": 100}
+                before = decode_png(await page.screenshot(clip=capture))
+                geometry = await page.evaluate("""() => {
+                  const range = document.createRange();
+                  range.selectNodeContents(document.getElementById('probe'));
+                  return range.getBoundingClientRect().toJSON();
+                }""")
+                await page.evaluate("""([start, end]) => {
+                  const text = document.getElementById('probe').lastChild;
+                  getSelection().setBaseAndExtent(text, start, text, end);
+                }""", [start, end])
+                after = decode_png(await page.screenshot(clip=capture))
+                different = sum(before.rgba[i:i+4] != after.rgba[i:i+4]
+                                for i in range(0, len(before.rgba), 4))
+                name = f"selection-{'mixed' if mixed else 'bulk'}-{'rtl' if rtl else 'ltr'}-{'visible' if visible else 'hidden'}"
+                assert_equal(different > 0, visible, f"{name}: paint only visible selection")
+                after_geometry = await page.evaluate("""() => {
+                  const range = document.createRange();
+                  range.selectNodeContents(document.getElementById('probe'));
+                  return range.getBoundingClientRect().toJSON();
+                }""")
+                assert_equal(geometry, after_geometry, f"{name}: preserve original range geometry")
+                record_contract(results, f"text_overflow_{name}",
+                    contract="Selection paint follows truncation in bulk and mixed IFCs; source geometry is preserved.",
+                    source="Blink TextFragmentPainter selection uses the visible fragment range",
+                    commands=["Page.captureScreenshot", "Runtime.evaluate"],
+                    observed={"differentPixels": different, "sourceGeometry": geometry})
     finally:
         await context.close()
 
