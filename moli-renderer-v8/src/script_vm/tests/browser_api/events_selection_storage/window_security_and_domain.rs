@@ -1498,7 +1498,7 @@ async fn third_party_web_storage_is_partitioned_by_top_level_site() {
 }
 
 #[tokio::test]
-async fn third_party_about_blank_popup_does_not_reuse_opener_or_first_party_storage_area() {
+async fn third_party_about_blank_popup_uses_first_party_storage_and_keeps_opener_partition() {
     let (child_origin, server) = spawn_about_blank_popup_storage_child_server().await;
     let child_url = format!("{child_origin}/popup-child.html");
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -1506,6 +1506,14 @@ async fn third_party_about_blank_popup_does_not_reuse_opener_or_first_party_stor
         "http://top-about-blank-popup-partition.test/page.html",
         &loader,
     );
+    let web_storage = crate::RendererWebStorageHandles::ephemeral();
+    vm.set_web_storage_handles(&web_storage);
+    let mut child_first_party_vm =
+        new_storage_test_vm_with_loader(&format!("{child_origin}/first-party.html"), &loader);
+    child_first_party_vm.set_web_storage_handles(&web_storage);
+    child_first_party_vm
+        .eval("localStorage.setItem('popup-scope', 'existing-first-party')")
+        .expect("seed the actual shared first-party storage area");
 
     let child_url_literal = serde_json::to_string(&child_url).expect("child url should serialize");
     vm.eval(&format!(
@@ -1538,7 +1546,7 @@ async fn third_party_about_blank_popup_does_not_reuse_opener_or_first_party_stor
     assert_eq!(
         vm.eval("globalThis.__aboutBlankPopupStorageMessage || 'missing'")
             .expect("about:blank popup message should evaluate"),
-        r#"{"popupBefore":null,"popupAfter":"popup-first-party","childAfter":"child-partition","opener":true}"#
+        r#"{"popupBefore":"existing-first-party","popupAfter":"popup-first-party","childAfter":"child-partition","opener":true}"#
     );
     assert_eq!(
         vm.eval("localStorage.getItem('popup-scope')")
@@ -1546,13 +1554,11 @@ async fn third_party_about_blank_popup_does_not_reuse_opener_or_first_party_stor
         "top"
     );
 
-    let mut child_first_party_vm =
-        new_storage_test_vm_with_loader(&format!("{child_origin}/first-party.html"), &loader);
     assert_eq!(
         child_first_party_vm
             .eval("localStorage.getItem('popup-scope')")
             .expect("child first-party localStorage should evaluate"),
-        "null"
+        "popup-first-party"
     );
 
     let requests = server.await.expect("popup child server should finish");
@@ -1562,6 +1568,44 @@ async fn third_party_about_blank_popup_does_not_reuse_opener_or_first_party_stor
         "unexpected popup child request: {:?}",
         requests[0]
     );
+}
+
+#[tokio::test]
+async fn same_origin_iframe_about_blank_popup_shares_first_party_local_storage() {
+    let (child_origin, server) = spawn_about_blank_popup_storage_child_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &format!("{child_origin}/top.html"),
+        &loader,
+    );
+    let child_url = serde_json::to_string(&format!("{child_origin}/popup-child.html")).unwrap();
+    vm.eval(&format!(
+        r#"
+        globalThis.popupStorageResult = null;
+        addEventListener('message', event => {{ popupStorageResult = String(event.data); }});
+        const frame = document.createElement('iframe');
+        frame.src = {child_url};
+        (document.body || document.documentElement || document).appendChild(frame);
+        "#
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.popupStorageResult !== null)",
+        "true",
+        "same-origin iframe popup storage result",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("popupStorageResult").unwrap(),
+        r#"{"popupBefore":"child-partition","popupAfter":"popup-first-party","childAfter":"popup-first-party","opener":true}"#
+    );
+    assert_eq!(
+        vm.eval("localStorage.getItem('popup-scope')").unwrap(),
+        "popup-first-party"
+    );
+    assert_eq!(server.await.unwrap().len(), 1);
 }
 
 #[tokio::test]
