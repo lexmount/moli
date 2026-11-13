@@ -143,6 +143,159 @@ async fn dialog_handling_reaches_its_owner_during_pending_document_admission() {
     assert!(!navigation.is_cancelled());
 }
 
+fn classic_alert_command(operation: &str, context: AutomationContext) -> AutomationCommand {
+    use moli_protocol::automation::{
+        DevToolsGetJavaScriptDialogCommand, DevToolsHandleJavaScriptDialogCommand,
+        DevToolsSetJavaScriptDialogPromptTextCommand,
+    };
+    match operation {
+        "get" => {
+            AutomationCommand::GetJavaScriptDialog(DevToolsGetJavaScriptDialogCommand { context })
+        }
+        "set" => AutomationCommand::SetJavaScriptDialogPromptText(
+            DevToolsSetJavaScriptDialogPromptTextCommand {
+                context,
+                prompt_text: "Classic text".to_owned(),
+            },
+        ),
+        "accept" | "dismiss" => {
+            AutomationCommand::HandleJavaScriptDialog(DevToolsHandleJavaScriptDialogCommand {
+                context,
+                accept: operation == "accept",
+                prompt_text: None,
+            })
+        }
+        _ => panic!("unknown alert operation"),
+    }
+}
+
+#[tokio::test]
+async fn classic_alert_wait_is_interrupted_by_a_dialog_not_by_a_blanket_exemption() {
+    use moli_core::page::{
+        RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+        RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
+    };
+    for operation in ["get", "set", "accept", "dismiss"] {
+        for dialog_already_open in [false, true] {
+            let mut conn = CdpConnection::new();
+            let navigation = arm_background_navigation_request(&mut conn, "LOADER-classic-alert");
+            let context = AutomationContext {
+                protocol: FrontendProtocol::WebDriverClassic,
+                session_id: None,
+                target_id: Some(navigation.target_id().into()),
+                browser_context_id: None,
+            };
+            let completion = RendererJavaScriptDialogCompletion::pending();
+            let page_id = PageId::new_for_testing(77);
+            let dialog = RendererPendingJavaScriptDialog::new(
+                RendererJavaScriptDialogId::new(1),
+                RendererDocumentLifecycleIdentity {
+                    frame: RendererFrameToken { page_id },
+                    document: RendererDocumentToken::new_for_testing(page_id, 1),
+                    epoch: RendererLifecycleEpoch(1),
+                },
+                RendererJavaScriptDialogSource::RootFrame,
+                "about:blank".to_owned(),
+                "prompt".to_owned(),
+                "Classic prompt".to_owned(),
+                String::new(),
+                Some(completion.clone()),
+            );
+            let (mut scheduler, protocol_work_completion_rx) = CdpScheduler::new(conn);
+            let state = scheduler.state.handle();
+            let (document_tx, document_activity_completion_rx) =
+                tokio::sync::mpsc::unbounded_channel();
+            let (background_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (navigation_tx, background_navigation_completion_rx) =
+                tokio::sync::mpsc::unbounded_channel();
+            let (renderer_tx, renderer_publication_rx) =
+                moli_core::renderer_output_transport_channel();
+            let ready = scheduler.state.scheduler_events_ready();
+            let mut receivers = super::CdpSchedulerEventReceivers {
+                state_events_ready: ready.clone(),
+                protocol_work_completion_rx,
+                document_activity_completion_rx,
+                background_event_rx,
+                background_navigation_completion_rx,
+                renderer_publication_rx,
+            };
+            let install = || {
+                state
+                    .with_state(|state| {
+                        state.push_page_javascript_dialog_for_test(&context, dialog);
+                    })
+                    .unwrap();
+                ready.notify_one();
+            };
+            let command = classic_alert_command(operation, context.clone());
+            let execution = if dialog_already_open {
+                install();
+                let wait = scheduler
+                    .execute_automation_command_with_external_load_wait(&mut receivers, command);
+                tokio::pin!(wait);
+                match futures_util::poll!(&mut wait) {
+                    std::task::Poll::Ready(execution) => execution,
+                    std::task::Poll::Pending => {
+                        panic!("{operation} must reach the existing prompt")
+                    }
+                }
+            } else {
+                let wait = scheduler
+                    .execute_automation_command_with_external_load_wait(&mut receivers, command);
+                tokio::pin!(wait);
+                assert!(
+                    futures_util::poll!(&mut wait).is_pending(),
+                    "{operation} must still wait when no prompt exists"
+                );
+                install();
+                match futures_util::poll!(&mut wait) {
+                    std::task::Poll::Ready(execution) => execution,
+                    std::task::Poll::Pending => {
+                        panic!("{operation} must recheck the prompt during navigation wait")
+                    }
+                }
+            };
+            let result = execution.expect("finite alert operation");
+            if operation == "get" {
+                let AutomationResult::JavaScriptDialog(dialog) = result else {
+                    panic!("dialog result")
+                };
+                assert_eq!(dialog.message, "Classic prompt");
+            } else {
+                assert!(matches!(result, AutomationResult::Empty));
+            }
+            assert!(
+                state
+                    .with_state(|state| state
+                        .has_inflight_background_navigation_for_target(navigation.target_id()))
+                    .unwrap()
+            );
+            assert!(!navigation.is_cancelled());
+            if matches!(operation, "get" | "set") {
+                let execution = scheduler
+                    .execute_automation_command_with_external_load_wait(
+                        &mut receivers,
+                        classic_alert_command("accept", context),
+                    )
+                    .await;
+                execution.unwrap();
+            }
+            let response = completion.wait();
+            assert_eq!(response.accepted, operation != "dismiss");
+            assert_eq!(
+                response.user_input,
+                if operation == "set" {
+                    "Classic text"
+                } else {
+                    ""
+                }
+            );
+            assert!(!completion.finish(false, String::new()));
+            drop((document_tx, background_tx, navigation_tx, renderer_tx));
+        }
+    }
+}
+
 fn navigation_started_automation_event() -> AutomationEvent {
     AutomationEvent::NavigationFrame(NavigationFrameEvent {
         target_id: DevToolsTargetId::from("TID-output"),

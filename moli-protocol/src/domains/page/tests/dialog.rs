@@ -1881,6 +1881,21 @@ async fn current_page_dialog_remains_handleable_while_replacement_is_reserved() 
             Some(completion.clone()),
         ),
     );
+    ctx.with_fixture(|conn| {
+        let context = crate::automation::AutomationContext {
+            protocol: crate::automation::FrontendProtocol::WebDriverClassic,
+            session_id: None,
+            target_id: Some("TID-1".into()),
+            browser_context_id: Some("BID-1".into()),
+        };
+        assert!(conn.has_current_javascript_dialog_for_devtools_context(&context));
+        assert!(!conn.has_current_javascript_dialog_for_devtools_context(
+            &crate::automation::AutomationContext {
+                target_id: Some("TID-missing".into()),
+                ..context
+            }
+        ));
+    });
     ctx.process_async(json!({
         "id": 281, "method": "Page.handleJavaScriptDialog",
         "sessionId": "SID-attached", "params": {"accept": true}
@@ -1929,6 +1944,17 @@ async fn handle_javascript_dialog_rejects_dialog_without_current_page_residence(
             },
         )
         .expect("target session state should exist")
+    });
+
+    ctx.with_fixture(|conn| {
+        let context = crate::automation::AutomationContext {
+            protocol: crate::automation::FrontendProtocol::WebDriverClassic,
+            session_id: None,
+            target_id: Some("TID-dialog-missing-frame".into()),
+            browser_context_id: Some("BID-dialog-missing-frame".into()),
+        };
+        assert!(conn.has_pending_javascript_dialog_for_devtools_context(&context));
+        assert!(!conn.has_current_javascript_dialog_for_devtools_context(&context));
     });
 
     ctx.process_async(json!({

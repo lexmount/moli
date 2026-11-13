@@ -54,16 +54,35 @@ fn cdp_session_has_pending_dialog(conn: &CdpConnection, session_id: Option<&str>
         return false;
     };
     let owner = CommandOwnerScope::capture(conn, session_id);
-    let page_owners = javascript_dialog_page_owners(conn, &owner);
-    conn.target_javascript_dialog_state_for_owner(&owner)
+    current_javascript_dialog_for_owner(conn, &owner)
+        .is_some_and(|dialog| dialog.was_opened_for_subscription(generation))
+}
+
+fn current_javascript_dialog_for_owner<'a>(
+    conn: &'a CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Option<&'a crate::conn::TargetJavaScriptDialog> {
+    let page_owners = javascript_dialog_page_owners(conn, owner);
+    conn.target_javascript_dialog_state_for_owner(owner)
         .and_then(|state| state.peek_next())
-        .is_some_and(|dialog| {
+        .filter(|dialog| {
             page_owners
                 .iter()
                 .flatten()
                 .any(|page| page == dialog.page_owner())
-                && dialog.was_opened_for_subscription(generation)
         })
+}
+
+impl CdpConnection {
+    /// Uses the same exact Page check as Get/Set/Handle. A queued stale dialog,
+    /// or a dialog on another target, cannot interrupt Classic navigation wait.
+    pub fn has_current_javascript_dialog_for_devtools_context(
+        &self,
+        context: &AutomationContext,
+    ) -> bool {
+        self.command_owner_scope_for_devtools_context(context)
+            .is_some_and(|owner| current_javascript_dialog_for_owner(self, &owner).is_some())
+    }
 }
 
 fn javascript_dialog_page_owners(
@@ -252,17 +271,8 @@ pub(super) fn finish_devtools_get_javascript_dialog_command(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Result<DevToolsJavaScriptDialogResult, DevToolsError> {
-    let page_owners = javascript_dialog_page_owners(conn, owner);
-    let dialog = conn
-        .target_javascript_dialog_state_for_owner(owner)
-        .and_then(|state| state.peek_next())
-        .filter(|dialog| {
-            page_owners
-                .iter()
-                .flatten()
-                .any(|page| page == dialog.page_owner())
-        })
-        .ok_or_else(no_javascript_dialog_error)?;
+    let dialog =
+        current_javascript_dialog_for_owner(conn, owner).ok_or_else(no_javascript_dialog_error)?;
     Ok(DevToolsJavaScriptDialogResult {
         dialog_type: dialog.dialog_type().to_owned(),
         message: dialog.message().to_owned(),
