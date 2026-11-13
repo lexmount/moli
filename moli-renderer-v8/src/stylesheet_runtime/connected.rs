@@ -1433,27 +1433,51 @@ impl DocumentRuntime {
                 .flatten();
             let document_owner = operation.document_owner();
             resource_loader.spawn_resource_task(async move {
+                let cancel = moli_fetch::FetchCancelHandle::new();
+                let mut timing = crate::context_bootstrap::FetchResourceTiming::from_start(
+                    "link",
+                    started,
+                    start_unix_millis,
+                );
+                timing.set_initiator(resource_initiator);
                 let result = fetch_connected_link_readiness_with_service_worker(
                     loader,
                     resource_task_runner,
-                    request_origin,
+                    request_origin.clone(),
                     document_url.clone(),
                     url.clone(),
                     fetch_options,
                     service_worker_context,
+                    cancel.clone(),
                 )
                 .await;
-                let resource_timing = crate::document_runtime::ConnectedResourceTiming {
-                    initiator: if result
-                        .as_ref()
-                        .is_ok_and(|response| response.from_service_worker)
-                    {
-                        crate::context_bootstrap::ResourceTimingInitiator::default()
-                    } else {
-                        resource_initiator
-                    },
-                    end_unix_millis: start_unix_millis + started.elapsed().as_secs_f64() * 1000.0,
+                let completed = std::time::Instant::now();
+                let native = cancel.response_timing();
+                timing.observe_native_timing(native);
+                let entry = match &result {
+                    Ok(response) => {
+                        if response.from_service_worker {
+                            timing.clear_initiator();
+                        }
+                        timing.classic_script_response_with_filter(
+                            &url,
+                            &request_origin,
+                            &response.response.head(),
+                            // This loader uses None for readable network responses,
+                            // including CORS. A cross-origin URL alone is not opaque.
+                            Some(
+                                response
+                                    .response_filter
+                                    .as_ref()
+                                    .unwrap_or(&AsyncSubresourceFetchResponseFilter::Basic),
+                            ),
+                            response.response.body_bytes().len(),
+                        )
+                    }
+                    Err(_) => timing.failure(&url),
                 };
+                let resource_timing =
+                    timing.completed_at(entry, native.response_end_at().unwrap_or(completed));
                 let preload = preload.map(|producer| {
                     let response = result
                         .as_ref()
@@ -1467,7 +1491,7 @@ impl DocumentRuntime {
                         .as_ref()
                         .is_ok_and(|response| response.load_event_successful),
                     network_results: vec![ConnectedLoadNetworkResult {
-                        resource_timing: Some(resource_timing),
+                        resource_timing: Some(Box::new(resource_timing)),
                         import_options: None,
                         consumed_preload_error: false,
                         document_owner,
@@ -2665,7 +2689,14 @@ async fn fetch_connected_link_readiness(
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     let request_origin = moli_url::WebOrigin::from_url(&document_url);
     let request = connected_link_readiness_request(&document_url, &request_origin, &url, &options);
-    fetch_connected_link_readiness_with_request(loader, url, &options, request).await
+    fetch_connected_link_readiness_with_request(
+        loader,
+        url,
+        &options,
+        request,
+        moli_fetch::FetchCancelHandle::new(),
+    )
+    .await
 }
 
 async fn fetch_connected_link_readiness_with_service_worker(
@@ -2676,6 +2707,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
     url: Url,
     options: ConnectedLinkReadinessFetchOptions,
     service_worker_context: Option<ServiceWorkerConnectedLinkContext>,
+    cancel: moli_fetch::FetchCancelHandle,
 ) -> Result<ConnectedLinkReadinessFetchResponse, String> {
     let request = connected_link_readiness_request(&document_url, &request_origin, &url, &options);
     let integrity = options
@@ -2688,7 +2720,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
     ) {
         match context
             .browser_context_runtime
-            .fetch_service_worker_subresource_for_client_with_metadata(
+            .fetch_service_worker_subresource_for_client_with_metadata_and_cancellation(
                 context.client_id,
                 document_url.clone(),
                 &request,
@@ -2696,6 +2728,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 resource_task_runner,
                 destination,
                 options.resource_type,
+                cancel.clone(),
             )
             .await
         {
@@ -2722,7 +2755,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
         }
     }
     let request_mode = options.request_mode;
-    fetch_connected_link_readiness_with_request(loader, url, &options, request)
+    fetch_connected_link_readiness_with_request(loader, url, &options, request, cancel)
         .await
         .map(|response| {
             let load_event_successful = connected_link_load_event_successful(&response, None);
@@ -2842,16 +2875,17 @@ async fn fetch_connected_link_readiness_with_request(
     url: Url,
     options: &ConnectedLinkReadinessFetchOptions,
     request: moli_fetch::Request,
+    cancel: moli_fetch::FetchCancelHandle,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     let response = async {
         if options.resource_type == SubresourceResourceType::Script {
-            return loader.fetch_cacheable_script_text_stream(request).await;
+            return loader
+                .fetch_cacheable_script_text_stream_with_cancel(request, cancel)
+                .await;
         }
         if options.link_preload && options.request_mode == moli_fetch::RequestMode::Cors {
             let origin = request.request_origin().cloned();
-            let response = loader
-                .fetch_raw_stream_with_cancel(request, moli_fetch::FetchCancelHandle::new())
-                .await?;
+            let response = loader.fetch_raw_stream_with_cancel(request, cancel).await?;
             // The transport checks redirects before following them. Check the
             // final response too, before consuming its body or firing load.
             if let Some(origin) = origin {
@@ -2864,7 +2898,7 @@ async fn fetch_connected_link_readiness_with_request(
             }
             return response.into_lossy_materialized_text_response().await;
         }
-        loader.fetch_text_stream(request).await
+        loader.fetch_text_stream_with_cancel(request, cancel).await
     }
     .await;
     response

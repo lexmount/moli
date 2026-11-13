@@ -1,6 +1,119 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+async fn append_timing_link(
+    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+    url: &str,
+    rel: &str,
+    expected_entries: usize,
+) -> serde_json::Value {
+    let url = serde_json::to_string(url).unwrap();
+    page.eval(&format!(
+        "{{ const link = document.createElement('link');\n\
+         link.rel = {rel:?}; link.as = 'fetch'; link.crossOrigin = 'anonymous';\n\
+         link.href = {url}; document.head.appendChild(link); }}"
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        page,
+        loader,
+        &format!("performance.getEntriesByName({url}).length"),
+        &expected_entries.to_string(),
+        "connected link native timing",
+    )
+    .await;
+    serde_json::from_str(
+        &page
+            .eval(&format!(
+                "JSON.stringify(performance.getEntriesByName({url})[{}].toJSON())",
+                expected_entries - 1
+            ))
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn connected_link_timing_retains_http_and_cache_observations() {
+    let server = timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(
+        &format!("{}/document.html", server.origin),
+        &loader,
+    );
+    for rel in ["prefetch", "preload"] {
+        let url = format!("{}/compressed?kind=gzip&cache=1&link={rel}", server.origin);
+        let network = append_timing_link(&mut page, &loader, &url, rel, 1).await;
+        assert_eq!(network["initiatorType"], "link");
+        assert_eq!(network["responseStatus"], 200);
+        assert_eq!(network["encodedBodySize"], 23);
+        assert_eq!(network["decodedBodySize"], 3);
+        assert_eq!(network["transferSize"], 323);
+        assert_eq!(network["nextHopProtocol"], "http/1.1");
+        let time = |name: &str| network[name].as_f64().unwrap();
+        assert!(time("fetchStart") > 0.0, "{network}");
+        assert!(time("requestStart") >= time("connectEnd"), "{network}");
+        assert!(time("requestStart") >= time("fetchStart"), "{network}");
+        assert!(time("responseStart") >= time("requestStart"), "{network}");
+        assert!(time("responseEnd") >= time("responseStart"), "{network}");
+
+        if rel == "prefetch" {
+            let cached = append_timing_link(&mut page, &loader, &url, rel, 2).await;
+            assert_eq!(cached["transferSize"], 0);
+            assert_eq!(cached["deliveryType"], "cache");
+            assert_eq!(cached["encodedBodySize"], 23);
+            assert_eq!(cached["decodedBodySize"], 3);
+            assert_eq!(cached["nextHopProtocol"], "");
+            assert_eq!(cached["requestStart"], cached["fetchStart"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn connected_link_timing_masks_cross_origin_network_observations() {
+    let server = timing_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(
+        "http://127.0.0.1:9/document.html",
+        &loader,
+    );
+    for rel in ["prefetch", "preload"] {
+        for tao in [false, true] {
+            let url = format!(
+                "{}/compressed?kind=gzip&cors=*&tao={}&link={rel}",
+                server.origin,
+                if tao { "*" } else { "" }
+            );
+            let entry = append_timing_link(&mut page, &loader, &url, rel, 1).await;
+            assert_eq!(entry["responseStatus"], 200);
+            if tao {
+                assert!(entry["requestStart"].as_f64().unwrap() > 0.0, "{entry}");
+                assert_eq!(entry["nextHopProtocol"], "http/1.1");
+                assert_eq!(entry["encodedBodySize"], 23);
+                assert_eq!(entry["decodedBodySize"], 3);
+                assert_eq!(entry["transferSize"], 323);
+            } else {
+                for name in [
+                    "domainLookupStart",
+                    "domainLookupEnd",
+                    "connectStart",
+                    "connectEnd",
+                    "requestStart",
+                    "responseStart",
+                    "encodedBodySize",
+                    "decodedBodySize",
+                    "transferSize",
+                ] {
+                    assert_eq!(entry[name], 0, "{name}: {entry}");
+                }
+                assert_eq!(entry["nextHopProtocol"], "");
+                assert_eq!(entry["deliveryType"], "");
+            }
+        }
+    }
+}
+
 struct DomInitiatorServer {
     origin: String,
     requests: Arc<AtomicUsize>,

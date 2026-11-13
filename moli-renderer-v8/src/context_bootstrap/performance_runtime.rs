@@ -342,7 +342,7 @@ impl ResourceConnectionTiming {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct ResourceServiceWorkerTiming {
     worker_start: Option<f64>,
     router_evaluation_start: Option<f64>,
@@ -351,7 +351,7 @@ struct ResourceServiceWorkerTiming {
     final_source: &'static str,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ResourcePerformanceEntry {
     service_worker: Option<Box<ResourceServiceWorkerTiming>>,
     preload_state: moli_fetch::ResponsePreloadState,

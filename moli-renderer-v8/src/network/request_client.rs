@@ -671,6 +671,7 @@ impl ResourceRequestClient {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn fetch_cacheable_script_text_stream(
         &self,
         request: Request,
