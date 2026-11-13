@@ -484,8 +484,8 @@ impl ServiceWorkerRuntimeService {
                     let _ = waiter.send(());
                 }
             }
-            LifecycleProgress::UnregisterCompleted(job) => {
-                job.send_all(true);
+            LifecycleProgress::UnregisterCompleted(job, removed) => {
+                job.send_all(removed);
             }
             LifecycleProgress::FetchFailed(progress) => {
                 let (job, message) = *progress;
