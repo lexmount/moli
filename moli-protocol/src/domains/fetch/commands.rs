@@ -37,8 +37,8 @@ use super::state::{
     take_pending_subresource_response_request_for_action_session,
 };
 use super::{
-    FetchCommandOutput, FetchCommandTaskStep, PageFetchCompletion, PendingFetchCommandDispatch,
-    PendingFetchCommandOperation,
+    FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch,
+    PendingFetchCommandOperation, ResourceFetchCompletion,
 };
 
 const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
@@ -370,9 +370,9 @@ fn start_devtools_continue_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandOperation::Page {
+            PendingFetchCommandOperation::Resource {
                 pending: pending_page,
-                finish: PageFetchCompletion::ContinueRequest {
+                finish: ResourceFetchCompletion::ContinueRequest {
                     state: Box::new(PendingContinueRequestState::SubresourceFetch { correlation }),
                 },
             },
@@ -651,9 +651,9 @@ fn start_devtools_fail_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandOperation::Page {
+            PendingFetchCommandOperation::Resource {
                 pending: pending_page,
-                finish: PageFetchCompletion::FailRequest {
+                finish: ResourceFetchCompletion::FailRequest {
                     state: Box::new(PendingFailRequestState::SubresourceFetch {
                         pending: Box::new(pending),
                     }),
@@ -691,9 +691,9 @@ fn start_devtools_fail_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandOperation::Page {
+            PendingFetchCommandOperation::Resource {
                 pending: pending_page,
-                finish: PageFetchCompletion::FailRequest {
+                finish: ResourceFetchCompletion::FailRequest {
                     state: Box::new(PendingFailRequestState::SubresourceResponse {
                         pending: Box::new(pending),
                     }),
@@ -927,9 +927,9 @@ fn start_devtools_fulfill_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandOperation::Page {
+            PendingFetchCommandOperation::Resource {
                 pending: pending_page,
-                finish: PageFetchCompletion::FulfillRequest {
+                finish: ResourceFetchCompletion::FulfillRequest {
                     state: Box::new(PendingFulfillRequestState::SubresourceFetch {
                         pending: Box::new(pending),
                         request_id,
@@ -973,9 +973,9 @@ fn start_devtools_fulfill_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandOperation::Page {
+            PendingFetchCommandOperation::Resource {
                 pending: pending_page,
-                finish: PageFetchCompletion::FulfillRequest {
+                finish: ResourceFetchCompletion::FulfillRequest {
                     state: Box::new(PendingFulfillRequestState::SubresourceResponse {
                         pending: Box::new(pending),
                     }),
@@ -1163,9 +1163,9 @@ pub(super) fn start_dispatch_websocket_message_command(
         conn,
         cmd.id,
         cmd.session_id,
-        PendingFetchCommandOperation::Page {
+        PendingFetchCommandOperation::Resource {
             pending: pending.into(),
-            finish: PageFetchCompletion::WebSocket { operation },
+            finish: ResourceFetchCompletion::WebSocket { operation },
         },
     ))
 }
@@ -1221,9 +1221,9 @@ pub(super) fn start_close_websocket_command(
         conn,
         cmd.id,
         cmd.session_id,
-        PendingFetchCommandOperation::Page {
+        PendingFetchCommandOperation::Resource {
             pending: pending.into(),
-            finish: PageFetchCompletion::WebSocket {
+            finish: ResourceFetchCompletion::WebSocket {
                 operation: PendingWebSocketCommandOperation::Close,
             },
         },
@@ -1514,9 +1514,9 @@ fn start_devtools_continue_intercepted_response_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandOperation::Page {
+            PendingFetchCommandOperation::Resource {
                 pending: pending_page,
-                finish: PageFetchCompletion::ContinueResponse {
+                finish: ResourceFetchCompletion::ContinueResponse {
                     state: Box::new(PendingContinueResponseState::SubresourceResponse {
                         pending: Box::new(pending),
                     }),
