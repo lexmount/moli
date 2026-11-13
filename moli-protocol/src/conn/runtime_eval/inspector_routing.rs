@@ -788,17 +788,19 @@ impl CdpConnection {
         let remote = result.get("result").unwrap_or(&Value::Null);
         let properties = listener.properties().clone();
         let realm_id = listener.realm_id().clone();
-        let data = DevToolsRemoteValue::from_cdp_remote_object(
+        let mut data = DevToolsRemoteValue::from_cdp_remote_object(
             remote,
             matches!(properties.ownership, DevToolsResultOwnership::Root),
             Some(realm_id.clone()),
         );
-        if let Some(remote_object_id) = data.handle.as_ref().or(data.shared_id.as_ref()) {
-            self.register_runtime_remote_object_ids_for_owner_with_realm(
-                owner.command_owner(),
-                vec![remote_object_id.as_str().to_owned()],
-                realm_id.as_str(),
-            );
+        if let Some(native) = data.handle.take() {
+            data.handle = self
+                .export_bidi_handle(
+                    owner.command_owner(),
+                    native.as_str().to_owned(),
+                    realm_id.as_str(),
+                )
+                .map(Into::into);
         }
         let event = BackgroundProtocolEvent::automation_only(AutomationEvent::ScriptMessage(
             ScriptMessageEvent {

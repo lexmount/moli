@@ -886,3 +886,106 @@ async fn call_function_shared_id_uses_renderer_binding_without_protocol_registry
     );
     assert_eq!(remote_value.value, json!("target:inside"));
 }
+
+#[tokio::test]
+async fn bidi_exports_reject_raw_cdp_ids_and_retire_after_disown_and_navigation() {
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let (context, _, _) =
+        materialize_bidi_target_node_for_test(&mut ctx, "<div id='target'>Hello</div>", "#target")
+            .await;
+    let remote = expect_script_value_result(
+        ctx.execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+                context: context.clone(),
+                realm_id: None,
+                world_name: None,
+                expression: "({marker: 'owned'})".into(),
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::Root,
+                preserve_remote_metadata: false,
+                materialize_bidi_script_result: true,
+                serialization_options: None,
+            }),
+        )
+        .await
+        .unwrap(),
+        "export owned result",
+    );
+    let handle = remote.handle.unwrap();
+    let realm = remote.realm.unwrap();
+    let owner = ctx.with_fixture(|conn| {
+        conn.command_owner_scope_for_devtools_context(&context)
+            .unwrap()
+    });
+    let native = ctx.with_fixture(|conn| {
+        conn.resolve_bidi_handle(&owner, handle.as_str(), Some(realm.as_str()))
+            .unwrap()
+    });
+    assert_ne!(handle.as_str(), native);
+    let call = |handle: &str| {
+        AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+            context: AutomationContext {
+                target_id: None,
+                ..context.clone()
+            },
+            realm_id: Some(realm.clone()),
+            world_name: None,
+            object_id: None,
+            this_parameter: Some(json!({"handle": handle})),
+            function_declaration: "function() { return this.marker; }".into(),
+            arguments: vec![],
+            await_promise: false,
+            user_gesture: false,
+            webdriver_bidi_file_prompt_handler: None,
+            result_ownership: DevToolsResultOwnership::None,
+            object_group: None,
+            preserve_remote_metadata: false,
+            serialization_options: None,
+            materialize_bidi_script_result: true,
+        })
+    };
+    assert_eq!(
+        ctx.execute_automation_command_through_renderer_fence_for_test(call(&native))
+            .await
+            .unwrap_err()
+            .kind,
+        DevToolsErrorKind::NoSuchHandle
+    );
+    let value = ctx
+        .execute_automation_command_through_renderer_fence_for_test(call(handle.as_str()))
+        .await
+        .unwrap();
+    assert_eq!(
+        expect_script_value_result(value, "resolve explicit export").value,
+        "owned"
+    );
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::ReleaseObjects(DevToolsReleaseObjectsCommand {
+            context: context.clone(),
+            realm_id: Some(realm.clone()),
+            world_name: None,
+            handles: vec![handle.clone()],
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ctx.execute_automation_command_through_renderer_fence_for_test(call(handle.as_str()))
+            .await
+            .unwrap_err()
+            .kind,
+        DevToolsErrorKind::NoSuchHandle
+    );
+    let stale = ctx.with_fixture(|conn| {
+        conn.export_bidi_handle(&owner, native.clone(), realm.as_str())
+            .unwrap()
+    });
+    ctx.install_navigation_fixture_for_session_owner("about:blank", owner.session_id())
+        .await;
+    assert!(
+        ctx.with_fixture(|conn| conn.resolve_bidi_handle(&owner, &stale, None))
+            .is_none()
+    );
+}

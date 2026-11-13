@@ -28,12 +28,11 @@ pub(super) async fn release_devtools_objects_for_owner_using(
     target_realm: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
     for handle in handles {
-        let object_id = handle.as_str().to_owned();
-        if !workflow
-            .state(|state| state.runtime_object_matches_realm(owner, &object_id, target_realm))?
-        {
+        let Some(object_id) = workflow
+            .state(|state| state.disown_runtime_handle(owner, handle.as_str(), target_realm))?
+        else {
             continue;
-        }
+        };
         let params = json!({ "objectId": object_id });
         let response = workflow
             .helper(owner.clone(), "Runtime.releaseObject", params)
@@ -44,7 +43,6 @@ pub(super) async fn release_devtools_objects_for_owner_using(
                 return Err(error);
             }
         }
-        workflow.state(|state| state.unregister_runtime_objects(owner, vec![object_id]))?;
     }
     Ok(())
 }

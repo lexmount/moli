@@ -342,7 +342,7 @@ pub(super) fn dom_object_reference_id_for_owner(
     owner: &CommandOwnerScope,
     object_id: &DevToolsRemoteHandleId,
 ) -> String {
-    if let Some(object_id) = conn.runtime_remote_object_alias_for_owner(owner, object_id.as_str()) {
+    if let Some(object_id) = conn.bidi_node_alias(owner, object_id.as_str()) {
         return object_id;
     }
     object_id.as_str().to_owned()

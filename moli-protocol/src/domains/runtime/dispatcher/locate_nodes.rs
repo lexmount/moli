@@ -44,7 +44,10 @@ pub(super) async fn execute_devtools_locate_nodes_command_using(
         Err(error) => return Err(error),
     };
     let call_function = locate_nodes_call_function_command(command, start_node_arguments);
-    let result = Box::pin(workflow.execute(AutomationCommand::CallFunction(call_function))).await;
+    let result = Box::pin(
+        workflow.execute_native_references(AutomationCommand::CallFunction(call_function)),
+    )
+    .await;
     workflow.state(move |state| state.release_runtime_object_group(lease))?;
     match result {
         Ok(result) => {
@@ -148,7 +151,10 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_using(
                 .and_then(|options| options.include_shadow_tree.clone()),
         }),
     };
-    let result = Box::pin(workflow.execute(AutomationCommand::CallFunction(call_function))).await;
+    let result = Box::pin(
+        workflow.execute_native_references(AutomationCommand::CallFunction(call_function)),
+    )
+    .await;
     workflow.state(move |state| state.release_runtime_object_group(lease))?;
     result.and_then(|result| {
         let mut result = locate_nodes_result_from_script_result(result, &locator)?;
@@ -226,7 +232,9 @@ pub(super) async fn locate_nodes_start_node_inputs_using(
         .into_iter()
         .map(LocateNodesStartNodeInput::Reference)
         .collect::<Vec<_>>();
-    for node in start_nodes {
+    let owner = CommandOwnerScope::for_route(target.route.clone());
+    let realm = devtools_realm_id_for_runtime_target_using(workflow, target).await;
+    for mut node in start_nodes {
         let Some(object) = node.as_object() else {
             return Err(DevToolsError::new(
                 DevToolsErrorKind::InvalidArgument,
@@ -241,11 +249,31 @@ pub(super) async fn locate_nodes_start_node_inputs_using(
             {
                 inputs.push(LocateNodesStartNodeInput::Reference(reference));
             } else {
+                if let Some(native) = workflow
+                    .state(|state| state.resolve_runtime_node_reference(&owner, shared_id))?
+                {
+                    node["sharedId"] = Value::String(native);
+                }
                 inputs.push(LocateNodesStartNodeInput::Raw(node));
             }
             continue;
         }
-        if object.get("handle").and_then(Value::as_str).is_some() {
+        if let Some(handle) = object.get("handle").and_then(Value::as_str) {
+            let native = workflow
+                .state(|state| {
+                    state.resolve_runtime_handle(
+                        &owner,
+                        handle,
+                        realm.as_ref().map(DevToolsRealmId::as_str),
+                    )
+                })?
+                .ok_or_else(|| {
+                    DevToolsError::new(
+                        DevToolsErrorKind::NoSuchHandle,
+                        "Cannot find object with given id",
+                    )
+                })?;
+            node["handle"] = Value::String(native);
             inputs.push(LocateNodesStartNodeInput::Raw(node));
             continue;
         }
