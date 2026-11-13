@@ -1,6 +1,112 @@
 use super::*;
 
 #[tokio::test]
+async fn service_worker_fetch_wait_until_rejects_script_redispatched_native_events() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        let captured;
+        let checked;
+        const redispatchChecked = new Promise(resolve => checked = resolve);
+        onfetch = event => {
+            if (captured) return;
+            captured = event;
+            let finish;
+            event.waitUntil(new Promise(resolve => finish = resolve));
+            event.respondWith(new Response('captured'));
+            setTimeout(() => {
+                self.dispatchEvent(event);
+                if (event.isTrusted) throw Error('script redispatch must clear trust');
+                let reads = 0;
+                const value = {get then() { reads++; return undefined; }};
+                for (const method of [event.waitUntil, ExtendableEvent.prototype.waitUntil]) {
+                    let caught;
+                    try { method.call(event, value); } catch (error) { caught = error; }
+                    if (!(caught instanceof DOMException) || caught.name !== 'InvalidStateError') {
+                        throw Error('redispatched waitUntil must reject: ' + caught);
+                    }
+                }
+                if (reads !== 2) throw Error('Promise arguments must be converted before trust check');
+                checked();
+                finish();
+            }, 0);
+        };
+        onmessage = event => event.waitUntil(redispatchChecked);
+        "#,
+    );
+    let completion = dispatch_service_worker_fetch_event_for_test(&mut handle, 85).await;
+    let ServiceWorkerFetchResult::Response(response) = completion.result else {
+        panic!("expected captured native fetch response");
+    };
+    assert_eq!(response.body, b"captured");
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        86,
+        serialize_test_string("verify"),
+    )
+    .await;
+    assert_eq!(completion.result, Ok(()));
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_fetch_event_constructor_preserves_webidl_state_and_dispatch() {
+    ensure_v8();
+    let source = format!(
+        "{}\nself.onmessage = event => event.waitUntil(runFetchEventConstructorChecks());",
+        include_str!("../../../../../tests/fixtures/fetch-event-constructor.js")
+    );
+    let mut handle = spawn_service_worker_for_test(&source);
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        31,
+        serialize_test_string("go"),
+    )
+    .await;
+    assert_eq!(completion.result, Ok(()));
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn native_fetch_event_preserves_its_intrinsic_prototype_and_readonly_request() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        const OriginalFetchEvent = FetchEvent;
+        const requestGetter = Object.getOwnPropertyDescriptor(FetchEvent.prototype, 'request').get;
+        Object.defineProperty(self, 'FetchEvent', {get() { throw Error('author FetchEvent getter'); }, configurable: true});
+        self.onfetch = event => {
+            const request = event.request;
+            const report = {
+                instance: event instanceof OriginalFetchEvent,
+                extendable: event instanceof ExtendableEvent,
+                event: event instanceof Event,
+                prototype: Object.getPrototypeOf(event) === OriginalFetchEvent.prototype,
+                request: requestGetter.call(event) === request,
+                ownRequest: Object.hasOwn(event, 'request'),
+                readonly: Reflect.set(event, 'request', null) === false,
+                url: event.request.url,
+                handled: event.handled === event.handled,
+                preload: event.preloadResponse === event.preloadResponse,
+                trusted: event.isTrusted,
+                cancelable: event.cancelable
+            };
+            OriginalFetchEvent.prototype.respondWith.call(event, new Response(JSON.stringify(report)));
+        };
+    "#,
+    );
+    let completion = dispatch_service_worker_fetch_event_for_test(&mut handle, 32).await;
+    let ServiceWorkerFetchResult::Response(response) = completion.result else {
+        panic!("expected native FetchEvent response");
+    };
+    assert_eq!(
+        String::from_utf8(response.body).unwrap(),
+        r#"{"instance":true,"extendable":true,"event":true,"prototype":true,"request":true,"ownRequest":false,"readonly":true,"url":"https://example.test/app/data.txt","handled":true,"preload":true,"trusted":true,"cancelable":true}"#
+    );
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn service_worker_wait_until_prototype_uses_native_dispatch_and_webidl_arguments() {
     ensure_v8();
     let source = format!(
