@@ -1,6 +1,6 @@
 use super::helpers::{
-    same_origin_window_receiver, window_child_context_handle, window_current_dispatch_scope,
-    window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_current_dispatch_scope, window_hidden_value,
+    window_host_ptr, window_receiver,
 };
 use super::*;
 
@@ -22,9 +22,7 @@ pub(in crate::context_bootstrap) fn window_frame_element_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = same_origin_window_receiver(scope, &args) else {
-        return;
-    };
+    let receiver = args.this();
     let Some(host_ptr) = window_host_ptr(scope, receiver) else {
         rv.set_null();
         return;

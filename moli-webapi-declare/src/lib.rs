@@ -227,6 +227,19 @@
 //! allow cross-origin calls, or `"getter"` / `"setter"` to check only that half
 //! of an accessor. Interface brand checks remain a separate policy.
 //!
+//! A member can instead declare `access_policy = path` to authorize its
+//! receiver in the native callback's realm. The policy has signature
+//! `fn(&mut v8::PinScope, v8::Local<v8::Object>) -> bool`: it returns `true` to
+//! invoke the callback, or throws the appropriate exception and returns `false`
+//! to stop. It runs after the interface brand check and before the callback or
+//! argument conversion. It applies to instance methods and both halves of
+//! `accessor_property` callbacks in either derive, including Promise adapters.
+//! This replaces the inherited V8 receiver access check; explicitly enabling
+//! `receiver_access_check` on the same member is rejected. Already-built
+//! `getter_value` functions and holder-based native data properties cannot use it.
+//! The embedding runtime supplies policies such as same-origin Window access;
+//! this crate does not implement an origin model or depend on a renderer.
+//!
 //! `returns_promise` on a method (including a static method) or accessor getter
 //! converts synchronous exceptions from both the receiver check and the callback
 //! into rejected Promises in the callback's realm. Successful return values are

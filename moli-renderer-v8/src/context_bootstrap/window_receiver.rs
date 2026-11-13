@@ -24,12 +24,10 @@ pub(crate) fn is_window_receiver<'s>(
 pub(crate) fn require_same_origin_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    lenient_this: bool,
 ) -> bool {
     // An extracted method or accessor bypasses WindowProxy's property access check.
     // Authorize native globals before reading slots, which can themselves
-    // trigger V8's cross-origin fallback. Leniency only applies to objects
-    // without the Window brand, never to a cross-origin Window.
+    // trigger V8's cross-origin fallback.
     if let Some(context) = receiver.get_creation_context(scope)
         && receiver.strict_equals(context.global(scope).into())
         && context_host_ptr_from_context_slot(context).is_some()
@@ -42,9 +40,7 @@ pub(crate) fn require_same_origin_window_receiver<'s>(
         if is_window_receiver(scope, receiver) {
             return true;
         }
-        if !lenient_this {
-            throw_type_error(scope, "Window member called on incompatible receiver.");
-        }
+        throw_type_error(scope, "Window member called on incompatible receiver.");
         return false;
     }
     crate::native_bridge::throw_dom_exception(
