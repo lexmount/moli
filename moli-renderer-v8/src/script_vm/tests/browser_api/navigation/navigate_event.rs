@@ -1656,3 +1656,72 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
     );
 }
+
+#[tokio::test]
+async fn navigation_cancellation_uses_dispatch_state_instead_of_author_cancelability() {
+    for (kind, cause, phase) in [
+        ("traverse", "detach", "dispatch"),
+        ("traverse", "stop", "dispatch"),
+        ("traverse", "nested", "dispatch"),
+        ("traverse", "preventDefault", "dispatch"),
+        ("navigate", "detach", "dispatch"),
+        ("navigate", "stop", "dispatch"),
+        ("navigate", "nested", "dispatch"),
+        ("navigate", "detach", "precommit"),
+        ("navigate", "stop", "precommit"),
+        ("navigate", "nested", "precommit"),
+    ] {
+        let server = StaticHttpServer::spawn(1).await;
+        let parent_url = server.base_url().join("parent").unwrap();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        let script = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/navigation-cancellation.js"
+        ));
+        vm.eval(&format!(
+            "{script}\n\
+             globalThis.cancellationResult = 'pending';\n\
+             navigationCancellationProbe({kind:?}, {cause:?}, {phase:?}).then(\n\
+               value => cancellationResult = value,\n\
+               error => cancellationResult = String(error));"
+        ))
+        .unwrap();
+        let context = format!("{kind}/{cause}/{phase}");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(cancellationResult !== 'pending')",
+            "true",
+            &context,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(cancellationResult)").unwrap()).unwrap();
+        let aborted = cause != "preventDefault";
+        let canceled = aborted && phase == "dispatch";
+        let cancelable = kind == "navigate";
+        let abort_states = if aborted {
+            serde_json::json!([[cancelable, canceled]])
+        } else {
+            serde_json::json!([])
+        };
+        let settlement = if aborted { "AbortError" } else { "fulfilled" };
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "cancelable": cancelable,
+                "defaultPrevented": canceled,
+                "afterPreventDefault": if kind == "traverse" { Some(false) } else { None },
+                "aborted": aborted,
+                "abortStates": abort_states,
+                "promises": [settlement, settlement],
+                "sameReason": true,
+                "calleeRealm": true
+            }),
+            "{context}"
+        );
+        assert_eq!(server.finish_targets().await, ["/child"], "{context}");
+    }
+}
