@@ -375,3 +375,33 @@ async fn empty_insert_text_replaces_selection_and_remains_cancelable() {
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ime_retains_caret_captured_before_beforeinput() {
+    for tag in ["input", "textarea"] {
+        for move_focus in [false, true] {
+            let mut ctx = TestContext::new();
+            let html = if tag == "input" {
+                "<input id=first value=abcd><input id=second value=wxyz>"
+            } else {
+                "<textarea id=first>abcd</textarea><textarea id=second>wxyz</textarea>"
+            };
+            with_loaded_document(&mut ctx, html).await;
+            let setup = format!(
+                r#"(() => {{const first=document.getElementById('first'),second=document.getElementById('second');first.focus();first.setSelectionRange(1,2);second.setSelectionRange(2,3);first.addEventListener('beforeinput',()=>{{if({move_focus})second.focus();else first.setSelectionRange(3,4);}});return 'ready';}})()"#
+            );
+            assert_eq!(evaluate_string(&mut ctx, &setup).await, "ready");
+            command(&mut ctx, "Input.insertText", json!({"text":"X"})).await;
+            let observed:serde_json::Value=serde_json::from_str(&evaluate_string(&mut ctx,"JSON.stringify(['first','second'].map(id=>{const e=document.getElementById(id);return [e.value,e.selectionStart,e.selectionEnd]}))").await).unwrap();
+            assert_eq!(
+                observed,
+                if move_focus {
+                    json!([["abcd", 1, 2], ["wxXz", 2, 2]])
+                } else {
+                    json!([["abcX", 2, 2], ["wxyz", 2, 3]])
+                },
+                "tag={tag}, move_focus={move_focus}"
+            );
+        }
+    }
+}
