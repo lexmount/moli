@@ -73,8 +73,9 @@ fn classic_error_status(code: ClassicErrorCode) -> StatusCode {
         ClassicErrorCode::JavascriptError | ClassicErrorCode::MoveTargetOutOfBounds => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
-        ClassicErrorCode::ScriptTimeout => StatusCode::INTERNAL_SERVER_ERROR,
-        ClassicErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
+        ClassicErrorCode::ScriptTimeout | ClassicErrorCode::Timeout => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
         ClassicErrorCode::UnknownCommand => StatusCode::NOT_FOUND,
         ClassicErrorCode::UnsupportedOperation => StatusCode::METHOD_NOT_ALLOWED,
         ClassicErrorCode::SessionNotCreated
@@ -103,15 +104,27 @@ mod tests {
 
     #[test]
     fn classic_error_response_includes_webdriver_headers() {
-        let response = classic_error_into_response(ClassicError::new(
-            ClassicErrorCode::NoSuchElement,
-            "missing",
-        ));
-
-        assert_eq!(response.headers().get("cache-control").unwrap(), "no-cache");
-        assert_eq!(
-            response.headers().get("content-type").unwrap(),
-            "application/json; charset=utf-8"
-        );
+        for (code, status) in [
+            (
+                ClassicErrorCode::NoSuchElement,
+                axum::http::StatusCode::NOT_FOUND,
+            ),
+            (
+                ClassicErrorCode::Timeout,
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                ClassicErrorCode::ScriptTimeout,
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ] {
+            let response = classic_error_into_response(ClassicError::new(code, "failed"));
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers().get("cache-control").unwrap(), "no-cache");
+            assert_eq!(
+                response.headers().get("content-type").unwrap(),
+                "application/json; charset=utf-8"
+            );
+        }
     }
 }
