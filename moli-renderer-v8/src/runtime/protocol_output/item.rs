@@ -54,6 +54,13 @@ pub enum RendererOwnerAction {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentNetworkActivitySnapshot,
     },
+    /// The new Document is installed, before its parser can attach child Frames.
+    ChildFrameCommit {
+        source_document: RendererDocumentLifecycleIdentity,
+        event: ChildFrameNavigationSnapshot,
+    },
+    /// Load delivery finished, including any descendant Document blockers.
+    /// This must not be projected as another navigation commit.
     ChildFrameLoad {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameNavigationSnapshot,

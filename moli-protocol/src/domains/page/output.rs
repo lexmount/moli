@@ -312,6 +312,44 @@ impl PagePreparedOutputs {
         }
     }
 
+    pub(crate) fn from_renderer_child_frame_commit(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        source_document: RendererDocumentLifecycleIdentity,
+        mut event: ChildFrameNavigationSnapshot,
+    ) -> Self {
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
+        else {
+            return Self::default();
+        };
+        let Some((root_frame_id, _, security_origin, secure_context_type)) =
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
+        else {
+            return Self::default();
+        };
+        if event.parent_frame_id.is_none() {
+            event.parent_frame_id = Some(root_frame_id);
+        }
+        let document = PagePreparedChildFrameDocumentActivity {
+            timestamp: monotonic_timestamp_seconds(),
+            commits: vec![
+                super::child_frame_activity::PagePreparedChildFrameNavigationCommit::from_snapshot(
+                    event,
+                ),
+            ],
+            security_origin,
+            secure_context_type,
+            ..Default::default()
+        };
+        Self {
+            child_frame_activities: vec![PagePreparedChildFrameActivity::from_document(
+                binding, document,
+            )],
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn from_renderer_child_frame_load(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
@@ -556,7 +594,7 @@ impl PagePreparedOutputs {
     #[cfg(test)]
     pub(super) fn child_frame_document_activity_for_test() -> PagePreparedChildFrameDocumentActivity
     {
-        PagePreparedChildFrameDocumentActivity::from_parts(
+        let mut document = PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
             vec![PagePreparedChildFrameTreeEvent::Attached {
                 frame_id: "CHILD-FRAME-1".to_owned(),
@@ -577,7 +615,13 @@ impl PagePreparedOutputs {
             }],
             "https://example.test".to_owned(),
             "Secure".to_owned(),
-        )
+        );
+        document.commits = document
+            .loads
+            .iter()
+            .map(|load| load.navigation_commit.clone())
+            .collect();
+        document
     }
 
     #[cfg(test)]

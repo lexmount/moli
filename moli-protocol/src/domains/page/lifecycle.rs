@@ -505,9 +505,6 @@ pub(crate) fn emit_child_frame_lifecycle_terminal(
 ) {
     if lifecycle_enabled {
         emit_cdp_page_lifecycle_marker_background_event(
-            out, session_id, "init", frame_id, loader_id, timestamp,
-        );
-        emit_cdp_page_lifecycle_marker_background_event(
             out,
             session_id,
             "DOMContentLoaded",

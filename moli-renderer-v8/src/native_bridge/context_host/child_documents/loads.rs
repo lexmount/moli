@@ -697,6 +697,11 @@ impl PageScriptHost {
         let mut parser_stop_action = None;
         let mut owner_transition = None;
         if let Some(snapshot) = snapshot_to_install.as_ref() {
+            if let Some(network) = completed_document_network.as_ref() {
+                // The response belongs before the new Document commit, not
+                // after its parser and descendant loads have all finished.
+                self.record_child_document_load_network(&network_attribution, network.clone());
+            }
             let window_commit = self.plan_child_document_window_commit(
                 handle,
                 snapshot,

@@ -485,6 +485,18 @@ impl PreparedProtocolOutputs {
                     )
                     .append_to_child_frame_output_sink(&mut prepared);
             }
+            RendererOwnerAction::ChildFrameCommit {
+                source_document,
+                event,
+            } => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_commit(
+                    conn,
+                    owner,
+                    source_document,
+                    event,
+                )
+                .append_to_child_frame_output_sink(&mut prepared);
+            }
             RendererOwnerAction::ChildFrameLoad {
                 source_document,
                 event,

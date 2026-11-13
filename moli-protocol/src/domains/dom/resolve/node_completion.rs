@@ -1563,24 +1563,27 @@ pub(super) fn complete_push_nodes_by_backend_ids_to_frontend_result(
 
 pub(super) fn node_for_describe_node_object_snapshot(
     snapshot: &DocumentNodeSnapshot,
-    child_frame_id: Option<&str>,
+    owner_frame_id: Option<&str>,
     top_frame_id: Option<&str>,
 ) -> Option<Value> {
-    let top_snapshot_node_id = if child_frame_id.is_some() {
+    let top_snapshot_node_id = if owner_frame_id.is_some() {
         snapshot.parent_id.or(Some(snapshot.node_id))
     } else {
         top_snapshot_node_id_for_live_object_snapshot(snapshot)
     };
-    let frame_id_for_html = if child_frame_id.is_some() {
+    let frame_id_for_html = if owner_frame_id.is_some() {
         None
     } else {
         top_frame_id
     };
     let mut node = node_snapshot_to_cdp(snapshot, top_snapshot_node_id, frame_id_for_html)?;
-    if let Some(child_frame_id) = child_frame_id
+    if let Some(owner_frame_id) = owner_frame_id
         && let Some(node) = node.as_object_mut()
     {
-        node.insert("frameId".to_owned(), json!(child_frame_id));
+        // An iframe's frameId identifies its hosted Frame, which can differ
+        // from the Frame owning the element's Document.
+        node.entry("frameId")
+            .or_insert_with(|| json!(owner_frame_id));
     }
     Some(node)
 }

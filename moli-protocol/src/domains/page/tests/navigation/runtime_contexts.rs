@@ -1383,7 +1383,7 @@ async fn navigate_emits_each_child_default_context_identity_once_per_runtime_ses
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn navigate_after_real_runtime_enable_auto_creates_native_named_child_world_before_frame_navigated()
+async fn navigate_after_real_runtime_enable_auto_creates_native_named_child_world_before_frame_load()
  {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
@@ -1488,10 +1488,10 @@ async fn navigate_after_real_runtime_enable_auto_creates_native_named_child_worl
     wait_until_message(
         &mut ctx,
         "SID-1",
-        "child frame navigation after its native named Runtime context",
+        "child frame load after its native named Runtime context",
         move |message| {
-            message["method"] == json!("Page.frameNavigated")
-                && message["params"]["frame"]["id"] == json!(expected_child_frame_id)
+            message["method"] == json!("Page.frameStoppedLoading")
+                && message["params"]["frameId"] == json!(expected_child_frame_id)
         },
     )
     .await;
@@ -1500,17 +1500,17 @@ async fn navigate_after_real_runtime_enable_auto_creates_native_named_child_worl
         .iter()
         .position(|message| message == &named_world_created)
         .expect("child named-world event index");
-    let child_frame_navigated_index = ctx
+    let child_frame_loaded_index = ctx
         .sent
         .iter()
         .position(|message| {
-            message["method"] == json!("Page.frameNavigated")
-                && message["params"]["frame"]["id"] == json!(child_frame_id)
+            message["method"] == json!("Page.frameStoppedLoading")
+                && message["params"]["frameId"] == json!(child_frame_id)
         })
-        .expect("child frame should emit Page.frameNavigated");
+        .expect("child frame should emit Page.frameStoppedLoading");
     assert!(
-        named_world_created_index < child_frame_navigated_index,
-        "child named-world context should be emitted before child frameNavigated; sent={:?}",
+        named_world_created_index < child_frame_loaded_index,
+        "child named-world context should be emitted before child load completion; sent={:?}",
         ctx.sent
     );
     let child_context_id = named_world_created["params"]["context"]["id"]
