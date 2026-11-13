@@ -860,14 +860,10 @@ impl PageVm {
             } => Ok(RendererPageReply::OptionalString(
                 self.outer_html_for_node(reference, include_shadow_dom)?,
             )),
-            RendererPageCommand::RenderMarkdown { options } => {
-                self.vm_mut().run_pending_resize_observer_frame();
-                Ok(RendererPageReply::OptionalString(Some(
-                    self.render_markdown(options),
-                )))
-            }
+            RendererPageCommand::RenderMarkdown { options } => Ok(RendererPageReply::OptionalString(
+                Some(self.render_markdown(options)),
+            )),
             RendererPageCommand::SerializeDocument { options } => {
-                self.vm_mut().run_pending_resize_observer_frame();
                 // Capture both from the live document in this handler turn.
                 // Browser admission metadata may precede a queued history update.
                 Ok(RendererPageReply::SerializedDocument {

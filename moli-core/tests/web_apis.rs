@@ -1481,6 +1481,9 @@ async fn secondary_webapis_cover_file_file_list_and_resize_observer_basics() -> 
     page.finish_capture_screenshot(captured)?;
     page.evaluate_runtime_expression_async("runGeometryProbe()")
         .await?;
+    // Observations are delivered at the next animation frame; run it, as a
+    // CDP client lets a frame pass in Chromium before reading the result.
+    page.run_pending_resize_observer_frame_async().await?;
 
     assert!(
         page.serialize_html_async()
