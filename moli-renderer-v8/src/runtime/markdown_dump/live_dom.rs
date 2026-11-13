@@ -1,13 +1,22 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use moli_html2md::{Dom, NodeKind};
+use url::Url;
 
-use crate::dom::native::{DomHost, NativeDom, NativeNodeId};
+use crate::dom::native::{DomHost, HtmlEmbeddedDocumentProvider, NativeDom, NativeNodeId, Node};
 
 /// Additional page facts needed by the Markdown presentation adapter.
 pub(super) trait MarkdownSource: Dom<NodeId = NativeNodeId> {
     fn native(&self) -> &NativeDom;
     fn parent_node(&self, node: NativeNodeId) -> Option<NativeNodeId>;
+    /// Base URL of the embedded Document containing `node`, if inlined.
+    fn frame_base_url(&self, _node: NativeNodeId) -> Option<&Url> {
+        None
+    }
 }
 
 /// A read-only adapter over the live page. Query caches store node IDs;
@@ -16,19 +25,28 @@ pub(super) struct LiveDom<'a> {
     host: &'a DomHost,
     has_shadow_roots: bool,
     projection: RefCell<ProjectionCache>,
+    /// Live embedded Documents, borrowed exactly as the HTML writer does.
+    frames: Option<&'a dyn HtmlEmbeddedDocumentProvider>,
+    sole_frame_owner: Option<NativeNodeId>,
 }
 
 impl<'a> LiveDom<'a> {
-    pub(super) fn new(host: &'a DomHost) -> Self {
+    pub(super) fn new(
+        host: &'a DomHost,
+        frames: Option<&'a dyn HtmlEmbeddedDocumentProvider>,
+    ) -> Self {
         Self {
             host,
             has_shadow_roots: !host.snapshot_connected_shadow_root_bindings().is_empty(),
             projection: RefCell::new(ProjectionCache::default()),
+            frames,
+            sole_frame_owner: frames.and_then(|frames| frames.sole_owner()),
         }
     }
 
-    pub(super) fn has_shadow_roots(&self) -> bool {
-        self.has_shadow_roots
+    /// Whether the export must follow projected edges rather than native ones.
+    pub(super) fn is_projected(&self) -> bool {
+        self.has_shadow_roots || self.frames.is_some()
     }
 }
 
@@ -39,6 +57,9 @@ impl<'a> LiveDom<'a> {
 struct ProjectionCache {
     parents: HashMap<NativeNodeId, Option<NativeNodeId>>,
     slot_children: HashMap<NativeNodeId, Option<Rc<[NativeNodeId]>>>,
+    /// Inlined frame content root -> its owner element.
+    frame_owners: HashMap<NativeNodeId, NativeNodeId>,
+    frame_documents: HashSet<NativeNodeId>,
 }
 
 impl LiveDom<'_> {
@@ -59,6 +80,32 @@ impl LiveDom<'_> {
         // Remember empty assignment without copying the fallback children.
         cache.slot_children.insert(slot, children.clone());
         children
+    }
+
+    /// The body (or root element) of the live Document embedded by `owner`.
+    /// A Document is inlined under at most one owner.
+    fn frame_root(&self, owner: NativeNodeId) -> Option<NativeNodeId> {
+        let frames = self.frames?;
+        if self.sole_frame_owner.is_some_and(|sole| sole != owner) {
+            return None;
+        }
+        let document = frames.embedded_document(owner)?.document;
+        let dom = self.host.dom();
+        let element_child = |parent, tag| {
+            dom.find_child(parent, |child| {
+                dom.node(child)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.is_html_element(tag))
+            })
+        };
+        let html = element_child(document, "html")?;
+        let root = element_child(html, "body").unwrap_or(html);
+        let mut cache = self.projection.borrow_mut();
+        if *cache.frame_owners.entry(root).or_insert(owner) != owner {
+            return None;
+        }
+        cache.frame_documents.insert(document);
+        Some(root)
     }
 }
 
@@ -110,7 +157,24 @@ impl MarkdownSource for LiveDom<'_> {
         self.host.dom()
     }
 
+    fn frame_base_url(&self, node: NativeNodeId) -> Option<&Url> {
+        self.frames?;
+        let document = self.host.node(node).and_then(Node::owner_document)?;
+        if !self.projection.borrow().frame_documents.contains(&document) {
+            return None;
+        }
+        self.host
+            .node(document)
+            .and_then(Node::as_document)
+            .map(|document| document.base_url())
+    }
+
     fn parent_node(&self, node: NativeNodeId) -> Option<NativeNodeId> {
+        if self.frames.is_some()
+            && let Some(&owner) = self.projection.borrow().frame_owners.get(&node)
+        {
+            return Some(owner);
+        }
         let native_parent = self.host.dom().parent_node(node)?;
         if !self.has_shadow_roots {
             return Some(native_parent);
@@ -160,6 +224,10 @@ impl Dom for LiveDom<'_> {
     type NodeId = NativeNodeId;
 
     fn node_kind(&self, node: Self::NodeId) -> NodeKind<'_> {
+        // An inlined frame owner is a plain container for its Document.
+        if self.frame_root(node).is_some() {
+            return NodeKind::Element("div");
+        }
         Dom::node_kind(self.host.dom(), node)
     }
 
@@ -176,6 +244,12 @@ impl Dom for LiveDom<'_> {
 
     fn children(&self, node: Self::NodeId) -> impl Iterator<Item = Self::NodeId> {
         let dom = self.host.dom();
+        if let Some(root) = self.frame_root(node) {
+            return ChildNodes::Projected(ProjectedChildren {
+                nodes: Rc::from([root]),
+                next: 0,
+            });
+        }
         if self.has_shadow_roots
             && let Some(element) = dom.node(node).and_then(|node| node.as_element())
         {
@@ -203,7 +277,7 @@ mod tests {
     use crate::dom_presentation::{flat_children, flat_parent};
 
     fn assert_projection(host: &DomHost) {
-        let view = LiveDom::new(host);
+        let view = LiveDom::new(host, None);
         let root = host.document_handle();
         let mut known_nodes = Vec::new();
         let mut stack = vec![root];

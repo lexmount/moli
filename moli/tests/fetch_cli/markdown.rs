@@ -93,3 +93,14 @@ fn http_markdown_dump_resolves_resource_urls() -> Result<()> {
     assert_eq!(String::from_utf8(output.stdout)?, expected);
     Ok(())
 }
+
+#[test]
+fn markdown_with_frames_inlines_child_documents_with_their_own_base_url() -> Result<()> {
+    let html = "<h1>Root</h1><p>Before frame</p><iframe srcdoc=\"<base href='https://child.example/dir/'><p>CHILD TEXT <a href='page.html'>child link</a></p><iframe srcdoc='<p>INNER</p>'></iframe>\"></iframe><p>After frame</p>";
+    assert_markdown_dump(
+        html,
+        "# Root\n\nBefore frame\n\nCHILD TEXT [child link](https://child.example/dir/page.html)\n\nINNER\n\nAfter frame",
+        &["--with-frames"],
+    )?;
+    assert_markdown_dump(html, "# Root\n\nBefore frame\n\nAfter frame", &[])
+}

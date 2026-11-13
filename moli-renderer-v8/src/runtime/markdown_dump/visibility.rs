@@ -294,7 +294,7 @@ impl<'a, D: MarkdownSource> MarkdownDom<'a, D> {
                     subscripts.insert(node);
                 }
             }
-            if let Some(base_url) = base_url {
+            if let Some(base_url) = dom.frame_base_url(node).or(base_url) {
                 let tag = match Dom::node_kind(dom, node) {
                     NodeKind::Element(tag) => tag,
                     _ => "",

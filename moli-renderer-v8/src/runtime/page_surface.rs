@@ -6186,6 +6186,7 @@ pub struct RendererHtmlSerializeOptions {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RendererMarkdownOptions {
     pub strip: RendererContentStripOptions,
+    pub with_frames: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
