@@ -1674,6 +1674,8 @@ impl FrameOwnerStore {
             .main_load_completion_state()
     }
 
+    // Share owned snapshot assembly across callers; HTML export uses the borrowed view.
+    #[inline(never)]
     pub(crate) fn current_frame_owner_snapshot(
         &self,
         frame_id: &FrameId,
@@ -1743,6 +1745,8 @@ impl FrameOwnerStore {
         })
     }
 
+    // Share owned snapshot assembly across callers; HTML export uses the borrowed view.
+    #[inline(never)]
     pub(crate) fn current_child_owner_snapshot(
         &self,
         child_handle: DomHandle,
