@@ -274,7 +274,8 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
                 .saturating_add(string_charge(&event.loader_id))
                 .saturating_add(child_frame_document_network_charge(&event.snapshot))
         }
-        RendererOwnerAction::ChildFrameLoad { event, .. } => [
+        RendererOwnerAction::ChildFrameCommit { event, .. }
+        | RendererOwnerAction::ChildFrameLoad { event, .. } => [
             Some(event.frame_id.as_str()),
             event.parent_frame_id.as_deref(),
             event.loader_id.as_deref(),

@@ -1708,7 +1708,7 @@ async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url()
         bind_renderer_document_for_test(conn, "SID-1", "TID-1", source_document)
     });
     let mut background_events = Vec::new();
-    let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
+    let mut document = super::PagePreparedChildFrameDocumentActivity::from_parts(
         12.5,
         vec![super::PagePreparedChildFrameTreeEvent::Attached {
             frame_id: "CHILD-FRAME-1".to_owned(),
@@ -1730,6 +1730,11 @@ async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url()
         "https://top.example".to_owned(),
         "Secure".to_owned(),
     );
+    document.commits = document
+        .loads
+        .iter()
+        .map(|load| load.navigation_commit.clone())
+        .collect();
     let activity = ctx.with_fixture(|conn| {
         prepared_child_frame_activity_for_test(conn, "SID-1", source_document, document)
     });
@@ -1840,19 +1845,27 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
             from_cache: false,
             cache_state: Default::default(),
         };
-        let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
+        let mut document = super::PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
             vec![super::PagePreparedChildFrameTreeEvent::Attached {
                 frame_id: "CHILD-background".into(),
                 parent_frame_id: "TID-background".into(),
             }],
             Vec::new(),
-            vec![ChildFrameDocumentNetworkActivitySnapshot {
-                frame_id: "RETIRED-CHILD-background".into(),
-                parent_frame_id: Some("TID-background".into()),
-                loader_id: "LID-historical-background".into(),
-                snapshot: network.clone(),
-            }],
+            vec![
+                ChildFrameDocumentNetworkActivitySnapshot {
+                    frame_id: "RETIRED-CHILD-background".into(),
+                    parent_frame_id: Some("TID-background".into()),
+                    loader_id: "LID-historical-background".into(),
+                    snapshot: network.clone(),
+                },
+                ChildFrameDocumentNetworkActivitySnapshot {
+                    frame_id: "CHILD-background".into(),
+                    parent_frame_id: Some("TID-background".into()),
+                    loader_id: "LID-background".into(),
+                    snapshot: network,
+                },
+            ],
             vec![ChildFrameNavigationSnapshot {
                 frame_id: "CHILD-background".into(),
                 parent_frame_id: Some("TID-background".into()),
@@ -1862,11 +1875,16 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
                 document_open_replacement: false,
                 security_origin_inherited: false,
                 security_origin_opaque: false,
-                document_network: Some(network),
+                document_network: None,
             }],
             "https://example.test".into(),
             "Secure".into(),
         );
+        document.commits = document
+            .loads
+            .iter()
+            .map(|load| load.navigation_commit.clone())
+            .collect();
         let binding = conn
             .target_root_document_protocol_attachment_identity_for_owner(&owner, source_document)
             .expect("unattached background Page has a frozen root Document");
@@ -1943,7 +1961,7 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn child_frame_activity_emits_document_network_events_from_prepared_load() {
+async fn child_frame_activity_emits_document_network_events_before_load_completion() {
     let mut conn = CdpConnection::default();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
@@ -1956,6 +1974,18 @@ async fn child_frame_activity_emits_document_network_events_from_prepared_load()
     let source_document = renderer_document_identity_for_test(1, 1);
     bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
     let mut background_events = Vec::new();
+    let network = ChildFrameDocumentNetworkSnapshot {
+        request_url: "https://example.test/child".to_owned(),
+        request_method: "GET".to_owned(),
+        request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
+        final_url: "https://example.test/child".to_owned(),
+        status: 200,
+        response_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
+        encoded_data_length: 3,
+        response_body: Some(SubresourceResponseBody::from_bytes(vec![0x00, 0xff, b'a'])),
+        from_cache: true,
+        cache_state: moli_fetch::ResponseCacheState::Local,
+    };
     let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
         12.5,
         vec![super::PagePreparedChildFrameTreeEvent::Attached {
@@ -1963,29 +1993,13 @@ async fn child_frame_activity_emits_document_network_events_from_prepared_load()
             parent_frame_id: "TID-1".to_owned(),
         }],
         Vec::new(),
-        Vec::new(),
-        vec![ChildFrameNavigationSnapshot {
+        vec![ChildFrameDocumentNetworkActivitySnapshot {
             frame_id: "CHILD-FRAME-1".to_owned(),
             parent_frame_id: Some("TID-1".to_owned()),
-            loader_id: Some("LID-CHILD-1".to_owned()),
-            name: Some("child-frame".to_owned()),
-            url: "https://example.test/child".to_owned(),
-            document_open_replacement: false,
-            security_origin_inherited: false,
-            security_origin_opaque: false,
-            document_network: Some(ChildFrameDocumentNetworkSnapshot {
-                request_url: "https://example.test/child".to_owned(),
-                request_method: "GET".to_owned(),
-                request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
-                final_url: "https://example.test/child".to_owned(),
-                status: 200,
-                response_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
-                encoded_data_length: 3,
-                response_body: Some(SubresourceResponseBody::from_bytes(vec![0x00, 0xff, b'a'])),
-                from_cache: true,
-                cache_state: moli_fetch::ResponseCacheState::Local,
-            }),
+            loader_id: "LID-CHILD-1".to_owned(),
+            snapshot: network,
         }],
+        Vec::new(),
         "https://example.test".to_owned(),
         "Secure".to_owned(),
     );
@@ -1994,6 +2008,13 @@ async fn child_frame_activity_emits_document_network_events_from_prepared_load()
 
     super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
     let out = protocol_messages_from_background_events(background_events);
+    assert!(
+        !out.iter().any(|message| matches!(
+            message["method"].as_str(),
+            Some("Page.frameNavigated" | "Page.frameStoppedLoading")
+        )),
+        "a completed network response must be observable before document lifecycle completion: {out:?}"
+    );
 
     let request = out
         .iter()

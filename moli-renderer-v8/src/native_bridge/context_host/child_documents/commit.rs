@@ -224,6 +224,9 @@ impl PageScriptHost {
             owner_local_window_id,
             owner_document_id,
         );
+        // Parsing can attach descendant Frames. Their client identities must
+        // belong to this committed Document, rather than the one it replaces.
+        self.publish_child_frame_navigation_commit(handle);
         let parser_start = self.start_live_child_document_parser(
             scope,
             handle,

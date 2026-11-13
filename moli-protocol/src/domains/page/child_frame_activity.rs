@@ -47,6 +47,7 @@ pub(crate) struct PagePreparedChildFrameDocumentActivity {
     pub(super) child_frame_tree_events: Vec<PagePreparedChildFrameTreeEvent>,
     pub(super) document_opened_events: Vec<ChildFrameDocumentOpenedSnapshot>,
     pub(super) document_networks: Vec<PagePreparedChildFrameDocumentNetwork>,
+    pub(super) commits: Vec<PagePreparedChildFrameNavigationCommit>,
     pub(super) loads: Vec<PagePreparedChildFrameLoadActivity>,
     pub(super) security_origin: String,
     pub(super) secure_context_type: String,
@@ -66,6 +67,7 @@ impl PagePreparedChildFrameDocumentActivity {
             timestamp,
             child_frame_tree_events,
             document_opened_events,
+            commits: Vec::new(),
             document_networks: document_networks
                 .into_iter()
                 .map(|network| PagePreparedChildFrameDocumentNetwork {
@@ -105,59 +107,25 @@ pub(crate) enum PagePreparedChildFrameTreeEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PagePreparedChildFrameLoadActivity {
     pub(super) document_open_replacement: bool,
-    pub(super) navigation_start: PagePreparedChildFrameNavigationStart,
-    pub(super) document_network: Option<PagePreparedChildFrameDocumentNetwork>,
     pub(super) navigation_commit: PagePreparedChildFrameNavigationCommit,
     pub(super) lifecycle_terminal: PagePreparedChildFrameLifecycleTerminal,
 }
 
 impl PagePreparedChildFrameLoadActivity {
     fn from_snapshot(load: ChildFrameNavigationSnapshot, timestamp: f64) -> Self {
-        let exact_loader_id = load.loader_id.clone();
-        let loader_id = load.loader_id.unwrap_or_else(|| LOADER_ID.to_owned());
-        let navigation_start = PagePreparedChildFrameNavigationStart {
-            frame_id: load.frame_id.clone(),
-            loader_id: loader_id.clone(),
-            url: load.url.clone(),
-        };
-        let document_network =
-            load.document_network
-                .map(|snapshot| PagePreparedChildFrameDocumentNetwork {
-                    frame_id: load.frame_id.clone(),
-                    loader_id: loader_id.clone(),
-                    timestamp,
-                    snapshot,
-                });
-        let navigation_commit = PagePreparedChildFrameNavigationCommit {
-            frame_id: load.frame_id.clone(),
-            parent_frame_id: load.parent_frame_id,
-            name: load.name,
-            loader_id: loader_id.clone(),
-            exact_loader_id,
-            url: load.url,
-            security_origin_inherited: load.security_origin_inherited,
-            security_origin_opaque: load.security_origin_opaque,
-        };
+        let document_open_replacement = load.document_open_replacement;
+        let navigation_commit = PagePreparedChildFrameNavigationCommit::from_snapshot(load);
         let lifecycle_terminal = PagePreparedChildFrameLifecycleTerminal {
-            frame_id: load.frame_id,
-            loader_id,
+            frame_id: navigation_commit.frame_id.clone(),
+            loader_id: navigation_commit.loader_id.clone(),
             timestamp,
         };
         Self {
-            document_open_replacement: load.document_open_replacement,
-            navigation_start,
-            document_network,
+            document_open_replacement,
             navigation_commit,
             lifecycle_terminal,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct PagePreparedChildFrameNavigationStart {
-    pub(super) frame_id: String,
-    pub(super) loader_id: String,
-    pub(super) url: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,6 +149,24 @@ pub(super) struct PagePreparedChildFrameNavigationCommit {
     pub(super) url: String,
     pub(super) security_origin_inherited: bool,
     pub(super) security_origin_opaque: bool,
+}
+
+impl PagePreparedChildFrameNavigationCommit {
+    pub(super) fn from_snapshot(snapshot: ChildFrameNavigationSnapshot) -> Self {
+        Self {
+            frame_id: snapshot.frame_id,
+            parent_frame_id: snapshot.parent_frame_id,
+            name: snapshot.name,
+            loader_id: snapshot
+                .loader_id
+                .clone()
+                .unwrap_or_else(|| LOADER_ID.to_owned()),
+            exact_loader_id: snapshot.loader_id,
+            url: snapshot.url,
+            security_origin_inherited: snapshot.security_origin_inherited,
+            security_origin_opaque: snapshot.security_origin_opaque,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

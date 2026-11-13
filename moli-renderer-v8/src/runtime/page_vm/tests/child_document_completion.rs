@@ -147,7 +147,9 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
             )?,
             "typed child"
         );
-        assert!(page_vm.take_completed_child_document_networks().is_empty());
+        let networks = page_vm.take_completed_child_document_networks();
+        assert_eq!(networks.len(), 1);
+        assert_eq!(networks[0].snapshot.request_url, child_url);
         assert!(!queue.has_ready_completion());
 
         server.await.expect("typed child server should finish");

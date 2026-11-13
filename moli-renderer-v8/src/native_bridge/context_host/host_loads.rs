@@ -505,6 +505,45 @@ impl PageScriptHost {
         }
     }
 
+    pub(in crate::native_bridge::context_host) fn publish_child_frame_navigation_commit(
+        &self,
+        handle: DomHandle,
+    ) {
+        let parent_frame_id = self.child_browsing_context_parent_frame_id(handle);
+        let Some(url) = self.child_browsing_context_current_url(handle) else {
+            return;
+        };
+        let Some(entry) = self.child_browsing_contexts.get(&handle) else {
+            return;
+        };
+        let identity = entry.frame_identity_snapshot();
+        let event = crate::protocol_types::ChildFrameNavigationSnapshot {
+            frame_id: identity.frame_id,
+            parent_frame_id: self.protocol_child_frame_parent_id(parent_frame_id),
+            loader_id: entry.current_document_loader_id().map(ToOwned::to_owned),
+            name: identity.name,
+            url: url.to_string(),
+            document_open_replacement: false,
+            security_origin_inherited: identity.security_origin_inherited,
+            security_origin_opaque: self.child_browsing_context_has_opaque_origin(handle),
+            document_network: None,
+        };
+        let published = self
+            .root_document_lifecycle_identity()
+            .is_some_and(|source_document| {
+                self.append_live_turn_owner_action(
+                    crate::runtime::RendererOwnerAction::ChildFrameCommit {
+                        source_document,
+                        event,
+                    },
+                )
+            });
+        assert!(
+            published || cfg!(test),
+            "a production child-frame commit must have a concrete renderer output sink"
+        );
+    }
+
     fn publish_child_frame_load_finish(
         &mut self,
         finish: crate::frame_owner_model::FrameDocumentLoadDispatchFinish,

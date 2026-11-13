@@ -558,6 +558,11 @@ impl PageScriptHost {
                             "new child frame refresh must capture initial-empty init inputs",
                         ),
                     );
+                    if initial_about_blank_document_is_complete
+                        || initial_navigation_uses_initial_empty_load
+                    {
+                        self.publish_child_frame_navigation_commit(handle);
+                    }
                     if initial_about_blank_document_is_complete {
                         let _ = self.dispatch_ready_child_initial_empty_load_synchronously(
                             scope,

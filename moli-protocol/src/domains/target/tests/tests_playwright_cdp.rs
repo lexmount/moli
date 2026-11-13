@@ -383,7 +383,7 @@ async fn playwright_page_session_auto_attach_does_not_duplicate_new_page_target_
     });
 }
 
-async fn wait_for_playwright_child_frame_navigation(
+async fn wait_for_playwright_child_frame_load(
     ctx: &mut TestContext,
     session_id: &str,
     child_frame_id: &str,
@@ -397,6 +397,18 @@ async fn wait_for_playwright_child_frame_navigation(
             message["method"] == json!("Page.frameNavigated")
                 && message["params"]["frame"]["id"] == json!(child_frame_id)
                 && message["params"]["frame"]["url"] == json!(expected_url)
+        },
+    )
+    .await;
+    // Navigation commits precede Realm bootstrap and document parsing.
+    // The following utility-script assertions read the loaded body.
+    crate::testing::wait_until_message(
+        ctx,
+        Some(session_id),
+        "child frame loaded before playwright-style body evaluation",
+        |message| {
+            message["method"] == "Page.frameStoppedLoading"
+                && message["params"]["frameId"] == child_frame_id
         },
     )
     .await;
@@ -577,7 +589,7 @@ async fn playwright_over_cdp_child_frame_playwright_style_utility_script_uses_ch
         .and_then(|message| message["params"]["frameId"].as_str())
         .map(str::to_owned)
         .expect("child frame should emit Page.frameAttached");
-    wait_for_playwright_child_frame_navigation(
+    wait_for_playwright_child_frame_load(
         &mut ctx,
         session_id.as_str(),
         &child_frame_id,
@@ -1117,7 +1129,7 @@ async fn playwright_connect_over_cdp_auto_attach_child_frame_utility_script_uses
         .and_then(|message| message["params"]["frameId"].as_str())
         .map(str::to_owned)
         .expect("network child frame should emit a Document request");
-    wait_for_playwright_child_frame_navigation(
+    wait_for_playwright_child_frame_load(
         &mut ctx,
         session_id.as_str(),
         &child_frame_id,
@@ -1410,6 +1422,179 @@ async fn playwright_over_cdp_child_frame_is_visible_in_frame_tree_after_frame_at
     assert_eq!(child_frames[0]["frame"]["id"], json!(child_frame_id));
     assert_eq!(child_frames[0]["frame"]["url"], json!(child_url.as_str()));
 
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn playwright_over_cdp_nested_siblings_commit_parent_before_attaching_children() {
+    async fn top(axum::extract::Path(kind): axum::extract::Path<String>) -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            format!("<iframe name=container src=/container/{kind}></iframe>"),
+        )
+    }
+
+    async fn container(
+        axum::extract::Path(kind): axum::extract::Path<String>,
+    ) -> impl IntoResponse {
+        let second = if kind == "same" {
+            "child"
+        } else {
+            "other-child"
+        };
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            format!(
+                "<iframe name=uno src=/child></iframe><iframe name=dos src=/{second}></iframe>"
+            ),
+        )
+    }
+
+    async fn child() -> impl IntoResponse {
+        ([(CONTENT_TYPE.as_str(), "text/html")], "<p>child</p>")
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/top/{kind}", get(top))
+                .route("/container/{kind}", get(container))
+                .route("/child", get(child))
+                .route("/other-child", get(child)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    let attached =
+        create_attached_page_session_async(&mut ctx, 53200, 53201, 53202, 53203, 53204).await;
+    let session_id = attached.session_id;
+    ctx.enable_page_events_for_test(Some(session_id.as_str()));
+
+    for kind in ["same", "distinct"] {
+        ctx.sent.clear();
+        ctx.process_and_wait_for_response_async(json!({
+            "id": 53205,
+            "method": "Page.navigate",
+            "sessionId": session_id,
+            "params": { "url": format!("http://{addr}/top/{kind}") }
+        }))
+        .await;
+        crate::testing::wait_until_message(
+            &mut ctx,
+            Some(session_id.as_str()),
+            "nested siblings finish loading",
+            |message| {
+                message["sessionId"] == session_id && message["method"] == "Page.loadEventFired"
+            },
+        )
+        .await;
+        let events = ctx.sent.clone();
+
+        ctx.process_async(json!({
+            "id": 53206,
+            "method": "Page.getFrameTree",
+            "sessionId": session_id
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, 53206);
+        let container = &response["result"]["frameTree"]["childFrames"][0];
+        let container_id = container["frame"]["id"].as_str().unwrap();
+        let children = container["childFrames"].as_array().unwrap();
+        assert_eq!(children.len(), 2, "{response}");
+        assert_ne!(children[0]["frame"]["id"], children[1]["frame"]["id"]);
+        let parent_commit = events
+            .iter()
+            .position(|event| {
+                event["method"] == "Page.frameNavigated"
+                    && event["params"]["frame"]["id"] == container_id
+                    && event["params"]["frame"]["url"] == format!("http://{addr}/container/{kind}")
+            })
+            .unwrap();
+        let parent_response = events
+            .iter()
+            .position(|event| {
+                event["method"] == "Network.responseReceived"
+                    && event["params"]["frameId"] == container_id
+            })
+            .unwrap();
+        assert!(parent_response < parent_commit, "{events:?}");
+        ctx.process_async(json!({
+            "id": 53207,
+            "method": "Page.createIsolatedWorld",
+            "sessionId": session_id,
+            "params": { "frameId": container_id, "worldName": "nested-frame-owners" }
+        }))
+        .await;
+        let world = take_response_by_id(&mut ctx, 53207);
+        let context_id = world["result"]["executionContextId"].as_i64().unwrap();
+        for (child, name) in children.iter().zip(["uno", "dos"]) {
+            assert_eq!(child["frame"]["name"], name);
+            let child_id = child["frame"]["id"].as_str().unwrap();
+            ctx.process_async(json!({
+                "id": 53208,
+                "method": "Runtime.evaluate",
+                "sessionId": session_id,
+                "params": {
+                    "contextId": context_id,
+                    "expression": format!("document.querySelector('iframe[name={name}]')")
+                }
+            }))
+            .await;
+            let element = take_response_by_id(&mut ctx, 53208);
+            let object_id = element["result"]["result"]["objectId"].as_str().unwrap();
+            ctx.process_async(json!({
+                "id": 53209,
+                "method": "DOM.describeNode",
+                "sessionId": session_id,
+                "params": { "objectId": object_id }
+            }))
+            .await;
+            let described = take_response_by_id(&mut ctx, 53209);
+            assert_eq!(
+                described["result"]["node"]["frameId"], child_id,
+                "an iframe must identify its hosted Frame, not its parent: {described}"
+            );
+            let attached = events
+                .iter()
+                .position(|event| {
+                    event["method"] == "Page.frameAttached"
+                        && event["params"]["frameId"] == child_id
+                })
+                .unwrap();
+            assert!(
+                parent_commit < attached,
+                "{kind}: parent must commit before attaching {name}; otherwise Playwright removes the new child subtree on parent navigation: {events:?}"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| {
+                        event["method"] == "Page.frameNavigated"
+                            && event["params"]["frame"]["id"] == child_id
+                    })
+                    .count(),
+                1,
+                "load completion must not repeat the child navigation: {events:?}"
+            );
+            for method in ["Network.requestWillBeSent", "Network.responseReceived"] {
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| {
+                            event["method"] == method && event["params"]["frameId"] == child_id
+                        })
+                        .count(),
+                    1,
+                    "{name}: {method} must be emitted once per document: {events:?}"
+                );
+            }
+        }
+    }
     server.abort();
 }
 
