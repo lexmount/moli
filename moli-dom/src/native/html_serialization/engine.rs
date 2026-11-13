@@ -134,6 +134,16 @@ fn escape_html_text<S>(value: &str, out: &mut S)
 where
     S: HtmlSerializationSink + ?Sized,
 {
+    if S::BOUNDED || value.len() <= MIN_HTML_ESCAPE_RUN {
+        escape_html_scalar::<S, false>(value, out);
+    } else {
+        escape_long_html_text(value, out);
+    }
+}
+
+// Long payloads amortize one call; share this loop across traversal modes.
+#[inline(never)]
+fn escape_long_html_text<S: HtmlSerializationSink + ?Sized>(value: &str, out: &mut S) {
     escape_html_value::<S, false>(value, out);
 }
 
@@ -264,6 +274,47 @@ struct HtmlEscapingWriter<'a, S, const EMBEDDED: bool> {
 }
 
 impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, EMBEDDED> {
+    // Shared across traversal policies; ordinary text keeps its specialized writer.
+    #[inline(never)]
+    fn shadow_template_start(&mut self, root: &HtmlSerializedShadowRoot<'_>) {
+        self.push_str("<template shadowrootmode=\"");
+        self.attribute_value(root.init.mode());
+        self.push('"');
+        if root.init.delegates_focus() {
+            self.push_str(" shadowrootdelegatesfocus=\"\"");
+        }
+        if root.init.serializable() {
+            self.push_str(" shadowrootserializable=\"\"");
+        }
+        if root.web_api && root.init.slot_assignment() != "named" {
+            self.push_str(" shadowrootslotassignment=\"");
+            self.attribute_value(root.init.slot_assignment());
+            self.push('"');
+        }
+        if root.init.clonable() {
+            self.push_str(" shadowrootclonable=\"\"");
+        }
+        if root.registry_attribute {
+            self.push_str(" shadowrootcustomelementregistry=\"\"");
+        }
+        if root.web_api
+            && let Some(reference_target) = root.init.reference_target()
+        {
+            self.push_str(" shadowrootreferencetarget=\"");
+            self.attribute_value(reference_target);
+            self.push('"');
+        }
+        if root.web_api
+            && root.include_style_sheets
+            && let Some(sheets) = root.init.adopted_style_sheets()
+        {
+            self.push_str(" shadowrootadoptedstylesheets=\"");
+            self.attribute_value(sheets);
+            self.push('"');
+        }
+        self.push('>');
+    }
+
     // Choose once per value. Ordinary text must not pay a frame-depth branch
     // for every character just because another node embeds a Document.
     #[inline]
@@ -505,7 +556,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     }
                 }
                 HtmlSerializationFrame::ShadowRootTemplate(root) => {
-                    self.shadow_template_start(&root);
+                    self.out.shadow_template_start(&root);
                     self.stack
                         .push(HtmlSerializationFrame::CloseShadowRootTemplate);
                     self.stack.push(HtmlSerializationFrame::Children(root.root));
@@ -674,45 +725,6 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             self.stack
                 .push(HtmlSerializationFrame::ShadowRootTemplate(root));
         }
-    }
-
-    fn shadow_template_start(&mut self, root: &HtmlSerializedShadowRoot<'_>) {
-        self.out.push_str("<template shadowrootmode=\"");
-        self.out.attribute_value(root.init.mode());
-        self.out.push('"');
-        if root.init.delegates_focus() {
-            self.out.push_str(" shadowrootdelegatesfocus=\"\"");
-        }
-        if root.init.serializable() {
-            self.out.push_str(" shadowrootserializable=\"\"");
-        }
-        if root.web_api && root.init.slot_assignment() != "named" {
-            self.out.push_str(" shadowrootslotassignment=\"");
-            self.out.attribute_value(root.init.slot_assignment());
-            self.out.push('"');
-        }
-        if root.init.clonable() {
-            self.out.push_str(" shadowrootclonable=\"\"");
-        }
-        if root.registry_attribute {
-            self.out.push_str(" shadowrootcustomelementregistry=\"\"");
-        }
-        if root.web_api
-            && let Some(reference_target) = root.init.reference_target()
-        {
-            self.out.push_str(" shadowrootreferencetarget=\"");
-            self.out.attribute_value(reference_target);
-            self.out.push('"');
-        }
-        if root.web_api
-            && root.include_style_sheets
-            && let Some(sheets) = root.init.adopted_style_sheets()
-        {
-            self.out.push_str(" shadowrootadoptedstylesheets=\"");
-            self.out.attribute_value(sheets);
-            self.out.push('"');
-        }
-        self.out.push('>');
     }
 
     fn embedded_attributes(&mut self) -> Result<(), HtmlSerializationError> {
