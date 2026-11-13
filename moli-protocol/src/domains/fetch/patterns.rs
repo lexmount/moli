@@ -20,7 +20,7 @@ pub(super) fn supported_pattern_config(
                 None => None,
                 Some(resource_type) => {
                     let filter = FetchResourceTypeFilter::parse(resource_type).ok_or(())?;
-                    if !filter.supports_fetch_enable() {
+                    if filter.interception_classes().is_empty() {
                         return Err(());
                     }
                     Some(filter)
