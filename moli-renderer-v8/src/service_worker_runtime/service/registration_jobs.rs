@@ -779,7 +779,6 @@ impl ServiceWorkerRuntimeService {
                 run: owner.cloned_run_identity(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );

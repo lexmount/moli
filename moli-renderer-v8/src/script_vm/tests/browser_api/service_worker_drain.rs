@@ -7,14 +7,16 @@ const MAX_SERVICE_WORKER_TEST_SETTLE_TURNS: usize = 4_096;
 const MAX_SERVICE_WORKER_TEST_CONSECUTIVE_IDLE_TURNS: usize = 64;
 
 /// Publish one browser-context ServiceWorker internal action through the
-/// current root-Document route and execute one FIFO head through the production
-/// selected-task dispatcher.
+/// current root-Document route and settle its available FIFO heads through the
+/// production selected-task dispatcher.
 ///
 /// The closure keeps the concrete typed producer visible at each call site.
 /// This helper deliberately does not select by internal variant: all
 /// ServiceWorker internal actions share one production task source, so an
-/// earlier task must remain ahead of the newly published action. Callers prove
-/// that their action ran through its stable domain effect.
+/// earlier task must remain ahead of the newly published action. Activation can
+/// leave a controller notification ahead of it even after the worker reaches
+/// activated. Callers prove that their action ran through its stable domain
+/// effect rather than assuming that it was the first available task.
 async fn publish_and_run_service_worker_internal_test_task<E>(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     loader: &ResourceRequestClient,
@@ -26,12 +28,20 @@ async fn publish_and_run_service_worker_internal_test_task<E>(
         publish(&sender).is_ok(),
         "{context}: typed ServiceWorker Page route closed"
     );
-    assert!(
-        page.run_one_service_worker_internal_task_executor_turn(loader)
+    for completed_turns in 0..MAX_SERVICE_WORKER_TEST_SETTLE_TURNS {
+        if !page
+            .run_one_service_worker_internal_task_executor_turn(loader)
             .await
-            .unwrap_or_else(|error| panic!("{context}: selected task failed: {error}")),
-        "{context}: expected one ServiceWorker internal FIFO task"
-    );
+            .unwrap_or_else(|error| panic!("{context}: selected task failed: {error}"))
+        {
+            assert!(
+                completed_turns > 0,
+                "{context}: expected a ServiceWorker internal FIFO task"
+            );
+            return;
+        }
+    }
+    panic!("{context}: ServiceWorker internal FIFO tasks did not settle");
 }
 
 pub(super) async fn run_service_worker_client_navigate_request_task_for_test(
