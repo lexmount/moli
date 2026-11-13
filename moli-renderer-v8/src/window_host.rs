@@ -1784,7 +1784,28 @@ fn dispatch_window_message_event<'s>(
     // sources must still match their accepting owner: an endpoint can be
     // reused by a successor Window.
     let source: v8::Local<'_, v8::Value> = match source_window {
-        Some(window) => window.into(),
+        Some(window) => {
+            // Navigation can leave the accepted stable proxy detached until
+            // its successor LocalWindow is first observed. MessageEvent.source
+            // is itself such an observation; its properties must work before
+            // a listener happens to read iframe.contentWindow.
+            if let PendingWindowMessageEndpoint::ChildWindow(handle) = source_endpoint
+                && host.child_browsing_context_is_live(handle)
+                && host.child_window_proxy_is_current(scope, handle, window)
+                && window
+                    .get_creation_context(scope)
+                    .and_then(|context| {
+                        host.window_execution_context_identity_for_access_check(context)
+                    })
+                    .is_none_or(|identity| {
+                        !host.window_execution_context_identity_is_current(identity)
+                    })
+                && let Err(error) = host.ensure_prebootstrapped_child_default_context(scope, handle)
+            {
+                tracing::warn!(%error, "failed to attach the accepted message source WindowProxy");
+            }
+            window.into()
+        }
         None if !host.window_execution_context_owner_is_current(
             source_identity.owner(),
             source_endpoint.dispatch_scope(),
