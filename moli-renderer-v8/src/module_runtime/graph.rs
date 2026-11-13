@@ -1542,8 +1542,6 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
             effective_fetch_metadata: fetched_source.effective_fetch_metadata,
             requested_modules: requests,
             phase,
-            has_parse_error: false,
-            parse_error: None,
         })
     }
 
@@ -1569,6 +1567,15 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
             effective_fetch_metadata: chromium_fetch_metadata(&effective_fetch_metadata),
             requested_modules,
         })
+    }
+
+    fn module_creation_error(
+        &self,
+        entry: module_tree::ModuleEntryId,
+    ) -> Option<module_tree::ModuleLoadError> {
+        let error = self.owner.module_failure(local_entry_id(entry))?;
+        (error.stage() == ModuleLoadStage::Compile)
+            .then(|| chromium_error(error).with_module_entry(entry))
     }
 
     fn link_module_graph(

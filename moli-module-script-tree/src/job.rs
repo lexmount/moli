@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::host::ModuleScriptTreeHost;
 use crate::types::*;
@@ -22,8 +22,8 @@ pub struct ModuleScriptTreeJob {
     queued_fetches: VecDeque<ModuleFetchRequest>,
     queued_completions: VecDeque<ModuleFetchResult>,
     joined_fetches: Vec<ModuleFetchRequest>,
-    module_order: Vec<ModuleMapKey>,
-    parse_errors: HashMap<ModuleMapKey, ModuleLoadError>,
+    entries_by_key: HashMap<ModuleMapKey, ModuleEntryId>,
+    creation_errors: HashMap<ModuleMapKey, ModuleLoadError>,
     terminal: Option<ModuleTreeTerminalState>,
 }
 
@@ -65,8 +65,8 @@ impl ModuleScriptTreeJob {
             queued_fetches: VecDeque::new(),
             queued_completions: VecDeque::new(),
             joined_fetches: Vec::new(),
-            module_order: Vec::new(),
-            parse_errors: HashMap::new(),
+            entries_by_key: HashMap::new(),
+            creation_errors: HashMap::new(),
             terminal: None,
         }
     }
@@ -173,7 +173,6 @@ impl ModuleScriptTreeJob {
         let key = ModuleMapKey::new(root.source_url.clone(), kind, root.attributes.clone());
         self.root_key = Some(key.clone());
         self.queued_or_visited.insert(key.clone(), root.phase);
-        self.record_module_order(key.clone());
         self.state = ModuleTreeState::FetchingRoot;
 
         let client = self.next_single_module_client();
@@ -211,7 +210,6 @@ impl ModuleScriptTreeJob {
         self.root_entry = Some(root.root_entry);
         self.queued_or_visited
             .insert(root.root_key.clone(), root.phase);
-        self.record_module_order(root.root_key.clone());
         self.record_entry_context(
             root.root_entry,
             ModuleEntryContext {
@@ -223,6 +221,13 @@ impl ModuleScriptTreeJob {
         self.add_entry(root.root_entry, root.phase);
         self.state = ModuleTreeState::FetchingDependencies;
 
+        if let Some(error) = host.module_creation_error(root.root_entry) {
+            self.record_creation_error(
+                self.root_key.clone().expect("inline root key"),
+                error.with_module_entry(root.root_entry),
+            );
+            return self.finish_after_creation_error(host);
+        }
         if root.phase == ModuleImportPhase::Source {
             return self.link_if_ready(host);
         }
@@ -235,43 +240,27 @@ impl ModuleScriptTreeJob {
         load: PendingModuleLoad,
         outcome: ModuleFetchOutcome,
     ) -> ModuleScriptTreePoll {
-        let mut current_load_had_parse_error = false;
+        let mut current_load_had_creation_error = false;
         let (entry, context) = match outcome {
             ModuleFetchOutcome::Fetched(source) => {
                 let context = ModuleEntryContext {
-                    key: source.key.clone(),
+                    key: load.key.clone(),
                     base_url: source.base_url.clone(),
                     fetch_metadata: source.effective_fetch_metadata.clone(),
                 };
                 match host.compile_module_source(*source, load.phase) {
-                    Ok(compiled) => {
-                        if let Some(error) = compiled.parse_error.clone() {
-                            self.record_parse_error(compiled.key.clone(), error);
-                            current_load_had_parse_error = true;
-                        } else if compiled.has_parse_error {
-                            self.record_parse_error(
-                                compiled.key.clone(),
-                                ModuleLoadError::new(
-                                    ModuleLoadStage::Compile,
-                                    "module source had a parse error",
-                                )
-                                .with_key(compiled.key.clone())
-                                .with_error_constructor(ModuleErrorConstructorKind::SyntaxError),
-                            );
-                            current_load_had_parse_error = true;
-                        }
-                        (compiled.entry, context)
-                    }
+                    Ok(compiled) => (compiled.entry, context),
                     Err(error) => {
-                        host.mark_module_failed(load.key.clone(), error.clone());
-                        return self.finish_module_load_error(host, load.key, error);
+                        let entry = host.mark_module_failed(load.key.clone(), error.clone());
+                        self.record_creation_error(load.key, error.with_module_entry(entry));
+                        return self.finish_after_creation_error(host);
                     }
                 }
             }
             ModuleFetchOutcome::Ready(module) => (
                 module.entry,
                 ModuleEntryContext {
-                    key: module.key,
+                    key: load.key.clone(),
                     base_url: module.base_url,
                     fetch_metadata: module.effective_fetch_metadata,
                 },
@@ -280,6 +269,10 @@ impl ModuleScriptTreeJob {
                 return self.finish_module_load_error(host, load.key, error);
             }
         };
+        if let Some(error) = host.module_creation_error(entry) {
+            self.record_creation_error(load.key.clone(), error.with_module_entry(entry));
+            current_load_had_creation_error = true;
+        }
         if load.graph_level == ModuleGraphLevel::TopLevel {
             self.root_entry = Some(entry);
             self.state = ModuleTreeState::FetchingDependencies;
@@ -287,8 +280,8 @@ impl ModuleScriptTreeJob {
         self.record_entry_context(entry, context);
         self.add_entry(entry, load.phase);
 
-        if current_load_had_parse_error {
-            return self.finish_after_parse_error(host);
+        if current_load_had_creation_error {
+            return self.finish_after_creation_error(host);
         }
         if load.phase == ModuleImportPhase::Source {
             return self.link_if_ready(host);
@@ -351,9 +344,6 @@ impl ModuleScriptTreeJob {
                 .strongest(request_record.phase);
             self.queued_or_visited
                 .insert(resolved.key.clone(), strongest_phase);
-            if existing_phase.is_none() {
-                self.record_module_order(resolved.key.clone());
-            }
             self.dependency_edges.push(ModuleDependencyEdge {
                 parent_key: snapshot.key.clone(),
                 parent_entry: snapshot.entry,
@@ -485,7 +475,7 @@ impl ModuleScriptTreeJob {
         if !self.queued_fetches.is_empty() || !self.pending_clients.is_empty() {
             return self.flush_or_wait(host);
         }
-        if let Some(error) = self.first_parse_error() {
+        if let Some(error) = self.first_creation_error() {
             return self.fail(error);
         }
         let Some(root_entry) = self.root_entry else {
@@ -516,34 +506,52 @@ impl ModuleScriptTreeJob {
     }
 
     fn record_entry_context(&mut self, entry: ModuleEntryId, context: ModuleEntryContext) {
+        self.entries_by_key.insert(context.key.clone(), entry);
         self.entry_contexts.entry(entry).or_insert(context);
     }
 
-    fn record_module_order(&mut self, key: ModuleMapKey) {
-        if !self.module_order.contains(&key) {
-            self.module_order.push(key);
+    fn record_creation_error(&mut self, key: ModuleMapKey, error: ModuleLoadError) {
+        self.creation_errors.entry(key).or_insert(error);
+    }
+
+    fn first_creation_error(&self) -> Option<ModuleLoadError> {
+        let root = self.root_key.as_ref()?;
+        let phase = match &self.root {
+            ModuleRootInput::External(root) => root.phase,
+            ModuleRootInput::Inline(root) => root.phase,
+        };
+        let mut pending = vec![(root, phase)];
+        let mut expanded = HashSet::new();
+        while let Some((key, phase)) = pending.pop() {
+            if let Some(error) = self.creation_errors.get(key) {
+                return Some(error.clone());
+            }
+            let Some(entry) = self.entries_by_key.get(key) else {
+                continue;
+            };
+            if phase == ModuleImportPhase::Source || !expanded.insert(*entry) {
+                continue;
+            }
+            // Edges for each parent are recorded in declaration order. Iterate
+            // in reverse so the stack visits the first dependency first, even
+            // when another branch's responses arrived earlier.
+            for edge in self.dependency_edges.iter().rev() {
+                if edge.parent_entry == *entry {
+                    pending.push((&edge.child_key, edge.phase));
+                }
+            }
         }
+        None
     }
 
-    fn record_parse_error(&mut self, key: ModuleMapKey, error: ModuleLoadError) {
-        self.parse_errors.entry(key).or_insert(error);
-    }
-
-    fn first_parse_error(&self) -> Option<ModuleLoadError> {
-        self.module_order
-            .iter()
-            .find_map(|key| self.parse_errors.get(key).cloned())
-            .or_else(|| self.parse_errors.values().next().cloned())
-    }
-
-    fn finish_after_parse_error<H: ModuleScriptTreeHost>(
+    fn finish_after_creation_error<H: ModuleScriptTreeHost>(
         &mut self,
         host: &mut H,
     ) -> ModuleScriptTreePoll {
         if !self.queued_fetches.is_empty() || !self.pending_clients.is_empty() {
             return self.flush_or_wait(host);
         }
-        let error = self.first_parse_error().unwrap_or_else(|| {
+        let error = self.first_creation_error().unwrap_or_else(|| {
             ModuleLoadError::new(ModuleLoadStage::Compile, "module source had a parse error")
                 .with_error_constructor(ModuleErrorConstructorKind::SyntaxError)
         });
@@ -556,12 +564,11 @@ impl ModuleScriptTreeJob {
         request_key: ModuleMapKey,
         error: ModuleLoadError,
     ) -> ModuleScriptTreePoll {
-        if !is_parse_error(&error) {
+        if !is_creation_error(&error) {
             return self.fail(error);
         }
-        let key = error.key.as_deref().cloned().unwrap_or(request_key);
-        self.record_parse_error(key, error);
-        self.finish_after_parse_error(host)
+        self.record_creation_error(request_key, error);
+        self.finish_after_creation_error(host)
     }
 
     fn dependency_snapshot_with_tree_context(
@@ -688,6 +695,6 @@ struct DependencyCandidate {
     position: TextPosition,
 }
 
-fn is_parse_error(error: &ModuleLoadError) -> bool {
-    error.error_constructor == Some(ModuleErrorConstructorKind::SyntaxError)
+fn is_creation_error(error: &ModuleLoadError) -> bool {
+    error.stage == ModuleLoadStage::Compile
 }

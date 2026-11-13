@@ -33,6 +33,13 @@ pub trait ModuleScriptTreeHost {
         entry: ModuleEntryId,
     ) -> Result<ModuleDependencySnapshot, ModuleLoadError>;
 
+    /// Return the stored module-creation failure, including for an inline root
+    /// or a cache hit. Exception constructors describe the exposed exception,
+    /// not whether a module script was successfully created.
+    fn module_creation_error(&self, _entry: ModuleEntryId) -> Option<ModuleLoadError> {
+        None
+    }
+
     fn link_module_graph(
         &mut self,
         root: ModuleEntryId,

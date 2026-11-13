@@ -39,6 +39,7 @@ struct FakeHost {
     started: Vec<ModuleFetchRequest>,
     queued: Vec<ModuleFetchResult>,
     compile_errors: HashMap<ModuleMapKey, ModuleLoadError>,
+    creation_errors: HashMap<ModuleEntryId, ModuleLoadError>,
     link_calls: usize,
     next_fetch_id: u64,
     next_entry_id: u32,
@@ -191,8 +192,6 @@ impl ModuleScriptTreeHost for FakeHost {
             effective_fetch_metadata: fetched_source.effective_fetch_metadata,
             requested_modules: Vec::new(),
             phase,
-            has_parse_error: false,
-            parse_error: None,
         })
     }
 
@@ -223,6 +222,10 @@ impl ModuleScriptTreeHost for FakeHost {
                     "missing dependency snapshot",
                 )
             })
+    }
+
+    fn module_creation_error(&self, entry: ModuleEntryId) -> Option<ModuleLoadError> {
+        self.creation_errors.get(&entry).cloned()
     }
 
     fn link_module_graph(
@@ -774,7 +777,7 @@ fn parse_error_waits_for_pending_sibling_fetches_before_failing() {
         panic!("tree should fail with delayed parse error after sibling completion");
     };
 
-    assert_eq!(error, a_error);
+    assert_eq!(error, a_error.with_module_entry(ModuleEntryId(0)));
     assert_eq!(host.link_calls, 0);
 }
 
@@ -908,7 +911,7 @@ fn cached_parse_error_does_not_skip_successful_sibling_descendants() {
 }
 
 #[test]
-fn parse_error_result_uses_module_discovery_order_not_completion_order() {
+fn parse_error_result_uses_dependency_order_not_completion_order() {
     let root_key = key("https://example.test/app/root.mjs");
     let a_key = key("https://example.test/app/a.mjs");
     let b_key = key("https://example.test/app/b.mjs");
@@ -963,7 +966,7 @@ fn parse_error_result_uses_module_discovery_order_not_completion_order() {
         panic!("tree should fail once all sibling fetches finish");
     };
 
-    assert_eq!(error, a_error);
+    assert_eq!(error, a_error.with_module_entry(ModuleEntryId(0)));
     assert_eq!(host.link_calls, 0);
 }
 
@@ -1209,4 +1212,141 @@ fn dynamic_import_owner_metadata_is_preserved_in_fetch_request() {
         moli_module_script_tree::ModuleFetchOrdering::Runtime
     );
     assert_eq!(job.state(), ModuleTreeState::FetchingRoot);
+}
+
+#[test]
+fn cached_creation_failures_reject_inline_and_external_roots_in_both_phases() {
+    for constructor in [
+        None,
+        Some(ModuleErrorConstructorKind::SyntaxError),
+        Some(ModuleErrorConstructorKind::WebAssemblyCompileError),
+    ] {
+        for phase in [ModuleImportPhase::Evaluation, ModuleImportPhase::Source] {
+            for inline in [true, false] {
+                let root_key = key("https://example.test/app/cached.mjs");
+                let entry = ModuleEntryId(7);
+                let mut host = FakeHost::new();
+                host.ready(root_key.clone(), entry, Vec::new());
+                let mut error =
+                    ModuleLoadError::new(ModuleLoadStage::Compile, "stored creation error")
+                        .with_key(root_key.clone());
+                error.error_constructor = constructor;
+                host.creation_errors.insert(entry, error.clone());
+                let root = if inline {
+                    let ModuleRootInput::Inline(mut root) = inline_root(root_key, entry) else {
+                        unreachable!()
+                    };
+                    root.phase = phase;
+                    ModuleRootInput::Inline(root)
+                } else {
+                    external_root(root_key.url, phase)
+                };
+                let mut job = job(root);
+                let ModuleScriptTreeDrive::Failed(actual) = job.drive(&mut host) else {
+                    panic!("cached module creation failure must reject before linking");
+                };
+                assert_eq!(actual, error.with_module_entry(entry));
+                assert_eq!(host.link_calls, 0);
+                assert!(host.started.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_creation_failures_follow_declaration_order_despite_reversed_responses_and_cycles() {
+    for first_branch in ["a", "b"] {
+        let root_key = key("https://example.test/app/root.mjs");
+        let mut host = FakeHost::new();
+        host.ready(
+            root_key.clone(),
+            ModuleEntryId(1),
+            vec![
+                request("./a.mjs", ModuleImportPhase::Evaluation),
+                request("./b.mjs", ModuleImportPhase::Evaluation),
+            ],
+        );
+        let mut job = job(inline_root(root_key.clone(), ModuleEntryId(1)));
+        let ModuleScriptTreePoll::NeedFetches(mut parents) = job.poll(&mut host) else {
+            panic!("root should request both branches");
+        };
+        let mut final_error = None;
+        for branch in [first_branch, if first_branch == "a" { "b" } else { "a" }] {
+            let branch_key = key(&format!("https://example.test/app/{branch}.mjs"));
+            let bad_key = key(&format!("https://example.test/app/bad-{branch}.json"));
+            let index = parents
+                .iter()
+                .position(|request| request.key == branch_key)
+                .unwrap();
+            let parent = parents.remove(index);
+            let entry = ModuleEntryId(if branch == "a" { 2 } else { 3 });
+            host.ready(
+                branch_key.clone(),
+                entry,
+                vec![
+                    request("./root.mjs", ModuleImportPhase::Evaluation),
+                    request(
+                        &format!("./bad-{branch}.json"),
+                        ModuleImportPhase::Evaluation,
+                    ),
+                ],
+            );
+            let ModuleScriptTreePoll::NeedFetches(mut bad) = job.resume_single_module_outcome(
+                &mut host,
+                parent.client,
+                ready_outcome(branch_key, entry),
+            ) else {
+                panic!("each branch should discover its own invalid child");
+            };
+            assert_eq!(bad.len(), 1, "the cycle must not fetch the root again");
+            let bad = bad.pop().unwrap();
+            assert_eq!(bad.key, bad_key);
+            let error = syntax_error(bad_key.clone(), &format!("bad-{branch}"));
+            host.fail_compile(bad_key.clone(), error);
+            let outcome = fetched_outcome(bad_key, ModuleSource::Text("invalid".into()));
+            match job.resume_single_module_outcome(&mut host, bad.client, outcome) {
+                ModuleScriptTreePoll::Failed(error) => final_error = Some(error),
+                waiting => assert_waiting_for_clients(waiting, 1),
+            }
+        }
+        assert_eq!(
+            final_error.unwrap().message,
+            "bad-a",
+            "{first_branch} responded first"
+        );
+        assert_eq!(host.link_calls, 0);
+    }
+}
+
+#[test]
+fn a_syntax_error_named_load_failure_is_not_a_module_creation_failure() {
+    let root_key = key("https://example.test/app/root.mjs");
+    let mut host = FakeHost::new();
+    host.ready(
+        root_key.clone(),
+        ModuleEntryId(1),
+        vec![
+            request("./failed.mjs", ModuleImportPhase::Evaluation),
+            request("./pending.mjs", ModuleImportPhase::Evaluation),
+        ],
+    );
+    let mut job = job(inline_root(root_key, ModuleEntryId(1)));
+    let ModuleScriptTreePoll::NeedFetches(fetches) = job.poll(&mut host) else {
+        panic!("root should fetch its dependencies");
+    };
+    let failed = fetches
+        .into_iter()
+        .find(|request| request.key.url.path().ends_with("failed.mjs"))
+        .unwrap();
+    let error = ModuleLoadError::new(ModuleLoadStage::Fetch, "load failure")
+        .with_error_constructor(ModuleErrorConstructorKind::SyntaxError);
+    let ModuleScriptTreePoll::Failed(actual) = job.resume_single_module_outcome(
+        &mut host,
+        failed.client,
+        ModuleFetchOutcome::Failed(error.clone()),
+    ) else {
+        panic!("a load failure must not wait for the other dependency");
+    };
+    assert_eq!(actual, error);
+    assert_eq!(job.pending_client_count(), 0);
 }
