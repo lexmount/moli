@@ -36,6 +36,9 @@ CASES = (
      '<span class="atomic"></span>AB...', ""),
     ("hidden-atomic", 'ABC<span class="atomic" style="width:80px"></span>XYZ',
      'ABC<span class="atomic" style="width:0;visibility:hidden"></span>...', ""),
+    ("hidden-atomic-text-mask", 'ABC<span class="atomic" style="width:80px">INNER</span>XYZ',
+     'ABC<span class="atomic" style="width:0;visibility:hidden">INNER</span>...',
+     "background:red;background-clip:text;-webkit-background-clip:text;color:transparent"),
     ("first-atomic", '<span class="atomic" style="width:80px"></span>'
      '<span class="atomic" style="width:80px"></span>',
      '<span class="atomic" style="width:80px"></span>...', ""),

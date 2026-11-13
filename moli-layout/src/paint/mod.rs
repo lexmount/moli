@@ -904,6 +904,11 @@ fn project_background_text_clip_mask<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    if let TextClipMaskScope::InlineBox(target) = scope
+        && projection.text_overflow_visibility.is_hidden(target)
+    {
+        return;
+    }
     project_box_text_clip_mask(projection, root, scope, cull, metrics, snapshot);
 
     // A block/background root owns every descendant IFC. A flattened inline
@@ -948,7 +953,7 @@ fn project_box_text_clip_mask<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if !layout_box.style.is_visible() {
+    if projection.text_overflow_visibility.is_hidden(id) || !layout_box.style.is_visible() {
         return;
     }
     let geometry = &projection.boxes[id.index()];
