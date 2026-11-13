@@ -5308,6 +5308,8 @@ pub enum RendererPageCommand {
     },
     LayoutMetrics,
     PublishLayout,
+    /// Runs a ResizeObserver delivery waiting for the next frame, once.
+    RunPendingResizeObserverFrame,
     PrintToPdf(RendererPrintToPdfRequest),
     CaptureScreenshot(RendererCaptureScreenshotRequest),
     CaptureScreencastFrame(RendererCaptureScreencastFrameRequest),
@@ -5944,6 +5946,7 @@ impl RendererPageCommand {
             Self::SerializeDocument { .. } => Some("SerializeDocument"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::PublishLayout => Some("PublishLayout"),
+            Self::RunPendingResizeObserverFrame => Some("RunPendingResizeObserverFrame"),
             Self::PrintToPdf(_) => Some("PrintToPdf"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
             Self::CaptureScreencastFrame(_) => Some("CaptureScreencastFrame"),

@@ -69,6 +69,10 @@ enum ScheduledTimerCallback {
         performance: v8::Global<v8::Object>,
         buffer_id: ResourceTimingBufferId,
     },
+    /// The Window's ResizeObserver delivery for one animation frame.
+    ResizeObserverFrame {
+        context: v8::Global<v8::Context>,
+    },
 }
 
 impl ScheduledTimerCallback {
@@ -81,7 +85,8 @@ impl ScheduledTimerCallback {
                 .relevant_context(scope)
                 .expect("a scheduled Window Web IDL callback must retain its relevant context"),
             Self::Source(source) => v8::Local::new(scope, &source.context),
-            Self::ResourceTimingBufferFull { context, .. } => v8::Local::new(scope, context),
+            Self::ResourceTimingBufferFull { context, .. }
+            | Self::ResizeObserverFrame { context } => v8::Local::new(scope, context),
         }
     }
 
@@ -92,7 +97,7 @@ impl ScheduledTimerCallback {
             | Self::Networking(function) => Some(function.realm_token),
             Self::WindowWebIdl(callback) => callback.realm_token(),
             Self::Source(source) => source.realm_token,
-            Self::ResourceTimingBufferFull { .. } => None,
+            Self::ResourceTimingBufferFull { .. } | Self::ResizeObserverFrame { .. } => None,
         }
     }
 
@@ -102,7 +107,9 @@ impl ScheduledTimerCallback {
             | Self::InternalFunction(function)
             | Self::Networking(function) => function.relevant_identity,
             Self::WindowWebIdl(callback) => callback.relevant_identity(),
-            Self::Source(_) | Self::ResourceTimingBufferFull { .. } => None,
+            Self::Source(_)
+            | Self::ResourceTimingBufferFull { .. }
+            | Self::ResizeObserverFrame { .. } => None,
         }
     }
 
@@ -131,7 +138,7 @@ impl ScheduledTimerCallback {
                 target_binding.map(WindowExecutionContextBinding::dispatch_scope)
             }
             Self::Source(_) => target_binding.map(WindowExecutionContextBinding::dispatch_scope),
-            Self::ResourceTimingBufferFull { .. } => None,
+            Self::ResourceTimingBufferFull { .. } | Self::ResizeObserverFrame { .. } => None,
         }
     }
 
@@ -151,7 +158,9 @@ impl ScheduledTimerCallback {
             Self::Function(_) | Self::InternalFunction(_) | Self::Networking(_) => {
                 self.context(scope)
             }
-            Self::ResourceTimingBufferFull { .. } => self.context(scope),
+            Self::ResourceTimingBufferFull { .. } | Self::ResizeObserverFrame { .. } => {
+                self.context(scope)
+            }
         }
     }
 }
@@ -654,6 +663,38 @@ impl HostTimeoutScheduler {
                 Instant::now(),
             )
             .get()
+    }
+
+    /// Runs the Window's ResizeObserver delivery after `delay_ms`, as a
+    /// native task so each callback can be followed by a microtask checkpoint.
+    pub(crate) fn queue_resize_observer_frame<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        delay_ms: u32,
+    ) -> bool {
+        let context = scope.get_current_context();
+        let receiver = context.global(scope);
+        let Some(owner) = scheduled_timer_owner_for_target(
+            scope,
+            HostTimerOwner::Window,
+            Some(receiver),
+            context,
+        ) else {
+            return false;
+        };
+        self.scheduler.schedule_after(
+            ScheduledTimerTask {
+                callback: ScheduledTimerCallback::ResizeObserverFrame {
+                    context: v8::Global::new(scope, context),
+                },
+                owner,
+                is_interval: false,
+                extra_args: Vec::new(),
+            },
+            u64::from(delay_ms),
+            Instant::now(),
+        );
+        true
     }
 
     pub(crate) fn queue_resource_timing_buffer_full<'s>(
@@ -1294,6 +1335,10 @@ fn run_window_timer_callback(
                     report_window_timer_exception(scope, None, None, &report);
                     HostTimeoutRunResult::CallbackError(message)
                 })
+        }
+        ScheduledTimerCallback::ResizeObserverFrame { .. } => {
+            crate::context_bootstrap::run_resize_observer_frame_task(scope);
+            Ok(HostTimeoutRunResult::Consumed)
         }
         ScheduledTimerCallback::ResourceTimingBufferFull {
             performance,

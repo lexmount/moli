@@ -472,8 +472,9 @@ fn windowless_fragment_insertions_preserve_native_mutation_records() {
     );
 }
 
-#[test]
-fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
+#[tokio::test]
+async fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = observer_callback_test_vm("https://observer-callback-function-semantics.test/");
 
     let queued = vm
@@ -540,6 +541,9 @@ fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_sema
 "#,
         )
         .expect("observer callback-function semantics should queue");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
     assert_eq!(queued, "queued");
 
     let result = vm
@@ -690,8 +694,9 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
     }
 }
 
-#[test]
-fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
+#[tokio::test]
+async fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/");
 
     vm.eval(
@@ -736,6 +741,9 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
 "#,
     )
     .expect("observer exception projection should queue");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
 
     let result = vm
         .eval(

@@ -95,6 +95,14 @@ impl DocumentRuntime {
         self.timeouts.queue_internal_task(scope, callback)
     }
 
+    pub(crate) fn queue_resize_observer_frame(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        delay_ms: u32,
+    ) -> bool {
+        self.timeouts.queue_resize_observer_frame(scope, delay_ms)
+    }
+
     pub(crate) fn queue_timeout_with_receiver<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

@@ -71,6 +71,22 @@ impl ScriptVm {
         })
     }
 
+    /// Runs a ResizeObserver delivery that is waiting for the next animation
+    /// frame now, once, so a screenshot or PDF includes what the observers
+    /// write, as a browser's frame before capture would. CLI `fetch` also runs
+    /// it once at readiness; HTML/MHTML/Markdown exports never run it.
+    /// Pages without queued observations do nothing.
+    pub(crate) fn run_pending_resize_observer_frame(&mut self) {
+        // Inside a debugger pause the frame timer delivers after resume.
+        if crate::runtime::nested_main_dispatch_active() {
+            return;
+        }
+        let _ = self.with_current_main_world_scope(|scope, _| {
+            crate::context_bootstrap::deliver_resize_observer_frame(scope);
+            Ok(())
+        });
+    }
+
     pub(crate) fn discard_stale_rendering_update_task(
         &mut self,
         task_id: RendererPageRenderingUpdateTaskId,

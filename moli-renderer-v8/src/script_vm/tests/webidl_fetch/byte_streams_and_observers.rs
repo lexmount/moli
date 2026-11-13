@@ -1669,8 +1669,9 @@ yield; // Publish this scene before reading its geometry.
     );
 }
 
-#[test]
-fn resize_observer_callback_runs_after_microtask_checkpoint() {
+#[tokio::test]
+async fn resize_observer_callback_runs_after_microtask_checkpoint() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_test_vm("https://resize-observer-delivery.test/");
 
     let result = vm
@@ -1692,6 +1693,9 @@ fn resize_observer_callback_runs_after_microtask_checkpoint() {
 "#,
         )
         .expect("ResizeObserver delivery setup should evaluate");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
 
     assert_eq!(result, "scheduled");
     let delivered = vm
@@ -1700,8 +1704,70 @@ fn resize_observer_callback_runs_after_microtask_checkpoint() {
     assert_eq!(delivered, "1:true:true");
 }
 
-#[test]
-fn resize_observer_measures_real_layout_before_any_snapshot_exists() {
+#[tokio::test]
+async fn resize_observer_delivers_at_the_frame_with_a_checkpoint_per_callback() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_test_vm("https://resize-observer-frame-delivery.test/");
+    vm.eval(
+        r#"
+globalThis.log = [];
+const html = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || html.appendChild(document.createElement('body'));
+const target = body.appendChild(document.createElement('div'));
+target.style.cssText = 'width:50px;height:20px';
+const first = new ResizeObserver(() => {
+  log.push('first');
+  Promise.resolve().then(() => { log.push('microtask'); second.disconnect(); });
+});
+const second = new ResizeObserver(() => log.push('second'));
+first.observe(target);
+second.observe(target);
+queueMicrotask(() => log.push('script-microtask'));
+'observed'
+"#,
+    )
+    .expect("ResizeObserver setup should evaluate");
+    assert_eq!(
+        vm.eval("log.join()").unwrap(),
+        "script-microtask",
+        "observations are delivered at the next frame, not in the microtask checkpoint"
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("log.join()").unwrap(),
+        "script-microtask,first,microtask",
+        "a microtask checkpoint after each callback lets it disconnect the next observer"
+    );
+}
+
+#[tokio::test]
+async fn resize_observer_delivery_follows_the_frames_animation_callbacks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_test_vm("https://resize-observer-after-raf.test/");
+    vm.eval(
+        r#"
+globalThis.log = [];
+const html = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || html.appendChild(document.createElement('body'));
+const target = body.appendChild(document.createElement('div'));
+target.style.cssText = 'width:50px;height:20px';
+new ResizeObserver(() => log.push('ro')).observe(target);
+requestAnimationFrame(() => { log.push('raf'); target.style.width = '200px'; });
+'observed'
+"#,
+    )
+    .expect("ResizeObserver setup should evaluate");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(vm.eval("log.join()").unwrap(), "raf,ro");
+}
+
+#[tokio::test]
+async fn resize_observer_measures_real_layout_before_any_snapshot_exists() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_parsed_test_vm(
         "https://resize-observer-first-layout.test/",
         "<!doctype html><div id=target style='width:300px;height:120px'></div>",
@@ -1711,6 +1777,9 @@ fn resize_observer_measures_real_layout_before_any_snapshot_exists() {
         "globalThis.__sizes=[];new ResizeObserver(es=>{for(const e of es)__sizes.push(e.contentRect.width+'x'+e.contentRect.height)}).observe(target);'observed'",
     )
     .expect("ResizeObserver setup should evaluate");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
     assert_eq!(
         vm.eval("__sizes.join('|')").unwrap(),
         "300x120",

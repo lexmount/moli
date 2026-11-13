@@ -1,4 +1,9 @@
-use std::{cell::RefCell, marker::PhantomData, ptr::NonNull, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    marker::PhantomData,
+    ptr::NonNull,
+    rc::Rc,
+};
 
 use anyhow::{Result, anyhow};
 
@@ -18,6 +23,13 @@ thread_local! {
     static ACTIVE_NESTED_MAIN_PAGE: RefCell<Option<ActiveNestedMainPage>> = const {
         RefCell::new(None)
     };
+    static NESTED_MAIN_DISPATCH: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a Page command is running inside a debugger pause. Such a command
+/// must not run page script, for example a pending ResizeObserver delivery.
+pub(crate) fn nested_main_dispatch_active() -> bool {
+    NESTED_MAIN_DISPATCH.with(Cell::get)
 }
 
 /// Dynamic owner-stack binding used by Chromium-style nested Main dispatch.
@@ -74,7 +86,10 @@ pub(crate) fn dispatch_nested_main_page_command(
     let page_vm = unsafe { active.page_vm.as_ptr().as_mut() }
         .ok_or_else(|| anyhow!("nested Main Page pointer was unexpectedly null"))?;
     first_dispatch.release();
-    let reply: RendererPageReply = page_vm.dispatch_renderer_page_command(command)?;
+    let was_nested = NESTED_MAIN_DISPATCH.with(|nested| nested.replace(true));
+    let reply = page_vm.dispatch_renderer_page_command(command);
+    NESTED_MAIN_DISPATCH.with(|nested| nested.set(was_nested));
+    let reply: RendererPageReply = reply?;
     // The enclosing turn is suspended inside V8, so its owner-slot snapshot
     // still describes the state before the pause. Capture the live VM for this
     // nested handler without committing/replacing the enclosing owner turn.

@@ -507,7 +507,7 @@ pub(crate) use crate::service_worker_runtime::{
     ServiceWorkerSyncRegistrationResult, ServiceWorkerVersionId, ServiceWorkerWorkerMessage,
     service_worker_exposed_client_id,
 };
-pub(crate) use nested_main::dispatch_nested_main_page_command;
+pub(crate) use nested_main::{dispatch_nested_main_page_command, nested_main_dispatch_active};
 
 static NEXT_RENDERER_OWNER_LOCAL_HOST_ID: AtomicU64 = AtomicU64::new(1);
 

@@ -874,16 +874,24 @@ impl PageVm {
             RendererPageCommand::LayoutMetrics => {
                 Ok(RendererPageReply::LayoutMetrics(self.layout_metrics()?))
             }
+            RendererPageCommand::RunPendingResizeObserverFrame => {
+                self.vm_mut().run_pending_resize_observer_frame();
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::PublishLayout => {
                 self.vm_mut().publish_layout()?;
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::PrintToPdf(request) => self
-                .print_to_pdf(request)
-                .map(RendererPageReply::PrintToPdf),
-            RendererPageCommand::CaptureScreenshot(request) => self
-                .capture_screenshot(request)
-                .map(RendererPageReply::CaptureScreenshot),
+            RendererPageCommand::PrintToPdf(request) => {
+                self.vm_mut().run_pending_resize_observer_frame();
+                self.print_to_pdf(request)
+                    .map(RendererPageReply::PrintToPdf)
+            }
+            RendererPageCommand::CaptureScreenshot(request) => {
+                self.vm_mut().run_pending_resize_observer_frame();
+                self.capture_screenshot(request)
+                    .map(RendererPageReply::CaptureScreenshot)
+            }
             RendererPageCommand::CaptureScreencastFrame(request) => self
                 .capture_screencast_frame(request)
                 .map(RendererPageReply::CaptureScreencastFrame),
