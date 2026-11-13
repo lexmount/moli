@@ -480,9 +480,8 @@ pub(crate) use self::shared::structured_deserialize_value;
 pub(crate) use self::shared::structured_serialize_value;
 pub(in crate::context_bootstrap) use self::shared::*;
 pub(crate) use self::shared::{
-    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
-    READABLE_STREAM_CHILD_REALM_HANDLED_REJECTION_SLOT, WINDOW_CUSTOM_ELEMENTS_SLOT,
-    WINDOW_NAME_SLOT,
+    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, READABLE_STREAM_CHILD_REALM_HANDLED_REJECTION_SLOT,
+    WINDOW_CUSTOM_ELEMENTS_SLOT, WINDOW_NAME_SLOT,
 };
 pub(crate) use self::shared::{
     RuntimeMessageSourceSecurity, prepare_value_for_window_post_message,

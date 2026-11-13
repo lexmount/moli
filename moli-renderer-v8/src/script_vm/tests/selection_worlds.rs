@@ -264,3 +264,46 @@ async fn selection_worlds_rebind_initial_child_document_together() {
         r#"[1,true,true,"new"]"#
     );
 }
+
+#[tokio::test]
+async fn selectionchange_follows_native_document_listeners_across_worlds() {
+    for isolated_listener in [false, true] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://selection-notify-worlds.test/",
+            &loader,
+        );
+        vm.eval("document.body.innerHTML='<div id=editor contenteditable=true>abc</div>'; 'ready'")
+            .unwrap();
+        let isolated = vm.create_isolated_world("selection-notify", false).unwrap();
+        let listen = r#"globalThis.changeLog=[];document.addEventListener('selectionchange',e=>changeLog.push([e.isTrusted,e.target===document,String(getSelection())]));'ready'"#;
+        let mutate = "getSelection().selectAllChildren(document.getElementById('editor')); 'ready'";
+        if isolated_listener {
+            vm.eval_in_isolated_context(isolated, listen).unwrap();
+            vm.eval(mutate).unwrap();
+        } else {
+            vm.eval(listen).unwrap();
+            vm.eval_in_isolated_context(isolated, mutate).unwrap();
+        }
+        assert!(
+            vm.run_one_user_interaction_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+        let observed = if isolated_listener {
+            vm.eval_in_isolated_context(isolated, "JSON.stringify(changeLog)")
+        } else {
+            vm.eval("JSON.stringify(changeLog)")
+        }
+        .unwrap();
+        assert_eq!(
+            observed, r#"[[true,true,"abc"]]"#,
+            "isolated_listener={isolated_listener}"
+        );
+        assert!(
+            !vm.run_one_user_interaction_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+    }
+}

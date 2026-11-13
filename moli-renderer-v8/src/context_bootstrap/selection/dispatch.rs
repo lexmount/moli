@@ -1,6 +1,5 @@
 use super::super::range::current_document_object;
 use super::super::range_algorithms::point_order;
-use super::*;
 use crate::document_runtime::EventTargetHandle;
 use crate::native_bridge::callback_value_dom_handle;
 use crate::page_task_queue::RendererPageUserInteractionEventKind;
@@ -15,11 +14,6 @@ pub(in crate::context_bootstrap) fn selection_dispatch_change(scope: &mut v8::Pi
     let Some(document_handle) = callback_value_dom_handle(scope, document.into()) else {
         return;
     };
-    if !object_hidden_bool(scope, document, DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT)
-        .unwrap_or(false)
-    {
-        return;
-    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
