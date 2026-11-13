@@ -21,6 +21,7 @@ enum PreparedAutomationCommand {
     NetworkData(Box<crate::domains::network::PreparedNetworkDataAccess>),
     Preload(Box<crate::domains::page::PreparedAutomationPreload>),
     PageQuery(crate::domains::page::PreparedAutomationPageQuery),
+    StopLoading(Box<crate::domains::page::PreparedPageStopLoading>),
     Dom(crate::domains::dom::PreparedAutomationDomCommand),
     CreateTarget(Box<crate::domains::target::PreparedAutomationTargetCreation>),
     ActivateTarget(Option<crate::domains::target::activation::PreparedTargetActivation>),
@@ -34,6 +35,15 @@ enum PreparedAutomationCommand {
 impl PreparedAutomationCommand {
     fn prepare(conn: &mut CdpConnection, command: AutomationCommand) -> Self {
         match command {
+            AutomationCommand::StopLoading(command) => {
+                match crate::domains::page::PreparedPageStopLoading::prepare_for_automation(
+                    conn,
+                    &command.context,
+                ) {
+                    Ok(prepared) => Self::StopLoading(Box::new(prepared)),
+                    Err(error) => Self::Complete(Err(error)),
+                }
+            }
             command @ (AutomationCommand::GetNetworkData(_)
             | AutomationCommand::DisownNetworkData(_)) => {
                 match crate::domains::network::PreparedNetworkDataAccess::prepare(conn, command) {
@@ -131,6 +141,14 @@ impl PreparedAutomationCommand {
             Self::NetworkData(prepared) => Box::pin(prepared.run(driver, context)).await,
             Self::Preload(prepared) => prepared.run(driver, context).await,
             Self::PageQuery(query) => query.run(driver, context).await,
+            Self::StopLoading(prepared) => {
+                let output = prepared
+                    .run(driver, context)
+                    .await
+                    .map_err(automation_error)?;
+                context.retain_output(output.into_composite_command_prefix());
+                Ok(AutomationResult::Empty)
+            }
             Self::Dom(command) => command.run(driver, context).await,
             Self::CreateTarget(prepared) => prepared.run(driver, context).await,
             Self::ActivateTarget(None) => Ok(AutomationResult::Empty),
@@ -207,6 +225,7 @@ pub(super) fn prepare_workflow(
         PreparedAutomationCommand::CreateTarget(_)
             | PreparedAutomationCommand::ActivateTarget(_)
             | PreparedAutomationCommand::Preload(_)
+            | PreparedAutomationCommand::StopLoading(_)
     );
     if let PreparedAutomationCommand::CreateTarget(creation) = &prepared {
         host = Some(creation.host().clone());

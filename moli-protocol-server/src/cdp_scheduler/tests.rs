@@ -231,10 +231,15 @@ async fn classic_alert_wait_is_interrupted_by_a_dialog_not_by_a_blanket_exemptio
             let execution = if dialog_already_open {
                 install();
                 let wait = scheduler
-                    .execute_automation_command_with_external_load_wait(&mut receivers, command);
+                    .execute_automation_command_with_external_load_wait_and_document_residence(
+                        &mut receivers,
+                        command,
+                        Some(std::time::Duration::ZERO),
+                        None,
+                    );
                 tokio::pin!(wait);
                 match futures_util::poll!(&mut wait) {
-                    std::task::Poll::Ready(execution) => execution,
+                    std::task::Poll::Ready(execution) => execution.execution.result,
                     std::task::Poll::Pending => {
                         panic!("{operation} must reach the existing prompt")
                     }
@@ -294,6 +299,60 @@ async fn classic_alert_wait_is_interrupted_by_a_dialog_not_by_a_blanket_exemptio
             drop((document_tx, background_tx, navigation_tx, renderer_tx));
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn classic_alert_navigation_deadline_stops_only_the_timed_out_navigation() {
+    use std::time::Duration;
+
+    tokio::task::LocalSet::new().run_until(async {
+        for operation in ["get", "set", "accept", "dismiss"] {
+            for duration in [Duration::ZERO, Duration::from_millis(200)] {
+                let mut conn = CdpConnection::new();
+                let navigation = arm_background_navigation_request(&mut conn, "LOADER-alert-timeout");
+                let context = AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
+                    session_id: None,
+                    target_id: Some(navigation.target_id().into()),
+                    browser_context_id: None,
+                };
+                let (mut scheduler, protocol_work_completion_rx) = CdpScheduler::new(conn);
+                let (document_tx, document_activity_completion_rx) = tokio::sync::mpsc::unbounded_channel();
+                let (background_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
+                let (navigation_tx, background_navigation_completion_rx) = tokio::sync::mpsc::unbounded_channel();
+                let (renderer_tx, renderer_publication_rx) = moli_core::renderer_output_transport_channel();
+                let marker = json!({
+                    "method": "Runtime.consoleAPICalled",
+                    "params": {"type": "log", "args": [], "executionContextId": 1,
+                               "timestamp": 0, "marker": "before-alert-deadline"}
+                });
+                if !duration.is_zero() {
+                    background_tx.send(BackgroundProtocolEvent::immediate(marker.clone())).unwrap();
+                }
+                let mut receivers = super::CdpSchedulerEventReceivers {
+                    state_events_ready: scheduler.state.scheduler_events_ready(),
+                    protocol_work_completion_rx,
+                    document_activity_completion_rx,
+                    background_event_rx,
+                    background_navigation_completion_rx,
+                    renderer_publication_rx,
+                };
+                let started = tokio::time::Instant::now();
+                let execution = tokio::time::timeout(
+                    duration + Duration::from_millis(1),
+                    scheduler.execute_automation_command_with_external_load_wait_and_document_residence(
+                        &mut receivers, classic_alert_command(operation, context), Some(duration), None,
+                    ),
+                ).await.expect("configured page-load deadline must end the wait without navigation input");
+                assert_eq!(tokio::time::Instant::now() - started, duration);
+                assert_eq!(execution.execution.protocol_output.events.iter().filter(|event| event.protocol_message()==Some(&marker)).count(), usize::from(!duration.is_zero()), "selected input output must survive the timeout and cleanup exactly once");
+                assert_eq!(execution.execution.result.unwrap_err().kind, moli_protocol::automation::DevToolsErrorKind::Timeout);
+                assert!(navigation.is_cancelled(), "timeout must stop the held request before returning");
+                assert!(!scheduler.state.with_state(|state| state.has_inflight_background_navigation_for_target(navigation.target_id())).unwrap());
+                drop((document_tx, background_tx, navigation_tx, renderer_tx));
+            }
+        }
+    }).await;
 }
 
 fn navigation_started_automation_event() -> AutomationEvent {

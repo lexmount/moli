@@ -214,6 +214,7 @@ pub struct AutomationContext {
 pub enum AutomationCommand {
     Navigate(DevToolsNavigateCommand),
     Reload(DevToolsReloadCommand),
+    StopLoading(DevToolsStopLoadingCommand),
     GetNavigationHistory(DevToolsGetNavigationHistoryCommand),
     TraverseHistory(DevToolsTraverseHistoryCommand),
     GetRealms(DevToolsGetRealmsCommand),
@@ -302,6 +303,7 @@ impl AutomationCommand {
         match self {
             AutomationCommand::Navigate(command) => &command.context,
             AutomationCommand::Reload(command) => &command.context,
+            AutomationCommand::StopLoading(command) => &command.context,
             AutomationCommand::GetNavigationHistory(command) => &command.context,
             AutomationCommand::TraverseHistory(command) => &command.context,
             AutomationCommand::GetRealms(command) => &command.context,
@@ -614,6 +616,11 @@ pub struct DevToolsGetLayoutMetricsCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetJavaScriptDialogCommand {
+    pub context: AutomationContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevToolsStopLoadingCommand {
     pub context: AutomationContext,
 }
 
