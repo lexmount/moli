@@ -16,6 +16,7 @@ from .drop_input import run_drop_input_workflow
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..progress import await_with_progress
 from .drag_interception import run_drag_interception_workflows
+from .keyboard_modifiers import run_keyboard_modifier_workflow
 from .native_drag_semantics import run_native_drag_semantics
 
 
@@ -249,6 +250,11 @@ async def run_dom_input_group(state: SmokeState) -> None:
     await await_with_progress(
         "scenario/playwright-and-cdp-keypress",
         run_keypress_dispatch_workflow(state),
+        timeout_seconds=30,
+    )
+    await await_with_progress(
+        "scenario/keyboard-modifiers",
+        run_keyboard_modifier_workflow(state),
         timeout_seconds=30,
     )
     await run_drop_input_workflow(state)
