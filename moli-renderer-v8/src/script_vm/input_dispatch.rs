@@ -27,7 +27,7 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    InputEventCoordinates, TextEditInputType, TouchEventPoint,
+    InputEventCoordinates, TextEditInputType, TextInputSource, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_after_touch_release,
     activate_handle_via_keyboard, cache_input_files_from_selected_files,
     construct_drag_event_with_related_target, construct_keyboard_event,
@@ -37,12 +37,12 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event_with_points, construct_wheel_event_for_target,
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
-    is_disabled_form_control, is_text_control, observable_input_hit_test,
-    perform_auxiliary_link_default_action, perform_drop_default_action,
-    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
-    replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, text_control_set_selection_range_internal,
+    is_disabled_form_control, observable_input_hit_test, perform_auxiliary_link_default_action,
+    perform_drop_default_action, perform_implicit_submission_from_control,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_text_input, perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    replace_text_control_selection, select_contenteditable_contents,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -2712,26 +2712,13 @@ impl ScriptVm {
         };
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
-            if is_text_control(unsafe { &*runtime_ptr }, handle) {
-                let _ = replace_text_control_selection(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    text,
-                    TextEditInputType::InsertText,
-                );
-                return Ok(true);
-            }
-            let runtime = unsafe { &*runtime_ptr };
-            let Some(editing_host) = contenteditable_editing_host(runtime, handle) else {
-                return Ok(false);
-            };
-            Ok(replace_contenteditable_selection(
+            Ok(perform_text_input(
                 scope,
                 runtime_ptr,
-                editing_host,
+                handle,
                 text,
                 TextEditInputType::InsertText,
+                TextInputSource::InputMethod,
             ))
         });
         self.finish_input_command_checkpoint(result)
@@ -2838,12 +2825,13 @@ impl ScriptVm {
                 let is_character_phase =
                     should_insert_text && matches!(event_name, "keydown" | "keypress");
                 if target.is_textarea && is_character_phase {
-                    return Ok(input_dispatch_outcome(replace_text_control_selection(
+                    return Ok(input_dispatch_outcome(perform_text_input(
                         scope,
                         runtime_ptr,
                         handle,
                         "\n",
                         TextEditInputType::InsertLineBreak,
+                        TextInputSource::Keyboard,
                     )));
                 }
                 if is_character_phase
@@ -2855,6 +2843,20 @@ impl ScriptVm {
                     )
                 {
                     return Ok(outcome);
+                }
+                if is_character_phase && contenteditable_editing_host(runtime, handle).is_some() {
+                    return Ok(input_dispatch_outcome(perform_text_input(
+                        scope,
+                        runtime_ptr,
+                        handle,
+                        "\n",
+                        if shift {
+                            TextEditInputType::InsertLineBreak
+                        } else {
+                            TextEditInputType::InsertParagraph
+                        },
+                        TextInputSource::Keyboard,
+                    )));
                 }
                 if event_name == "keydown" && (target.is_button_like || target.is_anchor_like) {
                     return Ok(activate_handle_via_keyboard(
@@ -2870,22 +2872,15 @@ impl ScriptVm {
                 if text.is_empty() {
                     return Ok(input_dispatch_outcome(true));
                 }
-                if target.is_text_control {
-                    return Ok(input_dispatch_outcome(replace_text_control_selection(
+                if target.is_text_control || contenteditable_editing_host(runtime, handle).is_some()
+                {
+                    return Ok(input_dispatch_outcome(perform_text_input(
                         scope,
                         runtime_ptr,
                         handle,
                         text,
                         TextEditInputType::InsertText,
-                    )));
-                }
-                if let Some(editing_host) = contenteditable_editing_host(runtime, handle) {
-                    return Ok(input_dispatch_outcome(replace_contenteditable_selection(
-                        scope,
-                        runtime_ptr,
-                        editing_host,
-                        text,
-                        TextEditInputType::InsertText,
+                        TextInputSource::Keyboard,
                     )));
                 }
                 return Ok(input_dispatch_outcome(true));

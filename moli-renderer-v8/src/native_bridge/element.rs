@@ -196,8 +196,8 @@ pub(crate) use activation::activate_handle_via_click;
 pub(crate) use activation::activate_handle_via_click_with_detail_and_modifiers;
 use activation::navigate_form_target_browsing_context;
 pub(crate) use activation::{
-    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    SpecialBrowsingContextTarget, TextInputSource, navigate_existing_browsing_context_target,
+    navigate_named_iframe_target, perform_text_input,
 };
 pub(crate) use activation::{
     accepts_drop_default_action, activate_handle_after_pointer_release,

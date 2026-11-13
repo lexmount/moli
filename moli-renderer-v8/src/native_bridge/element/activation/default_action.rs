@@ -522,6 +522,25 @@ pub(crate) fn replace_contenteditable_selection(
     else {
         return false;
     };
+    replace_contenteditable_selection_after_beforeinput(
+        scope,
+        runtime_ptr,
+        handle,
+        replacement_text,
+        input_type,
+    )
+}
+
+pub(super) fn replace_contenteditable_selection_after_beforeinput(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    replacement_text: &str,
+    input_type: TextEditInputType,
+) -> bool {
+    let Some(handle) = contenteditable_editing_host(unsafe { &*runtime_ptr }, handle) else {
+        return false;
+    };
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };

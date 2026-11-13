@@ -167,6 +167,7 @@ pub(crate) enum TextEditInputType {
     None,
     InsertText,
     InsertLineBreak,
+    InsertParagraph,
     InsertFromDrop,
     DeleteContentBackward,
     DeleteContentForward,
@@ -178,6 +179,7 @@ impl TextEditInputType {
             Self::None => "",
             Self::InsertText => "insertText",
             Self::InsertLineBreak => "insertLineBreak",
+            Self::InsertParagraph => "insertParagraph",
             Self::InsertFromDrop => "insertFromDrop",
             Self::DeleteContentBackward => "deleteContentBackward",
             Self::DeleteContentForward => "deleteContentForward",
@@ -189,6 +191,7 @@ impl TextEditInputType {
             Self::InsertText | Self::InsertFromDrop => Some(text),
             Self::None
             | Self::InsertLineBreak
+            | Self::InsertParagraph
             | Self::DeleteContentBackward
             | Self::DeleteContentForward => None,
         }
@@ -906,6 +909,18 @@ pub(crate) fn construct_input_event<'s>(
     data: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     construct_input_event_with_transfer(scope, event_type, input_type, data, None)
+}
+
+pub(crate) fn construct_text_input_event_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    target: DomHandle,
+    text: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    crate::context_bootstrap::construct_original_text_input_event(scope, text)
 }
 
 pub(crate) fn construct_drop_input_event<'s>(

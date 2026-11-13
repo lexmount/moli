@@ -9,6 +9,7 @@ mod element_click;
 mod keyboard_events;
 mod mouse_snapshot;
 mod text_control_compat;
+mod text_input_events;
 mod touch_taps;
 
 const INPUT_HIT_X: u32 = 20;
