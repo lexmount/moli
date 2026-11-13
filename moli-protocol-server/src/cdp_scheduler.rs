@@ -1415,6 +1415,7 @@ impl CdpScheduler {
                 receivers,
                 &command,
                 &navigation_context,
+                timeout,
             )
             .await
         {
@@ -1635,6 +1636,7 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         command: &AutomationCommand,
         context: &moli_protocol::automation::AutomationContext,
+        timeout: Option<Duration>,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
         // Dialog operations are finite Page-owned operations. Classic adds its
@@ -1645,6 +1647,9 @@ impl CdpScheduler {
         if !classic_dialog && devtools_command_bypasses_document_admission(command) {
             return Ok(out);
         }
+        let deadline = classic_dialog
+            .then(|| timeout.map(|timeout| TokioInstant::now() + timeout))
+            .flatten();
         while self
             .state
             .with_state(|state| {
@@ -1654,7 +1659,40 @@ impl CdpScheduler {
             })
             .expect("live protocol actor state")
         {
-            let Some(input) = receivers.recv_interleaved_input().await else {
+            let input = match deadline {
+                Some(deadline) => tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep_until(deadline) => Err(()),
+                    input = receivers.recv_interleaved_input() => Ok(input),
+                },
+                None => Ok(receivers.recv_interleaved_input().await),
+            };
+            let input = match input {
+                Ok(input) => input,
+                Err(()) => {
+                    let stopped = self
+                        .execute_owned_automation_command_with_interleaved_progress(
+                            receivers,
+                            AutomationCommand::StopLoading(
+                                moli_protocol::automation::DevToolsStopLoadingCommand {
+                                    context: context.clone(),
+                                },
+                            ),
+                            None,
+                            None,
+                        )
+                        .await;
+                    out.append(stopped.protocol_output);
+                    let error = stopped.result.err().unwrap_or_else(|| {
+                        DevToolsError::new(
+                            moli_protocol::automation::DevToolsErrorKind::Timeout,
+                            "navigation wait timed out",
+                        )
+                    });
+                    return Err(RendererOutputTransportFailure::new(out, error));
+                }
+            };
+            let Some(input) = input else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
                     renderer_output_transport_terminal_error(
@@ -1663,6 +1701,8 @@ impl CdpScheduler {
                     ),
                 ));
             };
+            // Selection may race the deadline; once taken, the move-owned
+            // input is completed outside that race, never abandoned halfway.
             out.append(
                 self.complete_interleaved_scheduler_input(receivers, input)
                     .await?,
@@ -3380,6 +3420,7 @@ fn devtools_command_bypasses_document_admission(command: &AutomationCommand) -> 
             command,
             AutomationCommand::CloseTarget(_)
                 | AutomationCommand::RemoveBrowserContext(_)
+                | AutomationCommand::StopLoading(_)
                 | AutomationCommand::ContinueInterceptedRequest(_)
                 | AutomationCommand::ContinueInterceptedResponse(_)
                 | AutomationCommand::ContinueWithAuth(_)

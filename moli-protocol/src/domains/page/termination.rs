@@ -180,6 +180,14 @@ pub(crate) struct PreparedPageStopLoading {
 }
 
 impl PreparedPageStopLoading {
+    pub(crate) fn prepare_for_automation(
+        conn: &mut CdpConnection,
+        context: &crate::automation::AutomationContext,
+    ) -> Result<Self, crate::automation::DevToolsError> {
+        let owner = super::page_command_owner(conn, context)?;
+        Ok(Self::prepare(conn, &owner))
+    }
+
     pub(crate) fn prepare(conn: &mut CdpConnection, owner: &CommandOwnerScope) -> Self {
         let lifecycle = conn
             .target_page_residence_identity_for_owner(owner)
@@ -191,6 +199,12 @@ impl PreparedPageStopLoading {
         // original Native stop waits must not become part of this cleanup.
         let pending = take_pending_fetch_state_for_owner(conn, owner);
         let cleanup = crate::domains::fetch::prepare_page_stop_loading(conn, owner, pending);
+        // A request waiting for response headers need not be in a Fetch pause
+        // map. Stop that exact pending request in this finite admission turn,
+        // before the Native lifecycle wait can admit a successor navigation.
+        if let Some(loader) = conn.current_document_loader_id_for_owner(owner) {
+            conn.clear_pending_document_navigation_for_owner_if_loader_matches(owner, &loader);
+        }
         Self { lifecycle, cleanup }
     }
 
