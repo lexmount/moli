@@ -1,6 +1,7 @@
 mod inline_svg;
 mod source_view;
 mod style_resolver;
+mod svg_geometry;
 
 use std::collections::HashMap;
 
@@ -10,6 +11,8 @@ use moli_layout::{
 };
 
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
+
+pub(crate) use svg_geometry::svg_client_rect;
 
 pub(crate) fn build_native_layout_pass(
     runtime: &PageScriptHost,
@@ -52,7 +55,14 @@ fn build_native_layout_pass_recursive(
     let source = source_view::NativeLayoutSourceView::with_paint_resources(
         runtime,
         root,
-        request.requests_paint(),
+        request.requests_paint().then(|| {
+            style_resolver::layout_style_read_scope(
+                runtime,
+                document,
+                request.viewport,
+                environment_override,
+            )
+        }),
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles = style_resolver::NativeLayoutStyleResolver::new(

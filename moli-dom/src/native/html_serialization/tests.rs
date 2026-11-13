@@ -10,6 +10,44 @@ fn scripting_enabled(_: NativeNodeId) -> bool {
 }
 
 #[test]
+fn bounded_attribute_projection_preserves_live_dom_and_escapes_values() {
+    let mut dom = NativeDom::new_html(test_url());
+    let root = dom.create_element("div");
+    let child = dom.create_element("span");
+    dom.set_attribute(root, "style", "color:red");
+    dom.append_child(root, child);
+    let original = dom.outer_html(root).unwrap();
+    let attributes = |node| {
+        if node == root {
+            vec![("style".into(), "font-family:\"A&B\"".into())]
+        } else {
+            vec![("id".into(), "derived".into())]
+        }
+    };
+    let projected = dom
+        .outer_html_with_limit_and_attributes(root, 512, &attributes)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        projected,
+        "<div style=\"font-family:&quot;A&amp;B&quot;\"><span id=\"derived\"></span></div>"
+    );
+    assert_eq!(dom.outer_html(root).unwrap(), original);
+    assert_eq!(
+        dom.outer_html_with_limit_and_attributes(root, projected.len(), &attributes)
+            .unwrap()
+            .unwrap(),
+        projected
+    );
+    assert_eq!(
+        dom.outer_html_with_limit_and_attributes(root, projected.len() - 1, &attributes),
+        Err(HtmlSerializationLimitExceeded {
+            max_bytes: projected.len() - 1
+        })
+    );
+}
+
+#[test]
 fn template_contents_require_the_exact_html_element_identity() {
     for (namespace, name, is_template) in [
         (None, "template", false),

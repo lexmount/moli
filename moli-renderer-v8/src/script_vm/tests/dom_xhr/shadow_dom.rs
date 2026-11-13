@@ -2911,6 +2911,9 @@ const rect = span.getBoundingClientRect();
     const circle = container.querySelector('circle');
     yield;
     const rect = circle.getBoundingClientRect();
+    // Chromium 145: SVG graphics expose their transformed object rectangle,
+    // even though hit testing still resolves to the outer replaced SVG here.
+    check('svg-circle-rect', rect.left === 8 && rect.top === 8 && rect.width === 100 && rect.height === 100);
     const pos = document.caretPositionFromPoint(50, 50);
     check('svg-circle', pos instanceof CaretPosition && pos.offsetNode === circle && pos.offset === 0, `${labelNode(pos && pos.offsetNode)},${circle.namespaceURI},${rect.left},${rect.top},${rect.width},${rect.height}`);
   }
@@ -3001,7 +3004,7 @@ const rect = span.getBoundingClientRect();
 
     assert_eq!(
         result,
-        "bad-options:pass|light-text:pass|light-text-rect:pass|inline-block-text-rect:pass|sheet-inline-block-text-rect:pass|svg-circle:fail:svg#:1,http://www.w3.org/2000/svg,0,0,0,0|post-svg-text-rect:pass|input:pass|textarea-wrap:fail|textarea-forced:fail:10,23.75,28,63,60|closed-allowed:pass|shadow-hidden:pass|shadow-hidden-rect:pass|shadow-allowed:pass|nested-hidden:pass|nested-inner:pass|nested-outer:pass|nested-both:pass"
+        "bad-options:pass|light-text:pass|light-text-rect:pass|inline-block-text-rect:pass|sheet-inline-block-text-rect:pass|svg-circle-rect:pass|svg-circle:fail:svg#:1,http://www.w3.org/2000/svg,8,8,100,100|post-svg-text-rect:pass|input:pass|textarea-wrap:fail|textarea-forced:fail:10,23.75,28,63,60|closed-allowed:pass|shadow-hidden:pass|shadow-hidden-rect:pass|shadow-allowed:pass|nested-hidden:pass|nested-inner:pass|nested-outer:pass|nested-both:pass"
     );
 }
 #[test]

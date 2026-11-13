@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+};
 
 use moli_layout::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutImageResource,
@@ -13,33 +16,33 @@ use crate::{
         flat_children, flat_parent, form_control_data, layout_element_classification, list_data,
         optional_positive_u16_attribute, select_control_data,
     },
-    native_bridge::PageScriptHost,
+    native_bridge::{PageScriptHost, element::StyleObservation},
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
     runtime: &'a PageScriptHost,
     root: DomHandle,
     document: Option<DomHandle>,
-    include_paint_resources: bool,
+    paint_styles: Option<RefCell<StyleObservation<'a>>>,
     text_selections: HashMap<DomHandle, LayoutTextSelection>,
 }
 
 impl<'a> NativeLayoutSourceView<'a> {
     #[cfg(test)]
     pub(super) fn new(runtime: &'a PageScriptHost, root: DomHandle) -> Self {
-        Self::with_paint_resources(runtime, root, false)
+        Self::with_paint_resources(runtime, root, None)
     }
 
     pub(super) fn with_paint_resources(
         runtime: &'a PageScriptHost,
         root: DomHandle,
-        include_paint_resources: bool,
+        paint_styles: Option<StyleObservation<'a>>,
     ) -> Self {
         Self {
             runtime,
             root,
             document: runtime.dom_host().owner_document_handle(root),
-            include_paint_resources,
+            paint_styles: paint_styles.map(RefCell::new),
             text_selections: document_text_selections(runtime, root),
         }
     }
@@ -238,9 +241,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         node: Self::NodeId,
         style: &moli_layout::ResolvedLayoutStyle,
     ) -> Option<LayoutImageResource> {
-        if !self.include_paint_resources {
-            return None;
-        }
+        let paint_styles = self.paint_styles.as_ref()?;
         let semantics = self
             .host()
             .node(node)
@@ -257,7 +258,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                 })
             }
             Some(LayoutReplacedKind::Svg) => {
-                super::inline_svg::replaced_resource(self.host(), node, style)
+                super::inline_svg::replaced_resource(self.runtime, node, style, paint_styles)
             }
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
@@ -273,9 +274,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn css_image_resource(&self, resolved_url: &str) -> Option<LayoutImageResource> {
-        if !self.include_paint_resources {
-            return None;
-        }
+        self.paint_styles.as_ref()?;
         let parsed = url::Url::parse(resolved_url).ok()?;
         // Blink shares the fetched bytes using a fragment-free cache key, but
         // then applies SVG view/element-fragment semantics separately. Until
