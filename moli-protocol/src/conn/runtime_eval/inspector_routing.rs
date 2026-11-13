@@ -207,7 +207,8 @@ impl CdpConnection {
                     );
                     if matches!(message, InspectorJson::Raw(_)) {
                         message.set_session_id(current_session_id);
-                        response_events.push(BackgroundProtocolEvent::immediate(message));
+                        response_events
+                            .push(BackgroundProtocolEvent::inspector_message(message, None));
                     } else {
                         let response =
                             BackgroundCommandResponsePayload::from_owned_runtime_inspector_message(
@@ -799,18 +800,14 @@ impl CdpConnection {
                 realm_id.as_str(),
             );
         }
-        let event = BackgroundProtocolEvent::immediate_automation_event(
-            json!({
-                "method": "Moli.scriptMessage",
-                "params": {}
-            }),
-            AutomationEvent::ScriptMessage(ScriptMessageEvent {
+        let event = BackgroundProtocolEvent::automation_only(AutomationEvent::ScriptMessage(
+            ScriptMessageEvent {
                 target_id: Some(listener.target_id().clone()),
                 realm_id: Some(realm_id),
                 channel: properties.channel.clone(),
                 data,
-            }),
-        );
+            },
+        ));
         self.publish_bidi_channel_listener_start(residence);
         BidiChannelListenerRoute::Event(event)
     }

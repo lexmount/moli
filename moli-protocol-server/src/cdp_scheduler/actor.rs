@@ -3028,10 +3028,13 @@ mod tests {
         let mut adapter_scheduler = ProtocolAdapterScheduler::default();
 
         background_event_tx
-            .send(BackgroundProtocolEvent::immediate(json!({
-                "method": "Network.requestWillBeSent",
-                "params": {}
-            })))
+            .send(BackgroundProtocolEvent::inspector_message(
+                json!({
+                    "method": "Network.requestWillBeSent",
+                    "params": {}
+                }),
+                None,
+            ))
             .expect("background event receiver should be alive");
         runtime_response_tx
             .send(RuntimeInspectorResponseReady::new(
@@ -3053,10 +3056,13 @@ mod tests {
         assert!(matches!(first, SchedulerInput::BackgroundEvent(_)));
 
         background_event_tx
-            .send(BackgroundProtocolEvent::immediate(json!({
-                "method": "Network.responseReceived",
-                "params": {}
-            })))
+            .send(BackgroundProtocolEvent::inspector_message(
+                json!({
+                    "method": "Network.responseReceived",
+                    "params": {}
+                }),
+                None,
+            ))
             .expect("background event receiver should remain alive");
         let second = receivers
             .recv(

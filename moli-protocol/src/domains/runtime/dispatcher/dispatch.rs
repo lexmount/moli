@@ -1127,7 +1127,10 @@ mod raw_response_tests {
             let messages = [RendererRuntimeInspectorMessage::protocol(source.clone())];
             assert_eq!(command_response_succeeded(&messages, Some(7)), succeeded);
             assert!(!command_response_succeeded(&messages, Some(8)));
-            let events = [BackgroundProtocolEvent::immediate(source.clone())];
+            let events = [BackgroundProtocolEvent::inspector_message(
+                source.clone(),
+                None,
+            )];
             assert_eq!(
                 command_response_succeeded_for_events(&events, Some(7)),
                 succeeded

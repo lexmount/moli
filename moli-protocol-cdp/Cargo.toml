@@ -6,6 +6,7 @@ edition = "2024"
 
 [dependencies]
 brotlic = "0.8.2"
+moli-inspector-json = { path = "../moli-inspector-json" }
 moli-page-types = { path = "../moli-page-types" }
 moli-time = { path = "../moli-time" }
 serde = { version = "1.0.228", features = ["derive"] }

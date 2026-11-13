@@ -1,3 +1,4 @@
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use std::collections::HashMap;
 
 use serde_json::{Value, json};
@@ -12,7 +13,7 @@ use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, DEFAULT_LOADER_ID,
     FetchRequestStage, PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
     PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
-    PendingSubresourceFetchResponseRequest, build_event, monotonic_timestamp_seconds,
+    PendingSubresourceFetchResponseRequest, monotonic_timestamp_seconds,
 };
 use crate::domains::network;
 use moli_core::runtime::DetachedParserScriptFetchContinuation;
@@ -627,7 +628,9 @@ fn subresource_request_paused_event(
         payload["redirectedRequestId"] = redirected_request_id.clone();
     }
     BackgroundProtocolEvent::immediate_automation_event(
-        build_event("Fetch.requestPaused", payload, session_id),
+        LocalCdpEvent::FetchRequestPaused,
+        payload,
+        session_id,
         AutomationEvent::RequestPaused(network_event),
     )
 }

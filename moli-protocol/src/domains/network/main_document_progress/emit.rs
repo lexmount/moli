@@ -6,6 +6,7 @@ use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 use moli_core::page::{
     SubresourceRequestInitiatorType, WebSocketFrameDirection, WebSocketFrameOpcode,
 };
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde_json::Value;
 use url::Url;
 
@@ -130,7 +131,7 @@ impl CdpNetworkAutomationEventSink for MainDocumentProgressOutputTarget<'_> {
 
     fn push_network_automation_event(
         &mut self,
-        method: &str,
+        method: LocalCdpEvent,
         params: serde_json::Value,
         session_id: Option<&str>,
         event: AutomationEvent,

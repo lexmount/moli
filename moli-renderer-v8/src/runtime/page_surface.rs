@@ -17,6 +17,7 @@ pub use moli_page_types::{
     RendererInspectorProtocolConfiguration, RendererInspectorProtocolConfigurationCommand,
     RendererInspectorSessionRestoreSnapshot, V8InspectorSessionState,
 };
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use moli_shared_worker::SharedWorkerInstanceId;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -1227,7 +1228,7 @@ fn runtime_context_restore_event_v8_inspector_message(
                 );
             }
             json!({
-                "method": "Runtime.executionContextCreated",
+                "method": LocalCdpEvent::RuntimeExecutionContextCreated.method(),
                 "params": {
                     "context": {
                         "id": context_id,
@@ -1246,7 +1247,7 @@ fn runtime_context_restore_event_v8_inspector_message(
                 ..
             } = event;
             json!({
-                "method": "Runtime.executionContextDestroyed",
+                "method": LocalCdpEvent::RuntimeExecutionContextDestroyed.method(),
                 "params": {
                     "executionContextId": context_id,
                     "executionContextUniqueId": realm_id,
@@ -1255,7 +1256,7 @@ fn runtime_context_restore_event_v8_inspector_message(
         }
         crate::protocol_types::RuntimeContextRestoreEvent::Cleared(_event) => {
             json!({
-                "method": "Runtime.executionContextsCleared",
+                "method": LocalCdpEvent::RuntimeExecutionContextsCleared.method(),
                 "params": {},
             })
         }

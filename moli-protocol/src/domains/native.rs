@@ -431,7 +431,7 @@ pub(crate) fn project_terminal(
                 if let Some(session) = session {
                     notification["sessionId"] = json!(session);
                 }
-                BackgroundProtocolEvent::immediate(notification)
+                BackgroundProtocolEvent::inspector_message(notification, None)
             }
             moli_core::RendererNativeProtocolNotification::DomSetChildNodes {
                 parent_node_id,
@@ -447,7 +447,7 @@ pub(crate) fn project_terminal(
     if let Some(session) = terminal.session.wire_session_id() {
         message["sessionId"] = json!(session);
     }
-    events.push(BackgroundProtocolEvent::immediate(message));
+    events.push(BackgroundProtocolEvent::inspector_message(message, None));
     events
 }
 

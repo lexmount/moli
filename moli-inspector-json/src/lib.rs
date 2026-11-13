@@ -16,7 +16,9 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+mod envelope;
 mod remote_objects;
+pub use envelope::InspectorEnvelope;
 
 /// Borrow a parsed response envelope and collect handles from known CDP fields.
 /// User values, deepSerializedValue and unknown extensions remain opaque.
@@ -158,6 +160,23 @@ impl InspectorJson {
         }
     }
 
+    /// Read one string-valued routing parameter without materializing opaque values.
+    pub fn string_param(&self, key: &str) -> serde_json::Result<Option<String>> {
+        match self {
+            Self::Parsed(value) => value
+                .get("params")
+                .and_then(|params| params.get(key))
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose(),
+            Self::Raw(raw) => {
+                let Some(params) = raw.source.fields.get("params") else {
+                    return Ok(None);
+                };
+                string_param_from_raw(params, key)
+            }
+        }
+    }
+
     pub fn has_field(&self, key: &str) -> bool {
         match self {
             Self::Parsed(value) => value.get(key).is_some(),
@@ -271,6 +290,14 @@ impl InspectorJson {
             Self::Raw(raw) => raw.value.get().is_some(),
         }
     }
+}
+
+fn string_param_from_raw(params: &RawValue, key: &str) -> serde_json::Result<Option<String>> {
+    let fields: BTreeMap<String, &RawValue> = serde_json::from_str(params.get())?;
+    fields
+        .get(key)
+        .map(|value| serde_json::from_str(value.get()))
+        .transpose()
 }
 
 fn validate_inspector_params(params: &RawValue) -> serde_json::Result<()> {

@@ -41,12 +41,18 @@ fn command_wait_failure_preserves_context_events_and_does_not_ack_early() {
     let (permit, flush) = conn.begin_command_response_flush_permit();
     let observer = flush.receiver().unwrap();
     let mut context = CommandDispatchContext::new(flush);
-    context.push_protocol_event(BackgroundProtocolEvent::immediate(json!({
-        "method": "Test.beforeResponse", "params": {}
-    })));
-    context.extend_post_response_events([BackgroundProtocolEvent::immediate(json!({
-        "method": "Test.afterResponse", "params": {}
-    }))]);
+    context.push_protocol_event(BackgroundProtocolEvent::inspector_message(
+        json!({
+            "method": "Test.beforeResponse", "params": {}
+        }),
+        None,
+    ));
+    context.extend_post_response_events([BackgroundProtocolEvent::inspector_message(
+        json!({
+            "method": "Test.afterResponse", "params": {}
+        }),
+        None,
+    )]);
 
     let CdpCommandTaskStep::Complete(outcome) = conn.complete_failed_command_wait_with_context(
         Some(42),

@@ -466,8 +466,9 @@ mod tests {
             let fixture = TestContext::from_conn(conn);
             let mut dispatch = CommandDispatchContext::default();
             let mut routed_output = RuntimeInspectorRoutedOutput::default();
-            routed_output.append_ordered_events(vec![BackgroundProtocolEvent::immediate(
+            routed_output.append_ordered_events(vec![BackgroundProtocolEvent::inspector_message(
                 json!({"method":"Runtime.consoleAPICalled","params":{"type":"log","args":[]}}),
+                None,
             )]);
             let prepared = PreparedPageRuntimeCommand::Response {
                 continuation: PageRuntimeCommandContinuation {

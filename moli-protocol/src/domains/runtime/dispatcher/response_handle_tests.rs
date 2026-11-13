@@ -61,8 +61,8 @@ fn routed_output_response_registration_preserves_groups_without_materializing() 
                 let raw = InspectorJson::from_slice(envelope.to_string().as_bytes()).unwrap();
                 let wire = raw.to_string();
                 let event = match container {
-                    Container::Raw => BackgroundProtocolEvent::immediate(raw.clone()),
-                    Container::Parsed => BackgroundProtocolEvent::immediate(envelope),
+                    Container::Raw => BackgroundProtocolEvent::inspector_message(raw.clone(), None),
+                    Container::Parsed => BackgroundProtocolEvent::inspector_message(envelope, None),
                     Container::Typed => {
                         BackgroundProtocolEvent::command_success(Some(45), owner.session_id(), body)
                     }
@@ -122,7 +122,7 @@ fn routed_output_registration_retains_notification_handle_semantics() {
     ] {
         let (mut conn, owner) = Owner::PageSession.fixture();
         let routed = RuntimeInspectorRoutedOutput {
-            events: vec![BackgroundProtocolEvent::immediate(message)],
+            events: vec![BackgroundProtocolEvent::inspector_message(message, None)],
             ..Default::default()
         };
         routed.register_object_group_for_success(&mut conn, &owner, Some("notifications"));

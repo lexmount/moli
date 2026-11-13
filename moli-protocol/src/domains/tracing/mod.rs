@@ -1,9 +1,10 @@
 use anyhow::Result;
 use futures_util::{FutureExt as _, future::LocalBoxFuture};
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::conn::{BackgroundProtocolEvent, CdpConnection, Cmd, build_event};
+use crate::conn::{BackgroundProtocolEvent, CdpConnection, Cmd};
 use crate::domains::actions::TracingAction;
 use crate::domains::command_output::CommandOutputPlan;
 
@@ -284,25 +285,25 @@ fn completed_trace_output_plan(
             data_loss_occurred,
         } => {
             for chunk in chunks {
-                plan.push_background_event(BackgroundProtocolEvent::immediate(build_event(
-                    "Tracing.dataCollected",
+                plan.push_background_event(BackgroundProtocolEvent::immediate_event(
+                    LocalCdpEvent::TracingDataCollected,
                     json!({ "value": chunk }),
                     session_id,
-                )));
+                ));
             }
-            plan.push_background_event(BackgroundProtocolEvent::immediate(build_event(
-                "Tracing.tracingComplete",
+            plan.push_background_event(BackgroundProtocolEvent::immediate_event(
+                LocalCdpEvent::TracingComplete,
                 json!({ "dataLossOccurred": data_loss_occurred }),
                 session_id,
-            )));
+            ));
         }
         CompletedTraceOutput::ReturnAsStream {
             body,
             data_loss_occurred,
         } => {
             let stream = conn.open_global_io_stream_body_source(body);
-            plan.push_background_event(BackgroundProtocolEvent::immediate(build_event(
-                "Tracing.tracingComplete",
+            plan.push_background_event(BackgroundProtocolEvent::immediate_event(
+                LocalCdpEvent::TracingComplete,
                 json!({
                     "dataLossOccurred": data_loss_occurred,
                     "stream": stream,
@@ -310,7 +311,7 @@ fn completed_trace_output_plan(
                     "streamCompression": "none",
                 }),
                 session_id,
-            )));
+            ));
         }
     }
     plan

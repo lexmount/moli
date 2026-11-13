@@ -1,6 +1,7 @@
 use crate::runtime::WorkerInspectorError;
 use anyhow::Result;
 use moli_inspector_json::InspectorJson;
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use std::{
     cell::{Cell, OnceCell, RefCell, UnsafeCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -789,7 +790,7 @@ impl WorkerRuntimeInspector {
                 inspector_session_id: worker_inspector_session_id_from_key(session_key),
                 messages: vec![RendererRuntimeInspectorMessage::from_v8_inspector_message(
                     json!({
-                        "method": "Inspector.workerScriptLoaded",
+                        "method": LocalCdpEvent::InspectorWorkerScriptLoaded.method(),
                         "params": {}
                     }),
                 )],

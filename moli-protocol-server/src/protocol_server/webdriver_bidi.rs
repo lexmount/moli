@@ -2865,13 +2865,16 @@ mod tests {
     fn protocol_output_hook_preserves_raw_dialog_opening_bridge() {
         let (mut bidi, _registry) = bidi_with_prompt_subscription();
         let output = ProtocolOutputSequence::from_background_event(
-            BackgroundProtocolEvent::immediate(json!({
-                "sessionId": "SID-raw",
-                "method": "Page.javascriptDialogOpening",
-                "params": {
-                    "frameId": "TID-raw", "type": "alert", "message": "raw CDP input",
-                }
-            })),
+            BackgroundProtocolEvent::inspector_message(
+                json!({
+                    "sessionId": "SID-raw",
+                    "method": "Page.javascriptDialogOpening",
+                    "params": {
+                        "frameId": "TID-raw", "type": "alert", "message": "raw CDP input",
+                    }
+                }),
+                None,
+            ),
         );
         let mut events = Vec::new();
         extend_bidi_events_from_protocol_output(None, &mut bidi, &mut events, output, None);
@@ -3005,7 +3008,7 @@ mod tests {
             timestamp: Some(1.0),
         });
         let output = ProtocolOutputSequence::from_background_event(
-            BackgroundProtocolEvent::immediate_automation_event(protocol_message, sidecar),
+            BackgroundProtocolEvent::inspector_message(protocol_message, Some(sidecar)),
         );
         let mut events = Vec::new();
 

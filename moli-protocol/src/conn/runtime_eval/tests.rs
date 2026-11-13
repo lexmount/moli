@@ -1415,7 +1415,7 @@ fn completed_runtime_await_registers_raw_response_groups_without_materializing()
         .remove_pending_inspector_await_for_owner(45, &owner)
         .unwrap();
     let message = InspectorJson::from_slice(br#"{"id":45,"result":{"result":{"type":"object","objectId":"actual","value":{"objectId":"user-object"}},"exceptionDetails":{"exception":{"type":"object","objectId":"exception"}}}}"#).unwrap();
-    let event = BackgroundProtocolEvent::immediate(message.clone());
+    let event = BackgroundProtocolEvent::inspector_message(message.clone(), None);
     conn.apply_completed_pending_inspector_await_entry(&owner, entry, &[event]);
     assert!(!message.is_materialized());
     for id in ["actual", "exception"] {
@@ -1466,8 +1466,8 @@ fn completed_runtime_await_response_containers_preserve_user_data_object_groups(
                 let envelope = json!({"id":45,"result":body});
                 let raw = InspectorJson::from_slice(envelope.to_string().as_bytes()).unwrap();
                 let event = match container {
-                    Container::Raw => BackgroundProtocolEvent::immediate(raw.clone()),
-                    Container::Parsed => BackgroundProtocolEvent::immediate(envelope),
+                    Container::Raw => BackgroundProtocolEvent::inspector_message(raw.clone(), None),
+                    Container::Parsed => BackgroundProtocolEvent::inspector_message(envelope, None),
                     Container::Typed => {
                         BackgroundProtocolEvent::command_success(Some(45), session_id, body)
                     }

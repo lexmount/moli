@@ -208,16 +208,18 @@ mod tests {
                         cursors[0],
                     ));
                     if emit_events {
-                        plan.push_background_event(BackgroundProtocolEvent::immediate(
-                            json!({"method": "Moli.beforeBoundary"}),
+                        plan.push_background_event(BackgroundProtocolEvent::inspector_message(
+                            json!({"method": "Tracing.dataCollected"}),
+                            None,
                         ));
                     }
                     plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(
                         cursors[1],
                     ));
                     if emit_events {
-                        plan.push_background_event(BackgroundProtocolEvent::immediate(
-                            json!({"method": "Moli.afterBoundary"}),
+                        plan.push_background_event(BackgroundProtocolEvent::inspector_message(
+                            json!({"method": "Tracing.tracingComplete"}),
+                            None,
                         ));
                     }
                     context.complete(plan)

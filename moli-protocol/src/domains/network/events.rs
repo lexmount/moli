@@ -7,12 +7,13 @@ use moli_cookie_jar::StoredCookieSetReport;
 use moli_core::page::{
     SubresourceRequestInitiatorType, WebSocketFrameDirection, WebSocketFrameOpcode,
 };
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use moli_web_mime::response_header_value;
 use serde_json::{Value, json};
 use url::Url;
 
 use super::*;
-use crate::conn::{BackgroundProtocolEvent, build_event};
+use crate::conn::BackgroundProtocolEvent;
 
 pub(crate) use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 
@@ -75,7 +76,7 @@ pub(crate) trait CdpNetworkAutomationEventSink {
 
     fn push_network_automation_event(
         &mut self,
-        method: &str,
+        method: LocalCdpEvent,
         params: Value,
         session_id: Option<&str>,
         event: AutomationEvent,
@@ -193,15 +194,14 @@ impl CdpNetworkAutomationEventSink for Vec<BackgroundProtocolEvent> {
 
     fn push_network_automation_event(
         &mut self,
-        method: &str,
+        method: LocalCdpEvent,
         mut params: Value,
         session_id: Option<&str>,
         event: AutomationEvent,
     ) {
         apply_blocked_intercepts_marker(&mut params, &event);
         self.push(BackgroundProtocolEvent::immediate_automation_event(
-            build_event(method, params, session_id),
-            event,
+            method, params, session_id, event,
         ));
     }
 }
@@ -713,8 +713,8 @@ pub(crate) fn emit_event_source_message_received(
     event_id: &str,
     data: &str,
 ) {
-    out.push_protocol_event(BackgroundProtocolEvent::immediate(build_event(
-        "Network.eventSourceMessageReceived",
+    out.push_protocol_event(BackgroundProtocolEvent::immediate_event(
+        LocalCdpEvent::NetworkEventSourceMessageReceived,
         json!({
             "requestId": request_id,
             "timestamp": timestamp,
@@ -723,7 +723,7 @@ pub(crate) fn emit_event_source_message_received(
             "data": data,
         }),
         session_id,
-    )));
+    ));
 }
 
 pub(crate) fn emit_request_served_from_cache(
@@ -731,11 +731,11 @@ pub(crate) fn emit_request_served_from_cache(
     session_id: Option<&str>,
     request_id: &str,
 ) {
-    out.push_protocol_event(BackgroundProtocolEvent::immediate(build_event(
-        "Network.requestServedFromCache",
+    out.push_protocol_event(BackgroundProtocolEvent::immediate_event(
+        LocalCdpEvent::NetworkRequestServedFromCache,
         json!({ "requestId": request_id }),
         session_id,
-    )));
+    ));
 }
 
 pub(crate) fn emit_data_received(
@@ -749,8 +749,8 @@ pub(crate) fn emit_data_received(
     if data_length == 0 && encoded_data_length == 0 {
         return;
     }
-    out.push_protocol_event(BackgroundProtocolEvent::immediate(build_event(
-        "Network.dataReceived",
+    out.push_protocol_event(BackgroundProtocolEvent::immediate_event(
+        LocalCdpEvent::NetworkDataReceived,
         json!({
             "requestId": request_id,
             "timestamp": timestamp,
@@ -758,7 +758,7 @@ pub(crate) fn emit_data_received(
             "encodedDataLength": encoded_data_length,
         }),
         session_id,
-    )));
+    ));
 }
 
 pub(crate) fn emit_loading_failed(
@@ -869,7 +869,7 @@ pub(crate) fn emit_cdp_network_automation_event(
                 params
             };
             out.push_network_automation_event(
-                "Network.responseReceived",
+                LocalCdpEvent::NetworkResponseReceived,
                 params,
                 session_id,
                 AutomationEvent::NetworkResponseStarted(network_event),
@@ -882,7 +882,7 @@ pub(crate) fn emit_cdp_network_automation_event(
                 "encodedDataLength": network_event.encoded_data_length.unwrap_or_default(),
             });
             out.push_network_automation_event(
-                "Network.loadingFinished",
+                LocalCdpEvent::NetworkLoadingFinished,
                 params,
                 session_id,
                 AutomationEvent::NetworkResponseCompleted(network_event),
@@ -900,7 +900,7 @@ pub(crate) fn emit_cdp_network_automation_event(
                 "canceled": network_event.loading_failed_canceled,
             });
             out.push_network_automation_event(
-                "Network.loadingFailed",
+                LocalCdpEvent::NetworkLoadingFailed,
                 params,
                 session_id,
                 AutomationEvent::NetworkFetchError(network_event),
@@ -909,7 +909,7 @@ pub(crate) fn emit_cdp_network_automation_event(
         AutomationEvent::NetworkAuthRequired(network_event) => {
             let params = fetch_auth_required_params(&network_event);
             out.push_network_automation_event(
-                "Fetch.authRequired",
+                LocalCdpEvent::FetchAuthRequired,
                 params,
                 session_id,
                 AutomationEvent::NetworkAuthRequired(network_event),
@@ -918,7 +918,7 @@ pub(crate) fn emit_cdp_network_automation_event(
         AutomationEvent::RequestPaused(network_event) => {
             let params = fetch_request_paused_params(&network_event);
             out.push_network_automation_event(
-                "Fetch.requestPaused",
+                LocalCdpEvent::FetchRequestPaused,
                 params,
                 session_id,
                 AutomationEvent::RequestPaused(network_event),
@@ -982,7 +982,7 @@ fn emit_network_before_request_sent(
         params["__moliFetchRequestId"] = json!(fetch_request_id.as_str());
     }
     out.push_network_automation_event(
-        "Network.requestWillBeSent",
+        LocalCdpEvent::NetworkRequestWillBeSent,
         params,
         session_id,
         AutomationEvent::NetworkBeforeRequestSent(network_event),
@@ -1141,15 +1141,15 @@ pub(crate) fn emit_websocket_frame_error(
     timestamp: f64,
     error_message: &str,
 ) {
-    out.push_protocol_event(BackgroundProtocolEvent::immediate(build_event(
-        "Network.webSocketFrameError",
+    out.push_protocol_event(BackgroundProtocolEvent::immediate_event(
+        LocalCdpEvent::NetworkWebSocketFrameError,
         json!({
             "requestId": request_id,
             "timestamp": timestamp,
             "errorMessage": error_message,
         }),
         session_id,
-    )));
+    ));
 }
 
 pub(crate) fn emit_websocket_closed(
@@ -1158,14 +1158,14 @@ pub(crate) fn emit_websocket_closed(
     request_id: &str,
     timestamp: f64,
 ) {
-    out.push_protocol_event(BackgroundProtocolEvent::immediate(build_event(
-        "Network.webSocketClosed",
+    out.push_protocol_event(BackgroundProtocolEvent::immediate_event(
+        LocalCdpEvent::NetworkWebSocketClosed,
         json!({
             "requestId": request_id,
             "timestamp": timestamp,
         }),
         session_id,
-    )));
+    ));
 }
 
 pub(crate) fn headers_as_json_object(

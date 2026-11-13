@@ -34,6 +34,7 @@ use moli_core::{
     runtime::{NavigationEngine, NavigationRuntimeConfig},
 };
 use moli_fetch::FetchConfig;
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::json;
 use std::sync::{
@@ -621,14 +622,17 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
     target_b.attach_active_session("SID-B");
     conn.push_inactive_browser_context_fixture_for_test(target_b);
 
-    let target_b_websocket = BackgroundProtocolEvent::immediate(json!({
-        "method": "Network.webSocketClosed",
-        "sessionId": "SID-B",
-        "params": {
-            "requestId": "REQ-B",
-            "timestamp": 1.0
-        }
-    }));
+    let target_b_websocket = BackgroundProtocolEvent::inspector_message(
+        json!({
+            "method": "Network.webSocketClosed",
+            "sessionId": "SID-B",
+            "params": {
+                "requestId": "REQ-B",
+                "timestamp": 1.0
+            }
+        }),
+        None,
+    );
 
     assert!(target_b_websocket.should_wait_for_background_navigation_completion());
     assert!(conn.has_inflight_background_navigation());
@@ -702,7 +706,7 @@ fn navigation_background_event_queue_drains_current_token() {
         .expect("active target should produce navigation token");
     conn.install_browser_context_fixture_for_test(browser_context);
     let message = build_event(
-        "Page.frameStartedLoading",
+        LocalCdpEvent::PageFrameStartedLoading,
         json!({ "frameId": "TID-nav" }),
         None,
     );
@@ -1699,12 +1703,12 @@ fn navigation_background_event_queue_drops_stale_token() {
         .expect("active target should produce current token");
     conn.install_browser_context_fixture_for_test(browser_context);
     let stale_message = build_event(
-        "Page.frameStartedLoading",
+        LocalCdpEvent::PageFrameStartedLoading,
         json!({ "frameId": "TID-nav", "loaderId": "LOADER-1" }),
         None,
     );
     let current_message = build_event(
-        "Page.frameStartedLoading",
+        LocalCdpEvent::PageFrameStartedLoading,
         json!({ "frameId": "TID-nav", "loaderId": "LOADER-2" }),
         None,
     );
@@ -1738,17 +1742,17 @@ fn navigation_background_event_queue_preserves_order_for_current_token() {
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let stale_message = build_event(
-        "Page.frameStartedLoading",
+        LocalCdpEvent::PageFrameStartedLoading,
         json!({ "frameId": "TID-nav-order", "loaderId": "LOADER-1" }),
         None,
     );
     let current_first_message = build_event(
-        "Page.frameStartedLoading",
+        LocalCdpEvent::PageFrameStartedLoading,
         json!({ "frameId": "TID-nav-order", "loaderId": "LOADER-2", "step": 1 }),
         None,
     );
     let current_second_message = build_event(
-        "Page.frameStoppedLoading",
+        LocalCdpEvent::PageFrameStoppedLoading,
         json!({ "frameId": "TID-nav-order", "loaderId": "LOADER-2", "step": 2 }),
         None,
     );
@@ -1784,7 +1788,7 @@ fn navigation_background_event_sender_preserves_typed_sidecar_for_current_token(
         .expect("active target should produce current navigation token");
     conn.install_browser_context_fixture_for_test(browser_context);
     let message = build_event(
-        "Page.frameStartedNavigating",
+        LocalCdpEvent::PageFrameStartedNavigating,
         json!({
             "frameId": "TID-nav-typed",
             "loaderId": "LOADER-typed",
@@ -1807,10 +1811,7 @@ fn navigation_background_event_sender_preserves_typed_sidecar_for_current_token(
 
     conn.send_navigation_background_protocol_event(
         current,
-        BackgroundProtocolEvent::immediate_automation_event(
-            message.clone(),
-            automation_event.clone(),
-        ),
+        BackgroundProtocolEvent::inspector_message(message.clone(), Some(automation_event.clone())),
     );
 
     let background_event = rx
