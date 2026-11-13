@@ -15,7 +15,7 @@ pub use dom::{
     backend_node_id_for_snapshot, collect_flattened_node_snapshot, frontend_node_id_for_snapshot,
     node_snapshot_base_payload, node_snapshot_to_cdp, node_snapshot_to_cdp_with_limit,
 };
-pub use metadata::{CDP_PROTOCOL_BROTLI, advertised_protocol_json};
+pub use metadata::{CDP_PROTOCOL_BROTLI, advertised_protocol_json, is_advertised_event};
 pub use runtime::remote_object_from_json_value;
 pub use target::{CdpTargetKindWire, CdpTargetType, cdp_target_type_wire_value};
 pub use time::{DEFAULT_LOADER_ID, monotonic_timestamp_seconds};
