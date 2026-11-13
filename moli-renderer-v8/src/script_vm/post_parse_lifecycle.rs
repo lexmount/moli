@@ -2043,7 +2043,7 @@ impl ScriptVm {
                 && self.has_pending_runtime_script_work())
     }
 
-    fn has_post_domcontentloaded_load_delaying_runtime_work(&mut self) -> bool {
+    pub(crate) fn has_post_domcontentloaded_load_delaying_runtime_work(&mut self) -> bool {
         if !self.document_runtime.dom_content_loaded_dispatched() {
             return false;
         }

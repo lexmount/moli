@@ -1555,6 +1555,27 @@ async fn fetch_with_networkidle_waits_for_delayed_fetch_dom_mutation() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fetch_with_domstable_waits_for_async_scripts_iframes_and_workers() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+
+    for kind in ["async", "frame", "worker"] {
+        let mut page = browser
+            .fetch_with_wait_until(
+                &server.url(&format!("/wait-until-domstable-pending-load?kind={kind}")),
+                RenderedDomWaitUntil::DomStable,
+                Duration::from_secs(7),
+            )
+            .await?;
+        let html = page.serialize_html_async().await.unwrap();
+        assert!(html.contains(&format!(">{kind}-ran<")), "{kind}: {html}");
+    }
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fetch_with_domstable_waits_for_delayed_fetch_dom_mutation() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
