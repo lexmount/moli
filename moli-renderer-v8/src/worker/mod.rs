@@ -49,16 +49,12 @@ pub(crate) use websocket_events::signal_worker_websocket_stream_pull;
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::WorkerRedirectOwner;
 pub(crate) use global_scope::{
-    abort_worker_event_source, cancel_worker_browser_timeout,
     NestedWorkerContext, WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse,
     WorkerFetchStreamingChunk, WorkerFetchStreamingFinished, WorkerFetchStreamingStarted,
-    WorkerGlobalState, WorkerOpfsCompletion, WorkerWebCryptoCompletion, cancel_worker_opfs_task,
-    check_and_queue_nested_worker_constructor_csp,
-    check_worker_websocket_csp, check_worker_webtransport_csp, close_worker_websocket,
-
-
-    begin_nested_worker_script_load,
-
+    WorkerGlobalState, WorkerOpfsCompletion, WorkerWebCryptoCompletion, abort_worker_event_source,
+    begin_nested_worker_script_load, cancel_worker_browser_timeout, cancel_worker_opfs_task,
+    check_and_queue_nested_worker_constructor_csp, check_worker_websocket_csp,
+    check_worker_webtransport_csp, close_worker_websocket,
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     fail_nested_worker_script_load, fetch_native_request, forget_worker_broadcast_channel_wrapper,
@@ -127,5 +123,4 @@ pub(crate) use handle::{
 pub(crate) use global_scope::{
     try_worker_service_worker_get_registration, try_worker_service_worker_get_registrations,
     try_worker_service_worker_register,
-
 };

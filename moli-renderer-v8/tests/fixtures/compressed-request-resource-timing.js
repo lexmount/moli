@@ -63,14 +63,15 @@
         let failed = false;
         try { await request(api, name, spec.method || 'GET', opaque, false); } catch { failed = true; }
         const entry = await entryFor(name);
-        const hidden = opaque || mode === 'denied';
+        const networkError = api === 'sync-xhr' && failed;
+        const hidden = opaque || mode === 'denied' || networkError;
         assert(failed === (mode === 'denied' || !!spec.fails && !opaque), 'Unexpected body result');
         assert(entry.encodedBodySize === (hidden ? 0 : spec.encoded), `encoded=${entry.encodedBodySize}`);
         assert(entry.decodedBodySize === (hidden ? 0 : spec.decoded), `decoded=${entry.decodedBodySize}`);
         const encoding = hidden || !spec.encoded || spec.kind === 'identity' ? '' : spec.kind.startsWith('zstd') ? 'zstd' : 'gzip';
         assert(entry.contentEncoding === encoding, `encoding=${entry.contentEncoding}`);
         assert(entry.responseStatus === (hidden ? 0 : 200), `status=${entry.responseStatus}`);
-        const allowed = mode === 'same' || mode.endsWith('tao');
+        const allowed = !networkError && (mode === 'same' || mode.endsWith('tao'));
         assert(entry.transferSize === (allowed ? (hidden ? 0 : spec.encoded) + 300 : 0), `transfer=${entry.transferSize}`);
         assert(performance.getEntriesByName(name, 'resource').length === 1, 'Duplicate timing');
       });

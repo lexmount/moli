@@ -2,41 +2,6 @@ use super::*;
 use crate::{document_runtime::DomHandle, exception_reporting::V8ExceptionReport};
 use moli_webapi::events::subclasses::error::construct_original_error_event;
 
-const BODY_ONERROR_RESOLUTION_GUARD_SLOT: &str = "__moliBodyOnerrorResolutionGuard";
-
-pub(super) fn ensure_window_reflecting_body_onerror_handler(scope: &mut v8::PinScope<'_, '_>) {
-    let global = scope.get_current_context().global(scope);
-    if global_hidden_value(scope, WINDOW_ONERROR_SLOT).is_some_and(|handler| handler.is_function())
-    {
-        return;
-    }
-    if get_private_value(scope, global, BODY_ONERROR_RESOLUTION_GUARD_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
-        return;
-    }
-    set_private_value(
-        scope,
-        global,
-        BODY_ONERROR_RESOLUTION_GUARD_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
-    let body = global
-        .get(scope, v8str(scope, "document").into())
-        .and_then(|document| v8::Local::<v8::Object>::try_from(document).ok())
-        .and_then(|document| document.get(scope, v8str(scope, "body").into()))
-        .and_then(|body| v8::Local::<v8::Object>::try_from(body).ok());
-    if let Some(body) = body {
-        let _ = body.get(scope, v8str(scope, "onerror").into());
-    }
-    set_private_value(
-        scope,
-        global,
-        BODY_ONERROR_RESOLUTION_GUARD_SLOT,
-        v8::Boolean::new(scope, false).into(),
-    );
-}
-
 struct ReportedExceptionDetails {
     message: String,
     filename: String,
@@ -233,10 +198,8 @@ pub(crate) fn dispatch_window_error_event<'s>(
     } else {
         None
     };
+
     let popup_id = crate::native_bridge::active_lightweight_popup_id(scope);
-    if popup_id.is_none() {
-        ensure_window_reflecting_body_onerror_handler(scope);
-    }
     let error_value = error_value.unwrap_or_else(|| v8::null(scope).into());
 
     let Some(event) =

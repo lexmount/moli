@@ -441,6 +441,7 @@ async fn child_navigation_retires_local_window_owned_xhr() {
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id,
         request_url: Url::parse("https://xhr-execution-context.test/pending").unwrap(),
         request_method: "GET".to_owned(),
@@ -619,6 +620,7 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: ordinary.0,
         request_url: Url::parse("https://fetch-execution-context.test/pending").unwrap(),
         request_method: "GET".to_owned(),
@@ -634,6 +636,7 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
     let _ = vm.take_network_output();
     let final_url = Url::parse("https://fetch-execution-context.test/pending").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: keepalive.0,
         request_url: final_url.clone(),
         request_method: "GET".to_owned(),

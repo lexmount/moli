@@ -210,6 +210,7 @@ pub(crate) struct FieldAttrs {
     pub(crate) setter_access_policy: Option<Path>,
     pub(crate) access_policy_with_data: bool,
     pub(crate) returns_promise: bool,
+    pub(crate) legacy_lenient_this: bool,
     pub(crate) kind: FieldKind,
     pub(crate) enumerable: bool,
     pub(crate) readonly: bool,
@@ -284,6 +285,7 @@ impl FieldAttrs {
             || self.receiver_access_check.is_some()
             || self.has_access_policy()
             || self.returns_promise
+            || self.legacy_lenient_this
             || self.enumerable
             || self.readonly
             || self.dont_delete
@@ -542,6 +544,13 @@ pub(crate) fn parse_field_attrs_with_defaults(
                 parsed.access_policy_with_data = true;
                 return Ok(());
             }
+            if meta.path.is_ident("legacy_lenient_this") {
+                if parsed.legacy_lenient_this {
+                    return Err(meta.error("field legacy_lenient_this can only be specified once"));
+                }
+                parsed.legacy_lenient_this = true;
+                return Ok(());
+            }
             if meta.path.is_ident("getter_access_policy") {
                 if parsed
                     .getter_access_policy
@@ -796,6 +805,29 @@ pub(crate) fn parse_field_attrs_with_defaults(
             getter_value.span(),
             "receiver and returns_promise require a Rust callback, not getter_value",
         ));
+    }
+    if parsed.legacy_lenient_this
+        && (!matches!(parsed.kind, FieldKind::AccessorProperty)
+            || parsed.receiver.is_none()
+            || parsed.getter_value.is_some()
+            || parsed.returns_promise)
+    {
+        return Err(Error::new(
+            field.span(),
+            "legacy_lenient_this requires accessor_property callbacks with a receiver and cannot return a Promise",
+        ));
+    }
+    if parsed.legacy_lenient_this {
+        if parsed
+            .receiver_access_check
+            .is_some_and(|check| check != ReceiverAccessCheck::None)
+        {
+            return Err(Error::new(
+                field.span(),
+                "legacy_lenient_this requires the generated receiver check instead of V8 receiver_access_check",
+            ));
+        }
+        parsed.receiver_access_check = Some(ReceiverAccessCheck::None);
     }
     if (parsed.getter_access_policy.is_some() || parsed.setter_access_policy.is_some())
         && (!matches!(parsed.kind, FieldKind::AccessorProperty)
@@ -1321,6 +1353,38 @@ mod tests {
             syn::parse_quote!(#[webapi(method, callback = call, setter_access_policy = authorize)] value: ()),
             syn::parse_quote!(#[webapi(accessor_property, getter = get, setter_access_policy = authorize)] value: ()),
             syn::parse_quote!(#[webapi(accessor_property, getter = get, getter_access_policy = authorize, access_policy = other)] value: ()),
+        ] {
+            assert!(parse_field_attrs(&field).is_err());
+        }
+    }
+
+    #[test]
+    fn lenient_this_requires_an_accessor_receiver_and_keeps_the_check_in_rust() {
+        let field = syn::parse_quote!(
+            #[webapi(accessor_property, getter = get, setter = set, legacy_lenient_this)]
+            value: ()
+        );
+        let receiver = syn::parse_quote!(is_instance);
+        let attrs = parse_field_attrs_with_defaults(
+            &field,
+            FieldDefaults {
+                receiver: Some(&receiver),
+                receiver_access_check: true,
+                ..FieldDefaults::default()
+            },
+        )
+        .expect("lenient accessors use their inherited receiver");
+        assert!(attrs.legacy_lenient_this);
+        assert!(matches!(
+            attrs.receiver_access_check,
+            Some(ReceiverAccessCheck::None)
+        ));
+        for field in [
+            syn::parse_quote!(#[webapi(method, callback = call, receiver = check, legacy_lenient_this)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter = get, legacy_lenient_this)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter = get, receiver = check, legacy_lenient_this, returns_promise)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter = get, receiver = check, receiver_access_check, legacy_lenient_this)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter = get, receiver = check, legacy_lenient_this, legacy_lenient_this)] value: ()),
         ] {
             assert!(parse_field_attrs(&field).is_err());
         }

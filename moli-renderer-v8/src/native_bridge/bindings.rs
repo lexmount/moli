@@ -374,6 +374,11 @@ impl NativeBridgeTemplates {
         );
         // A facade has no LocalWindow identity. Its unique default token must
         // force every external access through the cross-origin handlers.
+        {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            crate::context_bootstrap::exposed_interfaces::initialize_window_proxy_intrinsics(scope)
+                .expect("WindowProxy intrinsic registry should initialize");
+        }
         let global = context.global(scope);
         (global, v8::Global::new(scope, context))
     }
@@ -392,6 +397,11 @@ impl NativeBridgeTemplates {
                 ..Default::default()
             },
         );
+        {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            crate::context_bootstrap::exposed_interfaces::initialize_window_proxy_intrinsics(scope)
+                .expect("WindowProxy intrinsic registry should initialize");
+        }
         context
             .global(scope)
             .strict_equals(window_proxy.into())

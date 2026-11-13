@@ -8,6 +8,7 @@ pub(super) fn window_hidden_value<'s>(
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, receiver)?;
     if let Some(value) =
         get_private_value(scope, receiver, slot).filter(|value| !value.is_undefined())
     {

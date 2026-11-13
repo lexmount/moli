@@ -744,6 +744,19 @@ fn trusted_script_code_like_brand_drives_function_constructors() {
     return blocked;
   });
   const trusted = source.map(value => policy.createScript(value));
+  if (typeof Function.prototype !== 'function' || Function.prototype.constructor !== Function) {
+    throw new Error('Function retains its callable intrinsic prototype');
+  }
+  for (const Constructor of constructors) {
+    const Derived = class extends Constructor {};
+    const value = new Derived(...trusted);
+    if (Object.getPrototypeOf(value) !== Derived.prototype || !(value instanceof Derived)) {
+      throw new Error('Function construction preserves new.target');
+    }
+    if (Constructor !== Function && Object.getPrototypeOf(Constructor) !== Function) {
+      throw new Error('native Function constructor ancestry');
+    }
+  }
   const functions = constructors.map(Constructor => new Constructor(...trusted));
   let forgedBlocked = 0;
   for (let index = 0; index < source.length; index++) {

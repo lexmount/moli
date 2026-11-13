@@ -58,6 +58,8 @@ fn finish_fetch(
             response_filter: None,
             network_error_text: None,
             result: Ok(response).into(),
+
+            body_is_null: None,
         })
         .unwrap();
     }
@@ -197,6 +199,8 @@ fn fetch_resource_timing_reports_failed_network_requests() {
         response_filter: None,
         network_error_text: None,
         result: Err("network failed".to_owned()).into(),
+
+        body_is_null: None,
     })
     .unwrap();
     assert_eq!(vm.eval("fetchError").unwrap(), "TypeError");
@@ -217,9 +221,17 @@ fn fetch_resource_timing_separates_cors_attribution_from_timing_allow_origin() {
     let streaming_modes: &[bool] = &[false, true];
     // The production transport buffers no-cors responses for ORB body sniffing.
     let buffered: &[bool] = &[false];
-    for (modes, mode, tao, expected_source, expected_size, expected_status) in [
-        (streaming_modes, "cors", None, caller.as_str(), 0, 200),
-        (streaming_modes, "cors", Some("*"), caller.as_str(), 4, 200),
+    for (modes, mode, tao, expected_source, expected_size, expected_status, expected_transfer) in [
+        (streaming_modes, "cors", None, caller.as_str(), 4, 200, 0),
+        (
+            streaming_modes,
+            "cors",
+            Some("*"),
+            caller.as_str(),
+            4,
+            200,
+            304,
+        ),
         (
             streaming_modes,
             "cors",
@@ -227,17 +239,19 @@ fn fetch_resource_timing_separates_cors_attribution_from_timing_allow_origin() {
             caller.as_str(),
             4,
             200,
+            304,
         ),
         (
             streaming_modes,
             "cors",
             Some("https://other.test"),
             caller.as_str(),
-            0,
+            4,
             200,
+            0,
         ),
-        (buffered, "no-cors", None, "", 0, 0),
-        (buffered, "no-cors", Some("*"), "", 4, 0),
+        (buffered, "no-cors", None, "", 0, 0, 0),
+        (buffered, "no-cors", Some("*"), "", 0, 0, 300),
     ] {
         for &streaming in modes {
             let mut vm = new_storage_test_vm(document.as_str());
@@ -297,7 +311,7 @@ fn fetch_resource_timing_separates_cors_attribution_from_timing_allow_origin() {
                     expected_status,
                     expected_size,
                     expected_size,
-                    if expected_size == 0 { 0 } else { 304 },
+                    expected_transfer,
                     if mode == "cors" { "text/plain" } else { "" }
                 ]])
                 .to_string(),

@@ -3036,8 +3036,10 @@ mod tests {
             assert!(
                 error
                     .message()
-                    .contains("Child module CSP context unavailable")
+                    .contains("module fetch lost its exact child Document realm"),
+                "{error:?}"
             );
+            assert_eq!(error.stage(), ModuleLoadStage::Fetch);
             let entry = owner.module_entry_id(&key).expect("module-map entry");
             assert!(
                 owner.module_failure(entry).is_some(),
@@ -3087,12 +3089,19 @@ mod tests {
             );
             drop(fetched);
             drop(source);
-            assert_eq!(
-                weak_source.strong_count(),
-                1,
-                "{module_type}: only the compiled record should own the original text allocation",
-            );
-            assert_eq!(weak_source.upgrade().unwrap().as_ref(), text);
+            if module_type != "json" {
+                assert_eq!(
+                    weak_source.strong_count(),
+                    1,
+                    "{module_type}: only the compiled record should own the original text allocation",
+                );
+                assert_eq!(weak_source.upgrade().unwrap().as_ref(), text);
+            } else {
+                assert!(
+                    weak_source.upgrade().is_none(),
+                    "{module_type}: V8 exports must release the original source text",
+                );
+            }
             drop(vm);
             assert!(weak_source.upgrade().is_none());
         }

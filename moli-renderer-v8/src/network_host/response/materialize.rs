@@ -118,6 +118,17 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     )
 }
 
+/// A controller or CacheStorage supplied an actual null internal body. Keep
+/// the established immutable metadata and create no readable body source.
+pub(crate) fn build_null_body_fetch_response_object_with_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    head: moli_fetch::ResponseHead,
+    metadata: &FetchResponseMetadata,
+) -> v8::Local<'s, v8::Object> {
+    let obj = build_fetch_response_object_head(scope, &head, metadata, None);
+    finish_fetch_response_object_with_body_stream(scope, obj, &head, None, metadata.response_type)
+}
+
 pub(crate) fn build_fetch_response_object_from_body_source_with_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     method: &str,
@@ -324,7 +335,9 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     let headers_obj =
         build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
     set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
-    set_filtered_response_internal_body_from_bytes(scope, obj, body);
+    if !head.body_is_null {
+        set_filtered_response_internal_body_from_bytes(scope, obj, body);
+    }
     FetchResponseBodyDeclaration::new(String::new(), v8::null(scope).into())
         .initialize(scope, obj)
         .ok()?;
@@ -463,6 +476,11 @@ fn materialize_response_head_for_purpose<'s>(
 
     Ok((
         MaterializedResponseHead {
+            body_is_null: if filtered_response_type {
+                crate::network_host::body_source::filtered_response_internal_body_source_from_object(scope, response).is_none()
+            } else {
+                body_stream_object(scope, response).is_none()
+            },
             metadata,
             status: status as u16,
             status_text,

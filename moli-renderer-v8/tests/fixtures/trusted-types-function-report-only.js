@@ -47,7 +47,8 @@
     };
     assert(construct([parameter, changed])(1) === 11,
       'changed conversion goes through the transparent report-only default policy');
-    assert(defaults.length === before + 1, 'default conversion occurs once');
+    assert(defaults.length === before + 1, 'default conversion occurs once: ' +
+      JSON.stringify({before, actual: defaults.length, conversions, prototype: typeof Function.prototype}));
   }
   transform = true;
   let rejected = 0;

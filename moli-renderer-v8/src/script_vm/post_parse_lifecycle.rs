@@ -3088,7 +3088,13 @@ impl ScriptVm {
         if let Some(head) = head.as_ref() {
             let source = script
                 .and_then(|script| script.resource_timing_initiator_url.as_deref())
-                .unwrap_or(document_url.as_str());
+                .unwrap_or_else(|| {
+                    if request_initiator_type == SubresourceRequestInitiatorType::Parser {
+                        document_url.as_str()
+                    } else {
+                        ""
+                    }
+                });
             crate::context_bootstrap::ResourceTimingInitiator::from_captured_url(source.to_owned())
                 .apply(&mut performance_entry, head, readable);
         }

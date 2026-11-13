@@ -70,6 +70,12 @@ impl NavigationTiming {
         });
     }
 
+    pub(super) fn observe_materialized_body_size(&self, size: usize) {
+        if let Some(response) = self.0.response.lock().as_mut() {
+            response.materialized_body_size = Some(size);
+        }
+    }
+
     pub(crate) fn snapshot(&self) -> Option<NavigationTimingSnapshot> {
         let response = self.0.response.lock().clone()?;
         Some(NavigationTimingSnapshot {

@@ -42,7 +42,6 @@ pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) client: WorkerFetchClient,
     pub(in crate::worker) request_headers: moli_fetch::RequestHeaders,
 
-    pub(in crate::worker) document_url: Url,
     /// Effective network credentials; the input Request and FetchEvent retain
     /// the author's original credentials mode.
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,
@@ -53,7 +52,6 @@ pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) resource_timing: crate::context_bootstrap::FetchResourceTiming,
     pub(in crate::worker) signal_id: Option<u32>,
     pub(in crate::worker) load: ResourceLoadLease,
-    pub(in crate::worker) request_url: Url,
     pub(in crate::worker) request_method: String,
 
     pub(in crate::worker) streaming_body_source_id: Option<NetworkBodySourceId>,
@@ -94,14 +92,18 @@ pub(crate) enum WorkerFetchEvent {
         result: Result<(), moli_fetch::UploadBodyError>,
     },
 
-    RequestUploadReady { fetch_id: u32, result: Result<(), moli_fetch::UploadBodyError> },
-    RedirectAdmission { fetch_id: u32, admission: crate::network_host::RedirectAdmission },
+    RequestUploadReady {
+        fetch_id: u32,
+        result: Result<(), moli_fetch::UploadBodyError>,
+    },
+    RedirectAdmission {
+        fetch_id: u32,
+        admission: crate::network_host::RedirectAdmission,
+    },
     PolicyViolations(Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>),
 
-
-
     Completion(Box<WorkerFetchCompletion>),
-    StreamingStarted(WorkerFetchStreamingStarted),
+    StreamingStarted(Box<WorkerFetchStreamingStarted>),
     StreamingChunk(WorkerFetchStreamingChunk),
     StreamingFinished(WorkerFetchStreamingFinished),
     ResourceTiming {
@@ -111,6 +113,7 @@ pub(crate) enum WorkerFetchEvent {
 }
 
 pub(crate) struct WorkerFetchCompletion {
+    pub(crate) body_is_null: Option<bool>,
     pub(crate) fetch_id: u32,
 
     pub(crate) result: Result<WorkerFetchResponse, String>,
@@ -132,6 +135,7 @@ pub(crate) struct WorkerFetchStreamingChunk {
 }
 
 pub(crate) struct WorkerFetchStreamingFinished {
+    pub(crate) opaque_response_blocked: bool,
     pub(crate) fetch_id: u32,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) result: Result<crate::context_bootstrap::ResourcePerformanceEntry, String>,
@@ -149,12 +153,12 @@ pub(in crate::worker) struct PendingWorkerXhr {
     pub(in crate::worker) xhr: v8::Global<v8::Object>,
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,
 
-
     pub(in crate::worker) load: ResourceLoadLease,
 }
 
 pub(in crate::worker) struct WorkerXhrCompletion {
-    pub(in crate::worker) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(in crate::worker) response_filter:
+        Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     pub(in crate::worker) csp_violations:
         Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
 
@@ -164,7 +168,6 @@ pub(in crate::worker) struct WorkerXhrCompletion {
     pub(in crate::worker) local_request: Option<Box<PendingSubresourceFetchInfo>>,
 
     pub(in crate::worker) result: Result<Response, String>,
-
 }
 
 pub(super) fn next_fetch_id(state: &mut WorkerGlobalState) -> u32 {
@@ -200,7 +203,8 @@ pub(super) fn merge_worker_request_headers(
 }
 
 pub(in crate::worker) struct WorkerWebSocketState {
-    pub(in crate::worker) stream_abort: Option<crate::context_bootstrap::WebSocketStreamAbortRegistration>,
+    pub(in crate::worker) stream_abort:
+        Option<crate::context_bootstrap::WebSocketStreamAbortRegistration>,
     pub(in crate::worker) wrapper: v8::Global<v8::Object>,
     pub(in crate::worker) connection: WebSocketConnectionHandle,
     pub(in crate::worker) document_url: Url,

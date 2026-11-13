@@ -55,6 +55,13 @@ impl<'s> WebIdlConverter<'s> for Input {
 }
 
 impl Input {
+    pub(super) fn with_router_base_url(mut self, base_url: &str) -> Self {
+        if let Self::Init(init) = &mut self {
+            init.base_url.get_or_insert_with(|| base_url.to_owned());
+        }
+        self
+    }
+
     pub(super) fn library_input(&self) -> urlpattern::quirks::StringOrInit<'_> {
         use urlpattern::quirks::{StringOrInit, UrlPatternInit};
         match self {

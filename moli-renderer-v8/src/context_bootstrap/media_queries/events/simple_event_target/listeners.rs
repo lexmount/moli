@@ -1037,10 +1037,11 @@ fn simple_callback_context_anchors_for_contexts<'s>(
     v8::Local<'s, v8::Object>,
     Option<WindowExecutionContextIdentity>,
 ) {
-    let relevant_identity = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
-        unsafe { &*host_ptr }
-            .window_execution_context_identity_for_v8_context(scope, relevant_context)
-    });
+    let relevant_identity = crate::util::context_host_ptr_from_context_slot(relevant_context)
+        .and_then(|host_ptr| {
+            unsafe { &*host_ptr }
+                .window_execution_context_identity_for_v8_context(scope, relevant_context)
+        });
     let relevant_context_anchor = {
         let scope = &mut v8::ContextScope::new(scope, relevant_context);
         v8::Object::new(scope)

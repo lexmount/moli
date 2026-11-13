@@ -5,6 +5,17 @@ use super::*;
 use crate::parser::ParserDomMutation;
 
 impl DocumentRuntime {
+    fn reset_non_dirty_textarea_selection_after_child_list_change(&mut self, handle: DomHandle) {
+        let should_reset = self
+            .dom_host
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.is_html_textarea() && !element.input_value_dirty());
+        if should_reset {
+            let _ = self.dom_host.set_selection_range(handle, 0, 0);
+        }
+    }
+
     /// Keep existing V8-backed resource/event algorithms as activation boundaries.
     /// This preflight runs before changing the tree, so fallback never replays a commit.
     pub(crate) fn parser_mutation_needs_window_realm(&self, mutation: &ParserDomMutation) -> bool {
@@ -125,19 +136,9 @@ impl DocumentRuntime {
         self.queue_devtools_dom_mutations(facts);
         let changes = effects.stylesheet_owners().changes();
         if !changes.is_empty() {
-            let prime = self.prime_stylesheet_owner_runtime_changes(host_ptr, changes);
+            let prime =
+                self.prime_stylesheet_owner_runtime_changes(host_ptr, changes, &HashMap::new());
             self.pending_connected_style_load_prime_result.extend(prime);
-        }
-    }
-
-    fn reset_non_dirty_textarea_selection_after_child_list_change(&mut self, handle: DomHandle) {
-        let should_reset = self
-            .dom_host
-            .node(handle)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.is_html_textarea() && !element.input_value_dirty());
-        if should_reset {
-            let _ = self.dom_host.set_selection_range(handle, 0, 0);
         }
     }
 }

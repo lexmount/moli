@@ -12,7 +12,9 @@ use crate::{
 
 impl ScriptVm {
     pub(crate) fn cancel_closed_main_window_navigation(&mut self) -> Result<()> {
-        if !self._context_host.borrow().browsing_context_is_closed() {
+        if self.current_main_world().is_none()
+            || !self._context_host.borrow().browsing_context_is_closed()
+        {
             return Ok(());
         }
         self.with_default_context_scope(|scope, host_ptr| {

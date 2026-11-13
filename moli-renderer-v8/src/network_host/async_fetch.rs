@@ -924,6 +924,7 @@ pub(crate) fn spawn_async_subresource_fetch(
             )
             .await;
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -964,6 +965,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                     )
             });
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -1003,6 +1005,7 @@ pub(crate) fn spawn_async_subresource_fetch(
         .await;
         if let Err(error) = result {
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -1397,28 +1400,16 @@ mod tests {
     #[test]
     fn follow_rejects_an_invalid_final_redirect_location_without_parsing_manual_redirects() {
         let url = Url::parse("https://origin.test/source").unwrap();
-        let mut head = ResponseHead {
-            request_include_credentials: false,
-
-            final_url: url.clone(),
-            status: 302,
-            status_text: None,
-            headers: vec![("Location".to_owned(), b"http://[".to_vec())],
-            request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
-            redirected: false,
-            redirect_chain: Vec::new(),
-            from_cache: false,
-            cache_state: Default::default(),
-            preload_state: Default::default(),
-            negotiated_http_version: None,
-        };
+        let headers = vec![("Location".to_owned(), b"http://[".to_vec())];
         for mode in [RequestRedirectMode::Follow, RequestRedirectMode::Error] {
-            assert!(validate_redirect_mode_response_head(&head, mode).is_err());
+            assert!(validate_redirect_mode_parts(&url, 302, &headers, mode).is_err());
         }
-        assert!(validate_redirect_mode_response_head(&head, RequestRedirectMode::Manual).is_ok());
-        head.status = 200;
-        assert!(validate_redirect_mode_response_head(&head, RequestRedirectMode::Follow).is_ok());
+        assert!(
+            validate_redirect_mode_parts(&url, 302, &headers, RequestRedirectMode::Manual).is_ok()
+        );
+        assert!(
+            validate_redirect_mode_parts(&url, 200, &headers, RequestRedirectMode::Follow).is_ok()
+        );
     }
 
     #[test]

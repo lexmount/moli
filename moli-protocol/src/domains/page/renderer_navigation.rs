@@ -36,13 +36,13 @@ pub(crate) struct PreparedRendererNavigation {
 }
 
 enum RendererNavigationWork {
-    BeforeUnload(Box<super::navigation::PendingBeforeUnloadNavigationCommand>),
     InitialDocument {
         waiter: crate::conn::InitialDocumentPageBuildWaiter,
         admission: crate::conn::CommandWaitLifetime,
         action: Box<crate::conn::TopLevelNavigationOwnerAction>,
     },
     Complete(CommandOutputPlan),
+    BeforeUnload(Box<super::navigation::PendingBeforeUnloadNavigationCommand>),
     Load(Box<BackgroundNavigationLoadJob>),
     Request(Box<PreparedInterceptedNavigationRequest>),
     SameDocument {
@@ -216,6 +216,15 @@ impl PreparedRendererNavigation {
             crate::conn::TopLevelNavigationRequest::Location(navigation) => {
                 let navigation_history = url::Url::parse(navigation.url())
                     .ok()
+                    .filter(|_| {
+                        navigation.navigation_history().is_some()
+                            || navigation.browser_navigation_kind()
+                                != moli_fetch::BrowserNavigationRequestKind::Navigate
+                            || !navigation.request_method().eq_ignore_ascii_case("GET")
+                            || !super::navigation::session_owner_navigation_is_same_document_fragment(
+                                conn, &owner, navigation.url(),
+                            )
+                    })
                     .and_then(|url| {
                         conn.renderer_navigation_request_for_owner(
                             &owner,

@@ -1,7 +1,7 @@
 //! Buffered XHR loading has one native result and one network terminal fact.
 //! Protocol output and Page/Worker diagnostics project that same fact.
 
-use moli_fetch::{FetchCancelHandle, Request, Response};
+use moli_fetch::{FetchCancelHandle, Request, Response, ResponseHead};
 
 use crate::{
     network::loads::ResourceLoadLease,
@@ -12,6 +12,9 @@ use crate::{
 /// the original raw-byte capture. Keeping both here avoids copying the whole
 /// body back out of the Response or creating another disk-pool capture.
 pub(super) struct BufferedXhrResponse {
+    pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(super) body_is_null: Option<bool>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) response: Response,
     pub(super) body: SubresourceResponseBody,
 }
@@ -19,13 +22,31 @@ pub(super) struct BufferedXhrResponse {
 impl BufferedXhrResponse {
     fn from_response(response: Response) -> Self {
         let body = SubresourceResponseBody::from_fetch_response(&response);
-        Self { response, body }
+        Self {
+            response,
+            body,
+            response_filter: None,
+            body_is_null: None,
+            skip_fetch_security_validation: false,
+        }
     }
+}
+
+/// Headers selected after redirect and security checks survive a body-read
+/// failure. Resource Timing still reports that real response and native clock.
+pub(super) struct SelectedXhrResponseHead {
+    pub(super) head: ResponseHead,
+    pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
 }
 
 #[derive(Debug)]
 pub(crate) struct XhrLoadResult {
+    pub(crate) response_head: Option<ResponseHead>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(crate) body_is_null: Option<bool>,
+    pub(crate) skip_fetch_security_validation: bool,
+
     pub(crate) result: Result<Response, String>,
     pub(crate) info: PendingSubresourceFetchInfo,
     pub(crate) network_record: SubresourceNetworkRecord,
@@ -39,6 +60,17 @@ impl XhrLoadResult {
         result: Result<BufferedXhrResponse, String>,
         network_headers: Option<Vec<(String, String)>>,
     ) -> Self {
+        let response_filter = result
+            .as_ref()
+            .ok()
+            .and_then(|response| response.response_filter.clone());
+        let body_is_null = result
+            .as_ref()
+            .ok()
+            .and_then(|response| response.body_is_null);
+        let skip_fetch_security_validation = result
+            .as_ref()
+            .is_ok_and(|response| response.skip_fetch_security_validation);
         let record = match &result {
             Ok(delivered) => {
                 let response = &delivered.response;
@@ -95,13 +127,24 @@ impl XhrLoadResult {
             None => record,
         };
         Self {
+            response_head: result
+                .as_ref()
+                .ok()
+                .map(|delivered| delivered.response.head()),
             info,
             result: result.map(|delivered| delivered.response),
+            response_filter,
+            body_is_null,
+            skip_fetch_security_validation,
             network_record,
             csp_violations: Vec::new(),
-            response_filter: None,
         }
     }
+}
+
+pub(crate) struct BufferedXhrContext {
+    pub(crate) control: Option<super::ControlledXhrContext>,
+    pub(crate) service_worker: Option<super::XhrServiceWorkerContext>,
 }
 
 /// Starts a buffered consumer on the resource executor. Window and Worker keep
@@ -112,17 +155,50 @@ pub(crate) fn start_buffered_xhr(
     load: ResourceLoadLease,
     cancel: FetchCancelHandle,
     preflight_headers: Vec<(String, String)>,
-    control: Option<super::ControlledXhrContext>,
+    context: BufferedXhrContext,
     on_completed: impl FnOnce(&XhrLoadResult) + Send + 'static,
 ) -> crossbeam_channel::Receiver<Result<XhrLoadResult, String>> {
+    let BufferedXhrContext {
+        control,
+        service_worker,
+    } = context;
     let (tx, rx) = crossbeam_channel::bounded(1);
     load.task_runner().spawn(async move {
         let completed = match control {
             Some(control) => {
                 control
                     .load(request, info, load, cancel, preflight_headers)
+                    .with_service_worker(service_worker)
                     .run()
                     .await
+            }
+            None if service_worker.is_some() => {
+                // An ordinary request has no protocol pause/output capability.
+                info.network_request_handle = None;
+                let worker = service_worker.expect("matched the controlled ordinary route");
+                super::ControlledResourceLoad {
+                    response_policy: super::ResourceResponsePolicy::Xhr,
+                    redirect_owner: None,
+                    blob_url_entry: super::super::CapturedBlobUrl::capture(&request.url),
+                    worker_service_worker: None,
+                    response_filter: None,
+                    selected_response_head: None,
+                    race_response: None,
+                    csp_source_location: Default::default(),
+                    csp_violations: Vec::new(),
+                    request,
+                    info,
+                    load,
+                    cancel,
+                    preflight_headers,
+                    connect_policy: Some(worker.connect_policy.clone()),
+                    interception: None,
+                    service_worker: Some(worker),
+                    request_initiator_type: crate::types::SubresourceRequestInitiatorType::Script,
+                    initial_decision: None,
+                }
+                .run()
+                .await
             }
             None => {
                 // Ordinary synchronous loads have no native protocol request.
@@ -208,9 +284,10 @@ mod tests {
                 request_cookie_report: None,
             };
             let loaded = super::super::LoadedResponse {
+                response_filter: None,
+                body_is_null: None,
+                source: moli_fetch::RedirectSource::Network,
                 head: moli_fetch::ResponseHead {
-                    request_include_credentials: false,
-
                     final_url: url,
                     status: 200,
                     status_text: Some("OK".into()),
@@ -222,6 +299,7 @@ mod tests {
                     from_cache: false,
                     cache_state: Default::default(),
                     negotiated_http_version: None,
+                    request_include_credentials: false,
                     preload_state: Default::default(),
                 },
                 body: ResourceInterceptionBody::from_complete(captured),

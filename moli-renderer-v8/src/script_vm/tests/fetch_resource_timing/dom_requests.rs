@@ -183,12 +183,12 @@ async fn dom_resource_initiators_are_hidden_for_opaque_tao_responses() {
         );
         assert_eq!(
             page.eval(&format!(
-                "performance.getEntriesByName({})[0].encodedBodySize > 0",
+                "JSON.stringify((() => {{ const entry = performance.getEntriesByName({})[0]; return [entry.encodedBodySize, entry.decodedBodySize, entry.transferSize === 300]; }})())",
                 serde_json::to_string(&url).unwrap()
             ))
             .unwrap(),
-            "true",
-            "{tag}: the response must complete with TAO-visible bytes"
+            "[0,0,true]",
+            "{tag}: opaque body sizes stay hidden and TAO exposes only the fixed transfer overhead"
         );
     }
 }

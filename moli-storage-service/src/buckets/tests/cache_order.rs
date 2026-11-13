@@ -7,6 +7,8 @@ const URL: &str = "https://cache-order.test/item";
 fn response(body: &[u8]) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
         head: moli_fetch_types::FetchResponseHead {
+            body_is_null: false,
+
             metadata: moli_fetch_types::FetchResponseMetadata {
                 url_list: vec![URL.parse().unwrap()],
                 ..Default::default()

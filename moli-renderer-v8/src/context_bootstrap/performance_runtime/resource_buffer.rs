@@ -305,20 +305,12 @@ fn dispatch_resource_timing_buffer_full_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_constructor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(event) = event_constructor.new_instance(
+    let Some(event) = crate::context_bootstrap::construct_original_event(
         scope,
-        &[v8str(scope, RESOURCE_TIMING_BUFFER_FULL_EVENT).into()],
+        RESOURCE_TIMING_BUFFER_FULL_EVENT,
     ) else {
         return;
     };
-    mark_event_trusted(scope, event);
     let _ = dispatch_simple_event_target_event(
         scope,
         performance,

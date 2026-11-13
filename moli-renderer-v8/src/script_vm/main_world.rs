@@ -115,7 +115,8 @@ pub(super) fn initialize(
         }
         if let Some(seed) = pending.history_entry.as_ref() {
             crate::context_bootstrap::install_navigation_bootstrap_entry(scope, seed);
-        } else if let Some(position) = pending.history_position {
+        }
+        if let Some(position) = pending.history_position {
             crate::context_bootstrap::install_session_history_position(scope, position);
         }
         // Frame discovery also runs natively while the main world is absent.

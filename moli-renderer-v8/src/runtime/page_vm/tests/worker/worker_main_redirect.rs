@@ -68,18 +68,24 @@ async fn check_worker_main_redirect(mode: &'static str) {
             });
         });
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-        let mut hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
-        hooks.resource_task_runner = Some(loader.resource_task_runner());
         let document_url = Url::parse(&format!("{origin}/app/page.html")).unwrap();
-        let mut page = test_page_vm_with_loader_document_url_and_hooks(&loader, Vec::new(), document_url, hooks);
+        let (mut page, _resource_completion_source, page_wake) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         page.retain_standalone_request_client_owner_for_test(loader);
+        let (service_sender, service_wake) =
+            crate::service_worker_runtime::service_worker_owner_wake_channel();
+        page.runtime_hooks.browser_context_runtime
+            .add_service_worker_owner_wake_sender(service_sender);
         let local = page.local_executor.clone();
         local.run(async move {
             page.vm_mut().eval(&format!("const MODE = {};\n{CLIENT}", serde_json::to_string(mode).unwrap()))?;
-            drive_service_worker_page_vm_until_done_with_explicit_producer_admission(&mut page,
+            super::super::drive_page_work_until_done_with_producer_wake(&mut page,
 "String(redirectResult !== null || redirectError !== null)",
 "worker main redirects must reselect the controller with the same reserved client",
-|page| { page.runtime_hooks.browser_context_runtime.drain_shared_worker_service_lane(); }).await?;
+|page| {
+    page.runtime_hooks.browser_context_runtime.drain_service_worker_service_lane();
+    page.runtime_hooks.browser_context_runtime.drain_shared_worker_service_lane();
+}, Some(service_wake), Some(page_wake)).await?;
             assert_eq!(page.vm_mut().eval("String(redirectError)")?, "null");
             let result: serde_json::Value = serde_json::from_str(&page.vm_mut().eval("JSON.stringify(redirectResult)")?)?;
             assert_eq!(result["windowControlled"], false);

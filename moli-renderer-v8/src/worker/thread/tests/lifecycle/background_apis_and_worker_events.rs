@@ -703,6 +703,7 @@ self.addEventListener("notificationclick", event => {
             | WorkerToParentMessage::ServiceWorkerWorkerMessage(_)
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)
@@ -860,6 +861,7 @@ self.addEventListener("notificationclose", event => {
             | WorkerToParentMessage::ServiceWorkerWorkerMessage(_)
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)

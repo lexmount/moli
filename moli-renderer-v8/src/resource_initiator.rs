@@ -58,19 +58,28 @@ pub(crate) fn classic_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: Option<&Url>,
 ) -> v8::Local<'s, v8::Value> {
-    let origin = crate::util::context_host_ptr_from_global_bridge(scope)
-        .and_then(|host| {
-            let host = unsafe { &*host };
-            let identity = host
-                .window_execution_context_identity_for_access_check(scope.get_current_context())?;
-            let owner = identity.dispatch_scope();
-            let loader = host.document_resource_loader_for_dispatch_scope(owner)?;
-            Some(
-                host.subresource_request_environment(&loader, owner)?
-                    .request_origin,
-            )
+    let origin = crate::native_bridge::WindowEnvironmentSettings::for_current_realm(scope)
+        .map(|settings| settings.origin().clone())
+        .or_else(|| {
+            crate::native_bridge::WindowSecurityOrigin::for_context(scope.get_current_context())
+                .map(|origin| WebOrigin::from_serialized(&origin.serialized_origin()))
         })
-        .or_else(|| crate::worker::worker_global_origin(scope));
+        .or_else(|| {
+            crate::util::context_host_ptr_from_global_bridge(scope)
+                .and_then(|host| {
+                    let host = unsafe { &*host };
+                    let identity = host.window_execution_context_identity_for_access_check(
+                        scope.get_current_context(),
+                    )?;
+                    let owner = identity.dispatch_scope();
+                    let loader = host.document_resource_loader_for_dispatch_scope(owner)?;
+                    Some(
+                        host.subresource_request_environment(&loader, owner)?
+                            .request_origin,
+                    )
+                })
+                .or_else(|| crate::worker::worker_global_origin(scope))
+        });
     // A cross-origin classic without retained fetch metadata is explicitly
     // unknown. Its source must not become visible through a same-origin XHR.
     let source = source.filter(|source| {

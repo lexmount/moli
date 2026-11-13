@@ -1,136 +1,206 @@
-use super::*;
-use crate::service_worker_runtime::{
-    ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
-    ServiceWorkerFetchRequest, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
-    ServiceWorkerRuntimeService,
+//! Service Worker selection beneath native XHR request/response decisions.
+//! The retained native Request owns redirect, cookie, upload and policy state.
+
+use std::sync::Arc;
+
+use moli_fetch::{FetchCancelHandle, Request, ResponseHead};
+
+use super::LoadedResponse;
+use crate::{
+    document_runtime::DocumentConnectPolicySnapshot,
+    network::loads::ResourceLoadLease,
+    service_worker_runtime::{
+        ServiceWorkerClientId, ServiceWorkerDirectFetchCompletion, ServiceWorkerDirectFetchResult,
+        ServiceWorkerDirectFetchStreamEvent, ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest,
+        ServiceWorkerRequestDestination, ServiceWorkerRuntimeService,
+        service_worker_fetch_request_metadata,
+    },
+    types::{
+        AsyncSubresourceNetworkContext, PendingSubresourceFetchInfo, SubresourcePolicyContext,
+    },
 };
 
-#[derive(Clone)]
-pub(crate) struct WorkerServiceWorkerFetch {
-    pub(crate) runtime: ServiceWorkerRuntimeService,
-    pub(crate) client_id: ServiceWorkerClientId,
-    pub(crate) metadata: ServiceWorkerFetchRequestMetadata,
-    policy_context: crate::types::SubresourcePolicyContext,
-    body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>,
-    request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>,
+pub(crate) struct XhrServiceWorkerContext {
+    pub(super) runtime: ServiceWorkerRuntimeService,
+    client_id: ServiceWorkerClientId,
+    policy_context: SubresourcePolicyContext,
+    pub(super) connect_policy: DocumentConnectPolicySnapshot,
+    check_response:
+        Arc<dyn Fn(&ResponseHead, moli_fetch::RedirectSource) -> Result<(), String> + Send + Sync>,
 }
-impl ControlledResourceLoad {
-    pub(crate) fn with_service_worker(
-        mut self,
-        runtime: Option<ServiceWorkerRuntimeService>,
-        client_id: Option<ServiceWorkerClientId>,
-        metadata: ServiceWorkerFetchRequestMetadata,
+
+impl XhrServiceWorkerContext {
+    pub(crate) fn new(
+        runtime: ServiceWorkerRuntimeService,
+        client_id: ServiceWorkerClientId,
+        policy_context: SubresourcePolicyContext,
+        connect_policy: DocumentConnectPolicySnapshot,
+        check_response: impl Fn(&ResponseHead, moli_fetch::RedirectSource) -> Result<(), String>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
-        if let (Some(runtime), Some(client_id)) = (runtime, client_id) {
-            self.service_worker = Some(WorkerServiceWorkerFetch {
-                runtime,
-                client_id,
-                metadata,
-                policy_context: match self.response_policy { ResourceResponsePolicy::Fetch(policy) => policy, ResourceResponsePolicy::Xhr => Default::default() },
-                body_stream: None,
-                request_body_owner: None,
-            });
+        Self {
+            runtime,
+            client_id,
+            policy_context,
+            connect_policy,
+            check_response: Arc::new(check_response),
         }
-        self
     }
-    pub(crate) fn with_service_worker_policy(mut self, policy: crate::types::SubresourcePolicyContext) -> Self {
-        if let Some(source) = &mut self.service_worker { source.policy_context = policy; }
-        self
+
+    pub(super) fn check_response(
+        &self,
+        head: &ResponseHead,
+        source: moli_fetch::RedirectSource,
+    ) -> Result<(), String> {
+        (self.check_response)(head, source)
     }
-    pub(crate) fn with_service_worker_request_body(mut self, body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>, request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>) -> Self {
-        if let Some(source) = &mut self.service_worker {
-            source.body_stream = body_stream;
-            source.request_body_owner = request_body_owner;
-        }
-        self
-    }
-    pub(super) async fn fetch_service_worker_hop(
-        &mut self,
-        source: WorkerServiceWorkerFetch,
+
+    pub(super) async fn load_hop(
+        &self,
+        load: &ResourceLoadLease,
+        request: &mut Request,
+        info: &PendingSubresourceFetchInfo,
+        cancel: &FetchCancelHandle,
+        preflight_headers: &mut Vec<(String, String)>,
     ) -> Result<Option<LoadedResponse>, String> {
-        if self.load.request_client().bypass_service_worker()
-            || source
+        if load.request_client().bypass_service_worker()
+            || self
                 .runtime
-                .matching_controller_for_client_fetch(source.client_id, &self.request.url)
+                .matching_controller_for_client_fetch(self.client_id, &request.url)
                 .is_none()
         {
             return Ok(None);
         }
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let policy_context = source.policy_context;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
         let dispatch = ServiceWorkerFetchDispatch {
-            redirect_check: None,
-            request_body_owner: source.request_body_owner,
-            internal_id: self.info.internal_id,
+            request_body_owner: None,
+            redirect_check: None, // The complete retained native Request already owns its check.
+            internal_id: info.internal_id,
             request: ServiceWorkerFetchRequest {
-                body_stream: self.service_worker.as_mut().and_then(|source| source.body_stream.take()),
-                client_id: Some(source.client_id),
+                body_stream: None,
+                client_id: Some(self.client_id),
                 resulting_client_id: None,
-                url: self.request.url.clone(),
-                method: self.request.method.clone(),
-                headers: self.request.request_headers.to_byte_strings(),
-                body: self.request.body.clone(),
-                destination: ServiceWorkerRequestDestination::for_subresource_resource_type(
-                    self.info.resource_type,
-                )
-                .unwrap_or(ServiceWorkerRequestDestination::Empty),
-                request_mode: self.request.request_mode,
-                credentials_mode: self.request.credentials_mode,
-                redirect_mode: self.request.redirect_mode(),
-                priority: self.request.priority_hints.fetch_priority,
+                url: request.url.clone(),
+                method: request.method.clone(),
+                headers: request.request_headers.to_byte_strings(),
+                body: request.body.clone(),
+                destination: ServiceWorkerRequestDestination::Empty,
+                request_mode: request.request_mode,
+                credentials_mode: request.credentials_mode,
+                redirect_mode: request.redirect_mode(),
+                priority: request.priority_hints.fetch_priority,
                 is_reload: false,
-                metadata: source.metadata,
+                metadata: service_worker_fetch_request_metadata(request),
             },
-            cors_preflight_request_headers: self.preflight_headers.clone(),
-            request_cookie_report: None,
-            network_context: crate::types::AsyncSubresourceNetworkContext {
-                frame_id: None,
-                document_url: self.info.document_url.clone(),
-                request_origin: self
-                    .request
-                    .browser_origin()
-                    .map_err(|e| e.to_string())?
-                    .clone(),
-                resource_type: self.info.resource_type,
-                policy_context,
+            cors_preflight_request_headers: preflight_headers.clone(),
+            request_cookie_report: info.request_cookie_report.clone(),
+            network_context: AsyncSubresourceNetworkContext {
+                frame_id: info.frame_id.clone(),
+                request_origin: request
+                    .request_origin()
+                    .cloned()
+                    .expect("XHR retains its request origin"),
+                document_url: info.document_url.clone(),
+                resource_type: info.resource_type,
+                policy_context: self.policy_context,
             },
             completion_tx:
                 crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only(),
-            request_client: self.load.request_client(),
-            resource_task_runner: self.load.task_runner(),
-            cancel_handle: self.cancel.clone(),
-            direct_completion_tx: Some(crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::streaming(tx)),
+            request_client: load.request_client(),
+            resource_task_runner: load.task_runner(),
+            cancel_handle: cancel.clone(),
+            direct_completion_tx: Some(
+                ServiceWorkerDirectFetchCompletion::streaming_with_caller_redirects(sender),
+            ),
         };
-        if !source
+        if !self
             .runtime
-            .dispatch_controlled_fetch_hop(dispatch, self.request.clone())
+            .dispatch_controlled_fetch_hop(dispatch, request.clone())
         {
-            return Err("service worker fetch dispatch failed".into());
+            return Ok(None);
         }
-        let result = tokio::select! {
+        let outcome = tokio::select! {
             biased;
-            () = self.cancel.cancelled() => { source.runtime.abort_controlled_fetch(self.info.internal_id); return Err("net::ERR_ABORTED".into()); }
-            result = rx => result.map_err(|_|"service worker response channel closed".to_owned())?,
+            () = cancel.cancelled() => return Err("net::ERR_ABORTED".to_owned()),
+            result = receiver => result.map_err(|_| "service worker XHR completion channel closed".to_owned())?,
         };
-        match result {
+        match outcome {
             ServiceWorkerDirectFetchResult::Fallback => Ok(None),
-            ServiceWorkerDirectFetchResult::NetworkFallback { request, preflight_headers } => {
-                self.request = *request;
-                self.preflight_headers = preflight_headers;
+            ServiceWorkerDirectFetchResult::NetworkFallback {
+                request: next,
+                preflight_headers: headers,
+            } => {
+                let upload_observer = request.upload_observer().cloned();
+                *request = *next;
+                if request.body.is_some()
+                    && let Some(observer) = upload_observer
+                {
+                    *request = request.clone().with_upload_observer(observer);
+                }
+                *preflight_headers = headers;
                 Ok(None)
             }
-            ServiceWorkerDirectFetchResult::FallbackStream(body) => {
-                self.request = self.request.clone().with_upload_body(body);
-                Ok(None)
+            ServiceWorkerDirectFetchResult::Response(response) => {
+                let source = if response.from_network_fallback {
+                    moli_fetch::RedirectSource::Network
+                } else {
+                    moli_fetch::RedirectSource::ServiceWorker
+                };
+                let filter = response.response_filter;
+                let body_is_null = response.service_worker_body_is_null;
+                let mut loaded = LoadedResponse::from_response((*response.response).into());
+                loaded.source = source;
+                loaded.response_filter = filter;
+                loaded.body_is_null = body_is_null;
+                Ok(Some(loaded))
             }
             ServiceWorkerDirectFetchResult::Stream(stream) => {
-                self.response_filter = stream.response_filter;
-                Ok(Some(LoadedResponse { head: stream.head, body: crate::network::ResourceInterceptionBody::from_service_worker_stream(stream.events, self.load.request_client().disk_pool()) }))
+                let source = if stream
+                    .response_filter
+                    .as_ref()
+                    .and_then(|filter| filter.service_worker_metadata())
+                    .is_some()
+                {
+                    moli_fetch::RedirectSource::ServiceWorker
+                } else {
+                    moli_fetch::RedirectSource::Network
+                };
+                let head = stream.head;
+                let filter = stream.response_filter;
+                let chunks =
+                    futures_util::stream::unfold(Some(stream.events), |state| async move {
+                        let mut events = state?;
+                        match events.recv().await {
+                            Some(ServiceWorkerDirectFetchStreamEvent::Chunk(bytes)) => {
+                                Some((Ok(bytes), Some(events)))
+                            }
+                            Some(ServiceWorkerDirectFetchStreamEvent::Finished(Ok(()))) => None,
+                            Some(ServiceWorkerDirectFetchStreamEvent::Finished(Err(error))) => {
+                                Some((Err(error), None))
+                            }
+                            None => Some((
+                                Err("service worker XHR response stream closed".to_owned()),
+                                None,
+                            )),
+                        }
+                    });
+                Ok(Some(LoadedResponse {
+                    head,
+                    body: crate::network::ResourceInterceptionBody::from_stream(
+                        chunks,
+                        cancel.clone(),
+                        load.request_client().disk_pool(),
+                    ),
+                    response_filter: filter,
+                    body_is_null: Some(false),
+                    source,
+                }))
             }
             ServiceWorkerDirectFetchResult::Failure(error) => Err(error),
-            ServiceWorkerDirectFetchResult::Response(response) => {
-                self.response_filter = response.response_filter;
-                Ok(Some(LoadedResponse::from_response((*response.response).into())))
+            ServiceWorkerDirectFetchResult::FallbackStream(_) => {
+                Err("XMLHttpRequest cannot upload an author stream".to_owned())
             }
         }
     }

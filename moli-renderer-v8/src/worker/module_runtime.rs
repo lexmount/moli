@@ -2210,15 +2210,21 @@ pub(super) fn worker_bootstrap_error(
     )
 }
 
-fn worker_bootstrap_value_error(
-    scope: &mut v8::PinScope<'_, '_>,
+fn worker_bootstrap_value_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     script_url: &str,
-    value: v8::Local<'_, v8::Value>,
+    value: v8::Local<'s, v8::Value>,
     event_kind: WorkerParentErrorEventKind,
 ) -> WorkerBootstrapError {
-    let summary = value
-        .to_string(scope)
-        .map(|message| message.to_rust_string_lossy(scope))
+    let summary = v8::Local::<v8::Object>::try_from(value)
+        .ok()
+        .and_then(|object| crate::context_bootstrap::dom_exception_clone_fields(scope, object))
+        .map(|(message, name)| format!("{name}: {message}"))
+        .or_else(|| {
+            value
+                .to_detail_string(scope)
+                .map(|message| message.to_rust_string_lossy(scope))
+        })
         .unwrap_or_else(|| "module worker evaluation failed".to_owned());
     WorkerBootstrapError::new(
         V8ExceptionReport {

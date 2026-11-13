@@ -48,6 +48,7 @@ impl Eq for ServiceWorkerIdleTimeoutToken {}
 
 #[derive(Debug)]
 pub(super) struct ServiceWorkerVersion {
+    pub(super) router_rules: Vec<super::static_router::RouterRule>,
     pub(super) id: ServiceWorkerVersionId,
     pub(super) registration_id: ServiceWorkerRegistrationId,
     pub(super) script_url: Url,

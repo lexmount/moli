@@ -1,17 +1,32 @@
-use super::body_window::body_or_frameset_window_event_handler_properties;
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
-pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
+pub(crate) fn initialize_parser_inserted_event_handlers(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
-    initialize_parser_event_handlers(
-        scope,
-        runtime_ptr,
-        handle,
-        body_or_frameset_window_event_handler_properties(),
-    );
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(element) = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(crate::dom::native::Node::as_element)
+    else {
+        return;
+    };
+    let names = element
+        .attributes()
+        .iter()
+        .filter(|attribute| {
+            attribute.namespace().is_empty()
+                && super::element_event_handler_content_attribute_applies(
+                    runtime.dom_host(),
+                    handle,
+                    attribute.local_name(),
+                )
+        })
+        .map(|attribute| attribute.local_name().to_owned())
+        .collect::<Vec<_>>();
+    initialize_parser_event_handlers(scope, runtime_ptr, handle, names);
 }
 
 /// Attributes accepted by a parser merge, captured before the DOM changes.

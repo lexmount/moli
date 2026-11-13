@@ -5,9 +5,11 @@ mod fetch;
 mod result;
 mod service_worker;
 mod stream;
+mod worker_service_worker;
 pub(crate) use context::{ControlledXhrContext, XhrInterceptionRoute};
 use result::BufferedXhrResponse;
-pub(crate) use result::{XhrLoadResult, start_buffered_xhr};
+pub(crate) use result::{BufferedXhrContext, XhrLoadResult, start_buffered_xhr};
+pub(crate) use service_worker::XhrServiceWorkerContext;
 pub(crate) use stream::{ControlledResourceStream, ControlledXhrCompletion};
 
 #[cfg(any(test, feature = "devtools"))]
@@ -41,13 +43,17 @@ pub(crate) struct ControlledResourceLoad {
     response_policy: ResourceResponsePolicy,
     redirect_owner: Option<super::RedirectOwner>,
     blob_url_entry: Option<super::CapturedBlobUrl>,
-    service_worker: Option<service_worker::WorkerServiceWorkerFetch>,
+    worker_service_worker: Option<worker_service_worker::WorkerServiceWorkerFetch>,
+    service_worker: Option<XhrServiceWorkerContext>,
+    race_response:
+        Option<crate::service_worker_runtime::static_router::race::RouterRaceResponseReader>,
     response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    selected_response_head: Option<result::SelectedXhrResponseHead>,
     request: Request,
     info: PendingSubresourceFetchInfo,
     load: ResourceLoadLease,
     cancel: FetchCancelHandle,
-    interception: crate::network::interception_output::ResourceInterceptionContext,
+    interception: Option<crate::network::interception_output::ResourceInterceptionContext>,
     connect_policy: Option<DocumentConnectPolicySnapshot>,
     csp_source_location: crate::content_security_policy::ContentSecurityPolicySourceLocation,
     csp_violations: Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
@@ -65,12 +71,16 @@ impl LoadedResponse {
         stream: Option<&mut ControlledResourceStream>,
         network_request_headers: Option<Vec<(String, String)>>,
     ) -> Result<Option<BufferedXhrResponse>, String> {
-        if let Some(stream) = stream {
+        if let Some(stream) = stream
+            && self.body_is_null != Some(true)
+        {
             stream.start(
                 info,
                 self.head.clone(),
                 network_request_headers,
                 self.body.clone(),
+                self.response_filter.clone(),
+                self.source == moli_fetch::RedirectSource::ServiceWorker,
             )?;
             let mut offset = 0;
             loop {
@@ -91,15 +101,63 @@ impl LoadedResponse {
             return Ok(None);
         }
         let (response, body) = self.materialize().await?;
-        Ok(Some(BufferedXhrResponse { response, body }))
+        Ok(Some(BufferedXhrResponse {
+            response,
+            body,
+            response_filter: self.response_filter.clone(),
+            body_is_null: self.body_is_null,
+            skip_fetch_security_validation: self.source
+                == moli_fetch::RedirectSource::ServiceWorker,
+        }))
     }
 }
 
 impl ControlledResourceLoad {
+    pub(crate) fn with_service_worker(mut self, worker: Option<XhrServiceWorkerContext>) -> Self {
+        if self.connect_policy.is_none() {
+            self.connect_policy = worker.as_ref().map(|worker| worker.connect_policy.clone());
+        }
+        self.service_worker = worker;
+        self
+    }
+    pub(crate) fn with_race_response(
+        mut self,
+        response: Option<
+            crate::service_worker_runtime::static_router::race::RouterRaceResponseReader,
+        >,
+    ) -> Self {
+        self.race_response = response;
+        self
+    }
+    fn native_interception(
+        &self,
+    ) -> &crate::network::interception_output::ResourceInterceptionContext {
+        self.interception
+            .as_ref()
+            .expect("native pauses retain their interception owner")
+    }
+    fn is_worker(&self) -> bool {
+        self.interception
+            .as_ref()
+            .is_some_and(|context| context.is_worker())
+    }
+    fn worker_control_closed(&self) -> bool {
+        self.interception
+            .as_ref()
+            .is_some_and(|context| context.worker_control_closed())
+    }
+    async fn worker_control_shutdown(&self) {
+        if let Some(context) = &self.interception {
+            context.worker_control_shutdown().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    }
     fn effective_credentials_mode(&self) -> moli_fetch::RequestCredentialsMode {
         match self.response_policy {
             ResourceResponsePolicy::Xhr => self.request.credentials_mode,
-            ResourceResponsePolicy::Fetch(policy) => policy.network_credentials_mode(self.request.request_mode, self.request.credentials_mode),
+            ResourceResponsePolicy::Fetch(policy) => policy
+                .network_credentials_mode(self.request.request_mode, self.request.credentials_mode),
         }
     }
     pub(crate) fn with_redirect_owner(mut self, owner: Option<super::RedirectOwner>) -> Self {
@@ -131,13 +189,16 @@ impl ControlledResourceLoad {
             response_policy: ResourceResponsePolicy::Xhr,
             redirect_owner: None,
             blob_url_entry: super::CapturedBlobUrl::capture(&request.url),
+            worker_service_worker: None,
             service_worker: None,
+            race_response: None,
             response_filter: None,
+            selected_response_head: None,
             request,
             info,
             load,
             cancel,
-            interception,
+            interception: Some(interception),
             connect_policy: None,
             csp_source_location: Default::default(),
             csp_violations: Vec::new(),
@@ -153,7 +214,8 @@ impl ControlledResourceLoad {
     pub(crate) fn prepare_initial_pause(&mut self) -> RendererOwnerAction {
         let (pause, decision) = self.pause(InterceptionPhase::Request);
         self.initial_decision = Some(decision);
-        self.interception.request_action(self.info.clone(), pause)
+        self.native_interception()
+            .request_action(self.info.clone(), pause)
     }
 
     pub(crate) async fn run(self) -> XhrLoadResult {
@@ -169,7 +231,19 @@ impl ControlledResourceLoad {
         mut self,
         mut stream: Option<ControlledResourceStream>,
     ) -> ControlledXhrCompletion {
-        let result = self.run_inner(stream.as_mut()).await;
+        let runtime = self
+            .service_worker
+            .as_ref()
+            .map(|worker| worker.runtime.clone());
+        let cancel = self.cancel.clone();
+        let result = match runtime {
+            Some(runtime) => {
+                runtime
+                    .await_synchronous_fetch(self.run_inner(stream.as_mut()), cancel)
+                    .await
+            }
+            None => self.run_inner(stream.as_mut()).await,
+        };
         let result = self.normalize_cancellation(result);
         self.load.finish();
         if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id()) {
@@ -188,16 +262,21 @@ impl ControlledResourceLoad {
             Err(error) => (Err(error), None),
         };
         let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
-        completed.response_filter = self.response_filter.clone();
+        if let Some(selected) = self.selected_response_head.take() {
+            completed.response_head = Some(selected.head);
+            completed.response_filter = selected.response_filter;
+            completed.skip_fetch_security_validation = selected.skip_fetch_security_validation;
+        }
         completed.csp_violations = std::mem::take(&mut self.csp_violations);
         completed.network_record = completed
             .network_record
             .with_request_initiator_type(self.request_initiator_type);
-        if completed.info.network_request_handle.is_some() {
-            // Keep each hop's transport metadata. Protocol delivery skips
-            // redirect announcements already published at the native boundary.
-            self.interception
-                .record_subresource_network(completed.network_record.clone());
+        if let Some(interception) = &self.interception
+            && completed.info.network_request_handle.is_some()
+        {
+            // The protocol skips redirect announcements already published at
+            // the native boundary while retaining each hop's metadata.
+            interception.record_subresource_network(completed.network_record.clone());
         }
         self.publish_completed();
         ControlledXhrCompletion::Buffered(Box::new(completed))
@@ -212,7 +291,10 @@ impl ControlledResourceLoad {
     }
 
     fn publish_completed(&self) {
-        let _ = self.interception.publish_continue(
+        if self.interception.is_none() {
+            return;
+        }
+        let _ = self.native_interception().publish_continue(
             PendingSubresourceContinueEvent::Completed {
                 internal_id: self.info.internal_id,
             },
@@ -244,7 +326,7 @@ impl ControlledResourceLoad {
             .flatten();
         (
             pause
-                .with_worker_network(self.interception.is_worker())
+                .with_worker_network(self.is_worker())
                 .with_request_redirect(redirect)
                 .with_request_initiator_type(self.request_initiator_type),
             rx,
@@ -259,7 +341,7 @@ impl ControlledResourceLoad {
         tokio::select! {
             biased;
             () = self.cancel.cancelled() => Err("net::ERR_ABORTED".into()),
-            () = self.interception.worker_control_shutdown() => if self.load.disposition() != crate::network::loads::ResourceLoadDisposition::Keepalive {
+            () = self.worker_control_shutdown() => if !self.load.disposition().is_keepalive() {
                 Err("net::ERR_ABORTED".into())
             } else { Ok(match phase {
                 InterceptionPhase::Request => ResourceInterceptionDecision::ContinueRequest {url:None,method:None,body:None,headers:None,intercept_response:false,handle_auth_requests:false},
@@ -291,18 +373,23 @@ impl ControlledResourceLoad {
             || overrides.headers.is_some();
         let headers_changed = overrides.headers.is_some();
         overrides.apply(&mut self.request);
-        if !self.blob_url_entry.as_ref().is_some_and(|entry| entry.matches(&self.request.url)) {
+        if !self
+            .blob_url_entry
+            .as_ref()
+            .is_some_and(|entry| entry.matches(&self.request.url))
+        {
             self.blob_url_entry = super::CapturedBlobUrl::capture(&self.request.url);
         }
         if headers_changed {
             self.preflight_headers = self.request.request_headers.to_byte_strings();
             if self.info.resource_type == crate::types::SubresourceResourceType::EventSource {
-                self.preflight_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("Last-Event-ID"));
+                self.preflight_headers
+                    .retain(|(name, _)| !name.eq_ignore_ascii_case("Last-Event-ID"));
             }
         }
         self.sync_info();
-        if request_changed && self.interception.is_worker() {
-            self.interception.publish_network(
+        if request_changed && self.is_worker() {
+            self.native_interception().publish_network(
                 crate::types::ScriptNetworkOutputItem::SubresourceRequestUpdated(Box::new(
                     self.worker_request_snapshot(None),
                 )),
@@ -311,7 +398,7 @@ impl ControlledResourceLoad {
     }
 
     fn publish_worker_request(&self, redirect: Option<crate::types::NavigationRedirect>) {
-        self.interception.publish_network(
+        self.native_interception().publish_network(
             crate::types::ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
                 self.worker_request_snapshot(redirect),
             )),
@@ -350,45 +437,35 @@ impl ControlledResourceLoad {
         } else {
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
         };
-        if self.interception.is_worker()
-            && self.request.redirect_count() != 0
-            && let Some(mut violation) = self.connect_policy.as_ref().and_then(|policy| {
-                policy.report_only_violation(
-                    &self.info.document_url,
-                    &self.request.url,
-                    redirect_status,
+        if let Some(policy) = &self.connect_policy {
+            let (reports, enforced) = policy
+                .check_url(&self.info.document_url, &self.request.url, redirect_status)
+                .into_violations();
+            let failure = enforced.first().map(|violation| {
+                crate::document_runtime::document_content_security_policy_error_message(
+                    violation,
+                    "XMLHttpRequest",
                 )
-            })
-        {
-            violation.blocked_uri = self.request.redirect_chain()[0].from_url.to_string();
-            self.csp_source_location.apply_to(&mut violation);
-            self.csp_violations.push(violation);
-        }
-        if let Some(policy) = &self.connect_policy
-            && let Some(mut violation) = policy.enforce_violation(
-                &self.info.document_url,
-                &self.request.url,
-                redirect_status,
-            )
-        {
-            if self.request.redirect_count() != 0 {
-                violation.blocked_uri = self
-                    .request
-                    .redirect_chain()
-                    .first()
-                    .expect("redirect chain is nonempty")
-                    .from_url
-                    .to_string();
+            });
+            if self.is_worker() {
+                // Initial report-only checks run at JS admission. Each native
+                // redirect must report every policy, preserving the original URL.
+                for mut violation in reports
+                    .into_iter()
+                    .filter(|_| self.request.redirect_count() != 0)
+                    .chain(enforced)
+                {
+                    if let Some(redirect) = self.request.redirect_chain().first() {
+                        violation.blocked_uri =
+                            crate::content_security_policy::csp_url_for_report(&redirect.from_url);
+                    }
+                    self.csp_source_location.apply_to(&mut violation);
+                    self.csp_violations.push(violation);
+                }
             }
-            let message = crate::document_runtime::document_content_security_policy_error_message(
-                &violation,
-                "XMLHttpRequest",
-            );
-            if self.interception.is_worker() {
-                self.csp_source_location.apply_to(&mut violation);
-                self.csp_violations.push(violation);
+            if let Some(message) = failure {
+                return Err(message);
             }
-            return Err(message);
         }
         if self.connect_policy.is_none() {
             self.request
@@ -437,22 +514,25 @@ impl ControlledResourceLoad {
         mut stream: Option<&mut ControlledResourceStream>,
     ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
         use ResourceInterceptionDecision as D;
-        let mut next_request_pause = self.initial_decision.is_some()
-            || self
-                .load
-                .request_client()
-                .page_network_policy()
-                .should_intercept_subresource(self.info.resource_type);
-        let mut announce_request = self.interception.is_worker();
+        let mut next_request_pause = self.interception.is_some()
+            && (self.initial_decision.is_some()
+                || self
+                    .load
+                    .request_client()
+                    .page_network_policy()
+                    .should_intercept_subresource(self.info.resource_type));
+        let mut select_service_worker = true;
+        let mut announce_request = self.is_worker();
         let mut intercept_response = false;
         let mut handle_auth_requests = false;
         let mut synthetic = None;
         let mut network_request_headers = None;
-        let preflight_observer =
+        let preflight_observer = self.interception.as_ref().map(|context| {
             super::preflight_events::CorsPreflightNetworkObserver::for_native_xhr(
-                self.interception.clone(),
+                context.clone(),
                 &self.info,
-            );
+            )
+        });
         loop {
             if self.cancel.is_cancelled() || self.load.is_cancelled() {
                 return Err("net::ERR_ABORTED".into());
@@ -467,9 +547,11 @@ impl ControlledResourceLoad {
                         .map(Into::into),
                 );
             }
-            if self.interception.worker_control_closed() {
-                if !matches!(self.load.disposition(), crate::network::loads::ResourceLoadDisposition::Keepalive { .. })
-                {
+            if self.worker_control_closed() {
+                if !matches!(
+                    self.load.disposition(),
+                    crate::network::loads::ResourceLoadDisposition::Keepalive { .. }
+                ) {
                     return Err("net::ERR_ABORTED".into());
                 }
                 next_request_pause = false;
@@ -480,8 +562,10 @@ impl ControlledResourceLoad {
                     rx
                 } else {
                     let (pause, rx) = self.pause(InterceptionPhase::Request);
-                    if !self.interception.publish_request(self.info.clone(), pause)
-                        && !self.interception.worker_control_closed()
+                    if !self
+                        .native_interception()
+                        .publish_request(self.info.clone(), pause)
+                        && !self.worker_control_closed()
                     {
                         return Err("network interception output owner is closed".into());
                     }
@@ -538,15 +622,37 @@ impl ControlledResourceLoad {
                     .map_err(|error| error.to_string())?,
                 );
             }
-            if self.blob_url_entry.as_ref().is_some_and(|entry| entry.is_authorized_fetch(&self.request.url)) {
+            if self
+                .blob_url_entry
+                .as_ref()
+                .is_some_and(|entry| entry.is_authorized_fetch(&self.request.url))
+            {
                 self.response_filter = Some(crate::types::FetchResponseType::Basic.into());
             }
             let mut service_worker_response = None;
             if synthetic.is_none()
-                && let Some(source) = self.service_worker.clone()
+                && select_service_worker
+                && self.race_response.is_none()
+                && let Some(source) = self.worker_service_worker.clone()
                 && let Some(response) = self.fetch_service_worker_hop(source).await?
             {
                 service_worker_response = Some(response);
+            }
+            if synthetic.is_none()
+                && service_worker_response.is_none()
+                && select_service_worker
+                && self.race_response.is_none()
+                && let Some(worker) = &self.service_worker
+            {
+                service_worker_response = worker
+                    .load_hop(
+                        &self.load,
+                        &mut self.request,
+                        &self.info,
+                        &self.cancel,
+                        &mut self.preflight_headers,
+                    )
+                    .await?;
             }
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
@@ -556,6 +662,41 @@ impl ControlledResourceLoad {
                 .or_else(|| service_worker_response.take());
             let (response, is_synthetic, observations) = match synthetic_response {
                 Some(response) => (response, true, NetworkObservationJournal::default()),
+                None if self.race_response.is_some() => {
+                    let raced = self.race_response.take().unwrap();
+                    let observed = raced.head(&self.cancel).await?;
+                    let mut head = observed.head.clone();
+                    head.request_cookie_report = None;
+                    head.cookie_set_reports.clear();
+                    let filter = observed.response_filter.clone();
+                    let cancel = self.cancel.clone();
+                    let chunks =
+                        futures_util::stream::unfold(Some((raced, cancel)), |state| async move {
+                            let (mut response, cancel) = state?;
+                            match response.next_chunk(&cancel).await {
+                                Ok(Some(bytes)) => {
+                                    Some((Ok(bytes.to_vec()), Some((response, cancel))))
+                                }
+                                Ok(None) => None,
+                                Err(error) => Some((Err(error), None)),
+                            }
+                        });
+                    (
+                        LoadedResponse {
+                            head,
+                            body: crate::network::ResourceInterceptionBody::from_stream(
+                                chunks,
+                                self.cancel.clone(),
+                                loader.disk_pool(),
+                            ),
+                            response_filter: filter,
+                            body_is_null: None,
+                            source: moli_fetch::RedirectSource::Network,
+                        },
+                        true,
+                        NetworkObservationJournal::default(),
+                    )
+                }
                 None => {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
@@ -564,15 +705,18 @@ impl ControlledResourceLoad {
                         .request
                         .clone()
                         .with_credentials_mode(self.effective_credentials_mode());
-                    if self.interception.observes_request_headers()
+                    if let Some(output) = self.interception.as_ref()
+                        && output.observes_request_headers()
                         && let Some(handle) = self.info.network_request_handle
                     {
-                        let output = self.interception.clone();
+                        let output = output.clone();
                         let snapshot = (!output.is_worker())
-                            .then(|| self.info.request_snapshot(
-                                self.request_initiator_type,
-                                self.load.disposition().is_keepalive(),
-                            ))
+                            .then(|| {
+                                self.info.request_snapshot(
+                                    self.request_initiator_type,
+                                    self.load.disposition().is_keepalive(),
+                                )
+                            })
                             .flatten()
                             .map(Box::new);
                         request = request.with_network_request_observer(move |redirects, info| {
@@ -591,7 +735,7 @@ impl ControlledResourceLoad {
                         request,
                         hop_cancel.clone(),
                         self.preflight_headers.clone(),
-                        Some(&preflight_observer),
+                        preflight_observer.as_ref(),
                     )
                     .await?;
                     super::async_fetch::wait_for_request_upload(&self.request, &hop_cancel).await?;
@@ -609,8 +753,14 @@ impl ControlledResourceLoad {
             let network_response_extra_info =
                 super::response_hop::network_response_extra_info(&response.head, &observations);
             let mut response = response;
+            if response.response_filter.is_some() {
+                self.response_filter = response.response_filter.clone();
+            }
             if handle_auth_requests
-                && self.response_filter.as_ref().is_none_or(|filter| filter.service_worker_metadata().is_none())
+                && self
+                    .response_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter.service_worker_metadata().is_none())
                 && matches!(response.head.status, 401 | 407)
                 && let Some(challenge) = crate::protocol_types::extract_subresource_auth_challenge(
                     &response.head.headers,
@@ -618,7 +768,7 @@ impl ControlledResourceLoad {
             {
                 let (pause, rx) = self.pause(InterceptionPhase::Auth);
                 let pause = pause.with_response_body(response.body.clone());
-                if !self.interception.publish_continue(
+                if !self.native_interception().publish_continue(
                     PendingSubresourceContinueEvent::AuthRequired(PendingSubresourceAuthInfo {
                         response_preload_state: response.head.preload_state.clone(),
                         request_include_credentials: response.head.request_include_credentials,
@@ -640,8 +790,7 @@ impl ControlledResourceLoad {
                         response_cache_state: response.head.cache_state,
                     }),
                     Some(pause),
-                ) && !self.interception.worker_control_closed()
-
+                ) && !self.worker_control_closed()
                 {
                     return Err("network authentication output owner is closed".into());
                 }
@@ -653,6 +802,7 @@ impl ControlledResourceLoad {
                         }
                         self.request = self.request.clone().with_auth(auth.into());
                         announce_request = false;
+                        select_service_worker = false;
                         next_request_pause = false;
                         continue;
                     }
@@ -665,7 +815,7 @@ impl ControlledResourceLoad {
             if intercept_response {
                 let (pause, rx) = self.pause(InterceptionPhase::Response);
                 let pause = pause.with_response_body(response.body.clone());
-                if !self.interception.publish_continue(
+                if !self.native_interception().publish_continue(
                     PendingSubresourceContinueEvent::ResponsePaused(
                         PendingSubresourceResponseInfo {
                             preload_state: response.head.preload_state.clone(),
@@ -687,8 +837,7 @@ impl ControlledResourceLoad {
                         },
                     ),
                     Some(pause),
-                ) && !self.interception.worker_control_closed()
-
+                ) && !self.worker_control_closed()
                 {
                     return Err("network response output owner is closed".into());
                 }
@@ -720,6 +869,9 @@ impl ControlledResourceLoad {
                     _ => unreachable!("response pause accepts only response decisions"),
                 }
             }
+            if let Some(worker) = &self.service_worker {
+                worker.check_response(&response.head, response.source)?;
+            }
             use super::response_hop::{
                 SubresourceResponseTransition, advance_subresource_response,
             };
@@ -746,7 +898,7 @@ impl ControlledResourceLoad {
                     &mut self.request,
                     response.head.clone(),
                     network_response_extra_info,
-                    moli_fetch::RedirectSource::Network,
+                    response.source,
                     self.load.request_client().web_security_disabled(),
                 )?
             } else {
@@ -754,7 +906,7 @@ impl ControlledResourceLoad {
                     &mut self.request,
                     response.head.clone(),
                     network_response_extra_info,
-                    moli_fetch::RedirectSource::Network,
+                    response.source,
                     self.load.request_client().web_security_disabled(),
                 )?
             };
@@ -788,27 +940,24 @@ impl ControlledResourceLoad {
                 if let Some(stream) = stream.as_deref_mut() {
                     stream.policy_violations(std::mem::take(&mut self.csp_violations));
                 }
-                if let Some(ControlledResourceStream::WorkerFetch(fetch)) = stream.as_deref_mut() {
-                    fetch.set_response_filter(self.response_filter.clone());
+                if response.response_filter.is_none() {
+                    response.response_filter = self.response_filter.clone();
                 }
-                // Whole-body security checks are needed for opaque responses,
-                // not for every request authored with mode: "no-cors".
-                let opaque_response =
-                    matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
-                        && super::network_response_filter(
-                            self.request
-                                .browser_origin()
-                                .expect("native Fetch has a requesting origin"),
-                            &response.head,
-                            self.request.request_mode,
-                            self.request.redirect_mode(),
-                            self.load.request_client().web_security_disabled(),
-                        )
-                        .is_some();
+                self.selected_response_head = Some(result::SelectedXhrResponseHead {
+                    head: response.head.clone(),
+                    response_filter: response.response_filter.clone(),
+                    skip_fetch_security_validation: response.source
+                        == moli_fetch::RedirectSource::ServiceWorker,
+                });
                 let delivered = response
                     .deliver(
                         &self.info,
-                        if manual || opaque_response || (is_synthetic && self.response_filter.as_ref().is_none_or(|filter| filter.service_worker_metadata().is_none())) {
+                        if manual
+                            || (is_synthetic
+                                && self.response_filter.as_ref().is_none_or(|filter| {
+                                    filter.service_worker_metadata().is_none()
+                                }))
+                        {
                             None
                         } else {
                             stream.as_deref_mut()
@@ -823,25 +972,30 @@ impl ControlledResourceLoad {
             }
             self.preflight_headers = self.request.request_headers.to_byte_strings();
             if self.info.resource_type == crate::types::SubresourceResourceType::EventSource {
-                self.preflight_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("Last-Event-ID"));
+                self.preflight_headers
+                    .retain(|(name, _)| !name.eq_ignore_ascii_case("Last-Event-ID"));
             }
             // ExtraInfo describes the first on-wire request of the current hop.
             // Authentication retries retain it; a redirect starts a new hop.
             network_request_headers = None;
-            // Retire the previous hop's protocol correlation before installing
-            // its next one. The stable native network handle keeps Network ID.
-            self.interception.publish_continue(
-                PendingSubresourceContinueEvent::Completed {
-                    internal_id: self.info.internal_id,
-                },
-                None,
-            );
-            next_request_pause = self
-                .load
-                .request_client()
-                .page_network_policy()
-                .should_intercept_subresource(self.info.resource_type);
-            announce_request = self.interception.is_worker();
+            select_service_worker = true;
+            if self.interception.is_some() {
+                // Retire the previous hop's protocol correlation before installing
+                // its next one. The stable native network handle keeps Network ID.
+                self.native_interception().publish_continue(
+                    PendingSubresourceContinueEvent::Completed {
+                        internal_id: self.info.internal_id,
+                    },
+                    None,
+                );
+            }
+            next_request_pause = self.interception.is_some()
+                && self
+                    .load
+                    .request_client()
+                    .page_network_policy()
+                    .should_intercept_subresource(self.info.resource_type);
+            announce_request = self.is_worker();
         }
     }
 }

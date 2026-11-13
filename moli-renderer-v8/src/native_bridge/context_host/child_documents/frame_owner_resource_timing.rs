@@ -26,6 +26,7 @@ pub(in crate::native_bridge::context_host) struct PendingFrameOwnerResourceTimin
     start_unix_millis_bits: u64,
     started_at: std::time::Instant,
     initiator: crate::context_bootstrap::ResourceTimingInitiator,
+    request_origin: moli_url::WebOrigin,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +37,10 @@ pub(in crate::native_bridge::context_host) struct CompletedFrameOwnerResourceTim
 }
 
 impl PendingFrameOwnerResourceTiming {
+    pub(in crate::native_bridge::context_host) fn request_origin(&self) -> moli_url::WebOrigin {
+        self.request_origin.clone()
+    }
+
     pub(in crate::native_bridge::context_host) fn complete(
         self,
         child_owner: FrameDocumentTaskOwner,
@@ -127,6 +132,10 @@ impl PageScriptHost {
             .frame_owner_store
             .current_frame_owner_document_target(handle)?;
         let initiator_type = self.frame_owner_resource_initiator_type(handle)?;
+        let request_origin = self
+            .document_resource_loader_for_owner(target.owner)?
+            .fetch_context()
+            .request_origin();
         Some(PendingFrameOwnerResourceTiming {
             target,
             request_url: target_url.as_str().to_owned(),
@@ -134,6 +143,7 @@ impl PageScriptHost {
             start_unix_millis_bits: moli_time::unix_epoch_millis().to_bits(),
             started_at: std::time::Instant::now(),
             initiator: resource_initiator,
+            request_origin,
         })
     }
 

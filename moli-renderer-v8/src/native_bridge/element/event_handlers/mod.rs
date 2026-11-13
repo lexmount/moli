@@ -1,6 +1,7 @@
 mod body_onload;
 mod body_window;
 mod generic;
+mod parser;
 mod shared;
 
 pub(crate) use body_onload::compile_window_body_event_attribute;
@@ -22,6 +23,7 @@ pub(crate) use generic::{
     is_global_event_handler_attribute, node_event_handler_getter_function,
     node_event_handler_setter_function, node_event_handler_value_from_wrapper,
 };
+pub(crate) use parser::{ParserAddedEventHandlers, initialize_parser_inserted_event_handlers};
 pub(crate) use shared::{EventAttributeHandlerScope, compile_event_attribute_handler_for_owner};
 
 pub(crate) fn is_body_window_event_handler_attribute(name: &str) -> bool {

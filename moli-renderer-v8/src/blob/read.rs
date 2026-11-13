@@ -147,6 +147,7 @@ pub(super) fn read_promise_in_owner<'s>(
     format: BlobReadFormat,
     owner: v8::Local<'s, v8::Context>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
+    let scope = &mut v8::ContextScope::new(scope, owner);
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     if let Some(bytes) = data.as_bytes() {
@@ -156,7 +157,6 @@ pub(super) fn read_promise_in_owner<'s>(
             resolver: v8::Global::new(scope, resolver),
             format,
         };
-        let scope = &mut v8::ContextScope::new(scope, owner);
         submit(scope, resolver, data, target);
     }
     Some(promise)

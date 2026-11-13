@@ -1829,22 +1829,7 @@ fn cross_origin_proxy_storage_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
-    let value: v8::Local<'s, v8::Value> = object.into();
-    let Ok(proxy) = v8::Local::<v8::Proxy>::try_from(value) else {
-        return object;
-    };
-    let Ok(target) = v8::Local::<v8::Object>::try_from(proxy.get_target(scope)) else {
-        return object;
-    };
-    let is_moli_cross_origin_proxy =
-        get_private_value(scope, target, CROSS_ORIGIN_LOCATION_PROXY_SLOT).is_some()
-            || get_private_value(scope, target, DETACHED_CROSS_ORIGIN_WINDOW_PROXY_SLOT).is_some()
-            || get_private_value(scope, target, CROSS_ORIGIN_TOP_WINDOW_PROXY_SLOT).is_some();
-    if is_moli_cross_origin_proxy {
-        target
-    } else {
-        object
-    }
+    moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object)
 }
 
 fn get_cross_origin_proxy_private_value<'s>(
@@ -1867,9 +1852,12 @@ fn wrap_cross_origin_window_with_has_trap<'s>(
     }
     .bind(scope)
     .ok()?;
+    crate::web_api_interfaces::Window::DESCRIPTOR
+        .initialize(scope, target)
+        .ok()?;
     let proxy = v8::Proxy::new(scope, target, handler)?;
-    let proxy: v8::Local<'s, v8::Value> = proxy.into();
-    v8::Local::<v8::Object>::try_from(proxy).ok()
+    moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
+    Some(proxy.into())
 }
 
 fn install_cross_origin_window_methods<'s>(

@@ -518,7 +518,7 @@ impl PageScriptHost {
     fn queue_child_modulepreload_fetch_for_source(
         &mut self,
         source: FrameDocumentModulepreloadSource,
-        request: NativeModuleSingleFetchRequest,
+        mut request: NativeModuleSingleFetchRequest,
     ) -> bool {
         let handle = source.child_handle();
         let owner = source.owner();
@@ -556,6 +556,37 @@ impl PageScriptHost {
             );
             return false;
         };
+        let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Child(handle);
+        let context = request
+            .take_csp_context()
+            .or_else(|| {
+                self.module_fetch_csp_context_for_owner(
+                    dispatch_scope,
+                    request.module_key().url(),
+                    request.module_key().kind(),
+                    request.fetch_metadata(),
+                )
+            })
+            .expect("current child modulepreload retains its Document policy");
+        let report_context =
+            crate::network_host::capture_window_csp_report_request_context_for_owner(
+                self,
+                dispatch_scope,
+            )
+            .expect("materialized current child modulepreload has its exact reporting owner");
+        let completion_tx = self.resource_completion_sender();
+        request.set_csp_context(
+            context
+                .with_source_location(request.csp_source_location().cloned())
+                .with_violation_reporter(move |violation| {
+                    let _ = completion_tx.send_async_subresource_event(
+                        crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                            report_context: Box::new(report_context.clone()),
+                            violation: Box::new(violation),
+                        },
+                    );
+                }),
+        );
         let task = match source {
             FrameDocumentModulepreloadSource::Link(client) => {
                 FrameDocumentModulepreloadFetchTask::from_modulepreload_fetch_parts(

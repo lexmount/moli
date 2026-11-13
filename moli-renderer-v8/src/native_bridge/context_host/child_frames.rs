@@ -479,6 +479,10 @@ impl ChildBrowsingContextEntry {
             .document_content_security_policies =
             policy_container.document_content_security_policies.clone();
         self.document_policy_container
+            .inherited_meta_content_security_policies = policy_container
+            .inherited_meta_content_security_policies
+            .clone();
+        self.document_policy_container
             .response_content_security_policies =
             policy_container.response_content_security_policies.clone();
         self.document_policy_container
@@ -532,6 +536,16 @@ impl ChildBrowsingContextEntry {
             snapshot.policy_container.cross_origin_isolated;
         self.document_policy_container.coop_coep_isolation =
             snapshot.policy_container.coop_coep_isolation;
+        self.document_policy_container
+            .inherited_meta_content_security_policies = snapshot
+            .policy_container
+            .inherited_meta_content_security_policies
+            .clone();
+        self.document_policy_container
+            .document_content_security_policies = snapshot
+            .policy_container
+            .document_content_security_policies
+            .clone();
         self.document_policy_container
             .response_content_security_policies = snapshot
             .policy_container

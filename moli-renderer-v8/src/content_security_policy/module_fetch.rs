@@ -152,7 +152,7 @@ impl ModuleFetchCspContext {
         if !state
             .checked_hops
             .iter()
-            .any(|(n, checked)| *n == ordinal && checked == url)
+            .any(|(checked_ordinal, checked_url)| *checked_ordinal == ordinal && checked_url == url)
         {
             state.checked_hops.push((ordinal, url.clone()));
             if let Some(reporter) = &self.0.violation_reporter {
@@ -173,6 +173,10 @@ impl ModuleFetchCspContext {
 
     // Coalesced/cache consumers still validate every recorded redirect against
     // their own policy. The transport owner's checks are not another owner's authority.
+    #[cfg(test)]
+    pub(crate) fn check_response(&self, response: &moli_fetch::Response) -> anyhow::Result<()> {
+        self.check_response_head(&response.head())
+    }
 
     pub(crate) fn check_response_head(
         &self,

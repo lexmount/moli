@@ -78,9 +78,9 @@ async base => {
             const entry = byName(url)[0];
             test('cross-origin ' + tao + ': script executes and has a resource entry', () => !error && entry !== undefined);
             test('cross-origin ' + tao + ': opaque response status stays hidden', () => entry.responseStatus === 0);
-            test('cross-origin ' + tao + ': sizes follow TAO', () => tao ?
-                entry.encodedBodySize > 0 && entry.decodedBodySize > 0 && entry.transferSize > 0 :
-                entry.encodedBodySize === 0 && entry.decodedBodySize === 0 && entry.transferSize === 0);
+            test('cross-origin ' + tao + ': CORS masks body sizes and TAO gates transfer', () =>
+                entry.encodedBodySize === 0 && entry.decodedBodySize === 0 &&
+                entry.transferSize === (tao ? 300 : 0));
             test('cross-origin ' + tao + ': connection timing follows TAO', () => tao ?
                 entry.responseStart > 0 && entry.nextHopProtocol !== '' : entry.responseStart === 0 && entry.nextHopProtocol === '');
         }

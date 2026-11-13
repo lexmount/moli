@@ -926,6 +926,14 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
         return;
     };
     let request_signal_id = worker_abort_signal_id(scope, request_signal);
+    if state
+        .borrow()
+        .service_worker_runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.has_router_race(event.event_id, &event.owner))
+    {
+        crate::network_host::set_request_static_router_race_id(scope, request, event.event_id);
+    }
     let Some(handled_resolver) = v8::PromiseResolver::new(scope) else {
         let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerFetchCompleted(
             ServiceWorkerFetchCompletion {
@@ -1704,11 +1712,19 @@ pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
     let Some(promise) = promise_resolve_value(scope, parsed.promise) else {
         return;
     };
+    let _ = add_service_worker_lifetime_promise(scope, event, promise);
+}
+
+pub(in crate::worker) fn add_service_worker_lifetime_promise<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    promise: v8::Local<'s, v8::Promise>,
+) -> bool {
     // Script redispatch clears trust even while the original native event
     // still has pending lifetime promises. Its private dispatch ID is not enough.
     if !crate::context_bootstrap::event_trusted(scope, event) {
         throw_service_worker_wait_until_invalid_state(scope);
-        return;
+        return false;
     }
     let lifecycle_event_id = service_worker_lifecycle_event_id(scope, event);
     let fetch_event_id = service_worker_fetch_event_id(scope, event);
@@ -1737,7 +1753,7 @@ pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
         })
     else {
         throw_service_worker_wait_until_invalid_state(scope);
-        return;
+        return false;
     };
     let is_event_active = get_worker_state(scope).is_some_and(|state| {
         let state = state.borrow();
@@ -1788,7 +1804,7 @@ pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
     });
     if !is_event_active {
         throw_service_worker_wait_until_invalid_state(scope);
-        return;
+        return false;
     }
     let Some(on_fulfilled) = build_service_worker_wait_until_callback(
         scope,
@@ -1797,7 +1813,7 @@ pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
         true,
         service_worker_wait_until_fulfilled_callback,
     ) else {
-        return;
+        return false;
     };
     let Some(on_rejected) = build_service_worker_wait_until_callback(
         scope,
@@ -1806,7 +1822,7 @@ pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
         false,
         service_worker_wait_until_rejected_callback,
     ) else {
-        return;
+        return false;
     };
     let did_register = if let Some(state) = get_worker_state(scope) {
         let mut state = state.borrow_mut();
@@ -1886,11 +1902,13 @@ pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
     };
     if !did_register {
         throw_service_worker_wait_until_invalid_state(scope);
-        return;
+        return false;
     }
     if !promise_then2_after_wait_until_microtask(scope, promise, on_fulfilled, on_rejected) {
         service_worker_wait_until_settled_for_event(scope, event_id, event_kind, false);
+        return false;
     }
+    true
 }
 
 fn throw_service_worker_wait_until_invalid_state(scope: &mut v8::PinScope<'_, '_>) {
@@ -2350,8 +2368,6 @@ fn service_worker_respond_with_settled<'s>(
                     );
                     return;
                 }
-                let body_is_null =
-                    crate::network_host::body_stream_object(scope, response).is_none();
                 let body_source_id = new_network_body_source_id();
                 let (body, stream_cancel_handle) =
                     build_service_worker_respond_with_stream_chunk_callback(
@@ -2379,7 +2395,7 @@ fn service_worker_respond_with_settled<'s>(
                     });
                 match body {
                     MaterializedResponseBody::Ready(body) => ServiceWorkerFetchResult::Response(
-                        service_worker_fetch_response_from_materialized(head, body, body_is_null),
+                        service_worker_fetch_response_from_materialized(head, body),
                     ),
                     MaterializedResponseBody::Pending(promise) => {
                         let stream_body = stream_cancel_handle.is_some();
@@ -2513,13 +2529,8 @@ fn service_worker_respond_with_lifetime_settled_for_event(
 fn service_worker_fetch_response_from_materialized(
     head: MaterializedResponseHead,
     body: Vec<u8>,
-    body_is_null: bool,
 ) -> ServiceWorkerFetchResponse {
-    ServiceWorkerFetchResponse {
-        head,
-        body,
-        body_is_null,
-    }
+    head.with_body(body)
 }
 
 fn service_worker_fetch_response_head_from_materialized(
@@ -3016,7 +3027,7 @@ fn service_worker_respond_with_body_settled_for_event(
                 pending.pending_respond_with_stream_body_source_id = None;
                 pending.pending_respond_with_stream_cancel_handle = None;
                 ServiceWorkerFetchResult::Response(service_worker_fetch_response_from_materialized(
-                    head, body, false,
+                    head, body,
                 ))
             }
             Err(error) => {

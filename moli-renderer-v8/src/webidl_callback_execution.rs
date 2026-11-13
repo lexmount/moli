@@ -112,10 +112,14 @@ impl PreparedWebIdlCallbackExecution {
         scope: &mut v8::PinScope<'s, '_>,
         carrier: v8::Local<'s, v8::Object>,
     ) -> Option<Self> {
-        let (binding, owner) = CommonRuntimeBinding::from_scope(scope)?;
+        // Reject a missing dispatch environment before interpreting a carrier.
+        // The callback below still resolves its own actual relevant-context host.
+        CommonRuntimeBinding::from_scope(scope)?;
         let traced = V8TracedWebIdlCallbackFunction::from_object(carrier);
         let resource_initiator = traced.resource_initiator(scope);
         let callback = traced.prepare(scope);
+        let context = callback.relevant_context(scope);
+        let (binding, owner) = CommonRuntimeBinding::from_context(context)?;
         let environment = match owner {
             RuntimeExecutionContext::Window(host_ptr) => {
                 let host = unsafe { &*host_ptr };
@@ -123,13 +127,13 @@ impl PreparedWebIdlCallbackExecution {
                 let callback_identity =
                     host.window_execution_context_identity_for_v8_context(scope, context)?;
                 CallbackExecutionEnvironment::Window {
-                    context: v8::Global::new(scope, scope.get_current_context()),
+                    context: v8::Global::new(scope, context),
                     owner_identity: None,
                     callback_identity,
                 }
             }
             RuntimeExecutionContext::Worker => CallbackExecutionEnvironment::Worker {
-                context: v8::Global::new(scope, scope.get_current_context()),
+                context: v8::Global::new(scope, context),
             },
         };
         Some(Self {
@@ -162,14 +166,17 @@ impl PreparedWebIdlCallbackExecution {
         // Validate the exact preparation Context independently of the caller's
         // ambient Realm. The neutral callback layer then enters the relevant
         // Realm, which may belong to another Window or Page owner.
+        let relevant_context = self.callback.relevant_context(scope);
         match &self.environment {
             CallbackExecutionEnvironment::Window { context, .. } => {
                 let context = v8::Local::new(scope, context);
                 let scope = &mut v8::ContextScope::new(scope, context);
-                self.environment.can_invoke(scope, &self.binding)
+                self.environment
+                    .can_invoke(scope, &self.binding, relevant_context)
             }
             CallbackExecutionEnvironment::Worker { .. } => {
-                self.environment.can_invoke(scope, &self.binding)
+                self.environment
+                    .can_invoke(scope, &self.binding, relevant_context)
             }
         }
     }
@@ -288,10 +295,12 @@ impl PreparedWebIdlCallbackExecution {
                 if event_type == "error" {
                     return;
                 }
-                let Some(host_ptr) = self.binding.window_host_ptr() else {
+                let context = self.relevant_context(scope);
+                let Some((_, RuntimeExecutionContext::Window(host_ptr))) =
+                    CommonRuntimeBinding::from_context(context)
+                else {
                     return;
                 };
-                let context = self.relevant_context(scope);
                 let binding = WindowExecutionContextBinding::new(
                     callback_identity.owner(),
                     callback_identity.dispatch_scope(),
@@ -318,7 +327,12 @@ impl PreparedWebIdlCallbackExecution {
 }
 
 impl CallbackExecutionEnvironment {
-    fn can_invoke(&self, scope: &mut v8::PinScope<'_, '_>, binding: &CommonRuntimeBinding) -> bool {
+    fn can_invoke(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        binding: &CommonRuntimeBinding,
+        relevant_context: v8::Local<'_, v8::Context>,
+    ) -> bool {
         match (self, binding.callback_execution_context(scope)) {
             (
                 Self::Window {
@@ -329,12 +343,23 @@ impl CallbackExecutionEnvironment {
                 Some(RuntimeExecutionContext::Window(host_ptr)),
             ) => {
                 let host = unsafe { &*host_ptr };
-                let current = owner_identity.is_none_or(|identity| {
+                if !owner_identity.is_none_or(|identity| {
                     host.window_execution_context_identity_is_current(identity)
-                }) && host
-                    .window_execution_context_identity_is_current(*callback_identity);
+                }) {
+                    return false;
+                }
+                let Some((_, RuntimeExecutionContext::Window(callback_host_ptr))) =
+                    CommonRuntimeBinding::from_context(relevant_context)
+                else {
+                    return false;
+                };
+                let callback_host = unsafe { &*callback_host_ptr };
+                let current =
+                    callback_host.window_execution_context_identity_is_current(*callback_identity);
                 if current {
                     host.debug_assert_not_in_structural_mutation("callback-function invocation");
+                    callback_host
+                        .debug_assert_not_in_structural_mutation("callback-function invocation");
                 }
                 current
             }

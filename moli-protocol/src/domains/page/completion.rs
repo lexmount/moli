@@ -381,12 +381,6 @@ pub(super) async fn complete_using(
     let command_id = completed.command_id;
     let owner = completed.owner_scope;
     let plan = match *completed.kind {
-        CompletedPageCommandKind::BeforeUnloadNavigation(completed) => {
-            let prepared = context.with_state(driver, move |state, context| {
-                state.prepare_before_unload_navigation(*completed, context)
-            })?;
-            return Box::pin(prepared.run(driver, context, NavigationCommandOutput::Command)).await;
-        }
         CompletedPageCommandKind::BringToFront { route } => {
             bring_to_front_using(driver, route).await?
         }
@@ -402,7 +396,12 @@ pub(super) async fn complete_using(
         CompletedPageCommandKind::ChildFrameNavigate(completed) => {
             super::child_navigation::finish_navigation(driver, context, owner, *completed).await?
         }
-
+        CompletedPageCommandKind::BeforeUnloadNavigation(completed) => {
+            let prepared = context.with_state(driver, move |state, context| {
+                state.prepare_before_unload_navigation(*completed, context)
+            })?;
+            return Box::pin(prepared.run(driver, context, NavigationCommandOutput::Command)).await;
+        }
         CompletedPageCommandKind::Navigate(completed) => {
             let prepared =
                 driver.with_state(move |state| state.prepare_page_navigation(*completed))?;

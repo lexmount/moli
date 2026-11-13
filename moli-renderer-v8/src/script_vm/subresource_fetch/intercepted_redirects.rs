@@ -1,97 +1,46 @@
 use super::*;
 #[cfg(any(test, feature = "devtools"))]
 use crate::RendererSyntheticResponseBody;
-#[cfg(any(test, feature = "devtools"))]
-use moli_fetch::ResponseHead;
-use moli_fetch::{RedirectInfo, Request, RequestRedirectMode};
+use moli_fetch::{RedirectInfo, Request, ResponseHead};
 
 pub(super) fn follow_intercepted_redirect(
     mut request: Request,
     response: &crate::protocol_types::NavigationResponse,
-    document_url: &Url,
+    _document_url: &Url,
     web_security_disabled: bool,
 ) -> Result<Option<(Request, RedirectInfo)>, String> {
-    // A manual response does not follow Location, so even an invalid URL must
-    // remain opaque. The completion path still checks the response's CORS policy.
-    if request.redirect_mode() == RequestRedirectMode::Manual {
-        return Ok(None);
-    }
     let head = response.head();
-    if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
-        // A fulfilled network response has the same CORS gate as a real hop.
-        // Preserve that failure before rejecting an error-mode redirect.
-        if !web_security_disabled {
-            request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
-        }
-        if request.redirect_mode() == RequestRedirectMode::Error
-            && head
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("location"))
-        {
-            return Err("fetch: redirect mode is error".to_owned());
-        }
-    }
-    let Some(mut target) = crate::network_host::next_redirect_url(
-        &head.final_url,
-        head.status,
-        &head.headers,
-        request.redirect_count(),
-    )?
-    else {
-        return Ok(None);
-    };
-    let includes_credentials = !target.username().is_empty() || target.password().is_some();
-    // Like Chromium's credentialed-subresource check, allow credentials already
-    // present in the same-origin embedding document. Fetch's CORS taint remains
-    // sticky even when a later hop returns to that origin.
-    let credentials_blocked = includes_credentials
-        && (request
-            .request_origin()
-            .is_none_or(|origin| !origin.same_origin(&(&target).into()))
-            || target.username() != document_url.username()
-            || target.password() != document_url.password()
-            || (request.request_mode == moli_fetch::RequestMode::Cors
-                && request.has_cross_origin_url(&head.final_url)));
-    if !matches!(target.scheme(), "http" | "https")
-        || credentials_blocked
-        || moli_fetch::should_request_be_blocked_due_to_bad_port(&target)
+    // An intercepted error-mode snapshot without Location is final. Preserve
+    // main's admission behavior, including checking CORS before accepting it.
+    if matches!(head.status, 301 | 302 | 303 | 307 | 308)
+        && request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
+        && !head
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("location"))
     {
-        return Err(format!("fetch: invalid redirect target `{target}`"));
+        if !web_security_disabled { request.validate_cors_response_for_url(&head.final_url, &head.headers)?; }
+        return Ok(None);
     }
-    if target.fragment().is_none() {
-        target.set_fragment(head.final_url.fragment());
-    }
-    let cross_origin = !moli_url::same_origin(&head.final_url, &target);
-    let response_extra_info = response.network_response_extra_info().cloned();
-    let mut redirect = head.into_redirect(
-        target,
+    let transition = crate::network_host::advance_subresource_response(
+        &mut request,
+        head,
+        response.network_response_extra_info().cloned(),
         moli_fetch::RedirectSource::Network,
-        response_extra_info.is_some(),
-    );
-    redirect.request_extra_info = response.network_request_extra_info().cloned();
-    redirect.response_extra_info = response_extra_info;
-    request
-        .follow_redirect_with_web_security(redirect, web_security_disabled)
-        .map_err(|error| error.to_string())?;
-    if cross_origin {
-        request
-            .request_headers
-            .retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
-        let mut chain = request.redirect_chain().to_vec();
-        chain
-            .last_mut()
-            .expect("followed redirect")
-            .dispatched_request =
-            Some(request.capture_dispatched_request(request.request_headers.to_byte_strings()));
-        request = request.with_redirect_chain(chain);
+        web_security_disabled,
+    )?;
+    if transition != crate::network_host::SubresourceResponseTransition::FollowedRedirect {
+        return Ok(None);
     }
-    let redirect = request
-        .redirect_chain()
-        .last()
-        .expect("followed redirect")
-        .clone();
-    Ok(Some((request, redirect)))
+    if moli_fetch::should_request_be_blocked_due_to_bad_port(&request.url) {
+        return Err(format!("fetch: invalid redirect target `{}`", request.url));
+    }
+    let dispatched = request.capture_dispatched_request(request.request_headers.to_byte_strings());
+    let mut chain = request.redirect_chain().to_vec();
+    let redirect = chain.last_mut().expect("native hop followed a redirect");
+    redirect.dispatched_request = Some(dispatched);
+    let redirect = redirect.clone();
+    Ok(Some((request.with_redirect_chain(chain), redirect)))
 }
 
 impl ScriptVm {
@@ -148,6 +97,23 @@ impl ScriptVm {
         redirect: RedirectInfo,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let context_host = self._context_host.clone();
+        // This head is used only to check the actual accepted redirect target
+        // against the captured Document policy, before its next native pause.
+        let redirect_head = ResponseHead {
+            request_include_credentials: request.allows_credentials_for_url(&request.url),
+            final_url: request.url.clone(),
+            status: redirect.status,
+            status_text: None,
+            headers: redirect.headers.clone(),
+            request_cookie_report: redirect.request_cookie_report.clone(),
+            cookie_set_reports: redirect.cookie_set_reports.clone(),
+            redirected: true,
+            redirect_chain: request.redirect_chain().to_vec(),
+            from_cache: redirect.from_cache,
+            cache_state: Default::default(),
+            negotiated_http_version: redirect.negotiated_http_version,
+            preload_state: Default::default(),
+        };
         let entered_window_realm = pending.execution_context.context_global().is_some();
         let failure = if let Some(context) = pending.execution_context.context_global() {
             self.renderer_document_isolate
@@ -156,18 +122,22 @@ impl ScriptVm {
                     let scope = &mut scope.init();
                     let context = v8::Local::new(scope, context);
                     let scope = &mut v8::ContextScope::new(scope, context);
-                    Ok(document_connect_csp_redirect_failure_message(
+                    Ok(document_connect_csp_response_failure_message(
                         scope,
                         &context_host,
                         &pending,
-                        &request.url,
+                        &redirect_head,
+                        true,
+                        None,
                     ))
                 })?
         } else {
-            detached_window_fetch_csp_redirect_failure_message(
+            detached_window_fetch_csp_response_failure_message(
                 &context_host,
                 &pending,
-                &request.url,
+                &redirect_head,
+                true,
+                None,
             )
         };
         let failure = failure.or_else(|| {
@@ -195,6 +165,9 @@ impl ScriptVm {
             } else {
                 activity
             });
+        }
+        if let Some((_, state, _)) = pending.continuation.csp_request_policy() {
+            state.record_checked_url(&request.url, false);
         }
         let loader = pending.load.request_client();
         let request = loader.bind_browser_site_context(request);

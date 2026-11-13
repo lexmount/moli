@@ -1620,9 +1620,14 @@ fn expand_callback(
     }
     let receiver_check = attrs.receiver.as_ref().map(|receiver| {
         let check = quote!(#receiver(scope, args.this()));
+        let invalid_receiver = if attrs.legacy_lenient_this {
+            quote!()
+        } else {
+            quote!(::moli_webapi_declare::__private::throw_illegal_invocation(scope);)
+        };
         quote! {
             if !#check {
-                ::moli_webapi_declare::__private::throw_illegal_invocation(scope);
+                #invalid_receiver
                 return;
             }
         }

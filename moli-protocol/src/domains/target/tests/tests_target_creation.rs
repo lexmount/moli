@@ -2168,6 +2168,8 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
 #[tokio::test(flavor = "multi_thread")]
 async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_info() {
     let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new().run_until(async {
     load_bc_with_titled_page_async(
         &mut ctx,
         "BID-popup-info-change",
@@ -2175,6 +2177,14 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         "<main>popup opener</main>",
     )
     .await;
+            ctx.process_async(json!({
+                "id": 990001, "method": "Target.attachToTarget",
+                "params": { "targetId": "TID-popup-info-opener", "flatten": true }
+            })).await;
+            let opener_session_id = take_response_by_id(&mut ctx, 990001)["result"]["sessionId"]
+                .as_str().expect("actual opener session").to_owned();
+            ctx.take_all();
+
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2192,8 +2202,9 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
     ctx.process_async(json!({
         "id": 152,
         "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
         "params": {
-            "expression": "window.open('https://example.com/first-popup', 'reportWindow') !== null"
+            "expression": "window.open('data:text/html,first-popup', 'reportWindow') !== null"
         }
     }))
     .await;
@@ -2204,7 +2215,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
             message["method"] == json!("Target.targetCreated")
                 && message["params"]["targetInfo"]["type"] == json!("page")
                 && message["params"]["targetInfo"]["url"]
-                    == json!("https://example.com/first-popup")
+                    == json!("data:text/html,first-popup")
         })
         .unwrap_or_else(|| panic!("missing first popup page targetCreated: {first_sent:?}"));
     let page_target_id = page_created["params"]["targetInfo"]["targetId"]
@@ -2221,16 +2232,39 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         "catch-all discovery should report popup tab targetCreated: {first_sent:?}"
     );
 
+    if !first_sent.iter().any(|message| {
+            message["method"] == json!("Target.targetInfoChanged")
+                && message["params"]["targetInfo"]["url"] == json!("data:text/html,first-popup")
+        }) {
+            ctx.wait_for_scheduler_message(
+        "named popup actual Document commit",
+        |message| {
+            message["method"] == json!("Target.targetInfoChanged")
+                && message["params"]["targetInfo"]["url"] == json!("data:text/html,first-popup")
+        },
+    ).await;
+        }
+    ctx.take_all();
+
     ctx.process_async(json!({
         "id": 153,
         "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
         "params": {
-            "expression": "window.open('https://example.com/second-popup', 'reportWindow') !== null"
+            "expression": "window.open('data:text/html,second-popup', 'reportWindow') !== null"
         }
     }))
     .await;
 
-    let second_sent = ctx.take_all();
+    let changed = ctx.wait_for_scheduler_message(
+        "named popup actual Document commit",
+        |message| {
+            message["method"] == json!("Target.targetInfoChanged")
+                && message["params"]["targetInfo"]["url"] == json!("data:text/html,second-popup")
+        },
+    ).await;
+    let mut second_sent = ctx.take_all();
+    second_sent.push(changed);
     assert!(
         second_sent.iter().all(|message| {
             message["method"] != json!("Target.targetInfoChanged")
@@ -2244,10 +2278,11 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
                 && message["params"]["targetInfo"]["targetId"] == json!(page_target_id)
                 && message["params"]["targetInfo"]["type"] == json!("page")
                 && message["params"]["targetInfo"]["url"]
-                    == json!("https://example.com/second-popup")
+                    == json!("data:text/html,second-popup")
         }),
         "catch-all discovery should report page targetInfoChanged: {second_sent:?}"
     );
+    }).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

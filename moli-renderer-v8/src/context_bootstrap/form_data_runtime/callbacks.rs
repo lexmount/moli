@@ -7,7 +7,7 @@ use crate::{
             construct_form_data_event, dispatch_public_event, form_associated_form_owner,
             is_valid_submit_button,
         },
-        node_owner_document_relevant_context, node_runtime_and_handle_from_object_or_detached,
+        node_runtime_and_handle_from_object_or_detached, node_target_relevant_context,
         throw_dom_exception,
     },
     util::throw_type_error,
@@ -74,8 +74,7 @@ pub(crate) fn construct_form_data_entries_for_form<'s>(
         return None;
     }
 
-    let Some(context) = node_owner_document_relevant_context(scope, runtime_ptr, form_handle)
-    else {
+    let Some(context) = node_target_relevant_context(scope, runtime_ptr, form_handle) else {
         unsafe { &mut *runtime_ptr }.end_form_data_construction(form_handle);
         return None;
     };
@@ -93,7 +92,7 @@ fn dispatch_form_data_event_with_entries<'s>(
     form_handle: crate::document_runtime::DomHandle,
     entries: &[(String, v8::Global<v8::Value>)],
 ) -> Option<Vec<(String, v8::Global<v8::Value>)>> {
-    let context = node_owner_document_relevant_context(scope, runtime_ptr, form_handle)?;
+    let context = node_target_relevant_context(scope, runtime_ptr, form_handle)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let form_data = new_world_wrapper(scope)?;
     set_form_data_entries(scope, form_data, entries);

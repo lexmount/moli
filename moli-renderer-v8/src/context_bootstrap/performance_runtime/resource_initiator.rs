@@ -62,6 +62,7 @@ impl ResourceTimingInitiator {
         head: &ResponseHead,
         readable: bool,
     ) {
+        entry.apply_response_body_visibility(readable);
         // TAO exposes network timings, not the initiating source. Cache and
         // service-worker responses likewise do not expose a network dependency.
         if readable

@@ -28,7 +28,7 @@ pub(super) fn record_compatibility_intercepted_xhr(
         prepared.execution_context,
         xhr,
         prepared.use_cors_preflight,
-        String::new(),
+        prepared.initiator_url.clone(),
         prepared.credentials_mode,
         prepared.network_partition_key,
         prepared.policy_context,
@@ -47,6 +47,42 @@ pub(super) fn record_compatibility_intercepted_xhr(
             resource_type: SubresourceResourceType::Xhr,
             request_cookie_report,
         },
+    )
+}
+
+pub(super) fn native_xhr_service_worker_context(
+    host: &PageScriptHost,
+    owner: crate::native_bridge::OwnerDispatchScope,
+    document_url: &url::Url,
+    request_url: &url::Url,
+    policy_context: crate::types::SubresourcePolicyContext,
+    csp: crate::network_host::WindowCspRequestContext,
+) -> Option<crate::network_host::controlled_resource::XhrServiceWorkerContext> {
+    let client_id = host.service_worker_client_id_for_subresource_owner(owner);
+    host.service_worker_controller_for_fetch(client_id, document_url, request_url)?;
+    let runtime = host
+        .browser_context_runtime()
+        .service_worker_runtime_if_initialized()?;
+    let document_url = document_url.clone();
+    let request_url = request_url.clone();
+    let completion = host.resource_completion_sender();
+    Some(
+        crate::network_host::controlled_resource::XhrServiceWorkerContext::new(
+            runtime,
+            client_id,
+            policy_context,
+            csp.policy.clone(),
+            move |head, source| {
+                csp.check_response(
+                    &document_url,
+                    &request_url,
+                    head,
+                    source,
+                    completion.clone(),
+                    "XMLHttpRequest",
+                )
+            },
+        ),
     )
 }
 
@@ -91,7 +127,7 @@ pub(super) fn dispatch_service_worker_xhr(
         execution_context,
         xhr,
         prepared.use_cors_preflight,
-        String::new(),
+        prepared.initiator_url.clone(),
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.network_partition_key.clone(),
@@ -146,6 +182,7 @@ pub(super) fn dispatch_service_worker_xhr(
     let _ =
         host.resource_completion_sender()
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url: prepared.resolved_url.clone(),
                 request_method: prepared.method.clone(),
@@ -269,14 +306,28 @@ pub(super) fn spawn_network_xhr_fetch(
             .expect("registered XHR must retain its resource authority");
         let completion_tx = host.resource_completion_sender();
         let runner = request_client.resource_task_runner();
-        let mut controlled = control.load(
-            request,
-            info,
-            load,
-            cancel_handle,
-            prepared.cors_preflight_request_headers,
+        let csp = host
+            .window_subresource_csp_context(internal_id)
+            .expect("registered native XHR owns its captured Document policy");
+        let service_worker = native_xhr_service_worker_context(
+            host,
+            prepared.owner,
+            &prepared.document_url,
+            &prepared.resolved_url,
+            prepared.policy_context,
+            csp,
         );
-        controlled = controlled.with_redirect_owner(host.window_redirect_owner(internal_id));
+        let mut controlled = control
+            .load(
+                request,
+                info,
+                load,
+                cancel_handle,
+                prepared.cors_preflight_request_headers,
+            )
+            .with_service_worker(service_worker)
+            .with_redirect_owner(host.window_redirect_owner(internal_id));
+
         host.append_live_turn_owner_action(controlled.prepare_initial_pause());
         runner.spawn(async move {
             use crate::network_host::controlled_resource::{

@@ -129,7 +129,6 @@ async fn check_worker_credentialless_fetch(intercept: bool) {
                 WorkerToParentMessage::PendingSubresourceFetch(pending) => {
                     worker.continue_pending_fetch(pending_worker_fetch_continue(
                         pending.fetch_id,
-                        1,
                         &pending.info,
                         false,
                     ));

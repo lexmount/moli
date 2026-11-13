@@ -599,42 +599,71 @@ async fn rust_cdp_chromium_target_popup_target_keeps_opener_browser_context_id()
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    load_bc_with_titled_page_async(
-        &mut ctx,
-        "BID-named-context",
-        "TID-named-context-opener",
-        "<main>opener</main>",
-    )
-    .await;
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-named-context",
+                "TID-named-context-opener",
+                "<main>opener</main>",
+            )
+            .await;
+            ctx.process_async(json!({
+                "id": 990001, "method": "Target.attachToTarget",
+                "params": { "targetId": "TID-named-context-opener", "flatten": true }
+            }))
+            .await;
+            let opener_session_id = take_response_by_id(&mut ctx, 990001)["result"]["sessionId"]
+                .as_str()
+                .expect("actual opener session")
+                .to_owned();
+            ctx.take_all();
 
-    ctx.process_async(json!({
-        "id": 261_054,
-        "method": "Runtime.evaluate",
-        "params": {
-            "expression": "window.open('https://example.com/first', 'report') !== null",
-            "returnByValue": true
-        }
-    }))
-    .await;
-    ctx.sent.clear();
-    ctx.process_async(json!({
-        "id": 261_055,
-        "method": "Runtime.evaluate",
-        "params": {
-            "expression": "window.open('https://example.com/second', 'report') !== null",
-            "returnByValue": true
-        }
-    }))
-    .await;
-    let messages = ctx.take_all();
+            ctx.process_async(json!({
+                "id": 261_054,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": "window.open('data:text/html,first', 'report') !== null",
+                    "returnByValue": true
+                }
+            }))
+            .await;
+            ctx.wait_for_scheduler_message("named popup actual Document commit", |message| {
+                message["method"] == json!("Target.targetInfoChanged")
+                    && message["params"]["targetInfo"]["url"] == json!("data:text/html,first")
+            })
+            .await;
+            ctx.sent.clear();
+            ctx.process_async(json!({
+                "id": 261_055,
+                "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
+                "params": {
+                    "expression": "window.open('data:text/html,second', 'report') !== null",
+                    "returnByValue": true
+                }
+            }))
+            .await;
+            let changed = ctx
+                .wait_for_scheduler_message("named popup actual Document commit", |message| {
+                    message["method"] == json!("Target.targetInfoChanged")
+                        && message["params"]["targetInfo"]["url"] == json!("data:text/html,second")
+                })
+                .await;
+            let mut messages = ctx.take_all();
+            messages.push(changed);
 
-    let changed = event(&messages, "Target.targetInfoChanged");
-    assert_eq!(
-        changed["params"]["targetInfo"]["browserContextId"],
-        "BID-named-context"
-    );
-    assert_eq!(
-        changed["params"]["targetInfo"]["url"],
-        "https://example.com/second"
-    );
+            let changed = event(&messages, "Target.targetInfoChanged");
+            assert_eq!(
+                changed["params"]["targetInfo"]["browserContextId"],
+                "BID-named-context"
+            );
+            assert_eq!(
+                changed["params"]["targetInfo"]["url"],
+                "data:text/html,second"
+            );
+        })
+        .await;
 }

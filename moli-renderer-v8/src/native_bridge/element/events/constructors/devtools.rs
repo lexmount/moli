@@ -216,10 +216,8 @@ pub(crate) fn construct_mouse_event_for_target<'s>(
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target = unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)?;
-    let context = crate::native_bridge::node_relevant_context(scope, target)?;
+    let context =
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_mouse_event_with_modifiers(scope, event_type, coordinates, button, buttons, modifiers)
 }
@@ -236,10 +234,8 @@ pub(crate) fn construct_mouse_event_with_related_target_for_target<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target = unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)?;
-    let context = crate::native_bridge::node_relevant_context(scope, target)?;
+    let context =
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_mouse_event_with_related_target_and_modifiers(
         scope,
@@ -264,10 +260,8 @@ pub(crate) fn construct_mouse_event_with_detail_for_target<'s>(
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target = unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)?;
-    let context = crate::native_bridge::node_relevant_context(scope, target)?;
+    let context =
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_mouse_event_with_detail_and_modifiers(
         scope,
@@ -292,10 +286,8 @@ pub(crate) fn construct_wheel_event_for_target<'s>(
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target = unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)?;
-    let context = crate::native_bridge::node_relevant_context(scope, target)?;
+    let context =
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     // Wheel input does not change a mouse button.
     construct_wheel_event(

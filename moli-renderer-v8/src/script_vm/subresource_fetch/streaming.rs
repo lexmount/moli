@@ -16,7 +16,7 @@ pub(super) fn window_streaming_response_timing(
         return None;
     }
     let fetch = pending.continuation.window_fetch();
-    let name = fetch.map_or(&pending.info.url, |fetch| fetch.initial_request_url(&pending.info.url)).clone();
+    let name = fetch.map_or(&pending.info.url, |fetch| fetch.initial_request_url()).clone();
     let redirect_mode = fetch.map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| fetch.redirect_mode());
     let web_security_disabled = pending.load.request_client().web_security_disabled();
     let filter = response_filter.cloned().or_else(|| {
@@ -41,6 +41,7 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
+        body_is_null: Option<bool>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result =
@@ -144,6 +145,7 @@ impl ScriptVm {
                     self._context_host
                         .borrow_mut()
                         .record_pending_subresource_auth(PendingSubresourceAuthState {
+                            body_is_null,
                             pending,
                             #[cfg(any(test, feature = "devtools"))]
                             response: PendingSubresourceAuthResponse {
@@ -205,6 +207,7 @@ impl ScriptVm {
                     self._context_host
                         .borrow_mut()
                         .record_pending_subresource_response(PendingSubresourceResponseState {
+                            body_is_null,
                             pending,
                             request_url,
                             request_method,
@@ -237,6 +240,7 @@ impl ScriptVm {
                     skip_fetch_security_validation,
                     response_filter,
                     network_error_text.clone(),
+                    body_is_null,
                     AsyncSubresourceFetchResult::from_image_parts(Ok(response), encoded),
                 );
                 trace_async_subresource_stage(
@@ -257,6 +261,7 @@ impl ScriptVm {
                     skip_fetch_security_validation,
                     response_filter,
                     network_error_text,
+                    body_is_null,
                     AsyncSubresourceFetchResult::Failure(error),
                 );
                 trace_async_subresource_stage(
@@ -329,6 +334,7 @@ impl ScriptVm {
                 completion.skip_fetch_security_validation,
                 completion.response_filter,
                 completion.network_error_text,
+                completion.body_is_null,
                 completion.result,
             );
             trace_async_subresource_stage(
@@ -371,6 +377,7 @@ impl ScriptVm {
             completion.skip_fetch_security_validation,
             completion.response_filter,
             completion.network_error_text,
+            completion.body_is_null,
             completion.result,
         )?;
         trace_async_subresource_stage(
@@ -446,9 +453,10 @@ impl ScriptVm {
                     completed.info.request_headers,
                     completed.info.request_body,
                     None,
-                    false,
+                    completed.skip_fetch_security_validation,
+                    completed.response_filter,
                     None,
-                    None,
+                    completed.body_is_null,
                     completed
                         .result
                         .map(crate::protocol_types::NavigationResponse::from)
@@ -802,6 +810,7 @@ impl ScriptVm {
                 &pending,
                 &started.head,
                 started.skip_fetch_security_validation,
+                started.response_filter.as_ref(),
             )
             .or_else(|| {
                 if started.skip_fetch_security_validation {
@@ -1030,7 +1039,7 @@ impl ScriptVm {
                     &self._context_host,
                     &pending,
                     &started.head,
-                    started.skip_fetch_security_validation,
+                    started.skip_fetch_security_validation, started.response_filter.as_ref(),
                 )
             .or_else(|| {
                 if started.skip_fetch_security_validation {

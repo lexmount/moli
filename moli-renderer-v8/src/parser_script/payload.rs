@@ -121,6 +121,7 @@ impl ParserPreparedClassicScript {
             response_provenance: _,
             source_result,
             source_bytes,
+            network_result: _,
             muted_errors,
             fetch_timing,
             ..
@@ -284,6 +285,12 @@ impl ParserClassicScriptSourceResult {
         &self,
     ) -> Option<crate::types::SubresourceNetworkRequestHandle> {
         self.outcome.network_request_handle
+    }
+
+    pub(crate) fn fetch_timing(
+        &self,
+    ) -> Option<&std::sync::Arc<moli_parser::ScriptSourceFetchTiming>> {
+        self.outcome.fetch_timing.as_ref()
     }
 
     pub(crate) fn into_outcome(self) -> PreparedScriptSourceLoadOutcome {

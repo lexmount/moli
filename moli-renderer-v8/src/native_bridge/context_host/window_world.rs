@@ -776,16 +776,14 @@ pub(crate) fn window_event_access<'s>(
             WindowEventAccess::Denied
         };
     }
-    let allowed = if target_host == accessing_host {
-        unsafe { &*target_host }
-            .window_execution_context_can_access(accessing_identity, target_identity)
-    } else {
-        unsafe { &*accessing_host }.window_execution_context_can_access_other_host(
-            accessing_identity,
-            unsafe { &*target_host },
-            target_identity,
-        )
-    };
+    // Currentness and listener-world admission above remain mandatory. Use
+    // the shared Window access algorithm, including its exact inherited
+    // opaque-origin security token, for the origin comparison.
+    let allowed = super::window_security_tokens::window_contexts_allow_access(
+        scope,
+        accessing,
+        target_context,
+    );
     if allowed {
         WindowEventAccess::Allowed
     } else {

@@ -4732,6 +4732,9 @@ impl PageVm {
             {
                 self.vm_mut().install_session_history_position(position);
             }
+        } else if mode == AuxiliaryEnvironmentApply::InitialRealm {
+            self.vm_mut()
+                .install_navigation_bootstrap_from_history(None, None);
         }
         Ok(())
     }

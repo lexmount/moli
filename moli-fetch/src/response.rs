@@ -263,11 +263,13 @@ impl ResponseHead {
 }
 
 fn headers_allow_timing(headers: &[(String, Vec<u8>)], origin: &str) -> bool {
-    headers
+    let combined = headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("timing-allow-origin"))
-        .filter_map(|(_, value)| std::str::from_utf8(value).ok())
-        .flat_map(|value| value.split(','))
+        .map(|(_, value)| crate::decode_header_value(value))
+        .collect::<Vec<_>>()
+        .join(",");
+    crate::split_http_header_list(&combined)
         .map(|value| value.trim_matches(|ch: char| ch.is_ascii_whitespace()))
         .any(|value| value == "*" || value == origin)
 }

@@ -9,16 +9,27 @@ use super::{
     SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES, SECURE_WINDOW_EVENT_HANDLER_PROPERTIES,
     WINDOW_EVENT_HANDLER_PROPERTIES,
 };
-use crate::definitions::define_function_accessor_property;
 use crate::util::{get_private_value, set_private_value, v8str};
 use moli_webapi_declare::WebApiObject;
 
-#[derive(moli_webapi_declare::WebApiFunctionTemplate)]
-#[webapi(interface = crate::web_api_interfaces::Window)]
+#[derive(WebApiObject)]
+#[webapi(fragment, receiver = crate::context_bootstrap::is_window_receiver)]
 struct SimpleWindowEventHandlerDeclaration {
-    #[webapi(accessor_property = "handler", data = true,
-        getter = crate::context_bootstrap::simple_event_target_handler_getter_callback,
-        setter = crate::context_bootstrap::simple_event_target_handler_setter_callback,
+    name: &'static str,
+    #[webapi(accessor_property = self.name, data = v8str(scope, self.name), enumerable,
+        getter = window_event_handler_getter_function,
+        setter = window_event_handler_setter_function,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    handler: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(fragment, receiver = crate::context_bootstrap::is_window_receiver)]
+struct LenientWindowEventHandlerDeclaration {
+    name: &'static str,
+    #[webapi(accessor_property = self.name, data = v8str(scope, self.name), enumerable, legacy_lenient_this,
+        getter = window_event_handler_getter_function,
+        setter = window_event_handler_setter_function,
         access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     handler: (),
 }
@@ -34,39 +45,22 @@ pub(crate) fn install_simple_window_event_handlers<'s>(
         .copied()
         .filter(|property| event_handler_property_is_exposed(scope, window, property))
         .collect();
-    use moli_webapi_declare::WebApiFunctionTemplateDeclaration;
-    let getter_callback = SimpleWindowEventHandlerDeclaration::accessor_getter_callback("handler")
-        .expect("declared Window handler getter");
-    let setter_callback = SimpleWindowEventHandlerDeclaration::accessor_setter_callback("handler")
-        .expect("declared Window handler setter");
     for name in properties {
-        let data = v8str(scope, name).into();
-        let getter = v8::Function::builder_raw(getter_callback)
-            .data(data)
-            .build(scope)
-            .expect("Window handler getter");
-        let setter = v8::Function::builder_raw(setter_callback)
-            .data(data)
-            .length(1)
-            .build(scope)
-            .expect("Window handler setter");
-        getter.set_name(
-            crate::util::v8_string(scope, &format!("get {name}")).expect("Window getter name"),
-        );
-        setter.set_name(
-            crate::util::v8_string(scope, &format!("set {name}")).expect("Window setter name"),
-        );
-        crate::definitions::define_get_set_property(
-            scope,
-            window,
-            v8str(scope, name).into(),
-            getter.into(),
-            setter.into(),
-            v8::PropertyAttribute::NONE,
-            name,
-        )
-        .expect("Window handler accessor");
+        install_window_event_handler_accessor(scope, window, name);
     }
+}
+
+fn install_window_event_handler_accessor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) {
+    if crate::native_bridge::element::legacy_lenient_this_event_handler(name) {
+        LenientWindowEventHandlerDeclaration::new(name).initialize(scope, window)
+    } else {
+        SimpleWindowEventHandlerDeclaration::new(name).initialize(scope, window)
+    }
+    .expect("Window handler accessor declaration should initialize");
 }
 
 // Reset handler values alongside listener registrations, without invoking
@@ -91,6 +85,7 @@ struct WindowGlobalEventHandlerAccessorsDeclaration {
         accessor_property,
         getter = window_onmessageerror_getter_function,
         setter = window_onmessageerror_setter_function,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver,
         enumerable
     )]
     onmessageerror: (),
@@ -99,6 +94,7 @@ struct WindowGlobalEventHandlerAccessorsDeclaration {
         accessor_property,
         getter = window_onerror_getter_function,
         setter = window_onerror_setter_function,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver,
         enumerable
     )]
     onerror: (),
@@ -107,6 +103,7 @@ struct WindowGlobalEventHandlerAccessorsDeclaration {
         accessor_property,
         getter = window_onunhandledrejection_getter_function,
         setter = window_onunhandledrejection_setter_function,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver,
         enumerable
     )]
     onunhandledrejection: (),
@@ -115,6 +112,7 @@ struct WindowGlobalEventHandlerAccessorsDeclaration {
         accessor_property,
         getter = window_onrejectionhandled_getter_function,
         setter = window_onrejectionhandled_setter_function,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver,
         enumerable
     )]
     onrejectionhandled: (),
@@ -134,18 +132,7 @@ pub(in crate::context_bootstrap) fn install_window_global_accessors<'s>(
         ) {
             continue;
         }
-        let data = v8str(scope, name).into();
-        define_function_accessor_property(
-            scope,
-            global,
-            name,
-            window_event_handler_getter_function,
-            Some(data),
-            window_event_handler_setter_function,
-            Some(data),
-            v8::PropertyAttribute::NONE,
-        )
-        .expect("Window event handler accessor should initialize");
+        install_window_event_handler_accessor(scope, global, name);
     }
 }
 
@@ -159,18 +146,7 @@ pub(crate) fn install_secure_window_event_handler_accessors<'s>(
         .chain(SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES)
     {
         if secure_context_available {
-            let data = v8str(scope, name).into();
-            define_function_accessor_property(
-                scope,
-                window,
-                name,
-                window_event_handler_getter_function,
-                Some(data),
-                window_event_handler_setter_function,
-                Some(data),
-                v8::PropertyAttribute::NONE,
-            )
-            .expect("secure Window event handler accessor should initialize");
+            install_window_event_handler_accessor(scope, window, name);
         } else {
             let _ = window.delete(scope, v8str(scope, name).into());
         }

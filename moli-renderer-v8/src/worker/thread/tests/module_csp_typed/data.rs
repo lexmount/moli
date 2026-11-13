@@ -201,7 +201,7 @@ const load = () => (KIND === 'javascript' ? import(URL) : import(URL, {with: {ty
                     assert_eq!(
                         actual["events"],
                         if blocked {
-                            json!(["report", "enforce"])
+                            json!(["report", "enforce", "report", "enforce"])
                         } else {
                             json!(["report"])
                         },
@@ -209,11 +209,11 @@ const load = () => (KIND === 'javascript' ? import(URL) : import(URL, {with: {ty
                     );
                     let results = actual["results"].as_array().unwrap();
                     assert_eq!(results.len(), 4);
-                    for row in results {
+                    for (index, row) in results.iter().enumerate() {
                         assert_eq!(
                             *row,
                             if blocked {
-                                json!({"error": "TypeError", "native": true, "events": 2})
+                                json!({"error": "TypeError", "native": true, "events": if index == 3 { 4 } else { 2 }})
                             } else {
                                 json!({"value": if kind == "text" { json!("module-text") } else { json!(42) }})
                             },
@@ -250,6 +250,7 @@ async fn worker_data_module_csp_reuses_dependency_results_across_graphs() {
                     let server = ModuleServer::spawn(move |_| format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len(),
                     )).await;
+                    let worker_url = format!("{}/worker.js", server.url);
                     let worker = spawn_test_worker_with_options(
                         WorkerSpawnOptions::new(
                             probe(json!([
@@ -257,10 +258,10 @@ async fn worker_data_module_csp_reuses_dependency_results_across_graphs() {
                                 [format!("{}/b.js", server.url), "javascript"],
                                 [format!("{}/a.js", server.url), "javascript"]
                             ])),
-                            format!("{}/worker.js", server.url),
+                            worker_url.clone(),
                         )
                         .with_script_kind(script_kind)
-                        .with_global_kind(global.clone())
+                        .with_global_kind(global_kind_for_worker_url(global.clone(), &worker_url))
                         .with_content_security_policies(vec![
                             if blocked {
                                 "script-src 'self'; connect-src 'none'"
@@ -293,7 +294,7 @@ async fn worker_data_module_csp_reuses_dependency_results_across_graphs() {
                         }
                         assert_eq!(
                             row["events"].as_array().unwrap().len(),
-                            usize::from(index == 0),
+                            usize::from(blocked || index == 0),
                             "{actual}"
                         );
                     }

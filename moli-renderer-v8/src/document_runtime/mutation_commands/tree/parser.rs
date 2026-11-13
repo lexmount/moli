@@ -221,7 +221,7 @@ impl DocumentRuntime {
             insertion_plan,
         );
         for &root in insertion_plan.insertion_roots {
-            crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
+            crate::native_bridge::element::initialize_parser_inserted_event_handlers(
                 scope, host_ptr, root,
             );
         }

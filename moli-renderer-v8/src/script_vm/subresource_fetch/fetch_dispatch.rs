@@ -37,6 +37,7 @@ impl ScriptVm {
                     &pending,
                     &response.head(),
                     skip_fetch_security_validation,
+                    response_filter.as_ref(),
                 ) {
                     return Err(message);
                 }
@@ -167,6 +168,7 @@ impl ScriptVm {
         request_body: Option<String>,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
+        response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
@@ -252,6 +254,7 @@ impl ScriptVm {
                                 &pending,
                                 &response.head(),
                                 skip_fetch_security_validation,
+                                response_filter.as_ref(),
                             )
                         .or_else(|| {
                             (!skip_fetch_security_validation)
@@ -446,6 +449,7 @@ impl ScriptVm {
             skip_fetch_security_validation,
             response_filter,
             network_error_text,
+            None,
             result.into(),
         )
     }
@@ -461,6 +465,7 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
+        body_is_null: Option<bool>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         self.resolve_pending_subresource_fetch_completion_with_record(
@@ -473,6 +478,7 @@ impl ScriptVm {
             skip_fetch_security_validation,
             response_filter,
             network_error_text,
+            body_is_null,
             completion_result,
             None,
         )
@@ -489,6 +495,7 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
+        body_is_null: Option<bool>,
         completion_result: AsyncSubresourceFetchResult,
         mut supplied_network_record: Option<crate::types::SubresourceNetworkRecord>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
@@ -618,6 +625,7 @@ impl ScriptVm {
                 request_body,
                 response_status_text,
                 skip_fetch_security_validation,
+                response_filter,
                 network_error_text,
                 result,
             );
@@ -683,6 +691,7 @@ impl ScriptVm {
                         &pending,
                         &response.head(),
                         skip_fetch_security_validation,
+                                response_filter.as_ref(),
                     )
                 {
                     return Err(message);
@@ -841,10 +850,10 @@ impl ScriptVm {
                     }
                     if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
                         let entry = if opaque_response_blocked {
-                            fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url))
+                            fetch.resource_timing().failed(fetch.initial_request_url())
                         } else {
                             fetch.resource_timing().completed(
-                                fetch.initial_request_url(&pending.info.url),
+                                fetch.initial_request_url(),
                                 &response_head,
                                 response.body_bytes().len(),
                                 &metadata,
@@ -870,10 +879,6 @@ impl ScriptVm {
                                 mode: pending.request_mode,
                                 redirect_mode,
                             };
-                            response_request.capture_cors_exposure(
-                                &pending.request_origin, &head, pending.credentials_mode,
-                                &mut metadata,
-                            );
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
@@ -885,14 +890,17 @@ impl ScriptVm {
                             // ORB discards the internal body; request policy
                             // still selects opaque versus opaqueredirect.
                             // Preserve explicit service-worker filter overrides.
-                            let response_obj =
+                            let response_obj = if body_is_null == Some(true) {
+                                crate::network_host::build_null_body_fetch_response_object_with_metadata(scope, head, &metadata)
+                            } else {
                                 crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
                                     scope,
                                     &response_request_method,
                                     head,
                                     body,
                                     &metadata,
-                                );
+                                )
+                            };
                             resolver.resolve(scope, response_obj.into());
                             if let Some(upload) = upload { upload.finish(scope); }
                         }

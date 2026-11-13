@@ -323,7 +323,7 @@ document.addEventListener('securitypolicyviolation', event => admissionEvents.pu
     advance_page_task_executor_until_eval_equals(
         &mut vm,
         &loader,
-        "String(frame.contentWindow.admissionParserDone === true && frame.contentWindow.admissionEvents.length === 2)",
+        "String((frame.contentWindow.admissionParserDone === true && frame.contentWindow.admissionEvents.length === 2) || JSON.stringify({done:frame.contentWindow.admissionParserDone,events:frame.contentWindow.admissionEvents,readyState:frame.contentDocument.readyState}))",
         "true",
         "parser handler CSP tasks before getters",
     )

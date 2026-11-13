@@ -27,7 +27,8 @@ struct ServiceWorkerNavigationPreloadDispatch {
 }
 
 fn service_worker_fetch_event_can_use_navigation_preload(job: &ServiceWorkerFetchJob) -> bool {
-    job.request.request_mode == moli_fetch::RequestMode::Navigate
+    job.router_race_request_cancel_handle.is_none()
+        && job.request.request_mode == moli_fetch::RequestMode::Navigate
         && matches!(
             job.destination,
             ServiceWorkerRequestDestination::Document | ServiceWorkerRequestDestination::Iframe
@@ -50,6 +51,9 @@ fn navigation_preload_request_for_job(
     request.request_headers = headers;
     Ok(request
         .with_redirect_mode(moli_fetch::RequestRedirectMode::Manual)
+        // This preload starts at the current navigation URL. Earlier browser
+        // redirects remain on the job, outside this fetch's Response URL list.
+        .with_redirect_chain(Vec::new())
         .with_browser_navigation_kind(job.metadata.navigation_kind(job.is_reload))
         .with_page_network_policy())
 }
@@ -57,8 +61,11 @@ fn navigation_preload_request_for_job(
 fn navigation_preload_response_head(
     head: moli_fetch::ResponseHead,
     request_url: &Url,
+    request_method: &str,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     moli_fetch_types::FetchResponseHead {
+        body_is_null: request_method.eq_ignore_ascii_case("HEAD")
+            || matches!(head.status, 101 | 103 | 204 | 205 | 304),
         metadata: head.fetch_metadata(&request_url.into(), moli_fetch::RequestMode::Navigate),
         status_text: head.status_text().to_owned(),
         status: head.status,
@@ -109,7 +116,11 @@ async fn stream_navigation_preload_response(
     };
 
     let body_source_id = new_network_body_source_id();
-    let response_head = navigation_preload_response_head(raw.head(), &dispatch.request_url);
+    let response_head = navigation_preload_response_head(
+        raw.head(),
+        &dispatch.request_url,
+        &dispatch.request_method,
+    );
     if !service.mark_navigation_preload_response_started(dispatch.event_id, &dispatch.owner) {
         cancel_handle.cancel();
         return;
@@ -369,6 +380,7 @@ impl ServiceWorkerRuntimeService {
             resource_task_runner: dispatch.resource_task_runner,
             cancel_handle: dispatch.cancel_handle,
             navigation_preload_cancel_handle: None,
+            router_race_request_cancel_handle: None,
             streaming_body_source_id: None,
             direct_completion_tx: dispatch.direct_completion_tx,
         };
@@ -413,6 +425,9 @@ impl ServiceWorkerRuntimeService {
         let Some(controller_client_id) = controller_client_id else {
             return Err(Box::new(fetch_job));
         };
+        let mut static_dispatch = None;
+        let mut race_launch = None;
+        let mut soft_update_registration = None;
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();
             // Freeze the environment IDs when this fetch is admitted. The
@@ -474,7 +489,73 @@ impl ServiceWorkerRuntimeService {
                 return Err(Box::new(fetch_job));
             };
             fetch_job.bind_to_owner(version.run_owner());
-            if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
+            if !matches!(
+                version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            ) {
+                return Err(Box::new(fetch_job));
+            }
+            if !version.router_rules.is_empty() {
+                fetch_job
+                    .cancel_handle
+                    .mark_service_worker_router_evaluation();
+            }
+            let router_source = super::router_rules::matching_router_source(version, &request);
+            if let Some(source) = &router_source {
+                soft_update_registration = Some((
+                    registration_id,
+                    document_url.clone(),
+                    request.resulting_client_id.is_some()
+                        || service_worker_fetch_request_is_navigation_destination(
+                            request.destination,
+                        ),
+                ));
+                let source = match source {
+                    super::super::static_router::RouterSource::Network => {
+                        moli_fetch::ServiceWorkerRouterSource::Network
+                    }
+                    super::super::static_router::RouterSource::Cache { .. } => {
+                        moli_fetch::ServiceWorkerRouterSource::Cache
+                    }
+                    super::super::static_router::RouterSource::FetchEvent => {
+                        moli_fetch::ServiceWorkerRouterSource::FetchEvent
+                    }
+                    super::super::static_router::RouterSource::RaceNetworkAndFetchHandler => {
+                        moli_fetch::ServiceWorkerRouterSource::RaceNetworkAndFetchHandler
+                    }
+                };
+                fetch_job
+                    .cancel_handle
+                    .mark_service_worker_router_match(source);
+            }
+            let race_request = (matches!(
+                &router_source,
+                Some(super::super::static_router::RouterSource::RaceNetworkAndFetchHandler)
+            ) && request.method == "GET")
+                .then(|| request.clone());
+            match router_source {
+                Some(super::super::static_router::RouterSource::Network) => {
+                    static_dispatch = Some(super::router_rules::StaticRouterDispatch::Network);
+                }
+                Some(super::super::static_router::RouterSource::Cache { name }) => {
+                    static_dispatch = Some(super::router_rules::StaticRouterDispatch::Cache {
+                        origin: (&scope_url).into(),
+                        embedder_policy: version.main_script_resource.as_ref()
+                            .map(|resource| crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(&resource.headers))
+                            .unwrap_or(crate::cross_origin_isolation::CrossOriginEmbedderPolicy::None),
+                        store: version.launch_config.storage_bucket_store.clone().or_else(|| {
+                            self.inner.storage_bucket_store.lock().clone()
+                        }),
+                        storage_key: registration_storage_key.clone(),
+                        name,
+                    });
+                }
+                _ => {}
+            }
+            if static_dispatch.is_some() {
+                (None, None, Some(fetch_job))
+            } else if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
                 fetch_job.cancel_handle.mark_service_worker_start();
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
@@ -487,12 +568,16 @@ impl ServiceWorkerRuntimeService {
                     navigation_preload_sent: false,
                 };
                 version.pending_activation_fetch_events.push_back(event);
+                if let Some(request) = race_request {
+                    race_launch = Some(self.prepare_router_race(event_id, &mut fetch_job, request));
+                }
                 state.pending_fetch_jobs.insert(event_id, fetch_job);
                 (None, None, None)
             } else if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
                 return Err(Box::new(fetch_job));
             } else if version.fetch_handler_existence != ServiceWorkerFetchHandlerExistence::Unknown
                 && version.fetch_handler_type.allows_fetch_event_skip()
+                && race_request.is_none()
             {
                 (None, None, Some(fetch_job))
             } else {
@@ -561,13 +646,26 @@ impl ServiceWorkerRuntimeService {
                         )
                     }
                 };
+                if let Some(request) = race_request {
+                    race_launch = Some(self.prepare_router_race(event_id, &mut fetch_job, request));
+                }
                 state.pending_fetch_jobs.insert(event_id, fetch_job);
                 action
             }
         };
 
+        if let Some(race) = race_launch {
+            race.start(self);
+        }
+        if let Some((registration_id, document_url, non_subresource)) = soft_update_registration {
+            self.soft_update_for_router(registration_id, document_url, non_subresource);
+        }
         if let Some(job) = fallback_job {
-            self.dispatch_fetch_fallback(job);
+            if let Some(route) = static_dispatch {
+                route.complete(self, job);
+            } else {
+                self.dispatch_fetch_fallback(job);
+            }
             return Ok(dispatched_event_id);
         }
         if let Some(launch) = start_launch {
@@ -1540,7 +1638,7 @@ impl ServiceWorkerRuntimeService {
             if let Some(job) = state.pending_fetch_jobs.get(&event.event_id)
                 && job.is_bound_to_owner(&event.owner)
             {
-                job.cancel_handle.mark_service_worker_dispatch();
+                job.request_cancel_handle().mark_service_worker_dispatch();
             }
         }
         if host.dispatch_fetch_event(event.clone()) {

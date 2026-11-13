@@ -48,6 +48,37 @@ impl PageScriptHost {
         element: Option<DomHandle>,
         violation: &DocumentContentSecurityPolicyViolation,
     ) -> bool {
+        self.report_and_queue_content_security_policy_violation(
+            scope, owner, element, element, violation,
+        )
+    }
+
+    /// Fetch violations target the requesting Document. Retain the initiating
+    /// element independently for the Inspector issue's node attribution.
+    pub(crate) fn queue_subresource_content_security_policy_violation_task(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        element: DomHandle,
+        violation: &DocumentContentSecurityPolicyViolation,
+    ) -> bool {
+        self.report_and_queue_content_security_policy_violation(
+            scope,
+            owner,
+            Some(element),
+            None,
+            violation,
+        )
+    }
+
+    fn report_and_queue_content_security_policy_violation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        diagnostic_element: Option<DomHandle>,
+        event_element: Option<DomHandle>,
+        violation: &DocumentContentSecurityPolicyViolation,
+    ) -> bool {
         let Some(target) = self.current_window_document_task_target_for_dispatch_scope(owner)
         else {
             return false;
@@ -57,7 +88,7 @@ impl PageScriptHost {
             WindowDocumentOwner::Frame(document_owner) => {
                 // SAFETY: the Host and its DocumentRuntime share one ScriptVm.
                 unsafe { &mut *self.document_runtime }
-                    .record_content_security_policy_inspector_issue(element, violation);
+                    .record_content_security_policy_inspector_issue(diagnostic_element, violation);
                 let child = match owner {
                     OwnerDispatchScope::Child(handle) => Some(handle),
                     _ => None,
@@ -84,7 +115,12 @@ impl PageScriptHost {
                 );
             }
         }
-        self.queue_content_security_policy_violation_event_task(target, element, violation, false)
+        self.queue_content_security_policy_violation_event_task(
+            target,
+            event_element,
+            violation,
+            false,
+        )
     }
 
     /// All newly queued CSP violation events share this exact-owner source,

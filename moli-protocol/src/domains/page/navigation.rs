@@ -266,10 +266,10 @@ impl PendingSameDocumentHistoryTraversalCommand {
 }
 
 pub(super) enum NavigateCommandStart {
-    PendingBeforeUnload(Box<PendingBeforeUnloadNavigationCommand>),
     CompletePlan(CommandOutputPlan),
     CompleteImmediate(CommandOutputPlan),
     PendingLoad(Box<PendingNavigateLoadCommand>),
+    PendingBeforeUnload(Box<PendingBeforeUnloadNavigationCommand>),
     PendingChildFrame(Box<PendingChildFrameNavigateCommand>),
     PendingSameDocument(Box<PendingSameDocumentNavigateCommand>),
     PendingContinueWithoutRequestPause(Box<PendingContinueNavigationWithoutRequestPauseCommand>),
@@ -1175,7 +1175,7 @@ fn start_devtools_navigate_command(
     )
 }
 
-fn session_owner_navigation_is_same_document_fragment(
+pub(super) fn session_owner_navigation_is_same_document_fragment(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
     target: &str,
@@ -1806,12 +1806,6 @@ pub(super) fn finish_started_navigation_command_for_parts(
     reloaded_after_crash_session_ids: &[Option<String>],
 ) -> PageCommandTaskStep {
     match &mut start {
-        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
-            conn,
-            &mut pending.prefix_events,
-            &owner,
-            reloaded_after_crash_session_ids,
-        ),
         NavigateCommandStart::CompletePlan(_) => {}
         NavigateCommandStart::CompleteImmediate(plan) => {
             clear_crash_state_after_navigation_into_plan(
@@ -1821,7 +1815,12 @@ pub(super) fn finish_started_navigation_command_for_parts(
                 reloaded_after_crash_session_ids,
             )
         }
-
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            &owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
             conn,
             &mut pending.prefix_events,
@@ -1840,6 +1839,8 @@ pub(super) fn finish_started_navigation_command_for_parts(
         }
     }
     match start {
+        NavigateCommandStart::CompletePlan(plan) => PageCommandTaskStep::Complete(plan),
+        NavigateCommandStart::CompleteImmediate(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::PendingBeforeUnload(pending) => {
             PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
                 command_id,
@@ -1849,9 +1850,6 @@ pub(super) fn finish_started_navigation_command_for_parts(
                 )),
             })
         }
-        NavigateCommandStart::CompletePlan(plan) => PageCommandTaskStep::Complete(plan),
-        NavigateCommandStart::CompleteImmediate(plan) => PageCommandTaskStep::Complete(plan),
-
         NavigateCommandStart::PendingLoad(pending) => {
             PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
                 command_id,
@@ -2639,12 +2637,6 @@ fn clear_crash_state_for_renderer_navigation(
     reloaded_after_crash_session_ids: &[Option<String>],
 ) -> NavigateCommandStart {
     match &mut start {
-        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
-            conn,
-            &mut pending.prefix_events,
-            owner,
-            reloaded_after_crash_session_ids,
-        ),
         NavigateCommandStart::CompletePlan(_) => {}
         NavigateCommandStart::CompleteImmediate(plan) => {
             clear_crash_state_after_navigation_into_plan(
@@ -2654,7 +2646,12 @@ fn clear_crash_state_for_renderer_navigation(
                 reloaded_after_crash_session_ids,
             )
         }
-
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
             conn,
             &mut pending.prefix_events,

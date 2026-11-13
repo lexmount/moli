@@ -384,6 +384,7 @@ impl ScriptVm {
             .borrow()
             .resource_completion_sender()
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -437,6 +438,7 @@ impl ScriptVm {
         let PendingSubresourceAuthState {
             pending: pending_fetch,
             response,
+            ..
         } = pending;
         let PendingSubresourceAuthResponse {
             request_url,
@@ -582,7 +584,12 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
-        let PendingSubresourceAuthState { pending, response } = pending;
+        let PendingSubresourceAuthState {
+            pending,
+            response,
+            body_is_null,
+            ..
+        } = pending;
         let PendingSubresourceAuthResponse {
             request_url,
             request_method,
@@ -626,6 +633,7 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_pending_subresource_response(PendingSubresourceResponseState {
+                body_is_null,
                 pending,
                 request_url,
                 request_method,
@@ -920,6 +928,7 @@ impl ScriptVm {
             pending.details.skip_fetch_security_validation,
             pending.details.response_filter,
             None,
+            pending.body_is_null,
             AsyncSubresourceFetchResult::from_image_parts(Ok(response), pending.details.encoded),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))
@@ -1158,18 +1167,19 @@ impl ScriptVm {
             state.pending.blob_url_entry.as_ref(),
         )
         .map(|result| result.map_err(|error| error.into_message()));
-        let (source_policy_error, redirect_owner) = {
+        let source_policy_error = {
             let mut host = self._context_host.borrow_mut();
             host.begin_active_subresource_request();
             host.record_running_subresource_fetch(state);
             if let Some(check) = host.window_fetch_redirect_check(internal_id) {
                 request = request.with_redirect_check(check);
             }
-            (
-                host.window_subresource_replacement_url_error(internal_id, &request.url),
-                host.window_redirect_owner(internal_id),
-            )
+            host.window_subresource_replacement_url_error(internal_id, &request.url)
         };
+        let redirect_owner = self
+            ._context_host
+            .borrow()
+            .window_redirect_owner(internal_id);
         let preflight_headers = request.request_headers.to_byte_strings();
         let request = completion_tx.observe_subresource_request(request, internal_id);
         let request =
@@ -1204,6 +1214,7 @@ impl ScriptVm {
                 })
             };
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -1238,6 +1249,7 @@ impl ScriptVm {
         task_runner.spawn(async move {
             let result = response.await;
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,

@@ -453,6 +453,7 @@ async fn dispatch_service_worker_lifecycle_event_for_test(
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
@@ -570,6 +571,7 @@ async fn dispatch_service_worker_fetch_event_with_client_ids_for_test(
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
@@ -653,6 +655,7 @@ async fn dispatch_service_worker_message_event_object_for_test(
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
@@ -713,6 +716,7 @@ async fn dispatch_service_worker_notification_event_for_test(
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
@@ -779,6 +783,7 @@ async fn dispatch_service_worker_push_event_for_test(
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
@@ -847,6 +852,7 @@ async fn dispatch_service_worker_sync_event_for_test(
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
@@ -916,6 +922,7 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
@@ -1575,13 +1582,13 @@ mod rtp_script_transform;
 mod strict_script_mime;
 mod web_locks;
 
+mod canvas_transfer_to_image_bitmap;
 mod geometry_point_transform;
 mod network;
 mod onerror;
 mod performance_observer_contract;
 mod performance_resource_timing;
 mod postmessage;
-mod canvas_transfer_to_image_bitmap;
 mod tls;
 mod trusted_types_reporting;
 mod wasm_csp;

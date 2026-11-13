@@ -80,7 +80,7 @@ async base => {
   p.clearResourceTimings();const broken=base+'/timing-broken?xhr='+sync;
   try{await xhr(broken,sync);}catch{}
   const entries=rows(broken);const e=entries[0];observations['broken XHR '+sync]=snapshot(broken);
-  test('broken XHR '+sync+': retains received bytes',()=>entries.length===1&&e.responseStatus===200&&e.decodedBodySize===27);
+  test('broken XHR '+sync+': reports the actual terminal response',()=>entries.length===1&&(sync ? e.responseStatus===0&&e.encodedBodySize===0&&e.decodedBodySize===0&&e.transferSize===0 : e.responseStatus===200&&e.encodedBodySize===27&&e.decodedBodySize===27));
  }
  for(const kind of ['abort','timeout']){
   p.clearResourceTimings();const url=base+'/timing-hang?xhr='+kind;const x=new XMLHttpRequest();

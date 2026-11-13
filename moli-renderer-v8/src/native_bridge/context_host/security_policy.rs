@@ -19,7 +19,6 @@ use crate::{
         child_window_handle_from_marker_data, entered_child_window_handle,
     },
     util::get_private_value,
-    v8_execution_watchdog::V8ExecutionWatchdog,
 };
 use url::Url;
 
@@ -976,18 +975,15 @@ impl PageScriptHost {
             .document_subresource_csp_check(request_url, kind)
             .into_violations();
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
+        for violation in report_only_violation.iter().chain(&enforced_violation) {
             self.dispatch_content_security_policy_violation_event_best_effort(
-                scope, host_ptr, &violation,
+                scope, host_ptr, violation,
             );
         }
-        let Some(violation) = enforced_violation else {
-            return DocumentCspOutcome::Allowed;
-        };
-        self.dispatch_content_security_policy_violation_event_best_effort(
-            scope, host_ptr, &violation,
-        );
-        DocumentCspOutcome::Blocked(violation)
+        match enforced_violation.into_iter().next() {
+            Some(violation) => DocumentCspOutcome::Blocked(violation),
+            None => DocumentCspOutcome::Allowed,
+        }
     }
 
     pub(crate) fn check_element_subresource_csp<'s>(
@@ -1015,25 +1011,15 @@ impl PageScriptHost {
                 kind,
             )
             .into_violations();
-        let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
+        for violation in report_only_violation.iter().chain(&enforced_violation) {
+            self.queue_subresource_content_security_policy_violation_task(
+                scope, owner, element, violation,
             );
         }
-        let Some(violation) = enforced_violation else {
-            return DocumentCspOutcome::Allowed;
-        };
-        // A report-only event in a child can run script before this enforced
-        // violation is delivered. Keep the block even if that script was terminated.
-        if !scope.is_execution_terminating()
-            && !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
-        {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+        match enforced_violation.into_iter().next() {
+            Some(violation) => DocumentCspOutcome::Blocked(violation),
+            None => DocumentCspOutcome::Allowed,
         }
-        DocumentCspOutcome::Blocked(violation)
     }
 
     pub(crate) fn owner_dispatch_scope_for_node(
@@ -1563,19 +1549,11 @@ impl PageScriptHost {
                 violation.column_number = column_number;
             }
         }
-        let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+        let allowed = enforced_violation.is_none();
+        for violation in report_only_violation.iter().chain(&enforced_violation) {
+            self.queue_content_security_policy_violation_task(scope, owner, None, violation);
         }
-        let Some(violation) = enforced_violation else {
-            return true;
-        };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
-        false
+        allowed
     }
 
     pub(crate) fn child_wasm_eval_csp_violation(
@@ -1629,7 +1607,7 @@ impl PageScriptHost {
                 violation.column_number = column_number;
             }
         }
-        let host_ptr: *mut PageScriptHost = self;
+
         let allowed = !violations
             .iter()
             .any(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce);
@@ -1637,9 +1615,7 @@ impl PageScriptHost {
         // state is partitioned by disposition, with enforce policies modeled
         // before report-only policies, so preserve that order here.
         for violation in violations {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+            self.queue_content_security_policy_violation_task(scope, owner, None, &violation);
         }
         allowed
     }
@@ -1679,13 +1655,11 @@ impl PageScriptHost {
     pub(crate) fn dispatch_content_security_policy_violation_event_best_effort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut PageScriptHost,
+        _host_ptr: *mut PageScriptHost,
         violation: &DocumentContentSecurityPolicyViolation,
     ) {
         let owner = policy_owner_dispatch_scope(scope);
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, violation,
-        );
+        self.queue_content_security_policy_violation_task(scope, owner, None, violation);
     }
 
     pub(crate) fn dispatch_trusted_types_sink_csp_violation_event_best_effort<'s>(
@@ -1736,22 +1710,20 @@ impl PageScriptHost {
     >(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut PageScriptHost,
+        _host_ptr: *mut PageScriptHost,
         owner: OwnerDispatchScope,
         sink: &str,
         sample: &str,
     ) {
         for violation in self.trusted_types_sink_csp_violations_for_owner(owner, sink, sample) {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+            self.queue_content_security_policy_violation_task(scope, owner, None, &violation);
         }
     }
 
     fn dispatch_trusted_types_sink_csp_violation_event_with_location_best_effort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut PageScriptHost,
+        _host_ptr: *mut PageScriptHost,
         owner: OwnerDispatchScope,
         sink: &str,
         sample: &str,
@@ -1766,9 +1738,7 @@ impl PageScriptHost {
                 violation.line_number = *line_number;
                 violation.column_number = *column_number;
             }
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
+            self.queue_content_security_policy_violation_task(scope, owner, None, &violation);
         }
     }
 
@@ -1859,43 +1829,6 @@ impl PageScriptHost {
                 .dispatch_lightweight_popup_content_security_policy_violation_event_without_report_best_effort(
                     scope, popup_id, violation,
                 ),
-        }
-    }
-
-    pub(crate) fn dispatch_content_security_policy_violation_event_for_owner_best_effort<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut PageScriptHost,
-        owner: OwnerDispatchScope,
-        violation: &DocumentContentSecurityPolicyViolation,
-    ) {
-        match owner {
-            OwnerDispatchScope::Top => {
-                // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
-                let runtime = unsafe { &mut *self.document_runtime };
-                runtime.queue_content_security_policy_violation_event_best_effort(
-                    scope, host_ptr, violation,
-                );
-            }
-            OwnerDispatchScope::Child(handle) => {
-                // Child documents share this renderer PageVM and its Audits
-                // issue storage even though their DOM event targets differ.
-                unsafe { &mut *self.document_runtime }
-                    .record_content_security_policy_inspector_issue(None, violation);
-                self.dispatch_child_content_security_policy_violation_event_best_effort(
-                    scope, handle, violation,
-                );
-            }
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                // A lightweight popup shares this renderer owner only until it
-                // is projected as its own DevTools target. Publishing through
-                // the opener PageVM would leak the popup issue to the wrong
-                // target; popup-owned Audits delivery needs an explicit owner
-                // handoff alongside popup activation.
-                self.dispatch_lightweight_popup_content_security_policy_violation_event_best_effort(
-                    scope, popup_id, violation,
-                );
-            }
         }
     }
 

@@ -3,7 +3,7 @@ use super::*;
 const WORLD_PROBE: &str = include_str!("dom_event_worlds.js");
 
 #[tokio::test]
-async fn isolated_event_default_view_uses_its_construction_window() {
+async fn isolated_event_wrapper_uses_the_target_window_in_the_listener_world() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm =
         new_storage_page_task_executor_test_vm_with_loader("https://event-worlds.test/", &loader);
@@ -33,7 +33,7 @@ async fn isolated_event_default_view_uses_its_construction_window() {
         r#"
         document.getElementById('target').addEventListener('construction', function(event) {
             globalThis.constructionFacts = [
-                event instanceof parent.Event, !(event instanceof Event),
+                event instanceof Event, !(event instanceof parent.Event),
                 event.createdIn === undefined, event.target === this,
                 event.currentTarget === this, this === document.getElementById('target')
             ];
@@ -248,8 +248,9 @@ async fn dom_event_worlds_foreign_window_targets_keep_the_listener_world_and_ori
         }, {once: true});
         target.dispatchEvent(original);
         target.addEventListener('child-probe', function(event) {
-            facts.push(event instanceof UIEvent, this === target, event.target === target,
-                event.currentTarget === target, window.event === event, event.view === target);
+            facts.push(event instanceof UIEvent, event instanceof target.UIEvent,
+                this === target, event.target === target, event.currentTarget === target,
+                window.event === event, event.view === target);
         }, {once: true});
         globalThis.foreignFacts = facts;
         JSON.stringify(facts)
@@ -266,7 +267,7 @@ async fn dom_event_worlds_foreign_window_targets_keep_the_listener_world_and_ori
     assert_eq!(
         vm.eval_in_isolated_context(isolated, "JSON.stringify(foreignFacts)")
             .unwrap(),
-        "[true,true,true,true,true,true,true,true,true,true,true,true,true]"
+        "[true,true,true,true,true,true,true,false,true,true,true,true,true,true]"
     );
 }
 

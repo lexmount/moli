@@ -28,7 +28,7 @@ struct TrustedTypesWindowAccessorDeclaration {
         getter = trusted_types_global_getter,
         data = true,
         enumerable,
-        access_policy = crate::context_bootstrap::window_receiver::require_same_origin_window_receiver
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver
     )]
     trusted_types: (),
 }

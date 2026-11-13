@@ -64,6 +64,7 @@ pub(crate) fn dispatch_worker_event<'s>(
         | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
         | WorkerToParentMessage::ServiceWorkerClientFocus(_)
         | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+        | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
         | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
         | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
         | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }

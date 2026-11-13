@@ -13,8 +13,8 @@ use crate::{web_api_interfaces, webidl};
 use moli_webapi::navigator_options::{PlaybackState, PlaybackStateArgs, SetActionHandlerArgs};
 use moli_webapi::window_values::{
     MEDIA_SESSION_HANDLERS_SLOT as HANDLERS, MEDIA_SESSION_PLAYBACK_STATE_SLOT as PLAYBACK_STATE,
-    MEDIA_SESSION_POSITION_STATE_SLOT as POSITION,
-    MEDIA_SESSION_STATE_SLOT as STATE, new_media_session, new_media_session_state,
+    MEDIA_SESSION_POSITION_STATE_SLOT as POSITION, MEDIA_SESSION_STATE_SLOT as STATE,
+    new_media_session, new_media_session_state,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -88,6 +88,8 @@ fn session_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     session: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
+    let session = moli_webapi_declare::web_api_object_target(scope, session)
+        .expect("MediaSession receiver has passed its native brand check");
     get_private_value(scope, session, STATE)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .expect("MediaSession has Window-owned state")

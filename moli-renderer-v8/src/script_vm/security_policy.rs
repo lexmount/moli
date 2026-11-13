@@ -45,9 +45,7 @@ impl ScriptVm {
     ) {
         let result = self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
-                .dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                    scope, host_ptr, owner, violation,
-                );
+                .queue_content_security_policy_violation_task(scope, owner, None, violation);
             Ok(())
         });
         if let Err(error) = result {
@@ -129,28 +127,16 @@ impl ScriptVm {
         if self.current_main_document_task_owner() != Some(task.owner()) {
             return ContentSecurityPolicyViolationBodyExecution::DiscardedStaleDocument;
         }
-        if let Some(target) = task.window_target() {
-            if !self
+        if let Some(target) = task.window_target()
+            && !self
                 ._context_host
                 .borrow()
                 .window_document_owner_is_current_for_dispatch_scope(
                     target.owner(),
                     target.dispatch_scope(),
                 )
-            {
-                return ContentSecurityPolicyViolationBodyExecution::DiscardedStaleDocument;
-            }
-            let result = self.with_default_context_scope(|scope, host_ptr| {
-                unsafe { &mut *host_ptr }
-                    .dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                        scope,
-                        host_ptr,
-                        target.dispatch_scope(),
-                        task.violation(),
-                    );
-                Ok(())
-            });
-            return ContentSecurityPolicyViolationBodyExecution::DispatchAttempted(result);
+        {
+            return ContentSecurityPolicyViolationBodyExecution::DiscardedStaleDocument;
         }
         let result = self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
             document_runtime.dispatch_content_security_policy_violation_event_page_task(

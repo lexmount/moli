@@ -366,6 +366,17 @@ impl PageScriptHost {
         &self,
         context: v8::Local<'_, v8::Context>,
     ) -> Option<WindowExecutionContextIdentity> {
+        // Realm tokens are allocated per host. A foreign Context can have
+        // the same token as one of our own realms, so qualify it with its
+        // existing native binding before consulting this host's registry.
+        if context
+            .get_slot::<crate::common_runtime::CommonRuntimeBinding>()
+            .is_some()
+            && crate::util::context_host_ptr_from_context_slot(context)
+                != Some(std::ptr::from_ref(self).cast_mut())
+        {
+            return None;
+        }
         let realm_token = context
             .get_slot::<RuntimeObservableContextToken>()
             .as_deref()
@@ -387,6 +398,17 @@ impl PageScriptHost {
         _scope: &mut v8::PinScope<'_, '_>,
         context: v8::Local<'_, v8::Context>,
     ) -> Option<WindowExecutionContextIdentity> {
+        // Realm tokens are allocated per host. A foreign Context can have
+        // the same token as one of our own realms, so qualify it with its
+        // existing native binding before consulting this host's registry.
+        if context
+            .get_slot::<crate::common_runtime::CommonRuntimeBinding>()
+            .is_some()
+            && crate::util::context_host_ptr_from_context_slot(context)
+                != Some(std::ptr::from_ref(self).cast_mut())
+        {
+            return None;
+        }
         let realm_token = context
             .get_slot::<RuntimeObservableContextToken>()
             .as_deref()

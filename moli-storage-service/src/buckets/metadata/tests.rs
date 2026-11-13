@@ -129,8 +129,13 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
             request: StorageBucketCachedRequest::default(),
             response: StorageBucketCachedResponse {
                 head: moli_fetch_types::FetchResponseHead {
+                    body_is_null: false,
+
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        cors_exposed_header_names: None,
+
                         request_include_credentials: false,
+
                         response_type: moli_fetch_types::FetchResponseType::Default,
                         timing_allow_passed: true,
                         url_list: vec![
@@ -139,7 +144,6 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
                                 .expect("valid response URL"),
                         ],
                         redirected: false,
-                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".into(),

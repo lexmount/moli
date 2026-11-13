@@ -1,6 +1,6 @@
 use super::ImageDataColorSpace;
-use moli_webidl as webidl;
 use half::f16;
+use moli_webidl as webidl;
 use std::str::FromStr;
 use style::color::AbsoluteColor;
 

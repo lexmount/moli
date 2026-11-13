@@ -235,6 +235,22 @@ fn install_event_runtime(scope: &mut v8::PinScope<'_, '_>) {
     );
 }
 
+/// Restricted WindowProxy contexts also create native platform objects. Their
+/// intrinsic identities belong to that Context, independently of LocalWindow
+/// execution authority or the cross-origin surface exposed to script.
+pub(crate) fn initialize_window_proxy_intrinsics(scope: &mut v8::PinScope<'_, '_>) -> Result<()> {
+    initialize_realm_interface_registry(scope, RealmKind::Window)?;
+    let global = scope.get_current_context().global(scope);
+    crate::web_api_interfaces::Window::DESCRIPTOR.initialize(scope, global)?;
+    initialize_ecmascript_intrinsic_registry(scope, global);
+    capture_ecmascript_intrinsic(scope, global, "Error")?;
+    capture_ecmascript_intrinsic(scope, global, "Promise")?;
+    moli_webapi_declare::capture_web_api_reflect_set(scope)
+        .ok_or_else(|| anyhow!("native Reflect.set is unavailable during WindowProxy bootstrap"))?;
+    install_web_api_intrinsic_resolver(scope, resolve_web_api_intrinsic);
+    Ok(())
+}
+
 /// Captures trusted eager constructor/prototype identities after realm
 /// bootstrap and before author script can mutate the public global.
 pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
@@ -295,10 +311,16 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     moli_webapi::install_realm_callbacks(
         scope,
         moli_webapi::RealmCallbacks {
-            refresh_performance_entry: Some(crate::context_bootstrap::performance_runtime::refresh_navigation_timing),
-            new_interface_instance: Some(|scope, name| super::build_intrinsic_interface_instance(scope, name).ok()),
+            refresh_performance_entry: Some(
+                crate::context_bootstrap::performance_runtime::refresh_navigation_timing,
+            ),
+            new_interface_instance: Some(|scope, name| {
+                super::build_intrinsic_interface_instance(scope, name).ok()
+            }),
             call_function: Some(crate::util::call_script_visible_function),
-            is_window_named_properties_object: Some(crate::context_bootstrap::window_template::is_window_named_properties_object),
+            is_window_named_properties_object: Some(
+                crate::context_bootstrap::window_template::is_window_named_properties_object,
+            ),
             point_accessed: crate::context_bootstrap::svg_runtime::sync_svg_point_from_owner,
             point_mutated: crate::context_bootstrap::svg_runtime::reflect_svg_point_mutation,
             media_query_matches: crate::context_bootstrap::media_queries::read_media_query_matches,

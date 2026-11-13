@@ -244,7 +244,7 @@ async fn service_worker_get_registration_uses_inherited_blank_popup_and_srcdoc_s
 }
 
 #[tokio::test]
-async fn navigator_service_worker_update_check_failure_rejects_register_with_type_error() {
+async fn navigator_service_worker_update_check_failure_rejects_register_with_security_error() {
     let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
         (
             "/app/worker.js",
@@ -306,7 +306,7 @@ async fn navigator_service_worker_update_check_failure_rejects_register_with_typ
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerUpdateFailureProbe)",
-        r#"{"name":"TypeError","isTypeError":true,"isDomException":false,"messageIncludesNosniff":true}"#,
+        r#"{"name":"SecurityError","isTypeError":false,"isDomException":true,"messageIncludesNosniff":true}"#,
     )
     .await;
 

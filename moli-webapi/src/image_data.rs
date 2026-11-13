@@ -319,7 +319,6 @@ pub fn build_image_data_object<'s>(
     )
 }
 
-
 pub fn build_image_data_object_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: ImageDataClonePayload<'s>,
@@ -446,7 +445,6 @@ pub fn image_data_buffer_is_detached<'s>(
             .was_detached(),
     )
 }
-
 
 #[cfg(test)]
 mod image_data_color_space_tests {

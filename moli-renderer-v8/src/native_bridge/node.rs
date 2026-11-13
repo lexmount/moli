@@ -864,6 +864,23 @@ pub(crate) fn node_owner_document_relevant_context<'s>(
     document.get_creation_context(scope)
 }
 
+/// Native events use the existing target wrapper's relevant Realm. Adoption
+/// changes ownerDocument without changing a platform object's creation Realm.
+pub(crate) fn node_target_relevant_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Context>> {
+    if let Some(wrapper) = unsafe { &*runtime_ptr }
+        .native_bridge()
+        .cached_handle_wrapper(scope, handle)
+        && let Some(context) = wrapper.get_creation_context(scope)
+    {
+        return Some(context);
+    }
+    node_owner_document_relevant_context(scope, runtime_ptr, handle)
+}
+
 pub(crate) fn node_relevant_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,

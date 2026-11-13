@@ -1899,9 +1899,25 @@ async fn redirect_filter_intercepted_fetch_keeps_redirect_mode_when_resumed() {
                     let requests = page_vm.vm_mut().take_pending_subresource_fetch_infos();
                     assert_eq!(requests.len(), 1);
                     page_vm.continue_pending_subresource_fetch(requests[0].internal_id, None, None, None, None, false, false)?;
-                    drive_websocket_until_done(&mut page_vm, "String(__resumedRedirect !== 'pending')", "resumed fetch should settle").await?;
+                    let mut target_pauses = 0;
+                    drive_page_work_until_done_with_explicit_producer_admission(
+                        &mut page_vm,
+                        "String(__resumedRedirect !== 'pending')",
+                        "resumed fetch should settle",
+                        |page| {
+                            for request in page.vm_mut().take_pending_subresource_fetch_infos() {
+                                assert_eq!((redirect, path), ("follow", "with-location"));
+                                assert_eq!(request.url.as_str(), format!("{base}/target"));
+                                target_pauses += 1;
+                                page.continue_pending_subresource_fetch(
+                                    request.internal_id, None, None, None, None, false, false,
+                                ).expect("continue the actual redirected request pause");
+                            }
+                        },
+                    ).await?;
+                    assert_eq!(target_pauses, usize::from(redirect == "follow" && path == "with-location"));
                     let expected = match redirect {
-                        "error" => "TypeError".to_owned(),
+                        "error" if path == "with-location" => "TypeError".to_owned(),
                         "manual" => serde_json::json!(["opaqueredirect", 0, ""]).to_string(),
                         _ => serde_json::json!(["basic", if path == "with-location" { 200 } else { 302 }, "ok"]).to_string(),
                     };

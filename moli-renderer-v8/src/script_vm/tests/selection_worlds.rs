@@ -200,7 +200,9 @@ async fn selection_worlds_rebind_initial_child_document_together() {
     let mut vm = new_storage_html_test_vm("https://selection-worlds-rebind.test/");
     vm.eval(
         r#"
-        globalThis.frame = document.body.appendChild(document.createElement('iframe'));
+        globalThis.frame = document.createElement('iframe');
+        frame.srcdoc = '<p>pending initial navigation</p>';
+        document.body.appendChild(frame);
         frame.contentDocument.body.innerHTML = '<p id=oldText>old</p>';
         'ready'
     "#,

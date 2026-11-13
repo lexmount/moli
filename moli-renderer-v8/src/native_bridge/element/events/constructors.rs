@@ -15,8 +15,6 @@ use moli_webapi::events::subclasses::{
 mod devtools;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use devtools::{construct_drag_event_with_related_target, construct_pointer_event};
-#[cfg(test)]
-pub(crate) use devtools::{construct_mouse_event_with_detail_and_modifiers, construct_wheel_event};
 #[cfg(feature = "devtools")]
 pub(crate) use devtools::{
     construct_drop_input_event,
@@ -24,6 +22,8 @@ pub(crate) use devtools::{
     construct_mouse_event_with_related_target_for_target,
     construct_wheel_event_for_target,
 };
+#[cfg(test)]
+pub(crate) use devtools::{construct_mouse_event_with_detail_and_modifiers, construct_wheel_event};
 
 use crate::runtime::RendererPointerEventProperties;
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
@@ -35,12 +35,14 @@ use moli_webapi::events::{construct_native_event, init::EventInit, state::mark_e
 
 #[derive(Clone, Copy)]
 pub(in crate::native_bridge::element) enum ClickEventSource<'a> {
-    #[cfg(any(test, feature = "devtools"))]
+    #[cfg(any(test, feature = "ace-protocol"))]
     Pointer,
     #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
     PointerWithProperties(&'a RendererPointerEventProperties),
     #[cfg(feature = "devtools")]
-    Touch { pointer_id: i32 },
+    Touch {
+        pointer_id: i32,
+    },
     UserAgent,
     Script,
 }
@@ -437,10 +439,8 @@ pub(crate) fn construct_text_input_event_for_target<'s>(
     target: DomHandle,
     text: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let target = unsafe { &mut *runtime_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, target)?;
-    let context = crate::native_bridge::node_relevant_context(scope, target)?;
+    let context =
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     crate::context_bootstrap::construct_original_text_input_event(scope, text)
 }
@@ -474,7 +474,7 @@ pub(crate) fn construct_submit_event<'s>(
     cancelable: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let context =
-        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_native_submit_event(scope, submitter, bubbles, cancelable)
 }
@@ -489,7 +489,7 @@ pub(crate) fn construct_simple_event_for_target<'s>(
     composed: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let context =
-        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_simple_event(scope, event_type, bubbles, cancelable, composed)
 }
@@ -541,7 +541,7 @@ pub(crate) fn construct_activation_pointer_event<'s>(
         )
     });
     let context =
-        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+        crate::native_bridge::node::node_target_relevant_context(scope, runtime_ptr, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     let source = pointer.map_or(
         ClickEventSource::UserAgent,
@@ -585,7 +585,7 @@ fn construct_activation_pointer_event_in_context<'s>(
     // Activation retains only the pointing device's identity. Pressure, tilt and
     // the remaining PointerEvent fields use their dictionary defaults.
     let (pointer_id, pointer_type, positionless) = match source {
-        #[cfg(any(test, feature = "devtools"))]
+        #[cfg(any(test, feature = "ace-protocol"))]
         ClickEventSource::Pointer => (1, "mouse", false),
         ClickEventSource::PointerWithProperties(pointer) => {
             (pointer.pointer_id, pointer.pointer_type.as_str(), false)

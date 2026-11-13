@@ -1,5 +1,4 @@
 use super::*;
-use crate::network_host::request::RequestInputUrl;
 use crate::webidl;
 use std::str::FromStr;
 

@@ -351,7 +351,7 @@ struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
         getter = performance_resource_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 20),
+        data = callback_data_index_value(scope, 28),
         enumerable
     )]
     initiator_url: (),
@@ -820,8 +820,8 @@ const PERFORMANCE_RESOURCE_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT,
     PERFORMANCE_RESOURCE_RENDER_BLOCKING_STATUS_SLOT,
     PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT,
-    PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT,
     PERFORMANCE_RESOURCE_CONTENT_ENCODING_SLOT,
+    PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT,
 ];
 
 pub fn create_performance_entry<'s>(

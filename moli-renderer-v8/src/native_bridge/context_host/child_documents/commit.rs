@@ -219,6 +219,12 @@ impl PageScriptHost {
                 );
             document_handle
         };
+        unsafe { &*self.document_runtime }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            &snapshot
+                .policy_container
+                .inherited_meta_content_security_policies,
+        );
         self.dom_host_mut()
             .set_document_character_set_for_handle(document_handle, &snapshot.character_set);
         self.dom_host_mut()

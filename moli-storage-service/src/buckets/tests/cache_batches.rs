@@ -20,13 +20,17 @@ fn operation(
         },
         response: StorageBucketCachedResponse {
             head: moli_fetch_types::FetchResponseHead {
+                body_is_null: false,
+
                 metadata: moli_fetch_types::FetchResponseMetadata {
+                    cors_exposed_header_names: None,
+
                     request_include_credentials: false,
+
                     response_type: moli_fetch_types::FetchResponseType::Default,
                     url_list: vec![(url.to_owned()).parse().unwrap()],
                     timing_allow_passed: true,
                     redirected: false,
-                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),

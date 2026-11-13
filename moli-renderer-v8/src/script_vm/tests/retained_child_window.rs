@@ -488,17 +488,56 @@ globalThis.heldWindow = frame.contentWindow;
         .expect("initial child realm");
     let child_context_id = child_realm.context_id;
     let frame_id = child_realm.frame_id.expect("initial child frame id");
+    let parent_window = vm
+        .with_default_context_scope(|scope, _| {
+            let window = scope.get_current_context().global(scope);
+            Ok(v8::Global::new(scope, window))
+        })
+        .unwrap();
     for (name, universal) in [("enforcedRead", false), ("universalRead", true)] {
         let context_id = vm
             .create_isolated_world_for_frame(&frame_id, name, universal)
             .expect("initial child isolated world");
         vm.eval_in_isolated_context(
             context_id,
-            &format!(
-                "parent.{name} = ((target) => () => {{ try {{ return target.status; }} catch (error) {{ return error.name; }} }})(parent); 'installed'"
-            ),
+            "globalThis.statusReaderFactory = target => () => { try { return target.status; } catch (error) { return error.name; } }; 'installed'",
         )
-        .expect("retain a callback from the initial isolated realm");
+        .expect("create a callback factory in the initial isolated realm");
+        let context = vm
+            .page_isolated_world_contexts
+            .context(context_id)
+            .unwrap()
+            .context
+            .clone();
+        let callback = vm
+            .with_context_scope_by_ptr_and_checkpoint_for_test(&context as *const _, |scope, _| {
+                let global = scope.get_current_context().global(scope);
+                let key = v8::String::new(scope, "statusReaderFactory").unwrap();
+                let value = global.get(scope, key.into()).unwrap();
+                let factory = v8::Local::<v8::Function>::try_from(value).unwrap();
+                let target = v8::Local::new(scope, &parent_window);
+                let receiver = v8::undefined(scope).into();
+                let callback = crate::util::call_script_visible_function(
+                    scope,
+                    factory,
+                    receiver,
+                    &[target.into()],
+                    "retain isolated Window status reader",
+                )
+                .expect("capture the actual parent Window in a child-realm callback");
+                Ok(v8::Global::new(scope, callback))
+            })
+            .unwrap();
+        // Explicitly transfer the callback to the default world. Ordinary JS
+        // writes to parent in an isolated world belong to that isolated world.
+        vm.with_default_context_scope(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key = v8::String::new(scope, name).unwrap();
+            let callback = v8::Local::new(scope, &callback);
+            assert_eq!(global.set(scope, key.into(), callback), Some(true));
+            Ok(())
+        })
+        .unwrap();
     }
     vm.exec(
         "globalThis.loaded = false; frame.onload = () => { loaded = true; }; frame.src = '/child.html'; frame.removeAttribute('srcdoc');",

@@ -1611,7 +1611,7 @@ async fn prepared_accept_preserves_image_cache_and_partitions_representations() 
             assert_eq!(values, [expected], "{request}");
             let body = format!("body{index}");
             let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nVary: Accept\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             stream.write_all(head.as_bytes()).await.unwrap();

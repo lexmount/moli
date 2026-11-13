@@ -2078,8 +2078,27 @@ pub(super) fn finish_runtime_mutation_effects(
         && !document_followups_deferred_to_parser_owner
         && !stylesheet_owner_changes.is_empty()
     {
-        let mut prime_result =
-            runtime.prime_stylesheet_owner_runtime_changes(host_ptr, &stylesheet_owner_changes);
+        // Capture script metadata at the actual DOM API boundary; native parser
+        // priming below can then remain independent of a Window realm.
+        let sources = stylesheet_owner_changes
+            .iter()
+            .map(|change| {
+                let owner = change.owner();
+                (
+                    owner,
+                    runtime.capture_connected_style_request_source(
+                        scope,
+                        unsafe { &mut *host_ptr },
+                        owner,
+                    ),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let mut prime_result = runtime.prime_stylesheet_owner_runtime_changes(
+            host_ptr,
+            &stylesheet_owner_changes,
+            &sources,
+        );
         crate::native_bridge::document::apply_stylesheet_owner_css_projections(
             scope,
             unsafe { &*host_ptr },
@@ -2100,6 +2119,7 @@ impl DocumentRuntime {
         &mut self,
         host_ptr: *mut PageScriptHost,
         stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
+        sources: &HashMap<DomHandle, super::stylesheet_runtime::ConnectedStyleRequestSource>,
     ) -> ConnectedStyleLoadPrimeResult {
         let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
@@ -2124,7 +2144,7 @@ impl DocumentRuntime {
             }
             let inline_source = unsafe { &*host_ptr }.owner_style_sheet_processing_source(owner);
             let prepared_loads = self.prepare_connected_style_loads(owner, false);
-            for prepared_load in prepared_loads {
+            for mut prepared_load in prepared_loads {
                 // A native DOM callback already owns this exact live host.
                 // Commit touches only FrameOwnerStore and never dereferences
                 // the runtime pointer; apply resumes after that borrow ends.
@@ -2138,6 +2158,9 @@ impl DocumentRuntime {
                     continue;
                 };
                 debug_assert_eq!(prepared_load.owner(), owner);
+                if let Some(source) = sources.get(&owner) {
+                    prepared_load.set_request_source(source.clone());
+                }
                 prime_result.extend(self.apply_prepared_connected_style_load(
                     prepared_load,
                     inline_source.clone(),

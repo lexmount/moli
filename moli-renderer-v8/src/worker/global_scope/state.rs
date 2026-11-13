@@ -46,6 +46,7 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) interception_context:
         Option<crate::network::interception_output::ResourceInterceptionContext>,
     pub(in crate::worker) network_cancel: moli_fetch::FetchCancelHandle,
+    pub(in crate::worker) static_router: super::static_router::WorkerRouterState,
     pub(crate) message_source_security: crate::context_bootstrap::RuntimeMessageSourceSecurity,
     pub(crate) rtp_transformers: HashMap<u64, crate::worker::rtp_tasks::TransformerEntry>,
     /// Components shared with Window runtimes, owned by this Worker run.
@@ -102,9 +103,9 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) service_worker_can_import_new_scripts: bool,
     /// Referrer policy parsed from the top-level worker script response.
     pub(in crate::worker) referrer_policy: Option<String>,
-    /// Creator origin used by the bootstrap module graph, independently of a
-    /// data: Worker's own opaque origin and its script URL.
-    pub(in crate::worker) module_static_import_origin: Option<moli_url::WebOrigin>,
+    /// Frozen outside-settings origin for the constructor's complete module
+    /// graph. Dynamic imports use this WorkerGlobalScope's own origin.
+    pub(in crate::worker) module_static_import_request_origin: moli_url::WebOrigin,
     /// CSP policies from outside settings used for module static imports.
     pub(in crate::worker) module_static_import_content_security_policies:
         Vec<ContentSecurityPolicy>,

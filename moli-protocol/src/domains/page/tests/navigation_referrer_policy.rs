@@ -173,10 +173,15 @@ async fn top_level_history_preserves_policy_changes_across_traversal_and_reload(
         } else {
             json!(source)
         };
+        let observed = evaluate(&mut ctx, SNAPSHOT).await;
+        let native_history = ctx.with_fixture(|conn| {
+            let owner = crate::conn::CommandOwnerScope::capture(conn, Some("SID-1"));
+            format!("{:#?}", conn.renderer_navigation_history_for_owner(&owner))
+        });
         assert_eq!(
-            evaluate(&mut ctx, SNAPSHOT).await,
+            observed,
             json!({"urls":[expected_source,destination],"sameDocument":[false,true],"from":expected_source}),
-            "{policy}"
+            "{policy}; native history: {native_history}"
         );
         navigate(&mut ctx, "Page.reload", json!({})).await;
         assert_eq!(

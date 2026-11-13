@@ -261,9 +261,9 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
     server
         .respond(
             "/worker/b.mjs",
-            "200 OK",
-            "text/javascript",
-            "import 'unresolvable-bare-specifier';",
+            "503 Service Unavailable",
+            "text/plain",
+            "retry later",
         )
         .await;
     // A's retry is already admitted when B fails static resolution. The

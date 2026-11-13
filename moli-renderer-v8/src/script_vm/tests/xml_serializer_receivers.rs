@@ -192,7 +192,7 @@ fn xml_serialization_uses_one_attribute_prefix_allocator() {
 }
 
 #[test]
-fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_collisions() {
+fn xml_serialization_preserves_ordinary_xmlns_spelling_and_reserves_generated_prefixes() {
     let mut vm = new_storage_html_test_vm("https://xml-namespace-collisions.test/");
     let result = vm
         .eval(
@@ -212,18 +212,24 @@ fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_coll
         for (let i = 0; i < roots.length; ++i) {
             if (snapshot(roots[i]) !== before[i]) throw Error('serializer mutated source');
             const parsed = new DOMParser().parseFromString(serialized[i], 'application/xml');
-            const hasError = parsed.getElementsByTagName('parsererror').length !== 0;
-            if (hasError !== (i === 1)) throw Error('unexpected namespace collision result');
+            if (i === 0) {
+                if (!parsed.getElementsByTagName('parsererror').length)
+                    throw Error('ordinary xmlns spelling still appears verbatim');
+            } else if (parsed.getElementsByTagName('parsererror').length ||
+                       parsed.documentElement.getAttributeNS('urn:b', 'value') !== 'b') {
+                throw Error('generated namespace must round-trip without colliding');
+            }
         }
         return JSON.stringify(serialized);
     })()"#,
         )
         .unwrap();
-    // The literal prefix is reserved for the ordinary attribute. The generated
-    // attribute case still follows the nsN counter from DOM Parsing issue #44.
+    // Ordinary no-namespace xmlns:p text remains verbatim. Genuine namespace
+    // declarations reserve their prefixes so generated attributes round-trip;
+    // this matches Chromium rather than the old DOM Parsing issue #44 example.
     assert_eq!(
         result,
-        r#"["<ns1:root xmlns:ns1=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns1=\"urn:b\" ns1:value=\"b\"/>"]"#
+        r#"["<p:root xmlns:p=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns2=\"urn:b\" ns2:value=\"b\"/>"]"#
     );
 }
 
@@ -301,21 +307,22 @@ fn xml_serializer_derived_node_arguments_reject_invalid_roots_without_author_acc
 }
 
 #[test]
-fn xml_serialization_avoids_conflicting_ordinary_prefix_declarations() {
+fn xml_serialization_preserves_a_declared_prefix_used_by_descendants() {
     let mut vm = new_storage_html_test_vm("https://xml-ordinary-prefix.test/");
     let result = vm
         .eval(
             r#"(() => {
+                const xmlns = "http://www.w3.org/2000/xmlns/";
                 const node = document.createElementNS("urn:element", "p:item");
-                node.setAttribute("xmlns:p", "urn:ordinary");
-                node.append(document.createElementNS("urn:ordinary", "p:child"));
+                node.setAttributeNS(xmlns, "xmlns:p", "urn:child");
+                node.append(document.createElementNS("urn:child", "p:child"));
                 const xml = new XMLSerializer().serializeToString(node);
                 const parsed = new DOMParser().parseFromString(xml, "application/xml");
                 const root = parsed.documentElement;
-                return [node.getAttributeNS(null, "xmlns:p"), root.namespaceURI,
+                return [node.getAttributeNS(xmlns, "p"), root.namespaceURI,
                     root.firstElementChild?.namespaceURI, (xml.match(/xmlns:p=/g) || []).length].join("|");
               })()"#,
         )
         .expect("XML prefix reservation probe should evaluate");
-    assert_eq!(result, "urn:ordinary|urn:element|urn:ordinary|1");
+    assert_eq!(result, "urn:child|urn:element|urn:child|1");
 }

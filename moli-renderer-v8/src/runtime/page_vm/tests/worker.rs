@@ -901,6 +901,7 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
             admit_additional_producer_work(page_vm);
         },
         Some(receiver),
+        None,
     )
     .await
 }

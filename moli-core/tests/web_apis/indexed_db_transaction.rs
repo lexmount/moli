@@ -826,7 +826,7 @@ async fn indexed_db_writes_clone_before_key_paths_and_snapshot_queued_values() -
         assert_eq!(result["state"], "pass", "{target}: {result}");
         assert_eq!(
             result["checks"].as_array().unwrap().len(),
-            165,
+            181,
             "{target}: {result}"
         );
     }

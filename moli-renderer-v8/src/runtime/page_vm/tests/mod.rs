@@ -2213,13 +2213,14 @@ async fn drive_page_work_until_done_with_explicit_producer_admission(
     page_vm: &mut PageVm,
     done_expression: &str,
     context: &str,
-    admit_external_producer_work: impl FnMut(&PageVm),
+    admit_external_producer_work: impl FnMut(&mut PageVm),
 ) -> anyhow::Result<()> {
     drive_page_work_until_done_with_producer_wake::<()>(
         page_vm,
         done_expression,
         context,
         admit_external_producer_work,
+        None,
         None,
     )
     .await
@@ -2241,10 +2242,21 @@ async fn drive_page_work_until_done_with_producer_wake<W>(
     page_vm: &mut PageVm,
     done_expression: &str,
     context: &str,
-    mut admit_external_producer_work: impl FnMut(&PageVm),
+    mut admit_external_producer_work: impl FnMut(&mut PageVm),
     mut producer_wake: Option<tokio::sync::mpsc::UnboundedReceiver<W>>,
+    mut page_owner_wake: Option<
+        tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
+    >,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    // The explicit producer callback also owns SharedWorker service admission.
+    // Wake it from that native producer instead of waiting for the fallback.
+    let (shared_sender, mut shared_receiver) =
+        crate::shared_worker_runtime::shared_worker_owner_wake_channel();
+    page_vm
+        .runtime_hooks
+        .browser_context_runtime
+        .add_shared_worker_owner_wake_sender(shared_sender);
     while Instant::now() < deadline {
         admit_external_producer_work(page_vm);
         while page_vm
@@ -2281,6 +2293,8 @@ async fn drive_page_work_until_done_with_producer_wake<W>(
         let arrived = tokio::time::timeout(Duration::from_secs(1), async {
             tokio::select! {
                 _ = wait_for_test_producer_wake(&mut producer_wake) => true,
+                _ = wait_for_test_producer_wake(&mut page_owner_wake) => true,
+                _ = shared_receiver.recv() => true,
                 arrived = page_vm.wait_for_page_work_arrival_without_timeout(false) => arrived,
             }
         })
@@ -2408,6 +2422,7 @@ pub(super) async fn drive_service_worker_until_done(
                 .drain_service_worker_service_lane();
         },
         Some(receiver),
+        None,
     )
     .await
 }

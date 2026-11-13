@@ -647,12 +647,7 @@ pub(crate) struct ServiceWorkerFetchEventClientIds {
     pub(crate) resulting_client_id: String,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ServiceWorkerFetchResponse {
-    pub(crate) head: moli_fetch_types::FetchResponseHead,
-    pub(crate) body: Vec<u8>,
-    pub(crate) body_is_null: bool,
-}
+pub(crate) use moli_fetch_types::FetchResponse as ServiceWorkerFetchResponse;
 
 #[derive(Clone, Debug)]
 pub(crate) enum ServiceWorkerFetchResult {
@@ -713,10 +708,17 @@ pub(crate) use moli_fetch_types::FetchResponseHead as MaterializedServiceWorkerF
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchCompletion {
-    sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+    target: ServiceWorkerDirectFetchCompletionTarget,
     pub(super) stream_response: bool,
     pub(super) defer_network_fallback: bool,
     pub(super) defer_redirects: bool,
+    pub(super) router_race_event_id: Option<ServiceWorkerEventId>,
+}
+
+#[derive(Debug)]
+enum ServiceWorkerDirectFetchCompletionTarget {
+    Client(tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>),
+    RouterRace(super::static_router::race::RouterRaceCompletionTarget),
 }
 
 impl ServiceWorkerDirectFetchCompletion {
@@ -724,19 +726,11 @@ impl ServiceWorkerDirectFetchCompletion {
         sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
     ) -> Self {
         Self {
-            sender,
+            target: ServiceWorkerDirectFetchCompletionTarget::Client(sender),
             stream_response: false,
             defer_network_fallback: false,
             defer_redirects: false,
-        }
-    }
-
-    pub(crate) fn streaming(
-        sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
-    ) -> Self {
-        Self {
-            stream_response: true,
-            ..Self::buffered(sender)
+            router_race_event_id: None,
         }
     }
 
@@ -752,17 +746,33 @@ impl ServiceWorkerDirectFetchCompletion {
         }
     }
 
-    pub(crate) fn streaming_with_network_fallback(
+    pub(crate) fn streaming_with_caller_redirects(
         sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
     ) -> Self {
         Self {
-            defer_network_fallback: true,
-            ..Self::streaming(sender)
+            stream_response: true,
+            ..Self::buffered_with_caller_redirects(sender)
         }
     }
 
     pub(super) fn send(self, result: ServiceWorkerDirectFetchResult) -> bool {
-        self.sender.send(result).is_ok()
+        match self.target {
+            ServiceWorkerDirectFetchCompletionTarget::Client(sender) => sender.send(result).is_ok(),
+            ServiceWorkerDirectFetchCompletionTarget::RouterRace(target) => target.send(result),
+        }
+    }
+
+    pub(super) fn for_router_race(
+        target: super::static_router::race::RouterRaceCompletionTarget,
+        event_id: ServiceWorkerEventId,
+    ) -> Self {
+        Self {
+            target: ServiceWorkerDirectFetchCompletionTarget::RouterRace(target),
+            stream_response: true,
+            defer_network_fallback: true,
+            defer_redirects: true,
+            router_race_event_id: Some(event_id),
+        }
     }
 }
 
@@ -781,6 +791,8 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchStream {
+    pub(crate) service_worker_response_head:
+        Option<Box<MaterializedServiceWorkerFetchResponseHead>>,
     pub(crate) body_source_id: crate::types::NetworkBodySourceId,
     pub(crate) head: moli_fetch::ResponseHead,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
@@ -795,6 +807,9 @@ pub(crate) enum ServiceWorkerDirectFetchStreamEvent {
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchResponse {
+    pub(crate) service_worker_response_head:
+        Option<Box<MaterializedServiceWorkerFetchResponseHead>>,
+    pub(crate) service_worker_body_is_null: Option<bool>,
     /// The worker response's URL before applying the request-URL fallback.
     pub(crate) response_url: Option<Url>,
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,

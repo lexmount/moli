@@ -1578,6 +1578,17 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
         (async () => {{
             try {{
                 const response = await fetch({fetch_url_literal}, {{ mode: "no-cors" }});
+                if (performance.getEntriesByName({fetch_url_literal}).length === 0) {{
+                    await new Promise(resolve => {{
+                        const observer = new PerformanceObserver(list => {{
+                            if (list.getEntries().some(entry => entry.name === {fetch_url_literal})) {{
+                                observer.disconnect();
+                                resolve();
+                            }}
+                        }});
+                        observer.observe({{ type: "resource", buffered: true }});
+                    }});
+                }}
                 postMessage({{
                     fulfilled: true,
                     type: response.type,
@@ -2113,10 +2124,9 @@ async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
         .await
         .expect("worker CSP redirect source server should finish");
     assert!(
-        !target_server.is_finished(),
+        futures_util::FutureExt::now_or_never(target_listener.accept()).is_none(),
         "CSP refuses the redirected transport before dispatch"
     );
-    target_server.abort();
     let record = network.expect("worker fetch CSP redirect should record network failure");
     assert_eq!(record.url().path(), "/worker-fetch-csp-target");
     assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
@@ -2607,5 +2617,4 @@ async fn worker_fetch_blocks_mixed_content_with_empty_referrer_before_intercepti
     );
     let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
     assert_eq!(expect_post_json(message), r#""TypeError""#);
-
 }

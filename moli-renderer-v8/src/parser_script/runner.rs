@@ -634,7 +634,10 @@ where
             if !owner.is_current_parser_script_owner(script.context()) {
                 return None;
             }
-            let source_script = script.runner_script().cloned();
+            let source_script = script.runner_script().cloned().map(|mut prepared| {
+                prepared.source_fetch_timing = source_result.fetch_timing().cloned();
+                prepared
+            });
             let network_request_handle = source_result.network_request_handle();
             let network_record_urls = script
                 .runner_script()
@@ -671,7 +674,10 @@ where
                 if !owner.is_current_parser_script_owner(script.context()) {
                     return None;
                 }
-                let source_script = script.runner_script().cloned();
+                let source_script = script.runner_script().cloned().map(|mut prepared| {
+                    prepared.source_fetch_timing = source_result.fetch_timing().cloned();
+                    prepared
+                });
                 let network_request_handle = source_result.network_request_handle();
                 let network_record_urls = script
                     .runner_script()
@@ -726,7 +732,10 @@ where
                 return Some(ParserClassicScriptSourceResultApplication::Waiting);
             };
             let source_result = source_identity.into_source_result(source_load_outcome);
-            let source_script = script.runner_script().cloned();
+            let source_script = script.runner_script().cloned().map(|mut prepared| {
+                prepared.source_fetch_timing = source_result.fetch_timing().cloned();
+                prepared
+            });
             let network_request_handle = source_result.network_request_handle();
             let (notification, network_result) =
                 script.notify_runner_source_result_with_network_result(source_result)?;

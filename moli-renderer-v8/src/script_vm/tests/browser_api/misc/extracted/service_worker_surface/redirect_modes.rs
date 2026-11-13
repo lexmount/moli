@@ -28,6 +28,11 @@ async fn service_worker_synthetic_redirect_without_location_preserves_client_mod
         (async () => {
             await navigator.serviceWorker.register('worker.js', {scope:'./'});
             await navigator.serviceWorker.ready;
+            if (!navigator.serviceWorker.controller) {
+                await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                    'controllerchange', resolve, {once:true}
+                ));
+            }
             for (const stream of [false,true]) {
                 for (const status of [200,301,302,303,307,308]) {
                     for (const redirect of ['error','manual','follow']) {

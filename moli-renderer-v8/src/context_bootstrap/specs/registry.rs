@@ -169,10 +169,6 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
-        interface: web_api_interfaces::MediaElementAudioSourceNode::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 2 },
-    },
-    ConstructorSpec {
         interface: web_api_interfaces::MediaStreamAudioDestinationNode::DESCRIPTOR,
         kind: ConstructorKind::Shell { length: 1 },
     },

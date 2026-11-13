@@ -48,6 +48,7 @@ struct JsonServiceWorkerResourceStoreBackend {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ServiceWorkerStoredRegistration {
+    pub(super) router_rules: Vec<super::static_router::RouterRule>,
     pub(super) registration_order: u64,
     pub(super) storage_key: String,
     pub(super) scope_url: Url,
@@ -379,6 +380,8 @@ struct JsonServiceWorkerResourceStoreFile {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonStoredRegistration {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    router_rules: Vec<super::static_router::RouterRule>,
     #[serde(skip_serializing_if = "Option::is_none")]
     registration_order: Option<u64>,
     storage_key: Option<String>,
@@ -445,6 +448,7 @@ impl JsonStoredRegistration {
             })
             .unwrap_or_else(|| ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url));
         Ok(ServiceWorkerStoredRegistration {
+            router_rules: self.router_rules,
             registration_order,
             storage_key,
             scope_url,
@@ -495,6 +499,7 @@ fn normalize_json_stored_registration_storage_key(scope_url: &Url, storage_key: 
 impl From<&ServiceWorkerStoredRegistration> for JsonStoredRegistration {
     fn from(registration: &ServiceWorkerStoredRegistration) -> Self {
         Self {
+            router_rules: registration.router_rules.clone(),
             registration_order: Some(registration.registration_order),
             storage_key: Some(registration.storage_key.clone()),
             scope_url: registration.scope_url.as_str().to_owned(),
@@ -1124,6 +1129,7 @@ mod tests {
             WorkerScriptResourceKind::CssModule,
         );
         ServiceWorkerStoredRegistration {
+            router_rules: Vec::new(),
             registration_order: 1,
             storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
             scope_url,

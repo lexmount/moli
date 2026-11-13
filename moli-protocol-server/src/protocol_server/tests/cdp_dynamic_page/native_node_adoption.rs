@@ -109,7 +109,14 @@ async fn borrowed_event_target_methods_use_the_native_node_owner() {
             "proxyCalleeRealm": true,
             "forgedCalleeRealm": true,
             "receiverBeforeConversion": true
-        })
+        }),
+        "callback diagnostics: {}",
+        evaluate_window_name_probe(
+            &mut opener,
+            602,
+            "JSON.stringify({calls:listenerCalls, owner:foreignNode.ownerDocument.URL})"
+        )
+        .await
     );
     evaluate_window_name_probe(&mut opener, 3, "p.close(); true").await;
     wait_for_target_list(addr, "the producer Page has closed", |targets| {
@@ -120,10 +127,10 @@ async fn borrowed_event_target_methods_use_the_native_node_owner() {
         evaluate_window_name_probe(
             &mut opener,
             4,
-            "EventTarget.prototype.dispatchEvent.call(foreignNode, new Event('test')) && listenerCalls === 1"
+            "({dispatched:EventTarget.prototype.dispatchEvent.call(foreignNode, new Event('test')),calls:listenerCalls})"
         )
         .await,
-        true
+        json!({"dispatched":false,"calls":1})
     );
     abort_test_cdp_server(server).await;
 }
@@ -232,7 +239,14 @@ async fn native_adoption_preserves_views_and_callbacks_across_pages() {
             "staticRemovedNode": true,
             "secondAdoption": true,
             "thirdAdoption": true
-        })
+        }),
+        "callback realm diagnostics: {}",
+        evaluate_window_name_probe(
+            &mut opener,
+            603,
+            "JSON.stringify({source:root.callbackDocument===sourceDocument, target:root.callbackDocument===document, event:root.eventInSourceRealm, callback:realmListener instanceof p.Function})"
+        )
+        .await
     );
     evaluate_window_name_probe(&mut opener, 3, "p.close(); true").await;
     wait_for_target_list(addr, "adoption's producer Page has closed", |targets| {

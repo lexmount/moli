@@ -72,6 +72,16 @@ fn global_kinds() -> [WorkerGlobalKind; 2] {
     ]
 }
 
+fn global_kind_for_worker_url(mut global: WorkerGlobalKind, worker_url: &str) -> WorkerGlobalKind {
+    if let WorkerGlobalKind::Shared { storage_key, .. } = &mut global {
+        *storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(
+            &url::Url::parse(worker_url).unwrap(),
+            None,
+        );
+    }
+    global
+}
+
 fn probe(requests: Value) -> String {
     r#"
 const events = [];
@@ -92,6 +102,7 @@ addEventListener('securitypolicyviolation', event => events.push({
       result.value = type === 'json' ? module.default.answer : module.default;
     } catch (error) {
       result.error = error.name;
+      result.__moliModuleDiagnosticMessage = error.message;
       result.native = error instanceof TypeError;
     }
     result.events = events.splice(0);
@@ -121,7 +132,18 @@ async fn console_result(worker: &mut WorkerTestHandle) -> Value {
     })
     .await
     .expect("module imports must settle");
-    serde_json::from_str(text.strip_prefix("log: ").expect(&text)).unwrap()
+    let mut report: Value = serde_json::from_str(text.strip_prefix("log: ").expect(&text)).unwrap();
+    if let Some(rows) = report.as_array_mut() {
+        for row in rows {
+            if let Some(message) = row
+                .as_object_mut()
+                .and_then(|row| row.remove("__moliModuleDiagnosticMessage"))
+            {
+                eprintln!("Worker module import rejected: {message}");
+            }
+        }
+    }
+    report
 }
 
 async fn result(mut worker: WorkerTestHandle) -> Value {
@@ -266,12 +288,13 @@ async fn worker_module_csp_redirect_reports_do_not_wait_for_response() {
                 let source = ModuleServer::spawn(move |_| format!(
                     "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )).await;
+                let worker_url = format!("{}/worker.js", source.url);
                 let mut worker = spawn_test_worker_with_options(
                     WorkerSpawnOptions::new(
                         pending_response_probe(&format!("{}/redirect", source.url), kind, 1),
-                        format!("{}/worker.js", source.url),
+                        worker_url.clone(),
                     )
-                    .with_global_kind(global.clone())
+                    .with_global_kind(global_kind_for_worker_url(global.clone(), &worker_url))
                     .with_script_kind(script_kind)
                     .with_content_security_report_only_policies(vec![
                         if kind == "javascript" {
@@ -465,12 +488,13 @@ async fn worker_typed_module_redirect_csp_stops_each_forbidden_hop_once() {
                     "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )).await;
                 let request_url = format!("{}/redirect.{extension}", source.url);
+                let worker_url = format!("{}/main.js", source.url);
                 let worker = spawn_test_worker_with_options(
                     WorkerSpawnOptions::new(
                         probe(json!([[request_url, module_type]])),
-                        format!("{}/main.js", source.url),
+                        worker_url.clone(),
                     )
-                    .with_global_kind(global.clone())
+                    .with_global_kind(global_kind_for_worker_url(global.clone(), &worker_url))
                     .with_content_security_policies(if enforce {
                         vec!["connect-src 'self'".into()]
                     } else {

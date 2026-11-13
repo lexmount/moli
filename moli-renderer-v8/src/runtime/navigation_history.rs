@@ -207,6 +207,12 @@ impl RendererNavigationHistory {
         self.nested.clone()
     }
 
+    /// Window materialization consumes the already committed native records.
+    /// It must not create transient replacement identities or a new mutation.
+    pub(crate) fn bootstrap_seed(&self) -> Option<Arc<NavigationHistoryEntrySeed>> {
+        self.snapshot()
+    }
+
     pub(crate) fn current_document_id(&self) -> Option<NavigationHistoryDocumentId> {
         Some(
             current_entry(self.snapshot()?.as_ref())?

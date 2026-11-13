@@ -29,6 +29,12 @@ enum ServiceWorkerServiceLaneEvent {
     Completion(Box<ServiceWorkerRuntimeCompletion>),
     #[cfg(test)]
     Callback(Box<dyn FnOnce() + Send>),
+    RouterRules {
+        runtime: super::state::WeakServiceWorkerRuntimeService,
+        host: super::host::SharedRendererServiceWorkerHost,
+        request_id: u64,
+        rules: Vec<super::static_router::RouterRule>,
+    },
 }
 
 impl ServiceWorkerServiceLane {
@@ -60,6 +66,17 @@ impl ServiceWorkerServiceLane {
                 ServiceWorkerServiceLaneEvent::Completion(completion) => completion.complete(),
                 #[cfg(test)]
                 ServiceWorkerServiceLaneEvent::Callback(callback) => callback(),
+                ServiceWorkerServiceLaneEvent::RouterRules {
+                    runtime,
+                    host,
+                    request_id,
+                    rules,
+                } => {
+                    if let Some(runtime) = runtime.upgrade() {
+                        let result = runtime.register_router_rules(host.run_owner(), rules);
+                        host.dispatch_router_rules_result(request_id, result);
+                    }
+                }
             }
         }
         Some(count)
@@ -71,6 +88,22 @@ impl ServiceWorkerServiceLane {
 }
 
 impl ServiceWorkerRuntimeService {
+    pub(super) fn enqueue_router_rules_registration(
+        &self,
+        host: super::host::SharedRendererServiceWorkerHost,
+        request_id: u64,
+        rules: Vec<super::static_router::RouterRule>,
+    ) {
+        self.service_lane().state.lock().events.push_back(
+            ServiceWorkerServiceLaneEvent::RouterRules {
+                runtime: self.downgrade(),
+                host,
+                request_id,
+                rules,
+            },
+        );
+        self.signal_service_lane_wake();
+    }
     pub(crate) fn drain_service_lane(&self) -> usize {
         let Some(count) = self.service_lane().drain() else {
             return 0;

@@ -194,7 +194,7 @@ impl ParserMutationEffectConsumer for ContextDocumentParserOwner<'_, '_, '_> {
             return;
         }
         for &root in effects.tree().connected_roots() {
-            crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
+            crate::native_bridge::element::initialize_parser_inserted_event_handlers(
                 self.scope, self.host, root,
             );
         }

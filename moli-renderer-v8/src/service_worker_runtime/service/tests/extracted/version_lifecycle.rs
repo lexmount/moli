@@ -1464,6 +1464,7 @@ fn devtools_skip_waiting_scope_uses_activation_progress() {
         state.versions.insert(
             waiting_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: waiting_version_id,
                 registration_id,
                 script_url: waiting_script_url.clone(),
@@ -1643,6 +1644,7 @@ fn activate_completion_does_not_clear_newer_installing_version() {
             state.versions.insert(
                 version_id,
                 ServiceWorkerVersion {
+                    router_rules: Vec::new(),
                     id: version_id,
                     registration_id,
                     script_url: script_url.clone(),
@@ -1758,6 +1760,7 @@ fn activate_completion_does_not_clear_newer_waiting_version() {
             state.versions.insert(
                 version_id,
                 ServiceWorkerVersion {
+                    router_rules: Vec::new(),
                     id: version_id,
                     registration_id,
                     script_url: script_url.clone(),
@@ -1964,6 +1967,7 @@ fn update_install_waits_when_existing_active_version_has_not_been_skipped() {
         state.versions.insert(
             active_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: active_version_id,
                 registration_id,
                 script_url: active_script_url.clone(),
@@ -1990,6 +1994,7 @@ fn update_install_waits_when_existing_active_version_has_not_been_skipped() {
         state.versions.insert(
             installing_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: installing_version_id,
                 registration_id,
                 script_url: installing_script_url.clone(),
@@ -2142,6 +2147,7 @@ fn force_update_install_skips_waiting_even_with_active_controllee() {
         state.versions.insert(
             active_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: active_version_id,
                 registration_id,
                 script_url: active_script_url.clone(),
@@ -2168,6 +2174,7 @@ fn force_update_install_skips_waiting_even_with_active_controllee() {
         state.versions.insert(
             installing_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: installing_version_id,
                 registration_id,
                 script_url: installing_script_url.clone(),
@@ -2247,6 +2254,7 @@ fn update_install_activates_when_existing_active_has_no_controllees() {
         state.versions.insert(
             active_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: active_version_id,
                 registration_id,
                 script_url: active_script_url.clone(),
@@ -2273,6 +2281,7 @@ fn update_install_activates_when_existing_active_has_no_controllees() {
         state.versions.insert(
             installing_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: installing_version_id,
                 registration_id,
                 script_url: installing_script_url.clone(),
@@ -2351,6 +2360,7 @@ fn activate_completion_queues_service_worker_target_activated_version_update() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -2457,6 +2467,7 @@ fn skip_waiting_update_activation_replaces_previous_active_version() {
         state.versions.insert(
             active_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: active_version_id,
                 registration_id,
                 script_url: active_script_url.clone(),
@@ -2483,6 +2494,7 @@ fn skip_waiting_update_activation_replaces_previous_active_version() {
         state.versions.insert(
             waiting_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: waiting_version_id,
                 registration_id,
                 script_url: waiting_script_url.clone(),
