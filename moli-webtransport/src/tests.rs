@@ -1,3 +1,5 @@
+mod http3_metadata;
+
 mod terminal_reader;
 
 use std::{sync::Arc, time::Duration};
