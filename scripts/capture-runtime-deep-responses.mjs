@@ -22,16 +22,9 @@ try {
     const wire = JSON.stringify({ id: depth + 1, result });
     const file = `deep-${depth}.json`;
     await writeFile(join(directory, file), wire);
-    const ids = new Set();
-    const stack = [result];
-    while (stack.length) {
-      const value = stack.pop();
-      if (!value || typeof value !== "object") continue;
-      for (const [key, child] of Object.entries(value)) {
-        if (["objectId", "promiseObjectId", "errorObjectId"].includes(key) && typeof child === "string") ids.add(child);
-        else if (typeof child === "object") stack.push(child);
-      }
-    }
+    // Registration projects known response handles, not deep value internals.
+    const ids = new Set([result.result?.objectId, result.exceptionDetails?.exception?.objectId]
+      .filter(id => typeof id === "string"));
     cases.push({ file, depth, bytes: Buffer.byteLength(wire), expected_ids: [...ids].sort(), params });
     await post("Runtime.releaseObjectGroup", { objectGroup: params.objectGroup });
   }
