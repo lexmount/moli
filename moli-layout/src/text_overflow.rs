@@ -21,6 +21,66 @@ pub(crate) struct TextOverflow {
     pub(crate) hidden_boxes: Vec<LayoutBoxId>,
 }
 
+impl TextOverflow {
+    fn with_marker(
+        style: &crate::ResolvedLayoutStyle,
+        parley: &mut crate::text::ParleyDocumentServices,
+    ) -> Option<Self> {
+        let mut marker_style = style.parley_text_style();
+        // Blink shapes the generated marker directly with the line's font,
+        // without text spacing or the original text's decoration fragments.
+        marker_style.letter_spacing = 0.0;
+        marker_style.word_spacing = 0.0;
+        marker_style.brush.decoration = Default::default();
+        parley.resolve_font_families(&mut marker_style, None);
+        let primary = parley.primary_font_identity(&marker_style);
+        let shape = |parley: &mut crate::text::ParleyDocumentServices, text: &str| {
+            let mut builder =
+                parley
+                    .layout_context
+                    .style_run_builder(&mut parley.font_context, text, 1.0, true);
+            let style = builder.push_style(marker_style.clone());
+            builder.push_style_run(style, ..);
+            let mut layout = builder.build(text);
+            layout.break_all_lines(None);
+            layout
+        };
+        let mut marker = shape(parley, "…");
+        let use_periods = marker
+            .lines()
+            .flat_map(|line| line.runs())
+            .next()
+            .is_none_or(|run| {
+                primary.is_some_and(|primary| {
+                    primary != (run.font().font.data.id(), run.font().font.index)
+                }) || run
+                    .clusters()
+                    .flat_map(|cluster| cluster.glyphs())
+                    .any(|glyph| glyph.id == 0)
+            });
+        let marker_text: Arc<str> = if use_periods {
+            marker = shape(parley, "...");
+            Arc::from("...")
+        } else {
+            Arc::from("…")
+        };
+        let marker_width = marker
+            .lines()
+            .next()
+            .map_or(0.0, |line| line.metrics().advance);
+        if marker_width <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            marker,
+            marker_text,
+            marker_width,
+            lines: Vec::new(),
+            hidden_boxes: Vec::new(),
+        })
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct EllipsisLine {
     cut_inline: f32,
@@ -195,59 +255,10 @@ pub(crate) fn prepare_text_overflow<N>(
         if !text.lines().any(|line| line_overflows(&line, width, rtl)) {
             continue;
         }
-        let parley = services.parley_mut();
-        let mut marker_style = style.parley_text_style();
-        // Blink shapes the generated marker directly with the line's font,
-        // without text spacing or the original text's decoration fragments.
-        marker_style.letter_spacing = 0.0;
-        marker_style.word_spacing = 0.0;
-        marker_style.brush.decoration = Default::default();
-        parley.resolve_font_families(&mut marker_style, None);
-        let primary = parley.primary_font_identity(&marker_style);
-        let shape = |parley: &mut crate::text::ParleyDocumentServices, text: &str| {
-            let mut builder =
-                parley
-                    .layout_context
-                    .style_run_builder(&mut parley.font_context, text, 1.0, true);
-            let style = builder.push_style(marker_style.clone());
-            builder.push_style_run(style, ..);
-            let mut layout = builder.build(text);
-            layout.break_all_lines(None);
-            layout
-        };
-        let mut marker = shape(parley, "…");
-        let use_periods = marker
-            .lines()
-            .flat_map(|line| line.runs())
-            .next()
-            .is_none_or(|run| {
-                primary.is_some_and(|primary| {
-                    primary != (run.font().font.data.id(), run.font().font.index)
-                }) || run
-                    .clusters()
-                    .flat_map(|cluster| cluster.glyphs())
-                    .any(|glyph| glyph.id == 0)
-            });
-        let marker_text: Arc<str> = if use_periods {
-            marker = shape(parley, "...");
-            Arc::from("...")
-        } else {
-            Arc::from("…")
-        };
-        let marker_width = marker
-            .lines()
-            .next()
-            .map_or(0.0, |line| line.metrics().advance);
-        if marker_width <= 0.0 {
+        let Some(mut overflow) = TextOverflow::with_marker(style, services.parley_mut()) else {
             continue;
-        }
-        let mut overflow = TextOverflow {
-            marker,
-            marker_text,
-            marker_width,
-            lines: Vec::new(),
-            hidden_boxes: Vec::new(),
         };
+        let marker_width = overflow.marker_width;
         for line in text.lines() {
             if !line_overflows(&line, width, rtl) {
                 overflow.lines.push(None);
