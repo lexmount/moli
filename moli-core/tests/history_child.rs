@@ -2883,6 +2883,13 @@ async fn child_browsing_context_reload_result_surface_exists_in_child_script() -
         page.serialize_html_async()
             .await
             .unwrap()
+            .contains("data-activation-reads=\"0\""),
+        "native history capture must ignore author activation getters"
+    );
+    assert!(
+        page.serialize_html_async()
+            .await
+            .unwrap()
             .contains("data-sync-snapshot=\"true|0|0\""),
         "{}",
         page.serialize_html_async().await.unwrap()
