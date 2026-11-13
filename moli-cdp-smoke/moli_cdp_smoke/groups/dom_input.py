@@ -268,6 +268,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
     await run_element_handle_state_workflows(state)
     await run_dom_handle_workflows(state)
     await run_touch_input_workflows(state)
+    await run_touch_tap_activation_workflow(state)
 
 
 async def run_add_script_and_style_tag_workflows(state: SmokeState) -> None:
@@ -2298,3 +2299,39 @@ async def run_touch_input_workflows(state: SmokeState) -> None:
                 f"coordinate input did not dispatch {event_type}: {coordinate_events!r}"
             )
     state.record("coordinate_input_layout_hit_test_workflows")
+
+
+async def run_touch_tap_activation_workflow(state: SmokeState) -> None:
+    context = await state.browser.new_context(has_touch=True)
+    try:
+        page = await context.new_page()
+        await page.set_content("""<!doctype html>
+            <style>body{margin:0}button{width:120px;height:80px}</style>
+            <button id="tap">0</button><script>
+            window.tapClicks=0;window.tapEvents=[];window.lastTap=null;
+            const target=document.getElementById('tap');
+            for(const name of ['pointerdown','touchstart','pointerup','touchend','mousedown','mouseup','click'])
+                target.addEventListener(name,e=>{
+                    tapEvents.push(e.type);
+                    if(name==='click'){
+                        tapClicks++;target.textContent=String(tapClicks);
+                        window.lastTap=[e instanceof PointerEvent,e.pointerType,e.isTrusted];
+                    }
+                });
+            </script>""")
+        await capture_layout(page)
+        for _ in range(40):
+            await page.touchscreen.tap(20, 20)
+        assert_equal(
+            await page.evaluate("() => [tapClicks,document.getElementById('tap').textContent,lastTap]"),
+            [40, "40", [True, "touch", True]],
+            "Playwright touch taps must activate exactly once",
+        )
+        assert_equal(
+            await page.evaluate("() => tapEvents.slice(0,7)"),
+            ["pointerdown", "touchstart", "pointerup", "touchend", "mousedown", "mouseup", "click"],
+            "touch compatibility events precede the click",
+        )
+        state.record("touch_tap_click_activation")
+    finally:
+        await context.close()

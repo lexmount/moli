@@ -1159,6 +1159,7 @@ fn synthetic_click_focuses_element(runtime: &PageScriptHost, handle: DomHandle) 
         })
 }
 
+#[cfg(test)]
 pub(crate) fn activate_handle_via_click(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -1181,6 +1182,7 @@ pub(crate) fn activate_handle_via_click(
     )
 }
 
+#[cfg(any(test, feature = "ace-protocol"))]
 pub(crate) fn activate_handle_via_click_with_detail_and_modifiers(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -1251,6 +1253,27 @@ pub(crate) fn activate_handle_after_pointer_release(
         click_detail,
         modifiers,
         ClickEventSource::Pointer,
+        ClickFocusBehavior::Preserve,
+    )
+}
+
+pub(crate) fn activate_handle_after_touch_release(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    coordinates: InputEventCoordinates,
+    pointer_id: i32,
+) -> RendererInputDispatchOutcome {
+    click_handle_internal(
+        scope,
+        runtime_ptr,
+        handle,
+        coordinates,
+        0,
+        0,
+        1,
+        0,
+        ClickEventSource::Touch { pointer_id },
         ClickFocusBehavior::Preserve,
     )
 }

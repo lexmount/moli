@@ -8,6 +8,7 @@ mod element_click;
 mod keyboard_events;
 mod mouse_snapshot;
 mod text_control_compat;
+mod touch_taps;
 
 const INPUT_HIT_X: u32 = 20;
 const INPUT_HIT_Y: u32 = 20;
@@ -651,7 +652,7 @@ async fn touch_tap_and_drag_commands_hit_test_real_layout() {
 
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__events)").await,
-        r#"["touchstart","touchend","touchstart","touchend","touchstart","touchend","click","dragenter"]"#
+        r#"["touchstart","touchend","click","touchstart","touchend","click","touchstart","touchend","click","dragenter"]"#
     );
 }
 
@@ -2364,7 +2365,7 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
 
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__touchPending)").await,
-        r#"["touchstart","touchend","touchstart","touchend","touchstart","touchend"]"#
+        r#"["touchstart","touchend","click","touchstart","touchend","click","touchstart","touchend","click"]"#
     );
 }
 

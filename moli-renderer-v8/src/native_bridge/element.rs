@@ -190,6 +190,8 @@ use super::document::{
     detached_shadow_root_selection_value, node_shadow_root_element_from_point_callback,
     node_shadow_root_elements_from_point_callback,
 };
+#[cfg(test)]
+pub(crate) use activation::activate_handle_via_click;
 #[cfg(feature = "ace-protocol")]
 pub(crate) use activation::activate_handle_via_click_with_detail_and_modifiers;
 use activation::navigate_form_target_browsing_context;
@@ -198,13 +200,14 @@ pub(crate) use activation::{
     navigate_named_iframe_target,
 };
 pub(crate) use activation::{
-    accepts_drop_default_action, activate_handle_after_pointer_release, activate_handle_via_click,
-    activate_handle_via_keyboard, activate_handle_via_synthetic_click,
-    dispatched_click_activation_target, finish_legacy_activation_for_dispatched_click,
-    perform_auxiliary_link_default_action, perform_click_default_action_for_dispatched_event,
-    perform_drop_default_action, prepare_legacy_activation_for_dispatched_click,
-    replace_contenteditable_selection, scroll_to_document_fragment_target,
-    scroll_to_url_fragment_or_top, select_contenteditable_contents,
+    accepts_drop_default_action, activate_handle_after_pointer_release,
+    activate_handle_after_touch_release, activate_handle_via_keyboard,
+    activate_handle_via_synthetic_click, dispatched_click_activation_target,
+    finish_legacy_activation_for_dispatched_click, perform_auxiliary_link_default_action,
+    perform_click_default_action_for_dispatched_event, perform_drop_default_action,
+    prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
+    scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
+    select_contenteditable_contents,
 };
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
 use activation::{
@@ -286,10 +289,11 @@ pub(crate) use events::{
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
-    construct_submit_event, construct_toggle_event, construct_touch_event,
-    construct_touch_event_with_points, construct_wheel_event_for_target, dispatch_beforeinput,
-    dispatch_public_event,
+    construct_submit_event, construct_toggle_event, construct_touch_event_with_points,
+    construct_wheel_event_for_target, dispatch_beforeinput, dispatch_public_event,
 };
+pub(crate) use focus::is_disabled_form_control;
+use focus::is_focusable;
 pub(crate) use focus::{
     contenteditable_editing_host, focus_element, focus_live_element_for_inspector,
     perform_access_key_default_action_for_dispatched_event,
@@ -299,7 +303,6 @@ pub(crate) use focus::{
     reset_focus_from_previous_handle_with_previous_focus_within, schedule_focus_blur_if_needed,
     update_focus,
 };
-use focus::{is_disabled_form_control, is_focusable};
 pub(super) use focus::{node_blur_callback, node_focus_callback};
 pub(super) use forms::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
