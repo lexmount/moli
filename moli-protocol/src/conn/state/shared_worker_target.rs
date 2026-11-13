@@ -372,16 +372,6 @@ impl SharedWorkerTargetState {
             .any(|session| session.devtools.has_runtime_remote_object_id(object_id))
     }
 
-    pub(crate) fn take_runtime_remote_object_cleanup_plan(
-        &mut self,
-        session_id: &str,
-    ) -> (Vec<String>, Vec<String>) {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return (Vec::new(), Vec::new());
-        };
-        state.take_runtime_remote_object_cleanup_plan()
-    }
-
     #[cfg(test)]
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.sessions.keys().next().map(String::as_str)

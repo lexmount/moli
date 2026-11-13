@@ -428,12 +428,15 @@ impl PreparedSessionHandlerDisposal {
                     None => None,
                 };
                 let identity = identity.clone();
-                let (background, protocol) = driver.with_state(move |state| {
+                let (background, protocol, first_error) = driver.with_state(move |state| {
                     state.finish_session_runtime_cleanup(&identity, completed)
                 })?;
                 background_events.extend(background);
                 protocol_events.extend(protocol);
-                Ok(Default::default())
+                Ok(crate::conn::SessionPageUpdateResult {
+                    first_error,
+                    ..Default::default()
+                })
             }
             Self::Page { scripts, events } => {
                 protocol_events.extend(events);

@@ -1127,31 +1127,6 @@ impl DevToolsSessionState {
         self.runtime_remote_object_ids.contains(object_id)
             || self.runtime_remote_object_aliases.contains_key(object_id)
     }
-
-    pub(crate) fn take_runtime_remote_object_cleanup_plan(&mut self) -> (Vec<String>, Vec<String>) {
-        let grouped_object_ids = self
-            .runtime_remote_object_groups
-            .keys()
-            .cloned()
-            .collect::<HashSet<_>>();
-        let mut object_groups = self
-            .runtime_remote_object_groups
-            .values()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let mut ungrouped_object_ids = self
-            .runtime_remote_object_ids
-            .iter()
-            .filter(|object_id| !grouped_object_ids.contains(*object_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        object_groups.sort();
-        ungrouped_object_ids.sort();
-        self.clear_runtime_remote_object_tracking();
-        (object_groups, ungrouped_object_ids)
-    }
 }
 
 impl DevToolsDomStorageSessionState {

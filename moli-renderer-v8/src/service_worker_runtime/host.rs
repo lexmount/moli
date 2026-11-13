@@ -192,15 +192,15 @@ impl RendererServiceWorkerHost {
     pub(super) fn detach_worker_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
-    ) -> bool {
+    ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
         let state = self.state.lock();
         let RendererServiceWorkerHostState::Running {
             handle: Some(handle),
         } = &*state
         else {
-            return false;
+            return None;
         };
-        handle.detach_runtime_inspector_session(inspector_session_id)
+        Some(handle.detach_runtime_inspector_session(inspector_session_id))
     }
 
     pub(super) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
