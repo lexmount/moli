@@ -28,6 +28,7 @@ pub(super) struct LazyServiceWorkerRuntime {
     client_id_allocator: crate::service_worker_runtime::ServiceWorkerClientIdAllocator,
     browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
+    storage_bucket_store: Mutex<Option<crate::context_bootstrap::SharedStorageBucketStore>>,
 }
 
 enum LazyServiceWorkerRuntimeState {
@@ -79,6 +80,7 @@ impl LazyServiceWorkerRuntime {
             client_id_allocator: Default::default(),
             browser_context_runtime_id,
             output_transport,
+            storage_bucket_store: Mutex::new(None),
         }
     }
 
@@ -111,6 +113,9 @@ impl LazyServiceWorkerRuntime {
                 self.browser_context_runtime_id,
                 self.output_transport.clone(),
             );
+        if let Some(store) = self.storage_bucket_store.lock().clone() {
+            service.bind_storage_bucket_store(store);
+        }
         for sender in owner_wake_senders.into_senders() {
             service.add_owner_wake_sender(sender);
         }
@@ -130,6 +135,17 @@ impl LazyServiceWorkerRuntime {
         }
         *state = LazyServiceWorkerRuntimeState::Live(service.clone());
         service
+    }
+
+    pub(super) fn bind_storage_bucket_store(
+        &self,
+        store: crate::context_bootstrap::SharedStorageBucketStore,
+    ) {
+        let state = self.state.lock();
+        *self.storage_bucket_store.lock() = Some(store.clone());
+        if let LazyServiceWorkerRuntimeState::Live(service) = &*state {
+            service.bind_storage_bucket_store(store);
+        }
     }
 
     pub(super) fn get(&self) -> Option<crate::service_worker_runtime::ServiceWorkerRuntimeService> {
@@ -355,6 +371,17 @@ impl LazyServiceWorkerRuntime {
 }
 
 impl RendererBrowserContextRuntime {
+    /// Bind the partition's CacheStorage backend without initializing the
+    /// Service Worker registry or starting a restored worker.
+    pub fn bind_storage_bucket_store(
+        &self,
+        store: crate::context_bootstrap::SharedStorageBucketStore,
+    ) {
+        self.inner
+            .service_worker_runtime
+            .bind_storage_bucket_store(store);
+    }
+
     fn service_worker_runtime_for_existing_registration(
         &self,
     ) -> Option<crate::service_worker_runtime::ServiceWorkerRuntimeService> {
