@@ -367,3 +367,30 @@ globalThis.movedStyle = freshFrame.contentWindow.getComputedStyle(moved);
     .await
     .expect("computed size should use only the owning Document's existing snapshot");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn computed_size_rem_lengths_follow_root_font_size_across_device_rebuilds() {
+    run_page_vm_async_test(async move {
+        let mut page_vm =
+            page_with_size_fixture("<div id=s style=\"width:2rem;height:1px;font-size:2rem\"></div>")?;
+        page_vm.vm_mut().eval("document.documentElement.style.fontSize='10px';'set'")?;
+        let font_size = "id=>getComputedStyle(document.getElementById(id)).fontSize";
+        assert_eq!(read_sizes(&mut page_vm, &["s"])?, json!({"s":["20px","1px"]}));
+        publish_size_layout(&mut page_vm)?;
+        assert_eq!(page_vm.vm_mut().eval("String(s.getBoundingClientRect().width)")?, "20");
+
+        page_vm.vm_mut().eval("document.documentElement.style.fontSize='20px';'set'")?;
+        assert_eq!(page_vm.vm_mut().eval(&format!("({font_size})('s')"))?, "40px");
+
+        // A viewport change rebuilds the Stylo Device; elements resolved
+        // afterwards must still see the current root font size.
+        publish_size_layout_at(&mut page_vm, 400, 300)?;
+        page_vm.vm_mut().eval(
+            "const t=document.createElement('div');t.id='t';t.style.fontSize='3rem';document.body.appendChild(t);'added'",
+        )?;
+        assert_eq!(page_vm.vm_mut().eval(&format!("({font_size})('t')"))?, "60px");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("rem lengths should resolve against the root element font size");
+}
