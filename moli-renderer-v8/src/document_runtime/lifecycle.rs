@@ -299,6 +299,7 @@ impl DocumentRuntime {
         self.document_write_script_preload_scanner = None;
         self.main_document_script_preloads = Default::default();
         self.document_write_script_preloads.clear();
+        self.clear_classic_defer_timer_schedule_ranges();
         self.pending_parser_blocking_work = None;
         self.root_document_parser = None;
         self.reset_meta_content_security_policy_processing_for_document(self.document_handle());
@@ -389,6 +390,7 @@ impl DocumentRuntime {
 
     pub(crate) fn note_dom_content_loaded_dispatched(&mut self) {
         self.dom_content_loaded_dispatched = true;
+        self.clear_classic_defer_timer_schedule_ranges();
     }
 
     pub(crate) fn dom_content_loaded_dispatched(&self) -> bool {
