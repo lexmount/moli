@@ -22,14 +22,44 @@ fn network_idle_sleep_for(
 }
 
 impl PageVm {
-    pub(in crate::runtime) async fn advance_network_idle_wait_turn(
+    pub(in crate::runtime) async fn advance_idle_wait_turn(
         &mut self,
-        mut state: PageVmNetworkIdleWaitState,
+        mut state: PageVmIdleWaitState,
         remaining: std::time::Duration,
-    ) -> Result<PageVmNetworkIdleWaitAdvance> {
+    ) -> Result<PageVmIdleWaitAdvance> {
         if self.vm().has_pending_location_navigation() {
-            return Ok(PageVmNetworkIdleWaitAdvance::TriggeredNavigation);
+            return Ok(PageVmIdleWaitAdvance::TriggeredNavigation);
         }
+
+        let PageVmIdleWaitState::Network {
+            quiet_since,
+            observed_activity_epoch,
+        } = &mut state
+        else {
+            // Resource exhaustion is observed after a real checkpoint, never
+            // inferred from an empty JavaScript stack or a quiet network.
+            self.vm_mut().finish_event_loop_idle_checkpoint()?;
+            if self.vm().has_pending_location_navigation() {
+                return Ok(PageVmIdleWaitAdvance::TriggeredNavigation);
+            }
+            if !self.vm_mut().has_event_loop_keep_alive_work()?
+                && !self.vm().has_pending_child_document_lifecycle()
+                && self.page_task_queue.is_empty()
+            {
+                return Ok(PageVmIdleWaitAdvance::Completed);
+            }
+            let sleep_for = self
+                .vm()
+                .ms_to_next_timeout()
+                .map(std::time::Duration::from_millis)
+                .unwrap_or(remaining)
+                .min(remaining);
+            return if sleep_for.is_zero() {
+                Ok(PageVmIdleWaitAdvance::Progressed { state })
+            } else {
+                Ok(PageVmIdleWaitAdvance::Waiting { sleep_for, state })
+            };
+        };
 
         let pending_requests = self.pending_subresource_request_count();
         let pending_child_frame_lifecycle = self.vm().has_pending_child_document_lifecycle();
@@ -44,27 +74,27 @@ impl PageVm {
         let pending_idle_work = pending_requests + usize::from(pending_child_frame_lifecycle);
         let now = std::time::Instant::now();
         let quiet_elapsed = if pending_idle_work == 0 {
-            if state.observed_activity_epoch != Some(activity_epoch) {
-                state.observed_activity_epoch = Some(activity_epoch);
-                state.quiet_since = Some(now);
+            if *observed_activity_epoch != Some(activity_epoch) {
+                *observed_activity_epoch = Some(activity_epoch);
+                *quiet_since = Some(now);
             }
-            let quiet_since = state.quiet_since.get_or_insert(now);
+            let quiet_since = quiet_since.get_or_insert(now);
             let quiet_elapsed = now.saturating_duration_since(*quiet_since);
             if quiet_elapsed >= NETWORK_IDLE_QUIET_WINDOW {
-                return Ok(PageVmNetworkIdleWaitAdvance::Completed);
+                return Ok(PageVmIdleWaitAdvance::Completed);
             }
             quiet_elapsed
         } else {
-            state.observed_activity_epoch = Some(activity_epoch);
-            state.quiet_since = None;
+            *observed_activity_epoch = Some(activity_epoch);
+            *quiet_since = None;
             std::time::Duration::ZERO
         };
         let sleep_for =
             network_idle_sleep_for(ms_to_next, pending_idle_work, quiet_elapsed, remaining);
         if sleep_for.is_zero() {
-            Ok(PageVmNetworkIdleWaitAdvance::Progressed { state })
+            Ok(PageVmIdleWaitAdvance::Progressed { state })
         } else {
-            Ok(PageVmNetworkIdleWaitAdvance::Waiting { sleep_for, state })
+            Ok(PageVmIdleWaitAdvance::Waiting { sleep_for, state })
         }
     }
 

@@ -419,7 +419,8 @@ pub(crate) use self::message_ports::{
     discard_message_port_channel, dispatch_message_port_events_for_port_collecting_errors,
     dispatch_one_authorized_message_port_event, ensure_message_port_wrapper_for_id,
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
-    message_port_transfer_from_object, new_disconnected_message_port_object,
+    message_port_keeps_event_loop_alive, message_port_transfer_from_object,
+    new_disconnected_message_port_object,
 };
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,

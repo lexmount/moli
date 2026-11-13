@@ -786,23 +786,25 @@ impl RendererOwnerHandle {
                 ))
                 .into()
             }
-            RendererOwnerCommand::WaitForNetworkIdle {
+            RendererOwnerCommand::WaitForIdle {
                 token,
+                mode,
                 timeout_ms,
                 loader,
             } => {
+                let state = PageVmIdleWaitState::new(mode);
                 let deadline = match checked_live_page_wait_deadline(
                     Instant::now(),
                     timeout_ms,
-                    "networkidle",
+                    state.label(),
                 ) {
                     Ok(deadline) => deadline,
                     Err(error) => return Err(error).into(),
                 };
                 RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
-                    RenderRuntimeTurn::WaitLivePageNetworkIdle {
+                    RenderRuntimeTurn::WaitLivePageIdle {
                         token,
-                        state: PageVmNetworkIdleWaitState::default(),
+                        state,
                         deadline,
                         loader,
                     },

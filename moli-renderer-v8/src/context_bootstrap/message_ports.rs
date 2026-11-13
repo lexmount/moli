@@ -24,8 +24,8 @@ pub(crate) use state::{
     MessagePortRealmBinding, TransferredMessagePort, detach_message_port_owner_for_transfer,
     detach_transferred_message_port, discard_message_port_channel,
     ensure_message_port_wrapper_for_id, ensure_message_port_wrapper_for_id_in_realm,
-    message_port_id_from_object, message_port_transfer_from_object,
-    new_disconnected_message_port_object,
+    message_port_id_from_object, message_port_keeps_event_loop_alive,
+    message_port_transfer_from_object, new_disconnected_message_port_object,
 };
 pub(in crate::context_bootstrap) use state::{
     close_message_port_object, current_message_port_registry, set_internal_message_port_handlers,

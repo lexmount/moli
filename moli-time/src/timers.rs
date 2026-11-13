@@ -201,6 +201,14 @@ impl<T> TimerScheduler<T> {
         })
     }
 
+    /// Whether a live timer matches, including timers whose deadlines are in
+    /// the future. Canceled heap entries do not keep their runtime alive.
+    pub fn has_pending_matching(&self, mut predicate: impl FnMut(&T) -> bool) -> bool {
+        self.pending
+            .iter()
+            .any(|timer| self.active.contains(&timer.id) && predicate(&timer.payload))
+    }
+
     pub fn finish_running(&mut self, id: TimerId) {
         self.running.remove(&id);
         self.cancelled_running.remove(&id);
@@ -320,6 +328,19 @@ fn timer_precedes<T>(left: &ScheduledTimer<T>, right: &ScheduledTimer<T>) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keep_alive_observes_future_timers_but_not_canceled_or_other_payloads() {
+        let now = Instant::now();
+        let mut scheduler = TimerScheduler::default();
+        let id = scheduler.schedule_after("user", 60000, now);
+        scheduler.schedule_after("internal", 60000, now);
+        assert!(!scheduler.has_ready_timer(now));
+        assert!(scheduler.has_pending_matching(|kind| *kind == "user"));
+        assert!(scheduler.cancel(id));
+        assert!(!scheduler.has_pending_matching(|kind| *kind == "user"));
+        assert!(scheduler.has_pending_matching(|kind| *kind == "internal"));
+    }
 
     #[test]
     fn timers_wait_until_their_deadline_in_every_ready_query() {

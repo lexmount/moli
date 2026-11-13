@@ -194,4 +194,23 @@ impl Page {
             RendererPageReply::Unit => Ok(()),
         )
     }
+
+    pub(crate) async fn wait_for_idle(
+        &mut self,
+        loader: &ResourceRequestClient,
+        timeout: Duration,
+    ) -> Result<()> {
+        let timeout_ms = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+        let (reply, page_state) = self
+            .handle
+            .wait_for_idle(timeout_ms, loader.clone())
+            .await?;
+        self.replace_page_state(page_state);
+        expect_page_reply!(
+            reply,
+            "wait for event loop idle page command",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
 }

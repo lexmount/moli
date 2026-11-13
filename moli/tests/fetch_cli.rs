@@ -51,6 +51,8 @@ mod disable_js;
 mod eval;
 #[path = "fetch_cli/http_fail.rs"]
 mod http_fail;
+#[path = "fetch_cli/idle.rs"]
+mod idle;
 #[path = "fetch_cli/layout_regressions.rs"]
 mod layout_regressions;
 #[path = "fetch_cli/markdown.rs"]

@@ -3,6 +3,36 @@ use super::*;
 use crate::dom::native::Node;
 
 impl PageScriptHost {
+    /// User-owned resources that can still deliver Window callbacks. Runtime
+    /// service lanes, inspector queues and storage maintenance are excluded.
+    pub(crate) fn has_event_loop_keep_alive_resources(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> bool {
+        !self.websockets.is_empty()
+            || self.workers.values().any(|worker| match &worker.execution {
+                WorkerExecutionState::Loading { terminated, .. } => !terminated,
+                // The canonical connection stays registered until both relay
+                // queues have delivered their terminal markers. A closed
+                // worker inbox alone could overtake its final postMessage.
+                WorkerExecutionState::Running { .. } => true,
+            })
+            || self.message_port_wrappers.iter().any(|(port_id, entry)| {
+                if !self.window_execution_context_identity_is_current(entry.identity)
+                    || self
+                        .message_port_registry
+                        .message_port_peer_id(*port_id)
+                        .is_none()
+                {
+                    return false;
+                }
+                let context = v8::Local::new(scope, &entry.context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let port = v8::Local::new(scope, &entry.wrapper);
+                crate::context_bootstrap::message_port_keeps_event_loop_alive(scope, port)
+            })
+    }
+
     pub(crate) fn document_has_browsing_context(&self, document: DomHandle) -> bool {
         // A detached iframe compatibility window can be a document's defaultView
         // without registering a browsing context. Check the native association.

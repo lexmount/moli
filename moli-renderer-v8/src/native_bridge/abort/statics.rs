@@ -54,15 +54,9 @@ pub(crate) fn abort_signal_timeout_callback<'s>(
         rv.set(signal.into());
         return;
     };
-    let timeout_id = host.queue_timeout(
-        scope,
-        callback,
-        parsed.milliseconds,
-        crate::host::HostTimerOwner::Window,
-        Vec::new(),
-    );
-    // AbortSignal.timeout() intentionally exposes no cancel handle.
-    let _ = timeout_id;
+    // This is browser work, not a user timer: it has no clearTimeout handle
+    // and does not independently keep an explicit event-loop wait alive.
+    host.queue_internal_task_after(scope, callback, parsed.milliseconds);
     rv.set(signal.into());
 }
 

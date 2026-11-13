@@ -17,8 +17,7 @@ use super::owner_local_store::{
     RendererPreparedDocumentResidence, RetiringPageEntry,
     advance_document_lifecycle_one_page_turn_via_local_task,
     advance_dom_stable_wait_turn_on_entry_via_local_task,
-    advance_network_idle_wait_turn_on_entry_via_local_task,
-    advance_page_owner_one_turn_via_local_task,
+    advance_idle_wait_turn_on_entry_via_local_task, advance_page_owner_one_turn_via_local_task,
     advance_pending_phase_one_navigation_on_entry_via_local_task,
     advance_runtime_command_lifecycle_on_entry_via_local_task,
     advance_runtime_expression_await_turn_on_entry_via_local_task,
@@ -34,7 +33,8 @@ use super::owner_local_store::{
     dispatch_async_command_on_entry_via_local_task,
     finalize_pending_page_creation_on_bound_owner_local_store,
     follow_pending_location_navigation_one_turn_on_entry_via_local_task,
-    has_pending_document_lifecycle_turn_on_entry, install_page_vm_on_bound_owner_local_store,
+    has_pending_document_lifecycle_turn_on_entry, has_ready_page_tasks_on_bound_owner_local_store,
+    install_page_vm_on_bound_owner_local_store,
     install_phase_one_blocked_page_on_bound_owner_local_store,
     next_owner_maintenance_deadline_on_bound_owner_local_store,
     next_page_task_deadline_on_bound_owner_local_store, observe_document_lifecycle_on_entry,
@@ -265,8 +265,9 @@ pub enum RendererOwnerCommand {
         inspector_session_id: Option<String>,
         pause_guard: RendererRuntimeInspectorSessionDetachGuard,
     },
-    WaitForNetworkIdle {
+    WaitForIdle {
         token: RendererPageToken,
+        mode: crate::RendererPageIdleWaitMode,
         timeout_ms: u64,
         loader: ResourceRequestClient,
     },
@@ -736,9 +737,9 @@ enum RenderRuntimeTurn {
         token: RendererPageToken,
         document: RendererDocumentLifecycleIdentity,
     },
-    WaitLivePageNetworkIdle {
+    WaitLivePageIdle {
         token: RendererPageToken,
-        state: PageVmNetworkIdleWaitState,
+        state: PageVmIdleWaitState,
         deadline: Instant,
         loader: ResourceRequestClient,
     },
@@ -830,7 +831,7 @@ impl RenderRuntimeTurn {
             Self::RunDevToolsMainCommand { token, .. }
             | Self::RunLivePageCommand { token, .. }
             | Self::ContinueLivePageRuntimeCommandLifecycle { token, .. }
-            | Self::WaitLivePageNetworkIdle { token, .. }
+            | Self::WaitLivePageIdle { token, .. }
             | Self::WaitLivePageDomStable { token, .. }
             | Self::WaitLivePageSelector { token, .. }
             | Self::WaitLivePageScriptTruthy { token, .. }
@@ -843,7 +844,7 @@ impl RenderRuntimeTurn {
 
     fn committed_page_view_deadline(&self) -> Option<Instant> {
         match self {
-            Self::WaitLivePageNetworkIdle { deadline, .. }
+            Self::WaitLivePageIdle { deadline, .. }
             | Self::WaitLivePageDomStable { deadline, .. }
             | Self::WaitLivePageSelector { deadline, .. }
             | Self::WaitLivePageScriptTruthy { deadline, .. }
@@ -1019,7 +1020,7 @@ fn renderer_command_admission_page_token(
     match command {
         RendererOwnerCommand::RunAsyncPageCommand { token, .. }
         | RendererOwnerCommand::RunProtocolPageCommand { token, .. }
-        | RendererOwnerCommand::WaitForNetworkIdle { token, .. }
+        | RendererOwnerCommand::WaitForIdle { token, .. }
         | RendererOwnerCommand::WaitForDomStable { token, .. } => Some(*token),
         _ => None,
     }

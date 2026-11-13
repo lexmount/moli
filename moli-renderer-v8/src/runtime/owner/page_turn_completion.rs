@@ -123,7 +123,7 @@ impl RendererOwnerHandle {
             | RenderRuntimeTurn::RunDevToolsMainCommand { .. }
             | RenderRuntimeTurn::RunLivePageCommand { .. }
             | RenderRuntimeTurn::ResumeLivePageDocumentLifecycleAfterReply { .. }
-            | RenderRuntimeTurn::WaitLivePageNetworkIdle { .. }
+            | RenderRuntimeTurn::WaitLivePageIdle { .. }
             | RenderRuntimeTurn::WaitLivePageDomStable { .. }
             | RenderRuntimeTurn::WaitLivePageSelector { .. }
             | RenderRuntimeTurn::WaitLivePageScriptTruthy {
@@ -388,17 +388,16 @@ impl RendererOwnerHandle {
                 )
                 .await
             }
-            LivePagePendingNavigationCompletion::ContinueNetworkIdle { deadline, loader } => {
+            LivePagePendingNavigationCompletion::ContinueIdle {
+                state,
+                deadline,
+                loader,
+            } => {
                 if let Err(error) = self.refresh_live_page_before_wait(token, entry).await {
                     return Err(error).into();
                 }
-                self.wait_live_page_network_idle_turn(
-                    token,
-                    PageVmNetworkIdleWaitState::default(),
-                    deadline,
-                    loader,
-                )
-                .await
+                self.wait_live_page_idle_turn(token, state.reset(), deadline, loader)
+                    .await
             }
             LivePagePendingNavigationCompletion::ContinueDomStable { deadline, loader } => {
                 if let Err(error) = self.refresh_live_page_before_wait(token, entry).await {
@@ -495,7 +494,7 @@ impl RendererOwnerHandle {
                 )
                 .await
             }
-            LivePagePendingNavigationCompletion::ContinueNetworkIdle { .. }
+            LivePagePendingNavigationCompletion::ContinueIdle { .. }
             | LivePagePendingNavigationCompletion::ContinueDomStable { .. }
             | LivePagePendingNavigationCompletion::ContinueSubresourceResponse { .. } => {
                 self.restore_live_page_entry(token, entry);
