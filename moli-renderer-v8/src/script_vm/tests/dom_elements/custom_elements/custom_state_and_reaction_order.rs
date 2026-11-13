@@ -1744,3 +1744,42 @@ fn aria_labelled_by_elements_reflects_visible_and_hidden_labels() {
         })
     );
 }
+
+#[test]
+fn aria_idrefs_include_detached_roots_in_tree_order_and_preserve_tree_scope() {
+    let mut vm = new_storage_html_test_vm("https://example.com/");
+    let result = vm.eval(r#"(() => {
+        const root=document.createElement('section');root.id='label';
+        const input=document.createElement('input');input.id='input';
+        input.setAttribute('aria-labelledby','label');root.append(input);
+        const labels=()=>input.ariaLabelledByElements.map(node=>node.localName+'#'+node.id);
+        const result={detached:labels()};
+        root.setAttribute('aria-activedescendant','label');
+        root.setAttribute('aria-controls','label input');
+        result.singular=root.ariaActiveDescendantElement===root;
+        result.controls=root.ariaControlsElements.map(node=>node.id);
+        const duplicate=document.createElement('div');duplicate.id='label';root.prepend(duplicate);
+        result.duplicate=labels();
+        const fragment=document.createDocumentFragment();fragment.append(root);
+        result.fragment=labels();root.remove();result.detachedAgain=labels();
+        root.id='renamed';result.renamed=labels();
+        const self=document.createElement('input');self.id='self';self.setAttribute('aria-labelledby','self');
+        result.self=self.ariaLabelledByElements[0]===self;
+        const host=document.createElement('div');host.id='outside';
+        const shadow=host.attachShadow({mode:'open'});
+        const child=document.createElement('input');child.setAttribute('aria-labelledby','outside');shadow.append(child);
+        result.shadow=child.ariaLabelledByElements.length;
+        document.body.append(root);result.connected=labels();
+        document.implementation.createHTMLDocument('').adoptNode(root);
+        result.adopted=labels();return JSON.stringify(result);
+    })()"#).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "detached":["section#label"], "singular":true, "controls":["label","input"],
+            "duplicate":["section#label"], "fragment":["section#label"],
+            "detachedAgain":["section#label"], "renamed":["div#label"], "self":true,
+            "shadow":0,"connected":["div#label"], "adopted":["div#label"],
+        })
+    );
+}
