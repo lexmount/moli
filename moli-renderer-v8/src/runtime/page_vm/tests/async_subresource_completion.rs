@@ -38,6 +38,7 @@ fetch({:?}).then(
 
 fn failed_fetch_completion(internal_id: u64, request_url: &Url) -> AsyncSubresourceFetchEvent {
     AsyncSubresourceFetchEvent::Completion(Box::new(AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),

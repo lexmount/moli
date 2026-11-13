@@ -160,6 +160,7 @@ pub(crate) fn start_font_face_fetch<'s>(
             .map_err(|error| error.into_message());
         let _ = host.resource_completion_sender().send_async_subresource(
             AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method: "GET".to_owned(),

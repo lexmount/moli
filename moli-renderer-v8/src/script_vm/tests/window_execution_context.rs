@@ -551,6 +551,7 @@ async fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent
     let completion_url = Url::parse("https://borrowed-fetch-context.test/child-base/completion")
         .expect("completion URL");
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: completion_id,
         request_url: completion_url.clone(),
         request_method: "GET".to_owned(),

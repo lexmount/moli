@@ -213,6 +213,7 @@ pub(crate) fn start_media_element_resource_fetch(
         if !host.dispatch_service_worker_fetch(dispatch) {
             let _ = host.resource_completion_sender().send_async_subresource(
                 AsyncSubresourceFetchCompletion {
+                    body_is_null: None,
                     internal_id,
                     request_url,
                     request_method: "GET".to_owned(),

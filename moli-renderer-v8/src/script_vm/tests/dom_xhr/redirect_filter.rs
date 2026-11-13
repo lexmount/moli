@@ -40,6 +40,7 @@ async fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                 let request = &requests[0];
                 vm.complete_async_subresource_fetch(
                     crate::types::AsyncSubresourceFetchCompletion {
+                        body_is_null: None,
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: request.method.clone(),

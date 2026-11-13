@@ -927,6 +927,7 @@ pub(crate) fn spawn_async_subresource_fetch(
             )
             .await;
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -967,6 +968,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                     )
             });
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -1002,6 +1004,7 @@ pub(crate) fn spawn_async_subresource_fetch(
         .await;
         if let Err(error) = result {
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,

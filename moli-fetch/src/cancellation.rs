@@ -184,6 +184,7 @@ impl ResponseProgress {
 /// Native response boundaries shared with observers of the selected transfer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FetchResponseTiming {
+    service_worker_router: ServiceWorkerRouterTiming,
     service_worker_started_at: Option<Instant>,
     service_worker_dispatched_at: Option<Instant>,
     fetch_started_at: Option<Instant>,
@@ -196,7 +197,37 @@ pub struct FetchResponseTiming {
     connection_timing: Option<FetchConnectionTiming>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceWorkerRouterSource {
+    Network,
+    Cache,
+    FetchEvent,
+    RaceNetworkAndFetchHandler,
+}
+
+impl ServiceWorkerRouterSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Cache => "cache",
+            Self::FetchEvent => "fetch-event",
+            Self::RaceNetworkAndFetchHandler => "race-network-and-fetch-handler",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ServiceWorkerRouterTiming {
+    pub evaluation_started_at: Option<Instant>,
+    pub cache_lookup_started_at: Option<Instant>,
+    pub matched_source: Option<ServiceWorkerRouterSource>,
+    pub final_source: Option<ServiceWorkerRouterSource>,
+}
+
 impl FetchResponseTiming {
+    pub fn service_worker_router(self) -> ServiceWorkerRouterTiming {
+        self.service_worker_router
+    }
     pub fn service_worker_started_at(self) -> Option<Instant> {
         self.service_worker_started_at
     }
@@ -254,7 +285,7 @@ struct FetchLifecycleState {
     fetch_hop_started_at: Option<Instant>,
     // Worker startup/activation belongs to the request, independently of
     // whichever HTTP response is selected after redirects or fallback.
-    service_worker_timing: Mutex<(Option<Instant>, Option<Instant>)>,
+    service_worker_timing: Mutex<(Option<Instant>, Option<Instant>, ServiceWorkerRouterTiming)>,
     // This lock protects selection, while the selected token arbitrates
     // transport completion and consumer cancellation without taking the lock.
     response_progress: Mutex<ResponseProgress>,
@@ -405,6 +436,7 @@ impl FetchCancelHandle {
         let worker = self.state.service_worker_timing.lock();
         timing.service_worker_started_at = worker.0;
         timing.service_worker_dispatched_at = worker.1;
+        timing.service_worker_router = worker.2;
         timing
     }
 
@@ -425,6 +457,42 @@ impl FetchCancelHandle {
             let mut timing = self.state.service_worker_timing.lock();
             if timing.0.is_some() {
                 timing.1.get_or_insert_with(Instant::now);
+            }
+        }
+    }
+
+    pub fn mark_service_worker_router_evaluation(&self) {
+        if !self.is_cancelled() {
+            self.state.service_worker_timing.lock().2 = ServiceWorkerRouterTiming {
+                evaluation_started_at: Some(Instant::now()),
+                ..Default::default()
+            };
+        }
+    }
+
+    pub fn mark_service_worker_router_match(&self, source: ServiceWorkerRouterSource) {
+        if !self.is_cancelled() {
+            let mut timing = self.state.service_worker_timing.lock();
+            timing.2.matched_source = Some(source);
+            timing.2.final_source = Some(ServiceWorkerRouterSource::Network);
+        }
+    }
+
+    pub fn mark_service_worker_cache_lookup(&self) {
+        if !self.is_cancelled() {
+            self.state
+                .service_worker_timing
+                .lock()
+                .2
+                .cache_lookup_started_at = Some(Instant::now());
+        }
+    }
+
+    pub fn mark_service_worker_router_final_source(&self, source: ServiceWorkerRouterSource) {
+        if !self.is_cancelled() {
+            let mut timing = self.state.service_worker_timing.lock();
+            if timing.2.matched_source.is_some() {
+                timing.2.final_source = Some(source);
             }
         }
     }
@@ -463,6 +531,57 @@ mod tests {
     use super::{FetchCancelHandle, FetchResponseBodySizes};
     use crate::FetchCurlTiming;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn router_selection_keeps_request_timing_when_a_child_response_is_adopted() {
+        use super::ServiceWorkerRouterSource as Source;
+        let request = FetchCancelHandle::new();
+        request.mark_service_worker_router_evaluation();
+        request.mark_service_worker_router_match(Source::Cache);
+        request.mark_service_worker_cache_lookup();
+        let before = request.response_timing().service_worker_router();
+        assert!(before.evaluation_started_at <= before.cache_lookup_started_at);
+        let child = request.child_for_fetch_hop();
+        assert_eq!(
+            child.response_timing().service_worker_router(),
+            Default::default()
+        );
+        child.mark_service_worker_router_evaluation();
+        child.mark_service_worker_router_match(Source::FetchEvent);
+        child.mark_response_started();
+        request.adopt_response_progress(&child);
+        assert_eq!(request.response_timing().service_worker_router(), before);
+        request.mark_service_worker_router_final_source(Source::Network);
+        let selected = request.response_timing();
+        assert_eq!(
+            selected.service_worker_router().matched_source,
+            Some(Source::Cache)
+        );
+        assert_eq!(
+            selected.service_worker_router().final_source,
+            Some(Source::Network)
+        );
+        assert_eq!(
+            selected.response_started_at(),
+            child.response_timing().response_started_at()
+        );
+        request.mark_service_worker_router_evaluation();
+        request.mark_service_worker_router_final_source(Source::FetchEvent);
+        assert_eq!(
+            request
+                .response_timing()
+                .service_worker_router()
+                .matched_source,
+            None
+        );
+        assert_eq!(
+            request
+                .response_timing()
+                .service_worker_router()
+                .final_source,
+            None
+        );
+    }
 
     #[test]
     fn service_worker_clock_survives_response_selection_without_leaking_to_hops() {

@@ -923,6 +923,7 @@ impl ServiceWorkerRuntimeService {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: queued_job.script_url.clone(),

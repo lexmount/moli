@@ -170,6 +170,9 @@ pub(crate) fn request_constructor_callback<'s>(
     .initialize(scope, obj)
     .expect("Request instance declaration should initialize");
     mark_request_object(scope, obj);
+    if let Some(event_id) = state.router_race_event_id {
+        set_request_static_router_race_id(scope, obj, event_id);
+    }
 
     rv.set(obj.into());
 }

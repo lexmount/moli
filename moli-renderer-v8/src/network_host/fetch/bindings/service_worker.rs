@@ -156,6 +156,7 @@ pub(super) fn dispatch_service_worker_fetch<'s>(
     let _ =
         host.resource_completion_sender()
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url: prepared.resolved_url.clone(),
                 request_method: prepared.method.clone(),

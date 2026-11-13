@@ -303,6 +303,7 @@ async fn link_audit_ping_uses_its_adopted_document_base_policy_and_timeline() {
 
 fn complete_intercepted_beacon(vm: &mut StandaloneScriptVmHarness, internal_id: u64, url: &str) {
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id,
         request_url: Url::parse(url).unwrap(),
         request_method: "POST".to_owned(),

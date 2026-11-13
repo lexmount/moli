@@ -90,6 +90,7 @@ impl ScriptVm {
                 })
             };
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,
@@ -110,6 +111,7 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
+        body_is_null: Option<bool>,
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let RunningSubresourceFetchState {
@@ -260,7 +262,7 @@ impl ScriptVm {
                     return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
                 }
 
-                let activity = self.resolve_pending_subresource_fetch_body(
+                let activity = self.resolve_pending_subresource_fetch_completion(
                     pending,
                     request_url,
                     request_method,
@@ -270,7 +272,8 @@ impl ScriptVm {
                     skip_fetch_security_validation,
                     response_filter,
                     network_error_text.clone(),
-                    Ok(response),
+                    body_is_null,
+                    Ok(response).into(),
                 );
                 trace_async_subresource_stage(
                     "async_subresource_complete_running_done",
@@ -280,7 +283,7 @@ impl ScriptVm {
                 activity?
             }
             Err(error) => {
-                let activity = self.resolve_pending_subresource_fetch_body(
+                let activity = self.resolve_pending_subresource_fetch_completion(
                     pending,
                     request_url,
                     request_method,
@@ -290,7 +293,8 @@ impl ScriptVm {
                     skip_fetch_security_validation,
                     response_filter,
                     network_error_text,
-                    Err(error),
+                    body_is_null,
+                    Err(error).into(),
                 );
                 trace_async_subresource_stage(
                     "async_subresource_complete_running_done",
@@ -357,6 +361,7 @@ impl ScriptVm {
                 completion.skip_fetch_security_validation,
                 completion.response_filter,
                 completion.network_error_text,
+                completion.body_is_null,
                 completion.result.into_result(),
             );
             trace_async_subresource_stage(
@@ -399,6 +404,7 @@ impl ScriptVm {
             completion.skip_fetch_security_validation,
             completion.response_filter,
             completion.network_error_text,
+            completion.body_is_null,
             completion.result,
         )?;
         trace_async_subresource_stage(

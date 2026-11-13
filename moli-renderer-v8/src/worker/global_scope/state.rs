@@ -19,6 +19,7 @@ impl WorkerGlobalState {
 }
 
 pub(crate) struct WorkerGlobalState {
+    pub(in crate::worker) static_router: super::static_router::WorkerRouterState,
     pub(crate) message_source_security: crate::context_bootstrap::RuntimeMessageSourceSecurity,
     pub(crate) rtp_transformers: HashMap<u64, crate::worker::rtp_tasks::TransformerEntry>,
     /// Components shared with Window runtimes, owned by this Worker run.

@@ -841,6 +841,7 @@ mod tests {
 
     fn async_subresource_completion(internal_id: u64) -> AsyncSubresourceFetchCompletion {
         AsyncSubresourceFetchCompletion {
+            body_is_null: None,
             internal_id,
             request_url: Url::parse("https://example.test/api").unwrap(),
             request_method: "GET".to_owned(),

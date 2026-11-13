@@ -121,6 +121,8 @@ fn target_status_for_lifecycle_state(
 }
 
 pub(super) struct ServiceWorkerRuntimeInner {
+    pub(super) router_races:
+        Mutex<HashMap<ServiceWorkerEventId, super::static_router::race::RouterRaceEntry>>,
     pub(super) next_registration_id: AtomicU64,
     pub(super) next_version_id: AtomicU64,
     pub(super) client_id_allocator: super::ids::ServiceWorkerClientIdAllocator,
@@ -155,6 +157,7 @@ impl ServiceWorkerRuntimeInner {
     ) -> Self {
         Self {
             next_registration_id: AtomicU64::new(1),
+            router_races: Mutex::default(),
             next_version_id: AtomicU64::new(1),
             client_id_allocator,
             next_event_id: AtomicU64::new(1),
@@ -805,11 +808,48 @@ pub(super) struct ServiceWorkerFetchJob {
     pub(super) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(super) cancel_handle: moli_fetch::FetchCancelHandle,
     pub(super) navigation_preload_cancel_handle: Option<moli_fetch::FetchCancelHandle>,
+    /// A raced handler has independent response IO authority while matching
+    /// client aborts against the exact original request authority.
+    pub(super) router_race_request_cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     pub(super) streaming_body_source_id: Option<crate::types::NetworkBodySourceId>,
     pub(super) direct_completion_tx: Option<super::events::ServiceWorkerDirectFetchCompletion>,
 }
 
 impl ServiceWorkerFetchJob {
+    pub(super) fn request_cancel_handle(&self) -> &moli_fetch::FetchCancelHandle {
+        self.router_race_request_cancel_handle
+            .as_ref()
+            .unwrap_or(&self.cancel_handle)
+    }
+
+    pub(super) fn fork_router_race_delivery(&mut self) -> Self {
+        debug_assert_eq!(self.request.method, "GET");
+        debug_assert!(self.body_stream.is_none());
+        Self {
+            direct_streaming_tx: None,
+            request_body_owner: self.request_body_owner.clone(),
+            body_stream: None,
+            request: self.request.clone(),
+            internal_id: self.internal_id,
+            owner: self.owner.clone(),
+            cors_preflight_request_headers: self.cors_preflight_request_headers.clone(),
+            client_id: self.client_id,
+            resulting_client_id: self.resulting_client_id,
+            destination: self.destination,
+            is_reload: self.is_reload,
+            metadata: self.metadata.clone(),
+            request_cookie_report: self.request_cookie_report.clone(),
+            network_context: self.network_context.clone(),
+            completion_tx: self.completion_tx.clone(),
+            request_client: self.request_client.clone(),
+            resource_task_runner: self.resource_task_runner.clone(),
+            cancel_handle: self.cancel_handle.clone(),
+            navigation_preload_cancel_handle: None,
+            router_race_request_cancel_handle: None,
+            streaming_body_source_id: None,
+            direct_completion_tx: self.direct_completion_tx.take(),
+        }
+    }
     pub(super) fn bind_to_owner(&mut self, owner: ServiceWorkerRunOwner) {
         self.owner = Some(owner);
     }

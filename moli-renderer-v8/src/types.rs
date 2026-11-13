@@ -802,6 +802,7 @@ pub(super) struct InFlightWorkerSubresourceFetchState {
 
 #[derive(Debug)]
 pub(super) struct AsyncSubresourceFetchCompletion {
+    pub(super) body_is_null: Option<bool>,
     pub(super) internal_id: u64,
     pub(super) request_url: Url,
     pub(super) request_method: String,

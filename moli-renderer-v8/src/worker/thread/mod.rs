@@ -47,7 +47,8 @@ mod runtime_inspector;
 
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
 pub(in crate::worker) use dispatch::{
-    service_worker_respond_with_callback, service_worker_wait_until_callback,
+    add_service_worker_lifetime_promise, service_worker_respond_with_callback,
+    service_worker_wait_until_callback,
 };
 
 use super::bitmap_tasks::WorkerBitmapTasks;
@@ -2102,6 +2103,7 @@ async fn worker_main(
         service_worker_push_get_subscription_request_ids: Default::default(),
         service_worker_push_unsubscription_request_ids: Default::default(),
         service_worker_window_interaction_allowed_count: 0,
+        static_router: Default::default(),
         pending_service_worker_lifecycle_events: std::collections::HashMap::new(),
         pending_service_worker_fetch_events: std::collections::HashMap::new(),
         pending_service_worker_request_uploads: std::collections::HashMap::new(),
@@ -2840,6 +2842,26 @@ async fn worker_main(
                     &state,
                     &module_graph_fetch_tx,
                 );
+            }
+            WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerRouterRulesRegistered {
+                request_id,
+                result,
+            })) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages.push_back(
+                        WorkerMessage::ServiceWorkerRouterRulesRegistered { request_id, result },
+                    );
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                super::global_scope::static_router::complete_registration(
+                    scope, &state, request_id, result,
+                );
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
             WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerSkipWaitingResult {
                 request_id,

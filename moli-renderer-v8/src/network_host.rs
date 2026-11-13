@@ -173,6 +173,7 @@ pub(crate) use self::request::{
     request_headers_guard_for_mode, try_resolve_request_constructor_url_for_base,
     try_resolve_request_constructor_url_for_child, validate_request_method_body,
 };
+pub(crate) use self::request::{request_static_router_race_id, set_request_static_router_race_id};
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,
     effective_subresource_referrer_policy, effective_subresource_request_owner,
@@ -190,6 +191,7 @@ pub(crate) use self::response::{
     build_fetch_response_object_from_subresource_body_for_request_mode_with_filter,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
+    build_null_body_fetch_response_object_for_request_mode_with_filter,
     check_opaque_response_policy, cors_preflight_request_headers,
     fetch_response_needs_orb_body_validation, is_cors_policy_failure_message,
     materialize_cache_response_object_head, materialize_response_object_body,

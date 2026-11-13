@@ -125,7 +125,8 @@ impl RendererSharedWorkerHost {
             WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_) => {
                 trace!(url = %script_url, ?message, "dropping service worker clients.openWindow on shared worker host");
             }
-            WorkerToParentMessage::ServiceWorkerSkipWaiting { .. } => {
+            WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. } => {
                 trace!(url = %script_url, ?message, "dropping service worker skipWaiting message on shared worker host");
             }
             WorkerToParentMessage::ServiceWorkerClientsClaim { .. } => {

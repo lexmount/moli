@@ -408,6 +408,7 @@ fn dispatch_service_worker_content_security_policy_report(
     let _ =
         host.resource_completion_sender()
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url: request.url,
                 request_method: request.method,

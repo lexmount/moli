@@ -575,6 +575,7 @@ fn resource_timing_initiator_retains_the_triggering_script_until_publication() {
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: request.internal_id,
         request_url: request.url.clone(),
         request_method: "GET".to_owned(),
@@ -635,6 +636,7 @@ fn resource_timing_initiator_survives_promises_and_keeps_its_source_url() {
     let request = &requests[0];
     assert_eq!(request.url.as_str(), "https://resource-initiator.test/data");
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: request.internal_id,
         request_url: request.url.clone(),
         request_method: "GET".to_owned(),
@@ -690,6 +692,7 @@ fn http_cached_fetches_with_same_url_keep_separate_resource_timing_entries() {
         response.from_cache = true;
         response.cache_state = moli_fetch::ResponseCacheState::Local;
         vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+            body_is_null: None,
             internal_id: request.internal_id,
             request_url: request.url.clone(),
             request_method: "GET".into(),
@@ -809,6 +812,7 @@ fn resource_timing_initiator_requires_a_known_source_and_readable_network_respon
             } else {
                 vm.complete_async_subresource_fetch(
                     crate::types::AsyncSubresourceFetchCompletion {
+                        body_is_null: None,
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: "GET".to_owned(),
@@ -939,6 +943,7 @@ fn xhr_resource_timing_reads_internal_headers_before_cors_exposure() {
             } else {
                 vm.complete_async_subresource_fetch(
                     crate::types::AsyncSubresourceFetchCompletion {
+                        body_is_null: None,
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: "GET".to_owned(),

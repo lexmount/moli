@@ -8,6 +8,7 @@ use crate::webidl;
 use moli_fetch::RequestRedirectMode;
 
 pub(super) struct RequestConstructionState {
+    pub(super) router_race_event_id: Option<crate::service_worker_runtime::ServiceWorkerEventId>,
     pub(super) url_resolved: String,
     pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) method: String,
@@ -40,6 +41,8 @@ pub(super) fn request_initial_state<'s>(
     base_url: Option<url::Url>,
 ) -> Result<RequestConstructionState, webidl::WebIdlError> {
     let (url, inherited, input_object) = input.materialize(scope)?;
+    let router_race_event_id =
+        input_object.and_then(|input| request_static_router_race_id(scope, input));
     let url_resolved = url.into_constructor_url(scope, child_handle, base_url)?;
     let method = inherited
         .as_ref()
@@ -122,6 +125,7 @@ pub(super) fn request_initial_state<'s>(
     let signal = inherited.and_then(|snapshot| snapshot.signal);
 
     Ok(RequestConstructionState {
+        router_race_event_id,
         url_resolved,
         blob_url_entry,
         method,
@@ -154,6 +158,11 @@ pub(super) fn apply_request_init_overrides<'s>(
     state: &mut RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
     let has_init_members = parsed.has_any_member();
+    // A fresh abort source owns a different fetch lifetime, even when the
+    // Request began as a copy of a raced FetchEvent request.
+    if parsed.signal.is_some() {
+        state.router_race_event_id = None;
+    }
     if has_init_members {
         if state.mode == "navigate" {
             state.mode = "same-origin".to_owned();

@@ -119,6 +119,7 @@ fastrand = "2.3.0"
 markup5ever = "0.40"
 xml5ever = "0.39.0"
 serde = { version = "1.0.228", features = ["derive"] }
+regex = "1.12.3"
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 serde_v8 = "=0.320.0"
 smallvec = "1.15.1"

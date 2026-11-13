@@ -1820,6 +1820,7 @@ fn storage_bucket_cache_put_body_fulfilled_callback<'s>(
         }
     };
     let response = StorageBucketCachedResponse {
+        body_is_null: false,
         cors_exposed_header_names: pending.response_cors_exposed_header_names,
         request_include_credentials: pending.response_request_include_credentials,
         response_type: pending.response_type,
@@ -2821,6 +2822,7 @@ fn storage_bucket_cached_response_from_head_body(
     body: Vec<u8>,
 ) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
+        body_is_null: head.body_is_null,
         cors_exposed_header_names: head.cors_exposed_header_names,
         request_include_credentials: head.request_include_credentials,
         response_type: head.response_type,
@@ -2876,11 +2878,12 @@ fn build_storage_bucket_cached_response_object<'s>(
         );
         return Some(object);
     }
-    let body: v8::Local<'s, v8::Value> = if matches!(response.status, 204 | 205 | 304) {
-        v8::null(scope).into()
-    } else {
-        crate::blob::array_buffer_from_bytes(scope, response.body)?.into()
-    };
+    let body: v8::Local<'s, v8::Value> =
+        if response.body_is_null || matches!(response.status, 204 | 205 | 304) {
+            v8::null(scope).into()
+        } else {
+            crate::blob::array_buffer_from_bytes(scope, response.body)?.into()
+        };
     let public_headers = response
         .headers
         .iter()

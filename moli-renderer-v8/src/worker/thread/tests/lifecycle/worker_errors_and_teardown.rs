@@ -1211,6 +1211,7 @@ async fn worker_error_report_ignores_throwing_accessors() {
         | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
         | WorkerToParentMessage::ServiceWorkerClientFocus(_)
         | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+        | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
         | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
         | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
         | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }

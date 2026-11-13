@@ -19,6 +19,7 @@ fn operation(
             ..StorageBucketCachedRequest::default()
         },
         response: StorageBucketCachedResponse {
+            body_is_null: false,
             cors_exposed_header_names: None,
             request_include_credentials: false,
             response_type: "default".to_owned(),

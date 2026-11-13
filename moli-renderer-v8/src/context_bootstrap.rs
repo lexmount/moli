@@ -279,6 +279,7 @@ mod touch_runtime;
 mod trusted_types;
 mod url_form;
 mod url_pattern;
+pub(crate) use url_pattern::RoutingPatternInput;
 mod url_search_params_runtime;
 mod video_codecs;
 mod view_transition_runtime;

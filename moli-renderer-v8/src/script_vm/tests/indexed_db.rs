@@ -2836,6 +2836,42 @@ globalThis.cacheResponseResult = 'pending';
 }
 
 #[test]
+fn global_cache_storage_preserves_null_bodies_without_normalizing_empty_streams() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://cache-null-body.test/");
+    vm.eval(
+        r#"
+globalThis.cacheNullBodyResult = 'pending';
+(async () => {
+  const check = (value, label) => { if (!value) throw new Error(label); };
+  const cache = await caches.open('null-body');
+  for (const [key, original] of [['null', new Response(null)], ['empty', new Response('')]]) {
+    const bodyIsNull = key === 'null';
+    await cache.put('/' + key, original);
+    check(original.bodyUsed === !bodyIsNull, key + ': put consumes only non-null bodies');
+    const matches = [await cache.match('/' + key), (await cache.matchAll('/' + key))[0],
+      await caches.match('/' + key)];
+    for (const entry of matches) {
+      for (const response of [entry, entry.clone()]) {
+        check((response.body === null) === bodyIsNull, key + ': body nullity');
+        check(!response.bodyUsed, key + ': initially unused');
+        check(await response.text() === '', key + ': bytes');
+        check(response.bodyUsed === !bodyIsNull, key + ': consumption');
+      }
+    }
+  }
+  cacheNullBodyResult = 'ok';
+})().catch(error => cacheNullBodyResult = String(error.stack || error));
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("cacheNullBodyResult")
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
 fn global_cache_storage_rejects_uncacheable_responses_before_consuming_body() {
     let mut vm = new_storage_page_task_executor_test_vm("https://cache-admission.test/");
     vm.eval(
@@ -3274,6 +3310,7 @@ opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
                     "reservation",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
+                        body_is_null: false,
                         response_type: "default".into(),
                         url: format!("{page_url}reserved"),
                         redirected: false,
@@ -3381,6 +3418,7 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
                     "fixture",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
+                        body_is_null: false,
                         cors_exposed_header_names: None,
                         request_include_credentials: false,
                         response_type: "default".to_owned(),

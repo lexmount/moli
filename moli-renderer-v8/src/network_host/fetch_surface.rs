@@ -783,6 +783,8 @@ fn request_clone_callback<'s>(
     let clone = RequestCloneShellDeclaration::new()
         .bind(scope)
         .expect("Request clone shell declaration should bind");
+    // clone() creates an independent internal request. The routing race token
+    // is copied by the Request constructor, not by this clone operation.
     for slot in [
         BLOB_URL_ENTRY_SLOT,
         REQUEST_METHOD_SLOT,

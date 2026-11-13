@@ -409,6 +409,16 @@ impl RendererServiceWorkerHost {
         }
     }
 
+    pub(super) fn dispatch_router_rules_result(&self, request_id: u64, result: Result<(), String>) {
+        let state = self.state.lock();
+        if let RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        } = &*state
+        {
+            handle.dispatch_service_worker_router_rules_result(request_id, result);
+        }
+    }
+
     pub(super) fn dispatch_clients_claim_result(&self, request_id: u64, claimed: bool) {
         let state = self.state.lock();
         if let RendererServiceWorkerHostState::Running {
@@ -810,6 +820,16 @@ fn spawn_parent_message_pump(
                     }
                     WorkerToParentMessage::ServiceWorkerWorkerMessage(message) => {
                         service.enqueue_worker_message(message);
+                    }
+                    WorkerToParentMessage::ServiceWorkerRegisterRouterRules {
+                        request_id,
+                        rules,
+                    } => {
+                        service.enqueue_router_rules_registration(
+                            source_host.clone(),
+                            request_id,
+                            rules,
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerClientQuery(query) => {
                         service.enqueue_client_query(query, source_host.run_owner());

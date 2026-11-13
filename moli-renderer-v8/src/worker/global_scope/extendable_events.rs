@@ -23,7 +23,10 @@ struct ExtendableEventTemplateDeclaration {
     readonly_prototype,
     receiver = web_api_interfaces::InstallEvent::is_instance
 )]
-struct InstallEventTemplateDeclaration {}
+struct InstallEventTemplateDeclaration {
+    #[webapi(method = "addRoutes", callback = super::static_router::add_routes_callback, length = 1, enumerable, returns_promise)]
+    add_routes: (),
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]

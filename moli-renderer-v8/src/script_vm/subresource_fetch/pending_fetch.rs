@@ -538,6 +538,7 @@ impl ScriptVm {
             .borrow()
             .resource_completion_sender()
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method,

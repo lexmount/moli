@@ -159,6 +159,14 @@ impl ServiceWorkerRuntimeService {
         stored: ServiceWorkerStoredRegistration,
         mut launch_config: ServiceWorkerVersionLaunchConfig,
     ) -> Option<ServiceWorkerRegistrationId> {
+        if !super::super::static_router::within_registration_limit(&stored.router_rules)
+            || stored
+                .router_rules
+                .iter()
+                .any(|rule| !rule.condition.verify())
+        {
+            return None;
+        }
         if launch_config.storage_bucket_store.is_none() {
             launch_config.storage_bucket_store = self.inner.storage_bucket_store.lock().clone();
         }
@@ -209,6 +217,7 @@ impl ServiceWorkerRuntimeService {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: stored.router_rules,
                 id: version_id,
                 registration_id,
                 script_url: stored.script_url.clone(),
@@ -335,6 +344,7 @@ fn stored_registration_from_state_locked(
     }
     let main_script_resource = version.main_script_resource.clone()?;
     Some(ServiceWorkerStoredRegistration {
+        router_rules: version.router_rules.clone(),
         registration_order: registration.registration_order,
         storage_key: registration.storage_key.clone(),
         scope_url: registration.scope_url.clone(),

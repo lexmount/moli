@@ -114,6 +114,7 @@ mod console;
 mod content_security_policy;
 mod event_handlers;
 mod extendable_events;
+pub(in crate::worker) mod static_router;
 pub(in crate::worker) use extendable_events::initialize_native_install_event;
 mod fetch;
 mod font_loading;

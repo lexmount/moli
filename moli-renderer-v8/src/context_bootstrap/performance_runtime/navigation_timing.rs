@@ -178,6 +178,16 @@ pub(super) fn refresh_navigation_timing<'s>(
         &data.content_encoding,
         "",
     );
+    initialize_service_worker_timing_slots(
+        scope,
+        entry,
+        data.service_worker.as_deref(),
+        snapshot.time_origin,
+    );
+    let worker_start = data
+        .service_worker
+        .as_ref()
+        .map_or(worker_start, |timing| timing.worker_start);
     for (slot, value) in [
         (PERFORMANCE_RESOURCE_WORKER_START_SLOT, worker_start),
         (PERFORMANCE_RESOURCE_FETCH_START_SLOT, Some(fetch_start)),

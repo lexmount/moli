@@ -3,7 +3,8 @@ use crate::{
     context_bootstrap::{
         dom_time_since_origin_millis,
         performance_runtime::{
-            ResourceConnectionTiming, ResourcePerformanceEntry, install::EVENT_COUNTS_TRACKED_TYPES,
+            ResourceConnectionTiming, ResourcePerformanceEntry, ResourceServiceWorkerTiming,
+            install::EVENT_COUNTS_TRACKED_TYPES,
         },
     },
     util::{array_push_value, get_private_value, set_private_value, v8_string},
@@ -67,7 +68,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
 ) {
     let global = scope.get_current_context().global(scope);
     let entries = ensure_private_array(scope, global, WINDOW_PERFORMANCE_PENDING_RESOURCES_SLOT, 0);
-    let record = v8::Array::new(scope, 26);
+    let record = v8::Array::new(scope, 31);
     let Some(name) = v8_string(scope, &entry.name) else {
         return;
     };
@@ -96,6 +97,9 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
         .start_unix_millis
         .map(|value| v8::Number::new(scope, value).into())
         .unwrap_or_else(|| v8::undefined(scope).into());
+    let service_worker = entry.service_worker.as_deref();
+    let matched_source = service_worker.and_then(|timing| v8_string(scope, timing.matched_source));
+    let final_source = service_worker.and_then(|timing| v8_string(scope, timing.final_source));
     let fields = [
         name.into(),
         initiator_type.into(),
@@ -163,6 +167,24 @@ pub(in crate::context_bootstrap::performance_runtime) fn queue_pending_resource_
             .map(|value| v8::Number::new(scope, value).into())
             .unwrap_or_else(|| v8::undefined(scope).into()),
         initiator_url.into(),
+        service_worker
+            .and_then(|timing| timing.worker_start)
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        service_worker
+            .and_then(|timing| timing.router_evaluation_start)
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        service_worker
+            .and_then(|timing| timing.cache_lookup_start)
+            .map(|value| v8::Number::new(scope, value).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        matched_source
+            .map(Into::into)
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        final_source
+            .map(Into::into)
+            .unwrap_or_else(|| v8::undefined(scope).into()),
     ];
     for (index, value) in fields.into_iter().enumerate() {
         let _ = record.set_index(scope, index as u32, value);
@@ -184,7 +206,26 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
             let record = records
                 .get_index(scope, index)
                 .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())?;
+            let timestamp = |scope: &mut v8::PinScope<'s, '_>, index| {
+                record
+                    .get_index(scope, index)
+                    .filter(|value| !value.is_undefined())
+                    .and_then(|value| value.number_value(scope))
+            };
+            let worker_start = timestamp(scope, 26);
+            let router_evaluation_start = timestamp(scope, 27);
+            let service_worker = (worker_start.is_some() || router_evaluation_start.is_some())
+                .then(|| {
+                    Box::new(ResourceServiceWorkerTiming {
+                        worker_start,
+                        router_evaluation_start,
+                        cache_lookup_start: timestamp(scope, 28),
+                        matched_source: router_source(array_string(scope, record, 29)),
+                        final_source: router_source(array_string(scope, record, 30)),
+                    })
+                });
             Some(ResourcePerformanceEntry {
+                service_worker,
                 preload_state: Default::default(),
                 name: array_string(scope, record, 0)?,
                 initiator_type: array_string(scope, record, 1)?,
@@ -385,6 +426,16 @@ fn array_number(
     values.get_index(scope, index)?.number_value(scope)
 }
 
+fn router_source(value: Option<String>) -> &'static str {
+    match value.as_deref() {
+        Some("network") => "network",
+        Some("cache") => "cache",
+        Some("fetch-event") => "fetch-event",
+        Some("race-network-and-fetch-handler") => "race-network-and-fetch-handler",
+        _ => "",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,6 +456,13 @@ mod tests {
         );
         entry.delivery_type = "cache".to_owned();
         entry.content_encoding = "gzip".to_owned();
+        entry.service_worker = Some(Box::new(ResourceServiceWorkerTiming {
+            worker_start: Some(1000.1),
+            router_evaluation_start: Some(1000.2),
+            cache_lookup_start: Some(1000.3),
+            matched_source: "cache",
+            final_source: "network",
+        }));
         entry.request_start_unix_millis = Some(1000.5);
         entry.first_interim_response_start_unix_millis = Some(1001.0);
         entry.final_response_headers_start_unix_millis = Some(1002.0);
@@ -422,6 +480,12 @@ mod tests {
             entries[0].final_response_headers_start_unix_millis,
             Some(1002.0)
         );
+        let worker = entries[0].service_worker.as_ref().unwrap();
+        assert_eq!(worker.worker_start, Some(1000.1));
+        assert_eq!(worker.router_evaluation_start, Some(1000.2));
+        assert_eq!(worker.cache_lookup_start, Some(1000.3));
+        assert_eq!(worker.matched_source, "cache");
+        assert_eq!(worker.final_source, "network");
         assert!(take_pending_resource_entries(scope, window).is_empty());
     }
 }

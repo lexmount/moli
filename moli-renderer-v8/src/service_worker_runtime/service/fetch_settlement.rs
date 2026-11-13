@@ -142,6 +142,11 @@ fn service_worker_fetch_can_forward_stream(
     ) {
         return Err(message);
     }
+    if job.router_race_request_cancel_handle.is_some() {
+        // Select a potential response at its headers. The winning original
+        // job performs client policy, integrity and redirect processing.
+        return Ok(true);
+    }
     validate_service_worker_fetch_response_head_security_policy(
         job,
         response_head.final_url.as_ref(),
@@ -552,6 +557,7 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(super) fn dispatch_fetch_fallback(&self, mut job: ServiceWorkerFetchJob) {
+        self.close_job_router_race(&job);
         job.cancel_pending_navigation_preload();
         if let Some(stream) = job.body_stream.take() {
             // Startup failure can select network fallback before a FetchEvent
@@ -666,6 +672,8 @@ impl ServiceWorkerRuntimeService {
                             body,
                         );
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
+                        service_worker_response_head: None,
+                        service_worker_body_is_null: None,
                         response_url: Some(navigation_response.final_url.clone()),
                         response: Box::new(navigation_response),
                         response_filter,
@@ -676,6 +684,58 @@ impl ServiceWorkerRuntimeService {
             };
             let _ = completion_tx.send(result);
         });
+    }
+
+    pub(super) fn start_detached_service_worker_stream(
+        &self,
+        job: &mut ServiceWorkerFetchJob,
+        response_head: &MaterializedServiceWorkerFetchResponseHead,
+        body_source_id: crate::types::NetworkBodySourceId,
+    ) -> Result<bool, String> {
+        if !service_worker_fetch_can_forward_stream(job, response_head)? {
+            return Ok(false);
+        }
+        let head = service_worker_fetch_stream_response_head(job, response_head);
+        let response_filter = service_worker_fetch_response_head_filter(
+            &response_head.response_type,
+            response_head.cors_exposed_header_names.as_deref(),
+            response_head.status,
+            job.request.redirect_mode(),
+        );
+        job.streaming_body_source_id = Some(body_source_id);
+        job.request_client
+            .observe_service_worker_response_links(&job.request, &head);
+        if let Some(completion) = job.direct_completion_tx.take() {
+            let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+            job.direct_streaming_tx = Some(sender);
+            let _ = completion.send(ServiceWorkerDirectFetchResult::Stream(Box::new(
+                super::super::events::ServiceWorkerDirectFetchStream {
+                    service_worker_response_head: None,
+                    body_source_id,
+                    head,
+                    response_filter,
+                    events,
+                },
+            )));
+        } else {
+            let _ = job.completion_tx.send_async_subresource_event(
+                AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
+                    AsyncSubresourceStreamingStarted {
+                        skip_fetch_security_validation: true,
+                        response_filter,
+                        internal_id: job.internal_id,
+                        request_url: job.request.url.clone(),
+                        request_method: job.request.method.clone(),
+                        request_headers: job.request.request_headers.clone(),
+                        request_body: request_body_text(&job.request.body),
+                        body_source_id,
+                        head,
+                        network_request_headers: None,
+                    },
+                )),
+            );
+        }
+        Ok(true)
     }
 
     pub(super) fn finish_fetch_stream_started(&self, started: ServiceWorkerFetchStreamStarted) {
@@ -714,12 +774,17 @@ impl ServiceWorkerRuntimeService {
                 }
             }
             job.streaming_body_source_id = Some(started.body_source_id);
+            self.mark_fetch_event_router_source(job);
             let direct = job.direct_completion_tx.take().map(|completion| {
                 let (sender, events) = tokio::sync::mpsc::unbounded_channel();
                 job.direct_streaming_tx = Some(sender);
+                let service_worker_response_head = completion
+                    .router_race_event_id
+                    .map(|_| Box::new(started.response_head.clone()));
                 (
                     completion,
                     super::super::events::ServiceWorkerDirectFetchStream {
+                        service_worker_response_head,
                         body_source_id: started.body_source_id,
                         head: service_worker_fetch_stream_response_head(
                             job,
@@ -761,8 +826,14 @@ impl ServiceWorkerRuntimeService {
         }) else {
             return;
         };
-        request_client.observe_service_worker_response_links(&request, &streaming_started.head);
+        if direct
+            .as_ref()
+            .is_none_or(|(completion, _)| completion.router_race_event_id.is_none())
+        {
+            request_client.observe_service_worker_response_links(&request, &streaming_started.head);
+        }
         if let Some((completion, stream)) = direct {
+            self.close_router_race(started.event_id, &started.owner);
             let _ = completion.send(ServiceWorkerDirectFetchResult::Stream(Box::new(stream)));
             return;
         }
@@ -883,7 +954,12 @@ impl ServiceWorkerRuntimeService {
         mut job: ServiceWorkerFetchJob,
         response: ServiceWorkerFetchResponse,
     ) {
+        self.close_job_router_race(&job);
         job.cancel_pending_navigation_preload();
+        let internal_race = job.router_race_request_cancel_handle.is_some();
+        let service_worker_response_head = internal_race
+            .then(|| Box::new(MaterializedServiceWorkerFetchResponseHead::from(&response)));
+        let service_worker_body_is_null = Some(response.body_is_null);
         // Validate the filtered response before inspecting its internal redirect.
         // A restored Location must not turn an invalid respondWith into a fetch.
         if let Some(message) = service_worker_fetch_response_rejection(&job, &response) {
@@ -929,6 +1005,7 @@ impl ServiceWorkerRuntimeService {
         }
         if is_redirect_status(response.status)
             && job.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
+            && !internal_race
         {
             self.complete_fetch_with_network_failure(
                 job,
@@ -975,15 +1052,17 @@ impl ServiceWorkerRuntimeService {
             .unwrap_or_else(|| job.request.url.clone());
         // The inner network fetch already applies ORB. Synthesized bodies belong
         // to the service worker; only the receiving client's CORP/COEP is checked here.
-        if let Err(message) = validate_service_worker_fetch_response_head_security_policy(
-            &job,
-            response.final_url.as_ref(),
-            &response.headers,
-        ) {
+        if !internal_race
+            && let Err(message) = validate_service_worker_fetch_response_head_security_policy(
+                &job,
+                response.final_url.as_ref(),
+                &response.headers,
+            )
+        {
             self.complete_fetch_with_failure(job, message);
             return;
         }
-        if response.body_is_null && !job.metadata.integrity.is_empty() {
+        if !internal_race && response.body_is_null && !job.metadata.integrity.is_empty() {
             self.complete_fetch_with_failure(
                 job,
                 "fetch: integrity metadata requires a non-null response body".to_owned(),
@@ -1011,7 +1090,7 @@ impl ServiceWorkerRuntimeService {
             String::from_utf8_lossy(&response.body).into_owned(),
             response.body,
         );
-        if job.streaming_body_source_id.is_none() {
+        if !internal_race && job.streaming_body_source_id.is_none() {
             job.request_client
                 .observe_service_worker_response_links(&job.request, &navigation_response.head());
         }
@@ -1023,6 +1102,8 @@ impl ServiceWorkerRuntimeService {
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
                 ServiceWorkerDirectFetchResponse {
+                    service_worker_response_head,
+                    service_worker_body_is_null,
                     response_url,
                     response: Box::new(navigation_response),
                     response_filter,
@@ -1044,6 +1125,7 @@ impl ServiceWorkerRuntimeService {
         let _ = job
             .completion_tx
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: Some(response.body_is_null),
                 internal_id: job.internal_id,
                 request_url: job.request.url,
                 request_method: job.request.method,
@@ -1076,6 +1158,7 @@ impl ServiceWorkerRuntimeService {
         message: String,
         mut network_error_text: Option<String>,
     ) {
+        self.close_job_router_race(&job);
         job.cancel_pending_navigation_preload();
         if network_error_text.is_none() {
             network_error_text = service_worker_fetch_failure_network_error_text(&message);
@@ -1103,6 +1186,7 @@ impl ServiceWorkerRuntimeService {
         let _ = job
             .completion_tx
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id: job.internal_id,
                 request_url: job.request.url,
                 request_method: job.request.method,
@@ -1507,6 +1591,7 @@ mod tests {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1573,6 +1658,7 @@ mod tests {
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
                 navigation_preload_cancel_handle: None,
+                router_race_request_cancel_handle: None,
                 streaming_body_source_id: None,
                 direct_completion_tx: None,
             },
@@ -2715,6 +2801,7 @@ mod tests {
             resource_task_runner: test_resource_task_runner(),
             cancel_handle: moli_fetch::FetchCancelHandle::new(),
             navigation_preload_cancel_handle: None,
+            router_race_request_cancel_handle: None,
             streaming_body_source_id: None,
             direct_completion_tx: None,
         };

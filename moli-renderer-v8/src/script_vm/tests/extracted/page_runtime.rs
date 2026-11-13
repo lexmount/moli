@@ -101,6 +101,7 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
 
     let report_only_final = Url::parse("https://report-only-redirect-target.test/final").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: report_only_fetch.0,
         request_url: report_only_request.clone(),
         request_method: "GET".to_owned(),
@@ -119,6 +120,7 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
     .expect("detached report-only keepalive should complete without V8");
     let enforce_final = Url::parse("https://enforce-redirect-target.test/final").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: enforce_fetch.0,
         request_url: enforce_request.clone(),
         request_method: "GET".to_owned(),

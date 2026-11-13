@@ -447,6 +447,7 @@ impl ScriptVm {
             skip_fetch_security_validation,
             response_filter,
             network_error_text,
+            None,
             result.into(),
         )
     }
@@ -462,6 +463,7 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
+        body_is_null: Option<bool>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         if skip_fetch_security_validation
@@ -775,7 +777,13 @@ impl ScriptVm {
                             // ORB discards the internal body; request policy
                             // still selects opaque versus opaqueredirect.
                             // Preserve explicit service-worker filter overrides.
-                            let response_obj =
+                            let readable_null_body = body_is_null == Some(true)
+                                && !matches!(response_filter, Some(AsyncSubresourceFetchResponseFilter::Opaque | AsyncSubresourceFetchResponseFilter::OpaqueRedirect));
+                            let response_obj = if readable_null_body {
+                                crate::network_host::build_null_body_fetch_response_object_for_request_mode_with_filter(
+                                    scope, &pending.request_origin, response_request, head, response_filter,
+                                )
+                            } else {
                                 crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                     scope,
                                     &pending.request_origin,
@@ -783,7 +791,8 @@ impl ScriptVm {
                                     head,
                                     body,
                                     response_filter,
-                                );
+                                )
+                            };
                             resolver.resolve(scope, response_obj.into());
                             if let Some(upload) = upload { upload.finish(scope); }
                         }

@@ -693,6 +693,21 @@ pub(crate) struct ServiceWorkerFetchResponse {
     pub(crate) body: Vec<u8>,
 }
 
+impl From<&ServiceWorkerFetchResponse> for MaterializedServiceWorkerFetchResponseHead {
+    fn from(response: &ServiceWorkerFetchResponse) -> Self {
+        Self {
+            cors_exposed_header_names: response.cors_exposed_header_names.clone(),
+            request_include_credentials: response.request_include_credentials,
+            final_url: response.final_url.clone(),
+            response_type: response.response_type.clone(),
+            redirected: response.redirected,
+            status: response.status,
+            status_text: response.status_text.clone(),
+            headers: response.headers.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ServiceWorkerFetchResult {
     Fallback,
@@ -763,10 +778,17 @@ pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchCompletion {
-    sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+    target: ServiceWorkerDirectFetchCompletionTarget,
     pub(super) stream_response: bool,
     pub(super) defer_network_fallback: bool,
     pub(super) defer_redirects: bool,
+    pub(super) router_race_event_id: Option<ServiceWorkerEventId>,
+}
+
+#[derive(Debug)]
+enum ServiceWorkerDirectFetchCompletionTarget {
+    Client(tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>),
+    RouterRace(super::static_router::race::RouterRaceCompletionTarget),
 }
 
 impl ServiceWorkerDirectFetchCompletion {
@@ -774,10 +796,11 @@ impl ServiceWorkerDirectFetchCompletion {
         sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
     ) -> Self {
         Self {
-            sender,
+            target: ServiceWorkerDirectFetchCompletionTarget::Client(sender),
             stream_response: false,
             defer_network_fallback: false,
             defer_redirects: false,
+            router_race_event_id: None,
         }
     }
 
@@ -812,7 +835,23 @@ impl ServiceWorkerDirectFetchCompletion {
     }
 
     pub(super) fn send(self, result: ServiceWorkerDirectFetchResult) -> bool {
-        self.sender.send(result).is_ok()
+        match self.target {
+            ServiceWorkerDirectFetchCompletionTarget::Client(sender) => sender.send(result).is_ok(),
+            ServiceWorkerDirectFetchCompletionTarget::RouterRace(target) => target.send(result),
+        }
+    }
+
+    pub(super) fn for_router_race(
+        target: super::static_router::race::RouterRaceCompletionTarget,
+        event_id: ServiceWorkerEventId,
+    ) -> Self {
+        Self {
+            target: ServiceWorkerDirectFetchCompletionTarget::RouterRace(target),
+            stream_response: true,
+            defer_network_fallback: true,
+            defer_redirects: true,
+            router_race_event_id: Some(event_id),
+        }
     }
 }
 
@@ -831,6 +870,8 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchStream {
+    pub(crate) service_worker_response_head:
+        Option<Box<MaterializedServiceWorkerFetchResponseHead>>,
     pub(crate) body_source_id: crate::types::NetworkBodySourceId,
     pub(crate) head: moli_fetch::ResponseHead,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
@@ -845,6 +886,9 @@ pub(crate) enum ServiceWorkerDirectFetchStreamEvent {
 
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerDirectFetchResponse {
+    pub(crate) service_worker_response_head:
+        Option<Box<MaterializedServiceWorkerFetchResponseHead>>,
+    pub(crate) service_worker_body_is_null: Option<bool>,
     /// The worker response's URL before applying the request-URL fallback.
     pub(crate) response_url: Option<Url>,
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,

@@ -46,6 +46,7 @@ async fn fetch_request_initializers_use_request_header_guards() {
             negotiated_http_version: None,
         };
         vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+            body_is_null: None,
             response_filter: None,
             skip_fetch_security_validation: false,
             internal_id: request.internal_id,

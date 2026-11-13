@@ -819,6 +819,7 @@ fn pending_unregistration_deletion_clears_owner_state() {
                     resource_task_runner: test_resource_task_runner(),
                     cancel_handle: moli_fetch::FetchCancelHandle::new(),
                     navigation_preload_cancel_handle: None,
+                    router_race_request_cancel_handle: None,
                     streaming_body_source_id: None,
                     direct_completion_tx: None,
                 },
@@ -1354,6 +1355,7 @@ fn same_options_register_uses_waiting_newest_worker_for_fast_path() {
         state.versions.insert(
             waiting_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: waiting_version_id,
                 registration_id,
                 script_url: waiting_script_url.clone(),

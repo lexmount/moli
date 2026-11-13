@@ -284,6 +284,7 @@ pub(crate) fn start_event_source_request<'s>(
         set_event_source_active_request_id(scope, event_source, Some(registered.internal_id));
         let _ = host.resource_completion_sender().send_async_subresource(
             crate::types::AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id: registered.internal_id,
                 request_url: prepared.resolved_url,
                 request_method: "GET".to_owned(),
@@ -478,6 +479,7 @@ fn dispatch_service_worker_event_source<'s>(
     if !host.dispatch_service_worker_fetch(dispatch) {
         let _ = host.resource_completion_sender().send_async_subresource(
             crate::types::AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id: registered.internal_id,
                 request_url: prepared.resolved_url.clone(),
                 request_method: "GET".to_owned(),

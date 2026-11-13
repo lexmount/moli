@@ -3765,6 +3765,7 @@ __swNonStreamFailurePromise.then(
     .expect("promise observer should install");
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),
@@ -5112,6 +5113,7 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                 } else {
                     vm.complete_async_subresource_fetch(
                         crate::types::AsyncSubresourceFetchCompletion {
+                            body_is_null: None,
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
                             request_method: "GET".to_owned(),

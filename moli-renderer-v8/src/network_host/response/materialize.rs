@@ -240,6 +240,45 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
     body: moli_fetch::ResponseBody,
     filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 ) -> v8::Local<'s, v8::Object> {
+    build_fetch_response_object_with_body_nullity(
+        scope,
+        request_origin,
+        request,
+        head,
+        body,
+        filter_override,
+        false,
+    )
+}
+
+pub(crate) fn build_null_body_fetch_response_object_for_request_mode_with_filter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request_origin: impl Into<WebOrigin>,
+    request: FetchResponseRequest<'_>,
+    head: moli_fetch::ResponseHead,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+) -> v8::Local<'s, v8::Object> {
+    build_fetch_response_object_with_body_nullity(
+        scope,
+        request_origin,
+        request,
+        head,
+        moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
+        filter_override,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_fetch_response_object_with_body_nullity<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request_origin: impl Into<WebOrigin>,
+    request: FetchResponseRequest<'_>,
+    head: moli_fetch::ResponseHead,
+    body: moli_fetch::ResponseBody,
+    filter_override: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    body_is_null: bool,
+) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
     let filter = filter_override
         .as_ref()
@@ -253,7 +292,9 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
         None,
         filter_override.as_ref(),
     );
-    let body_stream = if response_has_null_body(request.method, head.status) {
+    let body_stream = if response_has_null_body(request.method, head.status)
+        || (body_is_null && filtered_response_exposes_body(filter))
+    {
         None
     } else if filtered_response_exposes_body(filter) {
         network_body_stream_from_response_body(scope, obj, body)
@@ -585,6 +626,7 @@ pub(crate) struct MaterializedResponseObject {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MaterializedResponseHead {
+    pub(crate) body_is_null: bool,
     pub(crate) cors_exposed_header_names: Option<Vec<String>>,
     pub(crate) request_include_credentials: bool,
     pub(crate) final_url: Option<url::Url>,
@@ -740,6 +782,7 @@ fn materialize_response_head_for_purpose<'s>(
 
     Ok((
         MaterializedResponseHead {
+            body_is_null: !filtered_response_type && body_stream_object(scope, response).is_none(),
             cors_exposed_header_names: (response_type == "cors").then(|| {
                 headers
                     .iter()

@@ -401,6 +401,7 @@ pub(crate) fn start_image_element_resource_fetch(
         if !host.dispatch_service_worker_fetch(dispatch) {
             let _ = host.resource_completion_sender().send_async_subresource(
                 AsyncSubresourceFetchCompletion {
+                    body_is_null: None,
                     internal_id,
                     request_url,
                     request_method: "GET".to_owned(),
@@ -425,6 +426,7 @@ pub(crate) fn start_image_element_resource_fetch(
         resource_loader.task_runner().spawn(async move {
             let outcome = scanned_preload.wait_outcome().await;
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method: "GET".to_owned(),

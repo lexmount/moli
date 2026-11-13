@@ -108,6 +108,7 @@ async fn window_service_worker_response_filter_survives_streaming_clone_and_cach
                 } else {
                     vm.complete_async_subresource_fetch(
                         crate::types::AsyncSubresourceFetchCompletion {
+                            body_is_null: None,
                             response_filter,
                             skip_fetch_security_validation: true,
                             internal_id: request.internal_id,
@@ -282,6 +283,7 @@ async fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache()
             } else {
                 vm.complete_async_subresource_fetch(
                     crate::types::AsyncSubresourceFetchCompletion {
+                        body_is_null: None,
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: "GET".to_owned(),

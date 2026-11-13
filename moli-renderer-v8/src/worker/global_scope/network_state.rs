@@ -120,6 +120,7 @@ pub(in crate::worker) enum WorkerFetchEvent {
 }
 
 pub(in crate::worker) struct WorkerFetchCompletion {
+    pub(super) body_is_null: Option<bool>,
     pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     pub(super) skip_fetch_security_validation: bool,
     pub(super) fetch_id: u32,

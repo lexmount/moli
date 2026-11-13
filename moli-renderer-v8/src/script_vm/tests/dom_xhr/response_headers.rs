@@ -67,6 +67,7 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
             } else {
                 vm.complete_async_subresource_fetch(
                     crate::types::AsyncSubresourceFetchCompletion {
+                        body_is_null: None,
                         response_filter: None,
                         skip_fetch_security_validation: false,
                         internal_id: request.internal_id,

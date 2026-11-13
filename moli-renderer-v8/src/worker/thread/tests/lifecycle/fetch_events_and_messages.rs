@@ -516,6 +516,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
             | WorkerToParentMessage::RuntimeInspectorResponse(_)

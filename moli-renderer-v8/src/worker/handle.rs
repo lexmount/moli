@@ -67,6 +67,10 @@ pub(crate) fn worker_secure_context_for_script_url(
 /// Message from the parent context to the worker.
 #[derive(Debug)]
 pub(crate) enum WorkerMessage {
+    ServiceWorkerRouterRulesRegistered {
+        request_id: u64,
+        result: Result<(), String>,
+    },
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
     /// Dispatch a ServiceWorker message at this client's container, retaining
@@ -337,6 +341,10 @@ pub(crate) struct WorkerResourceOwnerSlotDiagnostics {
 /// Message from the worker back to the parent context.
 #[derive(Debug)]
 pub(crate) enum WorkerToParentMessage {
+    ServiceWorkerRegisterRouterRules {
+        request_id: u64,
+        rules: Vec<crate::service_worker_runtime::static_router::RouterRule>,
+    },
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
     /// The worker encountered an unhandled error.
@@ -1200,6 +1208,16 @@ impl WorkerHandle {
         let _ = self
             .tx
             .send(WorkerMessage::ServiceWorkerSkipWaitingResult { request_id });
+    }
+
+    pub(crate) fn dispatch_service_worker_router_rules_result(
+        &self,
+        request_id: u64,
+        result: Result<(), String>,
+    ) {
+        let _ = self
+            .tx
+            .send(WorkerMessage::ServiceWorkerRouterRulesRegistered { request_id, result });
     }
 
     pub(crate) fn dispatch_service_worker_clients_claim_result(

@@ -126,6 +126,11 @@ impl FetchResourceTiming {
             && end.is_none()
             && native.body_sizes().is_none()
             && native.fetch_started_at().is_none()
+            && native.service_worker_started_at().is_none()
+            && native
+                .service_worker_router()
+                .evaluation_started_at
+                .is_none()
         {
             return;
         }
@@ -351,6 +356,7 @@ impl FetchResourceTiming {
             entry.delivery_type.clear();
         }
         if allowed {
+            self.apply_service_worker_timing(entry);
             self.apply_connection_timing(
                 entry,
                 head.final_url.scheme() == "https",
@@ -379,6 +385,52 @@ impl FetchResourceTiming {
                 .unwrap_or_default();
         }
         allowed
+    }
+
+    fn apply_service_worker_timing(&self, entry: &mut ResourcePerformanceEntry) {
+        let Some(native) = self
+            .response_timing
+            .as_ref()
+            .and_then(|timing| timing.native)
+        else {
+            return;
+        };
+        let router = native.service_worker_router();
+        if native.service_worker_started_at().is_none() && router.evaluation_started_at.is_none() {
+            return;
+        }
+        let worker_start = match (router.matched_source, router.final_source) {
+            (
+                Some(moli_fetch::ServiceWorkerRouterSource::Cache),
+                Some(moli_fetch::ServiceWorkerRouterSource::Cache),
+            )
+            | (Some(moli_fetch::ServiceWorkerRouterSource::RaceNetworkAndFetchHandler), Some(_))
+            | (
+                Some(moli_fetch::ServiceWorkerRouterSource::FetchEvent),
+                Some(moli_fetch::ServiceWorkerRouterSource::FetchEvent),
+            ) => router.evaluation_started_at,
+            (Some(_), Some(moli_fetch::ServiceWorkerRouterSource::Network)) => None,
+            _ => native.service_worker_started_at(),
+        };
+        entry.service_worker = Some(Box::new(super::ResourceServiceWorkerTiming {
+            worker_start: worker_start.map(|value| self.unix_millis(value)),
+            router_evaluation_start: router
+                .evaluation_started_at
+                .map(|value| self.unix_millis(value)),
+            cache_lookup_start: router
+                .cache_lookup_started_at
+                .map(|value| self.unix_millis(value)),
+            matched_source: router
+                .matched_source
+                .map_or("", moli_fetch::ServiceWorkerRouterSource::as_str),
+            final_source: router
+                .final_source
+                .map_or("", moli_fetch::ServiceWorkerRouterSource::as_str),
+        }));
+        if router.final_source == Some(moli_fetch::ServiceWorkerRouterSource::Cache) {
+            entry.delivery_type = "cache-storage".to_owned();
+            entry.transfer_size = 0.0;
+        }
     }
 
     pub(crate) fn timing_allowed(origin: &WebOrigin, head: &ResponseHead) -> bool {

@@ -728,6 +728,7 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_) => {}
             WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. } => {}
             WorkerToParentMessage::Error { message, .. } => {
                 panic!("unexpected service worker error: {message}");
@@ -933,7 +934,8 @@ async fn service_worker_clients_claim_posts_runtime_request() {
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_) => {}
-            WorkerToParentMessage::ServiceWorkerSkipWaiting { .. } => {}
+            WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. } => {}
             WorkerToParentMessage::Error { message, .. } => {
                 panic!("unexpected service worker error: {message}");
             }
@@ -1203,6 +1205,7 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
             | WorkerToParentMessage::ServiceWorkerWorkerMessage(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)
@@ -1565,6 +1568,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientMessage(_)
             | WorkerToParentMessage::ServiceWorkerWorkerMessage(_)
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)
@@ -1709,6 +1713,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientQuery(_)
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)

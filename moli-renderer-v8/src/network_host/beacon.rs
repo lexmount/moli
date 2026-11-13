@@ -428,6 +428,7 @@ fn start_window_ping(
     if let Some(error) = error {
         let _ = host.resource_completion_sender().send_async_subresource(
             crate::types::AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url: request.url,
                 request_method: request.method,

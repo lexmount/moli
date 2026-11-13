@@ -20,6 +20,7 @@ mod service_lane;
 mod snapshots;
 mod start_completion;
 mod state;
+pub(crate) mod static_router;
 mod target_output_streams;
 mod version;
 
