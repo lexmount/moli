@@ -138,9 +138,6 @@ mod tests {
                 script_url: url::Url::parse("https://example.test/missing-classic.js")
                     .expect("script url"),
                 error: "network error".to_owned(),
-                prepared_script: None,
-                source_network_result: None,
-                network_request_handle: None,
             },
             None,
         );

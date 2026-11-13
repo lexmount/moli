@@ -635,22 +635,21 @@ where
                 return None;
             }
             let network_request_handle = source_result.network_request_handle();
+            let network_record_urls = script
+                .runner_script()
+                .map(ParserClassicScriptNetworkRecordUrls::from_prepared_script);
             let (notification, network_result) =
                 script.notify_runner_source_result_with_network_result(source_result)?;
             script
                 .context_mut()
                 .clear_parser_classic_source_load_state();
-            let network_record_urls = script
-                .runner_script()
-                .map(ParserClassicScriptNetworkRecordUrls::from_prepared_script);
             let action = ParserPendingClassicScriptSourceResultAction::new(
                 notification,
                 network_result.as_ref(),
                 network_record_urls,
+                network_request_handle,
             );
-            owner.parser_script_source_result_action(
-                action.with_network_request_handle(network_request_handle),
-            )
+            owner.parser_script_source_result_action(action)
         })
     }
 
@@ -671,21 +670,21 @@ where
                     return None;
                 }
                 let network_request_handle = source_result.network_request_handle();
+                let network_record_urls = script
+                    .runner_script()
+                    .map(ParserClassicScriptNetworkRecordUrls::from_prepared_script);
                 let (notification, network_result) =
                     script.notify_runner_source_result_with_network_result(source_result)?;
                 script
                     .context_mut()
                     .clear_parser_classic_source_load_state();
-                let network_record_urls = script
-                    .runner_script()
-                    .map(ParserClassicScriptNetworkRecordUrls::from_prepared_script);
                 owner.parser_script_source_result_action(
                     ParserPendingClassicScriptSourceResultAction::new(
                         notification,
                         network_result.as_ref(),
                         network_record_urls,
-                    )
-                    .with_network_request_handle(network_request_handle),
+                        network_request_handle,
+                    ),
                 )
             },
         )
@@ -733,11 +732,10 @@ where
                 notification,
                 network_result.as_ref(),
                 network_record_urls,
+                network_request_handle,
             );
             Some(ParserClassicScriptSourceResultApplication::Applied(
-                owner.parser_script_source_result_action(
-                    action.with_network_request_handle(network_request_handle),
-                ),
+                owner.parser_script_source_result_action(action),
             ))
         })
         .unwrap_or(ParserClassicScriptSourceResultApplication::NoSourceLoad)
