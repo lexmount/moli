@@ -19,6 +19,10 @@ use crate::script_provenance::CompiledStringProvenance;
 // That keeps this commit structural rather than semantic, which is the safest way to start
 // shrinking `document_runtime.rs`.
 impl DocumentRuntime {
+    pub(crate) fn next_idle_period_work_deadline(&self) -> Option<std::time::Instant> {
+        self.timeouts.next_idle_period_work_deadline()
+    }
+
     /// A reused Window and retained nodes keep their existing EventTargets.
     /// The new Document has a fresh handle and receives no old listeners.
     pub(crate) fn retain_event_targets_from_initial_document(&mut self, initial: &mut Self) {

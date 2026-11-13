@@ -72,6 +72,14 @@ impl ScheduledWindowWebIdlCallback {
             .map(WindowExecutionContextIdentity::realm_token)
     }
 
+    pub(super) fn contributes_to_idle_deadline(&self) -> bool {
+        matches!(
+            self.kind,
+            WindowWebIdlCallbackTaskKind::Timer
+                | WindowWebIdlCallbackTaskKind::AnimationFrame { .. }
+        )
+    }
+
     pub(super) fn is_unexpired_idle_callback_at(&self, now_ms: f64) -> bool {
         match self.kind {
             WindowWebIdlCallbackTaskKind::Idle {
@@ -102,6 +110,7 @@ impl ScheduledWindowWebIdlCallback {
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut PageScriptHost,
         extra_args: &[v8::Global<v8::Value>],
+        idle_period_deadline_ms: Option<f64>,
     ) -> WebIdlCallbackExecutionOutcome<v8::Global<v8::Value>, Box<V8ExceptionReport>> {
         let Some(prepared) = self.callback.prepare_execution(scope, host_ptr, None) else {
             return WebIdlCallbackExecutionOutcome::Unavailable;
@@ -124,10 +133,16 @@ impl ScheduledWindowWebIdlCallback {
             WindowWebIdlCallbackTaskKind::Idle {
                 timeout_deadline_ms,
             } => {
-                let did_timeout = timeout_deadline_ms >= 0.0
-                    && crate::window_host::current_time_ms() >= timeout_deadline_ms;
+                let now_ms = crate::window_host::current_time_ms();
+                let did_timeout = timeout_deadline_ms >= 0.0 && now_ms >= timeout_deadline_ms;
+                let deadline_ms = if did_timeout {
+                    now_ms
+                } else {
+                    idle_period_deadline_ms
+                        .expect("an unexpired idle callback must belong to an idle period")
+                };
                 let Some(deadline) =
-                    crate::window_host::build_window_idle_deadline(scope, did_timeout)
+                    crate::window_host::build_window_idle_deadline(scope, did_timeout, deadline_ms)
                 else {
                     return WebIdlCallbackExecutionOutcome::Unavailable;
                 };
