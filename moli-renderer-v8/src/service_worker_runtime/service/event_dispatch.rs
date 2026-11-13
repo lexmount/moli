@@ -377,6 +377,7 @@ impl ServiceWorkerRuntimeService {
             };
             fetch_job.bind_to_owner(version.run_owner());
             if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
+                fetch_job.cancel_handle.mark_service_worker_start();
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
                 let event = ServiceWorkerFetchEvent {
@@ -397,6 +398,7 @@ impl ServiceWorkerRuntimeService {
             } else {
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
+                fetch_job.cancel_handle.mark_service_worker_start();
                 Self::begin_version_event_locked(version);
                 let action = match &version.running_state {
                     ServiceWorkerVersionRunningState::Running { host } => {
@@ -1396,6 +1398,14 @@ impl ServiceWorkerRuntimeService {
     ) {
         let navigation_preload = self.navigation_preload_dispatch_for_event(&event);
         event.navigation_preload_sent = navigation_preload.is_some();
+        {
+            let state = self.inner.state.lock();
+            if let Some(job) = state.pending_fetch_jobs.get(&event.event_id)
+                && job.is_bound_to_owner(&event.owner)
+            {
+                job.cancel_handle.mark_service_worker_dispatch();
+            }
+        }
         if host.dispatch_fetch_event(event.clone()) {
             if let Some(navigation_preload) = navigation_preload {
                 self.start_navigation_preload_dispatch(host, navigation_preload);
