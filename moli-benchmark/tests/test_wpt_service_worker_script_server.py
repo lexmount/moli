@@ -36,7 +36,7 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
         for name in (
             "mime-type-worker.py", "import-mime-type-worker.py", "malformed-worker.py",
             "invalid-chunked-encoding.py", "invalid-chunked-encoding-with-flush.py",
-            "redirect.py", "update-worker.py", "update-worker-from-file.py", "import-scripts-version.py",
+            "redirect.py", "scope1/redirect.py", "update-worker.py", "update-worker-from-file.py", "import-scripts-version.py",
             "update-during-installation-worker.py",
             "import-scripts-get.py", "import-scripts-echo.py",
             "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
@@ -82,28 +82,32 @@ class ServiceWorkerScriptFixtureTests(unittest.TestCase):
             ("ACACredentials", "true"),
             ("ACEHeaders", "X-Result"),
         ])
-        for method in ("GET", "HEAD", "POST", "OPTIONS", "PUT", "YO", "CUSTOM"):
-            with self.subTest(method=method):
-                status, headers, body = self.request(server.port, "redirect.py", query, method=method)
-                self.assertEqual(status, 307)
-                self.assertEqual(body, b"")
-                self.assertEqual(dict(headers)["location"], "../target.js?one=1&two=%20")
-                self.assertEqual(
-                    [value for name, value in headers if name == "access-control-allow-origin"],
-                    ["https://one.test", "https://two.test"],
-                )
-                for name, value in (
-                    ("access-control-allow-headers", "X-One, X-Two"),
-                    ("access-control-allow-methods", "GET, OPTIONS"),
-                    ("access-control-allow-credentials", "true"),
-                    ("access-control-expose-headers", "X-Result"),
-                ):
-                    self.assertEqual(dict(headers)[name], value)
-                self.assertNotIn("content-type", dict(headers))
-                self.assertNotIn("cache-control", dict(headers))
-        status, headers, _ = self.request(server.port, "%72edirect.py", "Redirect=%FF")
-        self.assertEqual(status, 302)
-        self.assertEqual(dict(headers)["location"], "\xff")
+        # scope1/redirect.py delegates to the same upstream main function.
+        for resource in ("redirect.py", "scope1/redirect.py"):
+            for method in ("GET", "HEAD", "POST", "OPTIONS", "PUT", "YO", "CUSTOM"):
+                with self.subTest(resource=resource, method=method):
+                    status, headers, body = self.request(server.port, resource, query, method=method)
+                    self.assertEqual(status, 307)
+                    self.assertEqual(body, b"")
+                    self.assertEqual(dict(headers)["location"], "../target.js?one=1&two=%20")
+                    self.assertEqual(
+                        [value for name, value in headers if name == "access-control-allow-origin"],
+                        ["https://one.test", "https://two.test"],
+                    )
+                    for name, value in (
+                        ("access-control-allow-headers", "X-One, X-Two"),
+                        ("access-control-allow-methods", "GET, OPTIONS"),
+                        ("access-control-allow-credentials", "true"),
+                        ("access-control-expose-headers", "X-Result"),
+                    ):
+                        self.assertEqual(dict(headers)[name], value)
+                    self.assertNotIn("content-type", dict(headers))
+                    self.assertNotIn("cache-control", dict(headers))
+            status, headers, _ = self.request(
+                server.port, resource.replace("redirect.py", "%72edirect.py"), "Redirect=%FF",
+            )
+            self.assertEqual(status, 302)
+            self.assertEqual(dict(headers)["location"], "\xff")
 
     def test_registration_mime_handlers_preserve_missing_empty_and_raw_values(self) -> None:
         server = self.server()
