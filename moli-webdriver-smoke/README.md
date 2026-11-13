@@ -379,8 +379,9 @@ is released. Without a prompt, Classic still waits for navigation and then
 returns `no such alert`. This differs from BiDi's finite prompt handling.
 The same 16 cases run against Moli and ChromeDriver. Absence is observed for a
 bounded 250 ms after the HTTP request is written; deterministic Rust tests also
-poll the actual wait before installing a prompt. Gates open only after each
-verdict, never to rescue a blocked alert operation.
+poll the actual wait before installing a prompt. The navigation response gate
+opens only after the verdict, never to rescue a blocked alert operation. The
+separate prompt trigger opens after the navigation request arrives.
 
 The release/old/new input-generation case is calibrated against
 Chrome/ChromeDriver 156.0.8078.73. Upstream mapper commit
