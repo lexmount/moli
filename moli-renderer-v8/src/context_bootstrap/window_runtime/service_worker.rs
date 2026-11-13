@@ -16,6 +16,10 @@ use crate::webidl;
 use crate::worker::WorkerScriptKind;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject, WebApiObjectDeclaration};
 
+const SERVICE_WORKER_REGISTRATION_INSTALLING_SLOT: &str =
+    "__moliServiceWorkerRegistrationInstalling";
+const SERVICE_WORKER_REGISTRATION_WAITING_SLOT: &str = "__moliServiceWorkerRegistrationWaiting";
+const SERVICE_WORKER_REGISTRATION_ACTIVE_SLOT: &str = "__moliServiceWorkerRegistrationActive";
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
 const SERVICE_WORKER_REGISTRATION_WORKER_SLOT: &str = "__moliServiceWorkerRegistrationWorker";
 const SERVICE_WORKER_REGISTRATION_WORKERS_SLOT: &str = "__moliServiceWorkerRegistrationWorkers";
@@ -598,6 +602,14 @@ pub(crate) fn dispatch_service_worker_lifecycle_notification(
     );
     for (owner, registration) in registrations {
         let previous_owner_context = owner.enter(scope);
+        // Publish the task's snapshot before entering author callbacks. Runtime
+        // state may already have advanced to a later lifecycle transition.
+        update_service_worker_registration_object(
+            scope,
+            registration,
+            service_worker_registration_snapshot_script_url(&notification.registration),
+            ServiceWorkerRegistrationPhase::Snapshot(&notification.registration),
+        );
         for event in &notification.events {
             match event {
                 crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound => {
@@ -2064,38 +2076,18 @@ fn service_worker_registration_snapshot_script_url(
         .unwrap_or_else(|| snapshot.scope_url().as_str())
 }
 
-fn service_worker_registration_snapshot_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    registration: v8::Local<'s, v8::Object>,
-) -> Option<crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot> {
-    let scope_url = service_worker_registration_scope_from_this(scope, registration)?;
-    let owner = service_worker_owner_scope_from_object(scope, registration);
-    context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
-        let host = unsafe { &mut *host_ptr };
-        let request_context = host.service_worker_window_request_context(owner)?;
-        host.service_worker_registration_for_client(&request_context, &scope_url)
-    })
-}
-
 fn service_worker_registration_worker_for_phase<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registration: v8::Local<'s, v8::Object>,
     phase: &'static str,
 ) -> v8::Local<'s, v8::Value> {
-    let Some(snapshot) = service_worker_registration_snapshot_from_object(scope, registration)
-    else {
-        return v8::null(scope).into();
+    let slot = match phase {
+        "installing" => SERVICE_WORKER_REGISTRATION_INSTALLING_SLOT,
+        "waiting" => SERVICE_WORKER_REGISTRATION_WAITING_SLOT,
+        "active" => SERVICE_WORKER_REGISTRATION_ACTIVE_SLOT,
+        _ => return v8::null(scope).into(),
     };
-    let version = match phase {
-        "installing" => snapshot.installing(),
-        "waiting" => snapshot.waiting(),
-        "active" => snapshot.active(),
-        _ => None,
-    };
-    let Some(version) = version else {
-        return v8::null(scope).into();
-    };
-    service_worker_registration_worker_for_snapshot_version(scope, registration, version)
+    get_private_value(scope, registration, slot).unwrap_or_else(|| v8::null(scope).into())
 }
 
 fn service_worker_registration_worker_for_snapshot_version<'s>(
@@ -2265,6 +2257,9 @@ struct ResolvedServiceWorkerRegistrationPhase<'s> {
     update_via_cache: &'static str,
     hidden_worker: v8::Local<'s, v8::Object>,
     cached_workers: Vec<v8::Local<'s, v8::Object>>,
+    installing: v8::Local<'s, v8::Value>,
+    waiting: v8::Local<'s, v8::Value>,
+    active: v8::Local<'s, v8::Value>,
 }
 
 fn resolve_service_worker_registration_phase<'s>(
@@ -2309,7 +2304,11 @@ fn resolve_service_worker_registration_phase<'s>(
                     })
                 })
                 .unwrap_or_else(|| build_service_worker_object(scope, script_url, "redundant"));
+            let null_value: v8::Local<'_, v8::Value> = v8::null(scope).into();
             ResolvedServiceWorkerRegistrationPhase {
+                installing: installing_worker.map(Into::into).unwrap_or(null_value),
+                waiting: waiting_worker.map(Into::into).unwrap_or(null_value),
+                active: active_worker.map(Into::into).unwrap_or(null_value),
                 update_via_cache: snapshot.update_via_cache().as_str(),
                 hidden_worker,
                 cached_workers,
@@ -2364,6 +2363,13 @@ fn remember_service_worker_registration_workers<'s>(
     registration: v8::Local<'s, v8::Object>,
     resolved: ResolvedServiceWorkerRegistrationPhase<'s>,
 ) {
+    set_service_worker_registration_worker_values(
+        scope,
+        registration,
+        resolved.installing,
+        resolved.waiting,
+        resolved.active,
+    );
     let owner = service_worker_owner_scope_from_object(scope, registration);
     for worker in resolved.cached_workers {
         service_worker_worker_set_owner_scope(scope, worker, owner);
@@ -2965,9 +2971,24 @@ fn set_service_worker_registration_worker_values<'s>(
     waiting: v8::Local<'s, v8::Value>,
     active: v8::Local<'s, v8::Value>,
 ) {
-    set_service_worker_readonly_value(scope, registration, "installing", installing);
-    set_service_worker_readonly_value(scope, registration, "waiting", waiting);
-    set_service_worker_readonly_value(scope, registration, "active", active);
+    set_private_value(
+        scope,
+        registration,
+        SERVICE_WORKER_REGISTRATION_INSTALLING_SLOT,
+        installing,
+    );
+    set_private_value(
+        scope,
+        registration,
+        SERVICE_WORKER_REGISTRATION_WAITING_SLOT,
+        waiting,
+    );
+    set_private_value(
+        scope,
+        registration,
+        SERVICE_WORKER_REGISTRATION_ACTIVE_SLOT,
+        active,
+    );
 }
 
 fn dispatch_service_worker_simple_event<'s>(

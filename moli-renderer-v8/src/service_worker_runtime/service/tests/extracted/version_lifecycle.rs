@@ -1,5 +1,217 @@
 use super::*;
 
+fn prepare_waiting_worker_replacement(
+    service: &ServiceWorkerRuntimeServiceOwner,
+) -> (
+    SharedRendererServiceWorkerHost,
+    crate::page_task_queue::RendererPageServiceWorkerTestHarness,
+) {
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let active_id = ServiceWorkerVersionId(1);
+    let waiting_id = ServiceWorkerVersionId(2);
+    let installing_id = ServiceWorkerVersionId(3);
+    let scope = url("https://example.test/app/");
+    insert_registered_version(
+        service,
+        registration_id,
+        active_id,
+        scope.join("active.js").unwrap(),
+        scope.clone(),
+        [scope.join("client.html").unwrap()],
+    );
+    let mut register_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    insert_starting_version_with_register_job(
+        service,
+        registration_id,
+        waiting_id,
+        scope.join("waiting.js").unwrap(),
+        scope.clone(),
+        2,
+        register_queue.sender(),
+    );
+    let waiting_run = exact_version_run(service, waiting_id);
+    let waiting_host = new_running_test_host(waiting_id, &waiting_run);
+    {
+        let mut state = service.inner.state.lock();
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        registration.installing_version_id = None;
+        registration.waiting_version_id = Some(waiting_id);
+        registration.pending_register_jobs.remove(&waiting_id);
+        let waiting = state.versions.get_mut(&waiting_id).unwrap();
+        waiting.lifecycle_state = ServiceWorkerVersionLifecycleState::Installed;
+        waiting.running_state = ServiceWorkerVersionRunningState::Running {
+            host: waiting_host.clone(),
+        };
+        state.record_target_created(
+            registration_id,
+            waiting_id,
+            scope.join("waiting.js").unwrap(),
+            scope.clone(),
+        );
+    }
+    insert_starting_version_with_register_job(
+        service,
+        registration_id,
+        installing_id,
+        scope.join("replacement.js").unwrap(),
+        scope.clone(),
+        3,
+        register_queue.sender(),
+    );
+    {
+        let mut state = service.inner.state.lock();
+        let installing = state.versions.get_mut(&installing_id).unwrap();
+        installing.running_state = ServiceWorkerVersionRunningState::Running {
+            host: new_running_test_host(installing_id, &installing.run),
+        };
+        installing.in_flight_event_count = 1;
+        installing.main_script_resource = Some(test_script_resource(&installing.script_url));
+    }
+    service.take_target_output_events_for_test();
+    assert!(!register_queue.has_ready_task());
+    (waiting_host, register_queue)
+}
+
+#[test]
+fn installed_replacement_retires_previous_waiting_worker_before_publishing_new_waiting() {
+    let service = new_service_worker_runtime_service();
+    let (waiting_host, mut register_queue) = prepare_waiting_worker_replacement(&service);
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let active_id = ServiceWorkerVersionId(1);
+    let waiting_id = ServiceWorkerVersionId(2);
+    let installing_id = ServiceWorkerVersionId(3);
+    let scope = url("https://example.test/app/");
+    let mut lifecycle_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    service.watch_registration_lifecycle(
+        scope.clone(),
+        ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope),
+        crate::window_document_identity::WindowDocumentOwner::for_test(1),
+        lifecycle_queue.sender(),
+    );
+    let installing_run = exact_version_run(&service, installing_id);
+
+    service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+        event_id: ServiceWorkerEventId(3),
+        owner: test_run_owner(installing_id, &installing_run),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+        result: Ok(()),
+    });
+
+    assert!(pop_register_completion(&mut register_queue).result.is_ok());
+    let Some(crate::page_task_queue::RendererServiceWorkerInternalTask::Lifecycle(retired)) =
+        lifecycle_queue.pop_internal()
+    else {
+        panic!("old waiting worker must receive its redundant statechange");
+    };
+    assert!(matches!(
+        retired.events.as_slice(),
+        [ServiceWorkerLifecycleClientEvent::WorkerStateChanged { version_id, state: "redundant" }]
+            if *version_id == waiting_id
+    ));
+    let previous_waiting = retired.registration.waiting().unwrap();
+    assert_eq!(previous_waiting.version_id(), waiting_id);
+    assert_eq!(previous_waiting.state(), "redundant");
+    let still_installing = retired.registration.installing().unwrap();
+    assert_eq!(still_installing.version_id(), installing_id);
+    assert_eq!(still_installing.state(), "installing");
+    let Some(crate::page_task_queue::RendererServiceWorkerInternalTask::Lifecycle(installed)) =
+        lifecycle_queue.pop_internal()
+    else {
+        panic!("new waiting worker must receive its installed statechange");
+    };
+    assert!(matches!(
+        installed.events.as_slice(),
+        [ServiceWorkerLifecycleClientEvent::WorkerStateChanged { version_id, state: "installed" }]
+            if *version_id == installing_id
+    ));
+    assert!(installed.registration.installing().is_none());
+    assert_eq!(
+        installed.registration.waiting().unwrap().version_id(),
+        installing_id
+    );
+    assert!(!lifecycle_queue.has_ready_task());
+    assert!(!waiting_host.has_running_worker());
+    assert!(service.take_target_output_events_for_test().iter().any(|event| matches!(
+        event,
+        crate::runtime::RendererServiceWorkerTargetEvent::Destroyed { version_id, active_run: Some(run) }
+            if *version_id == waiting_id.as_u64() && *run == waiting_host.run_identity()
+    )));
+    let state = service.inner.state.lock();
+    assert!(!state.versions.contains_key(&waiting_id));
+    assert_eq!(
+        state.registrations[&registration_id].active_version_id,
+        Some(active_id)
+    );
+    assert_eq!(
+        state.registrations[&registration_id].waiting_version_id,
+        Some(installing_id)
+    );
+    assert_eq!(
+        state.versions[&active_id].lifecycle_state,
+        ServiceWorkerVersionLifecycleState::Activated
+    );
+    assert_eq!(
+        state.versions[&installing_id].lifecycle_state,
+        ServiceWorkerVersionLifecycleState::Installed
+    );
+}
+
+#[test]
+fn failed_replacement_install_keeps_previous_waiting_worker_running() {
+    for storage_failure in [false, true] {
+        let failing_store = FailingJsonStorePath::new("waiting-replacement");
+        let resource_store = if storage_failure {
+            crate::new_shared_json_service_worker_resource_store(failing_store.store_path())
+                .unwrap()
+        } else {
+            new_shared_service_worker_resource_store()
+        };
+        let service = new_service_worker_runtime_service_with_resource_store(
+            resource_store,
+            test_worker_context_runtime(),
+        );
+        let (waiting_host, mut register_queue) = prepare_waiting_worker_replacement(&service);
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let waiting_id = ServiceWorkerVersionId(2);
+        let installing_id = ServiceWorkerVersionId(3);
+        let installing_run = exact_version_run(&service, installing_id);
+
+        service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+            event_id: ServiceWorkerEventId(3),
+            owner: test_run_owner(installing_id, &installing_run),
+            kind: ServiceWorkerLifecycleEventKind::Install,
+            result: if storage_failure {
+                Ok(())
+            } else {
+                Err("install rejected".to_owned())
+            },
+        });
+
+        assert!(pop_register_completion(&mut register_queue).result.is_err());
+        assert!(waiting_host.has_running_worker());
+        assert!(
+            !service
+                .take_target_output_events_for_test()
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    crate::runtime::RendererServiceWorkerTargetEvent::Destroyed { version_id, .. }
+                        if *version_id == waiting_id.as_u64()
+                ))
+        );
+        let state = service.inner.state.lock();
+        assert_eq!(
+            state.registrations[&registration_id].waiting_version_id,
+            Some(waiting_id)
+        );
+        assert_eq!(
+            state.versions[&waiting_id].lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Installed
+        );
+        assert!(!state.versions.contains_key(&installing_id));
+    }
+}
+
 #[test]
 fn unregister_queues_behind_installing_registration_job() {
     let service = new_service_worker_runtime_service();
