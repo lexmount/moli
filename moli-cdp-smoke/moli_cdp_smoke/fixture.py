@@ -1795,6 +1795,12 @@ class FixtureServer:
                     self._send_html(
                         '<!doctype html><a id="download" href="/download" download>download</a>'
                         '<a id="slow-download" href="/slow-download" download>slow</a>'
+                        '<a id="attachment-download" href="/download">attachment</a>'
+                        '<a id="redirect-download" href="/download-redirect">redirect attachment</a>'
+                    )
+                elif route == "/download-redirect":
+                    self._send_common(
+                        HTTPStatus.FOUND, "text/plain", b"", {"Location": "/download"}
                     )
                 elif route == "/download":
                     self._send_download("smoke-download.txt", b"download contents")

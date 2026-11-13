@@ -830,6 +830,20 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
         .send(WsMessage::Text(
             json!({
                 "id": 6_u64,
+                "method": "Network.enable",
+                "sessionId": session_id
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send Network.enable");
+    let _ = recv_until_id(&mut socket, 6).await;
+
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 7_u64,
                 "method": "Browser.setDownloadBehavior",
                 "params": {
                     "behavior": "allowAndName",
@@ -842,12 +856,12 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
         ))
         .await
         .expect("send Browser.setDownloadBehavior");
-    let _ = recv_until_id(&mut socket, 6).await;
+    let _ = recv_until_id(&mut socket, 7).await;
 
     socket
         .send(WsMessage::Text(
             json!({
-                "id": 7_u64,
+                "id": 8_u64,
                 "method": "Page.navigate",
                 "sessionId": session_id,
                 "params": {
@@ -859,16 +873,18 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
         ))
         .await
         .expect("send Page.navigate");
-    wait_for_session_navigation_response_and_load(&mut socket, 7, &session_id).await;
-    let mut click_response = runtime_click_download_link(&mut socket, 8, &session_id).await;
+    wait_for_session_navigation_response_and_load(&mut socket, 8, &session_id).await;
+    let mut click_response = runtime_click_download_link(&mut socket, 9, &session_id).await;
     assert_eq!(
-        runtime_click_response_value(&click_response, 8),
+        runtime_click_response_value(&click_response, 9),
         Some("clicked")
     );
 
+    let mut click_messages = Vec::new();
     let will_begin = timeout(Duration::from_secs(2), async {
         loop {
             let message = recv_download_message(&mut socket, &mut click_response).await;
+            click_messages.push(message.clone());
             if message["method"] == json!("Browser.downloadWillBegin") {
                 return message;
             }
@@ -885,6 +901,7 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
     let completed = timeout(Duration::from_secs(2), async {
         loop {
             let message = recv_download_message(&mut socket, &mut click_response).await;
+            click_messages.push(message.clone());
             if message["method"] == json!("Browser.downloadProgress")
                 && message["params"]["state"] == json!("completed")
             {
@@ -901,6 +918,33 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
     let body =
         std::fs::read_to_string(&artifact_path).expect("download artifact should be written");
     assert_eq!(body, "download-body");
+
+    let request = click_messages
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["request"]["url"] == format!("http://{fixture_addr}/download")
+        })
+        .expect("attachment navigation should publish its Document request");
+    let request_id = &request["params"]["requestId"];
+    let terminals = click_messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message["method"].as_str(),
+                Some("Network.loadingFailed" | "Network.loadingFinished")
+            ) && &message["params"]["requestId"] == request_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        terminals.len(),
+        1,
+        "exactly one navigation terminal: {click_messages:?}"
+    );
+    assert_eq!(terminals[0]["method"], "Network.loadingFailed");
+    assert_eq!(terminals[0]["params"]["type"], "Document");
+    assert_eq!(terminals[0]["params"]["errorText"], "net::ERR_ABORTED");
+    assert_eq!(terminals[0]["params"]["canceled"], true);
 
     socket
         .send(WsMessage::Text(

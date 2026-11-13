@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Awaitable
 
 from . import SmokeState
@@ -354,6 +355,33 @@ async def run_download_group(state: SmokeState) -> None:
     download_path = await download.path()
     assert_equal(Path(download_path).read_text(encoding="utf-8"), "download contents", "download artifact contents")
     state.record("download_event_and_artifact")
+
+    # Ordinary attachment links first start a Document navigation. Use real
+    # pointer input so Playwright also waits for that navigation to terminate.
+    for selector, name in [
+        ("#attachment-download", "attachment_download_mouse_click"),
+        ("#redirect-download", "redirect_attachment_download_mouse_click"),
+    ]:
+        source_url = f"{fixture}/download-page"
+        await page.goto(source_url, wait_until="load", timeout=10_000)
+        await page.evaluate("globalThis.__attachmentDownloadSource = {}")
+        async with page.expect_download(timeout=10_000) as attachment_info:
+            await page.locator(selector).click(timeout=10_000)
+        attachment = await attachment_info.value
+        assert_equal(attachment.suggested_filename, "smoke-download.txt", f"{name} filename")
+        assert_equal(attachment.url, f"{fixture}/download", f"{name} final URL")
+        with TemporaryDirectory(prefix="moli-attachment-") as directory:
+            saved_path = Path(directory) / "saved.txt"
+            await attachment.save_as(saved_path)
+            assert_equal(saved_path.read_bytes(), b"download contents", f"{name} saved contents")
+        assert_equal(await attachment.failure(), None, f"{name} completed download")
+        assert_equal(page.url, source_url, f"{name} retained Document URL")
+        assert_equal(
+            await page.evaluate("typeof globalThis.__attachmentDownloadSource"),
+            "object",
+            f"{name} retained source realm",
+        )
+        state.record(name)
 
     await page.goto(f"{fixture}/download-page", wait_until="load", timeout=10_000)
     async with page.expect_download(timeout=10_000) as slow_download_info:

@@ -557,15 +557,32 @@ fn completed_download_body_progress_queue(
 ) -> MainDocumentProgressQueueHandle {
     let network_observed = main_document_network_observed(conn, state.session_id.as_deref());
     let encoded_data_length = progress.len();
-    completed_or_streaming_document_progress_queue(
+    let context = CompletedMainDocumentProgressContext::for_navigation(
         conn,
         state,
-        network_observed,
-        state.request_id.clone(),
-        Some(progress.into_network_events()),
-        final_url,
-        encoded_data_length,
-    )
+        completed_body_main_document_network_request_id(network_observed, state.request_id.clone()),
+    );
+    let events = progress.into_network_events();
+    // Handing the response to the download manager aborts the Document request.
+    // It does not cancel the download. Clients use this terminal to release
+    // navigation waits started by pointer input while retaining the source page.
+    let terminal = context
+        .progress_target()
+        .map(
+            |target| MainDocumentNavigationProgressEvent::LoadingFailed {
+                target,
+                error_text: moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+            },
+        )
+        .into_iter()
+        .collect();
+    MainDocumentProgressQueueHandle::from_source(MainDocumentProgressSource::completed_body(
+        MainDocumentNavigationProgressEventBatches::new(
+            context.request_and_redirect_progress_events(&events),
+            context.response_received_progress_events(&events, final_url, encoded_data_length),
+            terminal,
+        ),
+    ))
 }
 
 fn completed_or_streaming_document_progress_queue(

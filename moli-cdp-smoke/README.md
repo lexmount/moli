@@ -14,6 +14,12 @@ The `protocol` group also opens prompts with two attached Page sessions. Each
 session receives one opening and one closing notification; either session can
 handle the prompt and resume the original evaluation with its supplied text.
 
+The `download` group clicks ordinary attachment links with Playwright pointer
+input, both directly and through a redirect. The click must finish, the download
+must save its complete contents with the response's suggested filename, and the
+source Document must remain usable. Separate controls cover the `download`
+attribute and cancellation of a streaming download.
+
 The default `fetch-font` group enables mixed Font/Image patterns before
 navigation and loads the fixture's valid WOFF2 through CSS `@font-face` and
 `FontFace.load()`. Six font scenarios cover request-stage continue, fulfill,
