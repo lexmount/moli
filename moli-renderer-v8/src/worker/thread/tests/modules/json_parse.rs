@@ -52,99 +52,82 @@ async fn worker_json_parse_errors_prevent_sibling_execution_and_remain_cached() 
 }
 
 #[tokio::test]
-async fn worker_json_parse_failure_preserves_pending_top_level_await() {
-    json_parse_failure_keeps_pending_sibling(true, false).await;
-}
-
-#[tokio::test]
-async fn worker_json_parse_failure_reuses_pending_and_completed_sibling() {
-    json_parse_failure_keeps_pending_sibling(false, false).await;
-}
-
-#[tokio::test]
-async fn worker_json_parse_failure_caches_sibling_after_graph_is_gone() {
-    for top_level_await in [true, false] {
-        json_parse_failure_keeps_pending_sibling(top_level_await, true).await;
-    }
-}
-
-async fn json_parse_failure_keeps_pending_sibling(
-    top_level_await: bool,
-    sibling_response_first: bool,
-) {
+async fn worker_nested_json_errors_follow_declaration_order_and_reuse_native_exceptions() {
     ensure_v8();
-    for imports in [
-        r#"import './side.mjs'; import data from './bad.json' with {type:'json'};"#,
-        r#"import data from './bad.json' with {type:'json'}; import './side.mjs';"#,
-    ] {
+    for first_branch in ["a", "b"] {
         let mut server = ModuleSourceServer::start().await;
-        let source = r#"
-            self.runs = 0;
-            let graphError;
-            try { await import('./graph.mjs'); }
-            catch (error) { graphError = error; }
-            postMessage(['caught', graphError.name, self.runs]);
-            await fetch('./hold');
-            const pendingSide = import('./side.mjs');
-            postMessage('joining sibling');
-            try {
-                const side = await pendingSide;
-                const again = await import('./side.mjs');
-                const graphAgain = await import('./graph.mjs').catch(error => error);
-                postMessage([true, graphError.name, side.value, self.runs,
-                    side === again, graphError === graphAgain]);
-            } catch (error) { postMessage({laterError: error.name}); }
-        "#;
-        let source = if top_level_await {
-            source.to_owned()
-        } else {
-            format!(
-                "(async () => {{ {source} }})().catch(error => postMessage({{error: error.name}}));"
-            )
-        };
-        let mut handle = server.worker(source, WorkerScriptKind::Module);
+        let mut handle = server.worker(r#"
+            (async () => {
+                self.runs = 0;
+                onmessage = async event => {
+                    await import(`./bad-${event.data}.json`, { with: { type: 'json' } }).catch(error => error);
+                    postMessage(['stored', event.data]);
+                };
+                const chosen = await import('./root.mjs').catch(error => error);
+                const fromA = await import('./bad-a.json', { with: { type: 'json' } }).catch(error => error);
+                const fromB = await import('./bad-b.json', { with: { type: 'json' } }).catch(error => error);
+                postMessage([chosen === fromA, chosen === fromB, self.runs, chosen.name]);
+            })().catch(error => postMessage({ error: error.name }));
+        "#.into(), WorkerScriptKind::Module);
         server
-            .respond("/worker/graph.mjs", "200 OK", "text/javascript", imports)
+            .respond(
+                "/worker/root.mjs",
+                "200 OK",
+                "text/javascript",
+                "import './a.mjs'; import './b.mjs'; ++self.runs;",
+            )
             .await;
-        let (sibling, invalid_json) = server
-            .request_pair("/worker/side.mjs", "/worker/bad.json")
-            .await;
-        ModuleSourceServer::write(invalid_json, "200 OK", "application/json", "{invalid}").await;
-        assert_eq!(
-            recv_post_json(&mut handle).await,
-            r#"["caught","SyntaxError",0]"#
-        );
-        let start_independent_import = async {
-            server
-                .respond("/worker/hold", "200 OK", "text/plain", "release")
-                .await;
-            assert_eq!(recv_post_json(&mut handle).await, r#""joining sibling""#);
+        let (a, b) = server.request_pair("/worker/a.mjs", "/worker/b.mjs").await;
+        let (first, second, second_branch) = if first_branch == "a" {
+            (a, b, "b")
+        } else {
+            (b, a, "a")
         };
-        let sibling_response = ModuleSourceServer::write(
-            sibling,
+        ModuleSourceServer::write(
+            first,
             "200 OK",
             "text/javascript",
-            "++self.runs; export const value = 42;",
-        );
-        if sibling_response_first {
-            // No live import needs this response yet; retain its module record.
-            sibling_response.await;
-            start_independent_import.await;
-        } else {
-            // The independent import must reuse the original in-flight fetch.
-            start_independent_import.await;
-            sibling_response.await;
-        }
-        let observed = tokio::select! {
-            observed = recv_post_json(&mut handle) => observed,
-            duplicate = server.request("/worker/side.mjs") => {
-                ModuleSourceServer::write(duplicate, "503 Service Unavailable", "text/plain", "duplicate fetch").await;
-                recv_post_json(&mut handle).await
-            }
-        };
+            &format!(
+                "import value from './bad-{first_branch}.json' with {{type:'json'}}; ++self.runs;"
+            ),
+        )
+        .await;
+        server
+            .respond(
+                &format!("/worker/bad-{first_branch}.json"),
+                "200 OK",
+                "application/json",
+                "{invalid}",
+            )
+            .await;
+        // A separate import settles only after the shared creation result has
+        // been stored. The other parent remains withheld until that barrier.
+        handle.post_message(serialize_test_string(first_branch));
         assert_eq!(
-            observed, r#"[true,"SyntaxError",42,1,true,true]"#,
-            "{imports}"
+            recv_post_json(&mut handle).await,
+            format!(r#"["stored","{first_branch}"]"#)
+        );
+        ModuleSourceServer::write(
+            second,
+            "200 OK",
+            "text/javascript",
+            &format!(
+                "import value from './bad-{second_branch}.json' with {{type:'json'}}; ++self.runs;"
+            ),
+        )
+        .await;
+        server
+            .respond(
+                &format!("/worker/bad-{second_branch}.json"),
+                "200 OK",
+                "application/json",
+                "{invalid}",
+            )
+            .await;
+        assert_eq!(
+            recv_post_json(&mut handle).await,
+            r#"[true,false,0,"SyntaxError"]"#,
+            "{first_branch} completed first"
         );
         handle.terminate_and_join();
         server.assert_no_more_requests();

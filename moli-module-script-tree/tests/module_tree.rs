@@ -992,6 +992,22 @@ fn evaluation_phase_upgrades_source_phase_for_same_key() {
     assert_eq!(fetches.len(), 1);
     assert_eq!(fetches[0].key, child_key);
     assert_eq!(fetches[0].phase, ModuleImportPhase::Evaluation);
+    host.ready(child_key.clone(), ModuleEntryId(2), Vec::new());
+    let ModuleScriptTreePoll::Complete(graph) = job.resume_single_module_outcome(
+        &mut host,
+        fetches[0].client,
+        ready_outcome(child_key, ModuleEntryId(2)),
+    ) else {
+        panic!("upgraded dependency should complete the graph");
+    };
+    assert_eq!(
+        graph.entry_phases[&ModuleEntryId(1)],
+        ModuleImportPhase::Evaluation
+    );
+    assert_eq!(
+        graph.entry_phases[&ModuleEntryId(2)],
+        ModuleImportPhase::Evaluation
+    );
 }
 
 #[test]
