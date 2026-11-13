@@ -37,6 +37,8 @@ pub(super) type SharedRendererServiceWorkerHost = Arc<RendererServiceWorkerHost>
 
 pub(super) struct RendererServiceWorkerHost {
     run_owner: ServiceWorkerRunOwner,
+    // IDs belong to this exact immutable run owner and are never moved to a new host.
+    pending_activation_skip_waiting: Mutex<Vec<u64>>,
     state: Mutex<RendererServiceWorkerHostState>,
 }
 
@@ -53,6 +55,7 @@ impl RendererServiceWorkerHost {
     ) -> SharedRendererServiceWorkerHost {
         Arc::new(Self {
             run_owner: run_owner.clone(),
+            pending_activation_skip_waiting: Mutex::new(Vec::new()),
             state: Mutex::new(RendererServiceWorkerHostState::Loading),
         })
     }
@@ -63,6 +66,7 @@ impl RendererServiceWorkerHost {
     ) -> SharedRendererServiceWorkerHost {
         Arc::new(Self {
             run_owner: run_owner.clone(),
+            pending_activation_skip_waiting: Mutex::new(Vec::new()),
             state: Mutex::new(RendererServiceWorkerHostState::Running { handle: None }),
         })
     }
@@ -74,6 +78,7 @@ impl RendererServiceWorkerHost {
     ) -> SharedRendererServiceWorkerHost {
         Arc::new(Self {
             run_owner: run_owner.clone(),
+            pending_activation_skip_waiting: Mutex::new(Vec::new()),
             state: Mutex::new(RendererServiceWorkerHostState::Running {
                 handle: Some(handle),
             }),
@@ -396,6 +401,30 @@ impl RendererServiceWorkerHost {
         true
     }
 
+    pub(super) fn defer_skip_waiting_until_activation(&self, request_id: u64) {
+        let state = self.state.lock();
+        if matches!(*state, RendererServiceWorkerHostState::Running { .. }) {
+            self.pending_activation_skip_waiting.lock().push(request_id);
+        }
+    }
+
+    pub(super) fn complete_activation_skip_waiting_requests(&self) {
+        let requests = std::mem::take(&mut *self.pending_activation_skip_waiting.lock());
+        for request_id in requests {
+            self.dispatch_skip_waiting_result(request_id);
+        }
+    }
+
+    pub(super) fn dispatch_skip_waiting_result(&self, request_id: u64) {
+        let state = self.state.lock();
+        if let RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        } = &*state
+        {
+            handle.dispatch_service_worker_skip_waiting_result(request_id);
+        }
+    }
+
     pub(super) fn dispatch_clients_claim_result(&self, request_id: u64, claimed: bool) {
         let state = self.state.lock();
         if let RendererServiceWorkerHostState::Running {
@@ -605,6 +634,7 @@ impl RendererServiceWorkerHost {
     pub(super) fn terminate_without_join(&self) {
         let handle = {
             let mut state = self.state.lock();
+            self.pending_activation_skip_waiting.lock().clear();
             match &mut *state {
                 RendererServiceWorkerHostState::Running { handle } => {
                     let handle = handle.take();
@@ -628,6 +658,7 @@ impl RendererServiceWorkerHost {
         let mut state = self.state.lock();
         if matches!(*state, RendererServiceWorkerHostState::Loading) {
             *state = RendererServiceWorkerHostState::Failed;
+            self.pending_activation_skip_waiting.lock().clear();
         }
     }
 
@@ -809,10 +840,18 @@ fn spawn_parent_message_pump(
                         service.enqueue_clients_open_window(open_window, source_host.run_owner());
                     }
                     WorkerToParentMessage::ServiceWorkerSkipWaiting {
+                        request_id,
                         registration_id,
                         version_id,
                     } => {
-                        service.enqueue_skip_waiting_requested(registration_id, version_id);
+                        if version_id != source_host.version_id() {
+                            continue;
+                        }
+                        service.enqueue_skip_waiting_requested(
+                            registration_id,
+                            source_host.run_owner(),
+                            request_id,
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerClientsClaim {
                         request_id,

@@ -442,13 +442,15 @@ impl ServiceWorkerRuntimeService {
     pub(crate) fn enqueue_skip_waiting_requested(
         &self,
         registration_id: ServiceWorkerRegistrationId,
-        version_id: ServiceWorkerVersionId,
+        owner: ServiceWorkerRunOwner,
+        request_id: u64,
     ) {
         self.enqueue_service_lane_completion(
             ServiceWorkerRuntimeCompletion::skip_waiting_requested(
                 self.downgrade(),
                 registration_id,
-                version_id,
+                owner,
+                request_id,
             ),
         );
         self.signal_service_lane_wake();
@@ -863,12 +865,13 @@ impl WeakServiceWorkerRuntimeService {
     pub(in crate::service_worker_runtime) fn finish_worker_skip_waiting_requested(
         &self,
         registration_id: ServiceWorkerRegistrationId,
-        version_id: ServiceWorkerVersionId,
+        owner: ServiceWorkerRunOwner,
+        request_id: u64,
     ) {
         let Some(service) = self.upgrade() else {
             return;
         };
-        service.finish_worker_skip_waiting_requested(registration_id, version_id);
+        service.finish_worker_skip_waiting_requested(registration_id, owner, request_id);
     }
 
     pub(in crate::service_worker_runtime) fn finish_clients_claim_requested(
