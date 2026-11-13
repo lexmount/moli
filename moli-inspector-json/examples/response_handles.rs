@@ -46,7 +46,7 @@ fn main() {
         let ids = if mode == "materialize" {
             materialized_handles(&message)
         } else {
-            message.response_remote_object_ids(1000).unwrap()
+            message.response_remote_object_ids().unwrap()
         };
         handles += black_box(&ids).len();
         object_ids.extend(ids);
