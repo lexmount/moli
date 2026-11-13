@@ -1344,3 +1344,118 @@ async fn navigator_service_worker_periodic_sync_register_respects_permission() {
         .await
         .expect("service worker periodic sync permission script server should finish");
 }
+
+#[tokio::test]
+async fn navigator_service_worker_get_registrations_preserves_registration_order() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/empty.js",
+            "text/javascript; charset=utf-8",
+            "// empty worker"
+        );
+        16
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__registrationOrderDone = false;
+      (async () => {
+        const expected = [];
+        for (let i = 15; i >= 0; --i) {
+          const registration = await navigator.serviceWorker.register("empty.js", { scope: "scope-" + i + "/" });
+          const worker = registration.installing || registration.waiting || registration.active;
+          if (worker.state !== "activated") {
+            await new Promise(resolve => worker.addEventListener("statechange", () => {
+              if (worker.state === "activated") resolve();
+            }));
+          }
+          expected.push(registration);
+        }
+        const first = await navigator.serviceWorker.getRegistrations();
+        const second = await navigator.serviceWorker.getRegistrations();
+        globalThis.__registrationOrder = [
+          first.length === expected.length && first.every((r, i) => r === expected[i]),
+          second.length === expected.length && second.every((r, i) => r === expected[i])
+        ].join(":");
+      })().catch(error => {
+        globalThis.__registrationOrder = "error:" + error.name + ":" + error.message;
+      }).finally(() => { globalThis.__registrationOrderDone = true; });
+    "#).expect("registration order probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__registrationOrderDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__registrationOrder)").unwrap(),
+        "true:true"
+    );
+    server.await.expect("all worker scripts should be fetched");
+}
+
+#[tokio::test]
+async fn navigator_service_worker_updates_keep_order_and_reregistration_moves_to_end() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        ("/app/first.js", "text/javascript", "// first"),
+        ("/app/second.js", "text/javascript", "// second"),
+        ("/app/third.js", "text/javascript", "// third"),
+        ("/app/update.js", "text/javascript", "// update"),
+        ("/app/replacement.js", "text/javascript", "// replacement"),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+      globalThis.__registrationReplacementDone = false;
+      (async () => {
+        const sw = navigator.serviceWorker;
+        const expected = [];
+        async function register(script, scope) {
+          const r = await sw.register(script, {scope});
+          const w = r.installing || r.waiting || r.active;
+          if (w.state !== 'activated') await new Promise(resolve => w.addEventListener('statechange', () => {
+            if (w.state === 'activated') resolve();
+          }));
+          return r;
+        }
+        for (const [script, scope] of [['first.js', 'z/'], ['second.js', 'b/'], ['third.js', 'a/']]) {
+          expected.push(await register(script, scope));
+        }
+        const updated = await register('update.js', 'b/');
+        const all = await sw.getRegistrations();
+        const same = updated === expected[1] && all.every((r,i) => r === expected[i]) && all.length === 3;
+        await expected[0].unregister();
+        const replacement = await sw.register('replacement.js', {scope: 'z/'});
+        const final = await sw.getRegistrations();
+        const after = [expected[1], expected[2], replacement];
+        globalThis.__registrationReplacement = [same,
+          final.length === 3 && final.every((r,i) => r === after[i])].join(':');
+      })().catch(error => {
+        globalThis.__registrationReplacement = 'error:' + error.name + ':' + error.message;
+      }).finally(() => { globalThis.__registrationReplacementDone = true; });
+    "#).expect("registration replacement probe should evaluate");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(globalThis.__registrationReplacementDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(globalThis.__registrationReplacement)")
+            .unwrap(),
+        "true:true"
+    );
+    server.await.expect("all worker scripts should be fetched");
+}
