@@ -2314,6 +2314,27 @@ impl SubresourceNetworkRecord {
         self
     }
 
+    /// Projects a terminal after redirects were already reported separately.
+    /// The diagnostic record can keep its original complete redirect chain.
+    pub fn with_redirect_chain(mut self, redirects: Vec<NavigationRedirect>) -> Self {
+        if let SubresourceNetworkOutcome::Success { redirect_chain, .. } =
+            &mut Arc::make_mut(&mut self.inner).outcome
+        {
+            *redirect_chain = redirects;
+        }
+        self
+    }
+
+    /// Keeps a consumer's detailed diagnostic without rebuilding the terminal.
+    pub fn with_error_text(mut self, error: impl Into<String>) -> Self {
+        if let SubresourceNetworkOutcome::Failure { error_text } =
+            &mut Arc::make_mut(&mut self.inner).outcome
+        {
+            *error_text = error.into();
+        }
+        self
+    }
+
     pub fn with_response_status_text(mut self, status_text: impl Into<String>) -> Self {
         if let SubresourceNetworkOutcome::Success {
             status_text: current,

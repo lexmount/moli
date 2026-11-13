@@ -189,7 +189,7 @@ pub(in crate::worker) struct PausedWorkerSubresourceResponse {
 }
 
 pub(in crate::worker) struct WorkerXhrCompletion {
-    pub(in crate::worker) native_result: Option<(PendingSubresourceFetchInfo, bool)>,
+    pub(in crate::worker) native_record: Option<SubresourceNetworkRecord>,
     pub(in crate::worker) xhr_id: u32,
     pub(in crate::worker) network_request_headers: Option<Vec<(String, String)>>,
     pub(in crate::worker) result: Result<WorkerXhrResponse, String>,

@@ -440,21 +440,29 @@ impl ScriptVm {
                 self._context_host
                     .borrow_mut()
                     .update_pending_subresource_native_info(&completed.info);
-                self.complete_async_subresource_fetch_body(AsyncSubresourceFetchCompletion {
-                    internal_id: completed.info.internal_id,
-                    request_url: completed.info.url,
-                    request_method: completed.info.method,
-                    request_headers: completed.info.request_headers,
-                    request_body: completed.info.request_body,
-                    response_status_text: None,
-                    skip_fetch_security_validation: completed.synthetic,
-                    response_filter: None,
-                    network_error_text: None,
-                    result: completed
+                let pending = self
+                    ._context_host
+                    .borrow_mut()
+                    .take_pending_subresource_fetch(completed.info.internal_id);
+                let Some(pending) = pending else {
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                };
+                self.resolve_pending_subresource_fetch_completion_with_record(
+                    pending,
+                    completed.info.url,
+                    completed.info.method,
+                    completed.info.request_headers,
+                    completed.info.request_body,
+                    None,
+                    completed.synthetic,
+                    None,
+                    None,
+                    completed
                         .result
                         .map(crate::protocol_types::NavigationResponse::from)
                         .into(),
-                })
+                    Some(completed.network_record),
+                )
             }
             AsyncSubresourceFetchEvent::Completion(completion) => {
                 self.complete_async_subresource_fetch_body(*completion)
