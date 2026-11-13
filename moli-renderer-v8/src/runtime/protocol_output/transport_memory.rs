@@ -317,12 +317,20 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         RendererOwnerAction::SubresourceFetchPause {
             info,
             child_document,
+            redirect,
             ..
-        } => info.renderer_transport_charge_bytes().saturating_add(
-            child_document
-                .as_ref()
-                .map_or(0, |document| document.renderer_transport_charge_bytes()),
-        ),
+        } => info
+            .renderer_transport_charge_bytes()
+            .saturating_add(
+                child_document
+                    .as_ref()
+                    .map_or(0, |document| document.renderer_transport_charge_bytes()),
+            )
+            .saturating_add(redirect.as_ref().map_or(0, |redirect| {
+                string_charge(redirect.from_url.as_str())
+                    .saturating_add(string_charge(redirect.to_url.as_str()))
+                    .saturating_add(headers_charge(&redirect.headers))
+            })),
         RendererOwnerAction::SubresourceContinue { event, .. } => {
             event.renderer_transport_charge_bytes()
         }

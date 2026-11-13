@@ -10,6 +10,7 @@ use super::{AsyncSubresourceCommandExecution, ScriptVm};
 
 mod document_completion;
 mod fetch_dispatch;
+mod fulfilled_redirects;
 mod intercepted_fetch;
 mod pending_fetch;
 mod streaming;
@@ -206,6 +207,24 @@ fn report_window_fetch_csp_redirect_violation<'s>(
             report_context.identity(),
             violation,
         );
+}
+
+fn window_fetch_redirect_policy_was_checked(
+    pending: &PendingSubresourceFetchState,
+    head: &moli_fetch::ResponseHead,
+) -> bool {
+    // Intercepted hops were admitted before their next pause. A later network
+    // redirect still needs its final-target check; do not report the same
+    // captured-policy violation again when a fulfilled body is delivered.
+    pending
+        .continuation
+        .window_fetch()
+        .and_then(|fetch| fetch.intercepted_request.as_deref())
+        .is_some_and(|request| {
+            !request.redirect_chain().is_empty()
+                && request.url == head.final_url
+                && request.redirect_chain().len() == head.redirect_chain.len()
+        })
 }
 
 fn detached_window_fetch_csp_redirect_failure_message(

@@ -127,6 +127,7 @@ impl ControlledXhrLoad {
         let (pause, decision) = self.pause(InterceptionPhase::Request);
         self.initial_decision = Some(decision);
         RendererOwnerAction::SubresourceFetchPause {
+            redirect: None,
             source_document: self.source_document,
             info: Box::new(self.info.clone()),
             child_document: None,
@@ -303,6 +304,7 @@ impl ControlledXhrLoad {
                     if !self
                         .output
                         .publish(RendererOwnerAction::SubresourceFetchPause {
+                            redirect: None,
                             source_document: self.source_document,
                             info: Box::new(self.info.clone()),
                             child_document: None,

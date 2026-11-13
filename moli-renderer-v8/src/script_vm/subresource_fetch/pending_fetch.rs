@@ -26,15 +26,26 @@ fn with_subresource_request_metadata(
     }
 }
 
-fn request_for_pending_subresource(
+pub(super) fn request_for_pending_subresource(
     pending: &PendingSubresourceFetchState,
     request_url: &Url,
     request_method: &str,
     request_headers: moli_fetch::RequestHeaders,
     request_body_bytes: Option<bytes::Bytes>,
 ) -> moli_fetch::Request {
-    if let Some(dispatch) = &pending.dispatch {
-        let mut request = dispatch.request.clone();
+    let captured_request = pending
+        .dispatch
+        .as_ref()
+        .map(|dispatch| &dispatch.request)
+        .or_else(|| {
+            pending
+                .continuation
+                .window_fetch()?
+                .intercepted_request
+                .as_deref()
+        });
+    if let Some(request) = captured_request {
+        let mut request = request.clone();
         request.url = request_url.clone();
         request.method = request_method.to_owned();
         request.cookie_context.set_request_method(request_method);
@@ -1240,6 +1251,14 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
+        if pending.continuation.window_fetch().is_some() {
+            return self.fulfill_intercepted_window_fetch(
+                pending,
+                response_code,
+                response_headers,
+                response_body,
+            );
+        }
         let PendingSubresourceFetchState {
             dispatch,
             redirect_headers: _,

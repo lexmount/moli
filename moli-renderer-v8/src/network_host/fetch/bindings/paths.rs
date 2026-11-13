@@ -10,8 +10,12 @@ pub(super) fn record_intercepted_fetch(
     host: &mut PageScriptHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) -> u64 {
+) -> Result<u64, String> {
     let cache_mode = prepared.cache_mode();
+    let request = prepared
+        .resource_loader
+        .request_client()
+        .bind_browser_site_context(native_window_fetch_request(&prepared)?);
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -20,7 +24,7 @@ pub(super) fn record_intercepted_fetch(
         &prepared.method,
         prepared.credentials_mode,
     );
-    host.record_pending_subresource_fetch(
+    Ok(host.record_pending_subresource_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
         prepared.resource_timing,
@@ -30,6 +34,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.credentials_mode,
         prepared.request_mode,
         cache_mode,
+        request,
         prepared.request_origin.clone(),
         prepared.network_partition_key,
         prepared.policy_context,
@@ -47,7 +52,7 @@ pub(super) fn record_intercepted_fetch(
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report,
         },
-    )
+    ))
 }
 
 pub(super) fn reject_offline_fetch(

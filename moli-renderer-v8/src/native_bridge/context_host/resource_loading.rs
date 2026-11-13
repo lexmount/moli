@@ -40,13 +40,14 @@ impl PageScriptHost {
     }
 
     fn push_pending_subresource_fetch_info(&mut self, info: PendingSubresourceFetchInfo) {
-        self.push_subresource_fetch_pause(info, None);
+        self.push_subresource_fetch_pause(info, None, None);
     }
 
     fn push_subresource_fetch_pause(
         &mut self,
         info: PendingSubresourceFetchInfo,
         child_document: Option<crate::protocol_types::ChildDocumentFetchRequest>,
+        redirect: Option<crate::protocol_types::NavigationRedirect>,
     ) {
         if let Some(source_document) = self.root_document_lifecycle_identity()
             && self.append_live_turn_owner_action(
@@ -55,6 +56,7 @@ impl PageScriptHost {
                     source_document,
                     info: Box::new(info.clone()),
                     child_document: child_document.map(Box::new),
+                    redirect: redirect.map(Box::new),
                 },
             )
         {
@@ -634,6 +636,7 @@ impl PageScriptHost {
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         cache_mode: moli_fetch::RequestCacheMode,
+        request: moli_fetch::Request,
         request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
@@ -674,7 +677,8 @@ impl PageScriptHost {
                         cache_mode,
                         connect_policy,
                         csp_report_context,
-                    ),
+                    )
+                    .with_intercepted_request(request),
                 ),
                 deferred_request_started: false,
             },
@@ -1635,7 +1639,7 @@ impl PageScriptHost {
         self.assign_pending_subresource_fetch_identity(&mut info);
         fetch.set_network_info(info.clone());
         let internal_id = info.internal_id;
-        self.push_subresource_fetch_pause(info.clone(), Some(child_document));
+        self.push_subresource_fetch_pause(info.clone(), Some(child_document), None);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1782,6 +1786,15 @@ impl PageScriptHost {
         self.pending_subresource_fetches
             .insert(state.info.internal_id, state);
         self.note_subresource_activity();
+    }
+
+    pub(crate) fn repause_window_fetch_after_redirect(
+        &mut self,
+        pending: PendingSubresourceFetchState,
+        redirect: moli_fetch::RedirectInfo,
+    ) {
+        self.push_subresource_fetch_pause(pending.info.clone(), None, Some(redirect.into()));
+        self.restore_pending_subresource_fetch(pending);
     }
 
     pub(crate) fn cancel_pending_worker_subresource_fetch(
