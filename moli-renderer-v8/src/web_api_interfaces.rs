@@ -177,6 +177,7 @@ interfaces! {
     EventTarget;
     External;
     ExtendableEvent: Event;
+    InstallEvent: ExtendableEvent;
     ExtendableMessageEvent: ExtendableEvent;
     FetchEvent: ExtendableEvent;
     File: Blob;

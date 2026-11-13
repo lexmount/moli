@@ -1,6 +1,75 @@
 use super::*;
 
 #[tokio::test]
+async fn service_worker_install_event_constructor_preserves_webidl_state_and_dispatch() {
+    ensure_v8();
+    let source = format!(
+        "{}\nself.onmessage = event => event.waitUntil(runInstallEventConstructorChecks());",
+        include_str!("../../../../../tests/fixtures/install-event-constructor.js")
+    );
+    let mut handle = spawn_service_worker_for_test(&source);
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        87,
+        serialize_test_string("go"),
+    )
+    .await;
+    assert_eq!(completion.result, Ok(()));
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn native_install_event_preserves_intrinsic_prototype_and_wait_until() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        const OriginalInstallEvent = InstallEvent;
+        const originalPrototype = InstallEvent.prototype;
+        let installed = false;
+        Object.defineProperty(self, 'InstallEvent', {
+            configurable: true,
+            get() { throw Error('author InstallEvent getter'); }
+        });
+        oninstall = event => {
+            ExtendableEvent.prototype.waitUntil.call(event, Promise.resolve().then(async () => {
+                if (!(event instanceof OriginalInstallEvent) ||
+                    !(event instanceof ExtendableEvent) || !(event instanceof Event) ||
+                    Object.getPrototypeOf(event) !== originalPrototype ||
+                    Object.prototype.toString.call(event) !== '[object InstallEvent]' ||
+                    event.type !== 'install' || !event.isTrusted || event.bubbles ||
+                    event.cancelable || event.composed || Object.hasOwn(event, 'waitUntil') ||
+                    Object.hasOwn(event, 'composed') || Reflect.set(event, 'composed', true)) {
+                    throw Error('incorrect native InstallEvent');
+                }
+                await new Promise(resolve => setTimeout(resolve, 0));
+                installed = true;
+            }));
+        };
+        onactivate = event => event.waitUntil(Promise.resolve().then(() => {
+            if (!installed || event instanceof OriginalInstallEvent || event.type !== 'activate') {
+                throw Error('incorrect activation event or premature install completion');
+            }
+        }));
+        onfetch = event => event.respondWith(new Response(String(installed)));
+        "#,
+    );
+    for (kind, id) in [
+        (ServiceWorkerLifecycleEventKind::Install, 88),
+        (ServiceWorkerLifecycleEventKind::Activate, 89),
+    ] {
+        let completion =
+            dispatch_service_worker_lifecycle_event_for_test(&mut handle, kind, id).await;
+        assert_eq!(completion.result, Ok(()));
+    }
+    let completion = dispatch_service_worker_fetch_event_for_test(&mut handle, 90).await;
+    let ServiceWorkerFetchResult::Response(response) = completion.result else {
+        panic!("expected response after native InstallEvent checks");
+    };
+    assert_eq!(response.body, b"true");
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn service_worker_wait_until_prototype_uses_native_dispatch_and_webidl_arguments() {
     ensure_v8();
     let source = format!(
