@@ -354,7 +354,7 @@ impl ProtocolOutputSequence {
         Self {
             events: messages
                 .into_iter()
-                .map(BackgroundProtocolEvent::immediate)
+                .map(|message| BackgroundProtocolEvent::inspector_message(message, None))
                 .collect(),
         }
     }

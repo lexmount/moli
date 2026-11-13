@@ -28,7 +28,7 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                         response.notifications.extend(
                             style_sheets::style_sheet_inventory_notifications(&frame_id, update)
                                 .map(|(method, params)| {
-                                    json!({ "method": method, "params": params }).into()
+                                    json!({ "method": method.method(), "params": params }).into()
                                 }),
                         );
                         response

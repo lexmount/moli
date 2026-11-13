@@ -1,8 +1,9 @@
-use crate::conn::{BackgroundProtocolEvent, CdpConnection, Cmd, build_event};
+use crate::conn::{BackgroundProtocolEvent, CdpConnection, Cmd};
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
     RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
 };
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde_json::{Value, json};
 
 use super::{
@@ -68,9 +69,9 @@ pub(super) fn complete_enable_command_output_plan(
 ) -> CommandOutputPlan {
     let mut plan = CommandOutputPlan::success();
     for (method, params) in style_sheet_inventory_notifications(frame_id, update) {
-        plan.push_background_event(BackgroundProtocolEvent::immediate(build_event(
+        plan.push_background_event(BackgroundProtocolEvent::immediate_event(
             method, params, session_id,
-        )));
+        ));
     }
     plan
 }
@@ -78,16 +79,16 @@ pub(super) fn complete_enable_command_output_plan(
 pub(super) fn style_sheet_inventory_notifications(
     frame_id: &str,
     update: RendererStyleSheetInventoryUpdate,
-) -> impl Iterator<Item = (&'static str, Value)> + '_ {
+) -> impl Iterator<Item = (LocalCdpEvent, Value)> + '_ {
     let removed = update.removed.into_iter().map(|style_sheet_id| {
         (
-            "CSS.styleSheetRemoved",
+            LocalCdpEvent::CssStyleSheetRemoved,
             json!({ "styleSheetId": style_sheet_id }),
         )
     });
     let added = update.added.into_iter().map(move |header| {
         (
-            "CSS.styleSheetAdded",
+            LocalCdpEvent::CssStyleSheetAdded,
             json!({ "header": style_sheet_header_value(frame_id, &header) }),
         )
     });

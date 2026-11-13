@@ -313,7 +313,10 @@ async fn input_owned_completion_retains_context_through_cancel_and_ready_loss() 
         .unwrap();
         let prefix = json!({"method":"Page.frameStartedLoading","params":{"frameId":"TID-owned-input"},"sessionId":"SID-owned-input"});
         let mut dispatch = CommandDispatchContext::default();
-        dispatch.push_protocol_event(BackgroundProtocolEvent::immediate(prefix.clone()));
+        dispatch.push_protocol_event(BackgroundProtocolEvent::inspector_message(
+            prefix.clone(),
+            None,
+        ));
         let CdpCommandTaskStep::Pending(pending) = handle
             .with_state(|state| {
                 state.start_parsed_command_dispatch_with_context(&command, &mut dispatch)
@@ -468,7 +471,10 @@ async fn discarded_input_workflow_result_keeps_the_original_native_output() {
     .unwrap();
     let mut context = CommandDispatchContext::default();
     let prefix = json!({"method":"Page.frameStartedLoading","params":{"frameId":"TID-input-reply-drop"},"sessionId":"SID-input-reply-drop"});
-    context.push_protocol_event(BackgroundProtocolEvent::immediate(prefix.clone()));
+    context.push_protocol_event(BackgroundProtocolEvent::inspector_message(
+        prefix.clone(),
+        None,
+    ));
     let CdpCommandTaskStep::Pending(pending) = fixture.with_fixture(|conn| {
         conn.start_parsed_command_dispatch_with_context(&command, &mut context)
     }) else {

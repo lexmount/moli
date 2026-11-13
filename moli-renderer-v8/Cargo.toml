@@ -53,6 +53,7 @@ moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-page-types" }
 moli-parkable-image = { path = "../moli-parkable-image" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
+moli-protocol-cdp-defs = { path = "../moli-protocol-cdp-defs" }
 moli-selector = { path = "../moli-selector" }
 moli-shared-worker = { path = "../moli-shared-worker" }
 moli-storage-service = { path = "../moli-storage-service" }

@@ -21,6 +21,7 @@ moli-fetch = { path = "../moli-fetch" }
 moli-html-input-type = { path = "../moli-html-input-type" }
 moli-protocol = { path = "../moli-protocol" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
+moli-protocol-cdp-defs = { path = "../moli-protocol-cdp-defs" }
 moli-protocol-webdriver-bidi = { path = "../moli-protocol-webdriver-bidi" }
 moli-protocol-webdriver-classic = { path = "../moli-protocol-webdriver-classic" }
 moli-trace = { path = "../moli-trace" }

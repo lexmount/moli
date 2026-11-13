@@ -685,18 +685,18 @@ pub(crate) use moli_protocol_cdp::{DEFAULT_LOADER_ID, monotonic_timestamp_second
 pub(crate) use navigation_error::{
     NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,
 };
-pub(crate) use output::NavigationBackgroundEvent;
 #[cfg(test)]
 pub(crate) use output::build_command_success_response;
 pub use output::{
     BackgroundCommandResponsePayload, BackgroundEventSender, BackgroundProtocolEvent,
     PageScreencastFrameMetadata, RuntimeInspectorAsyncCompletionReceiver,
-    RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender, build_event,
+    RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender,
 };
 pub(crate) use output::{
     BackgroundCommandResponsePayloadRef, BackgroundServiceWorkerErrorMessage,
     BackgroundServiceWorkerRegistration, BackgroundServiceWorkerVersion,
 };
+pub(crate) use output::{NavigationBackgroundEvent, build_event};
 pub(crate) use page_state::{
     InstalledNavigationPage, LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit,
 };

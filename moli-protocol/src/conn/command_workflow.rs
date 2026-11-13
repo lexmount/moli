@@ -601,8 +601,9 @@ mod tests {
                 context
                     .with_state(&mut ProtocolWorkflowDriver::new(access), |_, context| {
                         let mut output = CommandOutputPlan::result(json!({"accepted": 42}));
-                        output.push_background_event(BackgroundProtocolEvent::immediate(
-                            json!({"method":"Moli.accepted","params":{}}),
+                        output.push_background_event(BackgroundProtocolEvent::inspector_message(
+                            json!({"method":"Tracing.dataCollected","params":{}}),
+                            None,
                         ));
                         context.retain_terminal(output);
                     })
@@ -610,8 +611,9 @@ mod tests {
                 held.await.unwrap();
                 assert_ne!(phase, 4, "injected failure after accepting a terminal");
                 let mut tail = CommandOutputPlan::error(-32000, "late failure");
-                tail.push_background_event(BackgroundProtocolEvent::immediate(
-                    json!({"method":"Moli.tail","params":{}}),
+                tail.push_background_event(BackgroundProtocolEvent::inspector_message(
+                    json!({"method":"Tracing.tracingComplete","params":{}}),
+                    None,
                 ));
                 if phase == 1 {
                     context.fail(tail)
@@ -665,10 +667,10 @@ mod tests {
                 1
             );
             assert_eq!(messages[0]["result"], json!({"accepted":42}));
-            assert_eq!(messages[1]["method"], "Moli.accepted");
+            assert_eq!(messages[1]["method"], "Tracing.dataCollected");
             assert_eq!(messages.len(), if phase == 4 { 2 } else { 3 });
             if phase != 4 {
-                assert_eq!(messages[2]["method"], "Moli.tail");
+                assert_eq!(messages[2]["method"], "Tracing.tracingComplete");
             }
         }
     }
@@ -723,9 +725,12 @@ mod tests {
                     applied.set(applied.get() + 1);
                     assert!(!panic_in_completion, "injected finite completion failure");
                     let mut output = CommandOutputPlan::default();
-                    output.push_background_event(BackgroundProtocolEvent::immediate(json!({
-                        "method": "Moli.afterFiniteCompletion", "params": {}
-                    })));
+                    output.push_background_event(BackgroundProtocolEvent::inspector_message(
+                        json!({
+                            "method": "Tracing.tracingComplete", "params": {}
+                        }),
+                        None,
+                    ));
                     output
                 })
             });
@@ -769,8 +774,9 @@ mod tests {
     #[tokio::test]
     async fn cancelling_before_context_return_preserves_typed_side_effects_and_order() {
         let mut actor_context = CommandDispatchContext::default();
-        let prefix = BackgroundProtocolEvent::immediate(
+        let prefix = BackgroundProtocolEvent::inspector_message(
             json!({"method":"Page.frameStartedLoading","params":{"frameId":"FRAME-context"}}),
+            None,
         );
         actor_context.push_protocol_event(prefix);
         let (mut task_context, scope) =
@@ -836,8 +842,9 @@ mod tests {
                 43,
                 Some("NODE-state-result".into()),
             );
-            let after = BackgroundProtocolEvent::immediate(
-                json!({"method":"Moli.afterOriginalCursor","params":{}}),
+            let after = BackgroundProtocolEvent::inspector_message(
+                json!({"method":"Tracing.tracingComplete","params":{}}),
+                None,
             );
             let expected_before = before.clone();
             let expected_after = after.clone();

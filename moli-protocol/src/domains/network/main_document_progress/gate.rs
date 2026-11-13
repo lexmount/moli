@@ -1,3 +1,4 @@
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
 
@@ -438,15 +439,15 @@ impl<'a> MainDocumentProgressOutputTarget<'a> {
 
     pub(super) fn push_automation_event(
         &mut self,
-        method: &str,
+        method: LocalCdpEvent,
         params: Value,
         session_id: Option<&str>,
         event: AutomationEvent,
     ) {
         let protocol_event = build_event(method, params, session_id);
-        self.push_background_event(BackgroundProtocolEvent::immediate_automation_event(
+        self.push_background_event(BackgroundProtocolEvent::inspector_message(
             protocol_event,
-            event,
+            Some(event),
         ));
     }
 }

@@ -3318,6 +3318,7 @@ name = "moli-protocol-cdp"
 version = "0.1.0"
 dependencies = [
  "brotlic",
+ "moli-inspector-json",
  "moli-page-types",
  "moli-protocol-cdp-defs",
  "moli-time",
@@ -3350,6 +3351,7 @@ dependencies = [
  "moli-inspector-json",
  "moli-protocol",
  "moli-protocol-cdp",
+ "moli-protocol-cdp-defs",
  "moli-protocol-webdriver-bidi",
  "moli-protocol-webdriver-classic",
  "moli-test-support",
@@ -3456,6 +3458,7 @@ dependencies = [
  "moli-parkable-image",
  "moli-parser",
  "moli-protocol-cdp",
+ "moli-protocol-cdp-defs",
  "moli-script",
  "moli-selector",
  "moli-session-history",

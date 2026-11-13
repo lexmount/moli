@@ -1,5 +1,7 @@
 use anyhow::Result;
 use moli_inspector_json::{InspectorJson, PRIVATE_PROTOCOL_PARAM_FIELDS};
+use moli_protocol_cdp::{CdpEventContractError, validate_event_name};
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use std::sync::Arc;
 
 use crate::automation::{
@@ -576,6 +578,7 @@ pub(crate) enum BackgroundCommandResponsePayloadRef<'a> {
 pub struct BackgroundProtocolMessageEvent {
     message: InspectorJson,
     automation_event: Option<Box<AutomationEvent>>,
+    contract_error: Option<Arc<CdpEventContractError>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1074,23 +1077,77 @@ impl ProtocolDeliveryEnvelope {
         self
     }
 
-    pub fn immediate(message: impl Into<InspectorJson>) -> Self {
-        let message = message.into();
-        Self::wrap_protocol(BackgroundProtocolMessageEvent {
-            message,
-            automation_event: None,
-        })
+    /// Create a local notification from the same event definition used by discovery.
+    ///
+    /// ```
+    /// use moli_protocol::conn::BackgroundProtocolEvent;
+    /// use moli_protocol_cdp_defs::LocalCdpEvent;
+    /// let event = BackgroundProtocolEvent::immediate_event(
+    ///     LocalCdpEvent::PageLoadEventFired, serde_json::json!({"timestamp": 1}), None,
+    /// );
+    /// assert!(event.has_protocol_wire_message());
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use moli_protocol::conn::BackgroundProtocolEvent;
+    /// BackgroundProtocolEvent::immediate_event("Page.loadEventFired", serde_json::json!({}), None);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use moli_protocol::conn::BackgroundProtocolEvent;
+    /// BackgroundProtocolEvent::immediate(serde_json::json!({"method":"Runtime.someUnknownEvent"}));
+    /// ```
+    pub fn immediate_event(event: LocalCdpEvent, params: Value, session_id: Option<&str>) -> Self {
+        Self::checked_protocol_message(
+            build_event(event, params, session_id).into(),
+            None,
+            "local event",
+        )
     }
 
     pub fn immediate_automation_event(
-        message: impl Into<InspectorJson>,
+        event: LocalCdpEvent,
+        params: Value,
+        session_id: Option<&str>,
         automation_event: AutomationEvent,
     ) -> Self {
-        let message = message.into();
+        Self::checked_protocol_message(
+            build_event(event, params, session_id).into(),
+            Some(automation_event),
+            "local event",
+        )
+    }
+
+    /// Check an opaque Inspector/renderer message. A violation remains attached
+    /// to its delivery route so the owning frontend can be terminated at output.
+    pub fn inspector_message(
+        message: impl Into<InspectorJson>,
+        automation_event: Option<AutomationEvent>,
+    ) -> Self {
+        Self::checked_protocol_message(message.into(), automation_event, "Inspector/renderer")
+    }
+
+    fn checked_protocol_message(
+        message: InspectorJson,
+        automation_event: Option<AutomationEvent>,
+        source: &'static str,
+    ) -> Self {
+        let contract_error = validate_event_name(&message, source).err().map(Arc::new);
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
             message,
-            automation_event: Some(Box::new(automation_event)),
+            automation_event: automation_event.map(Box::new),
+            contract_error,
         })
+    }
+
+    pub fn cdp_contract_violation(&self) -> Option<&CdpEventContractError> {
+        match &self.payload {
+            BackgroundProtocolEventPayload::Protocol(event) => event.contract_error.as_deref(),
+            BackgroundProtocolEventPayload::TargetReceivedMessageFromTarget(event) => {
+                event.nested_event.cdp_contract_violation()
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn audits_issue_added(
@@ -1099,8 +1156,8 @@ impl ProtocolDeliveryEnvelope {
         frame_id: &str,
         loader_id: &str,
     ) -> Self {
-        Self::immediate(build_event(
-            "Audits.issueAdded",
+        Self::immediate_event(
+            LocalCdpEvent::AuditsIssueAdded,
             json!({
                 "issue": crate::domains::audits_output_state::inspector_issue_protocol_value(
                     issue,
@@ -1109,7 +1166,7 @@ impl ProtocolDeliveryEnvelope {
                 ),
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn page_download_will_begin(
@@ -1122,7 +1179,7 @@ impl ProtocolDeliveryEnvelope {
     ) -> Self {
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
             message: build_event(
-                "Page.downloadWillBegin",
+                LocalCdpEvent::PageDownloadWillBegin,
                 json!({
                     "frameId": frame_id,
                     "guid": guid,
@@ -1133,6 +1190,7 @@ impl ProtocolDeliveryEnvelope {
             )
             .into(),
             automation_event: None,
+            contract_error: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
     }
@@ -1147,7 +1205,7 @@ impl ProtocolDeliveryEnvelope {
     ) -> Self {
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
             message: build_event(
-                "Page.downloadProgress",
+                LocalCdpEvent::PageDownloadProgress,
                 json!({
                     "guid": guid,
                     "state": state,
@@ -1158,11 +1216,12 @@ impl ProtocolDeliveryEnvelope {
             )
             .into(),
             automation_event: None,
+            contract_error: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
     }
 
-    pub(crate) fn automation_only(automation_event: AutomationEvent) -> Self {
+    pub fn automation_only(automation_event: AutomationEvent) -> Self {
         Self::wrap_automation_only_event(Box::new(automation_event))
     }
 
@@ -1485,15 +1544,15 @@ impl ProtocolDeliveryEnvelope {
         name: &str,
         value: &str,
     ) -> Self {
-        Self::immediate(build_event(
-            "DOM.attributeModified",
+        Self::immediate_event(
+            LocalCdpEvent::DomAttributeModified,
             json!({
                 "nodeId": node_id,
                 "name": name,
                 "value": value,
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn dom_attribute_removed(
@@ -1501,14 +1560,14 @@ impl ProtocolDeliveryEnvelope {
         node_id: u32,
         name: &str,
     ) -> Self {
-        Self::immediate(build_event(
-            "DOM.attributeRemoved",
+        Self::immediate_event(
+            LocalCdpEvent::DomAttributeRemoved,
             json!({
                 "nodeId": node_id,
                 "name": name,
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn dom_character_data_modified(
@@ -1516,14 +1575,14 @@ impl ProtocolDeliveryEnvelope {
         node_id: u32,
         character_data: &str,
     ) -> Self {
-        Self::immediate(build_event(
-            "DOM.characterDataModified",
+        Self::immediate_event(
+            LocalCdpEvent::DomCharacterDataModified,
             json!({
                 "nodeId": node_id,
                 "characterData": character_data,
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn dom_child_node_count_updated(
@@ -1531,14 +1590,14 @@ impl ProtocolDeliveryEnvelope {
         node_id: u32,
         child_node_count: usize,
     ) -> Self {
-        Self::immediate(build_event(
-            "DOM.childNodeCountUpdated",
+        Self::immediate_event(
+            LocalCdpEvent::DomChildNodeCountUpdated,
             json!({
                 "nodeId": node_id,
                 "childNodeCount": child_node_count,
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn dom_child_node_inserted(
@@ -1547,15 +1606,15 @@ impl ProtocolDeliveryEnvelope {
         previous_node_id: u32,
         node: Value,
     ) -> Self {
-        Self::immediate(build_event(
-            "DOM.childNodeInserted",
+        Self::immediate_event(
+            LocalCdpEvent::DomChildNodeInserted,
             json!({
                 "parentNodeId": parent_node_id,
                 "previousNodeId": previous_node_id,
                 "node": node,
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn dom_child_node_removed(
@@ -1563,14 +1622,14 @@ impl ProtocolDeliveryEnvelope {
         parent_node_id: u32,
         node_id: u32,
     ) -> Self {
-        Self::immediate(build_event(
-            "DOM.childNodeRemoved",
+        Self::immediate_event(
+            LocalCdpEvent::DomChildNodeRemoved,
             json!({
                 "parentNodeId": parent_node_id,
                 "nodeId": node_id,
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn page_navigation_frame(
@@ -1852,8 +1911,8 @@ impl ProtocolDeliveryEnvelope {
         window_features: &[String],
         user_gesture: bool,
     ) -> Self {
-        Self::immediate(build_event(
-            "Page.windowOpen",
+        Self::immediate_event(
+            LocalCdpEvent::PageWindowOpen,
             json!({
                 "url": url,
                 "windowName": window_name,
@@ -1861,7 +1920,7 @@ impl ProtocolDeliveryEnvelope {
                 "userGesture": user_gesture,
             }),
             session_id,
-        ))
+        )
     }
 
     pub(crate) fn inspector_target_crashed(session_id: Option<&str>) -> Self {
@@ -2285,7 +2344,7 @@ impl ProtocolDeliveryEnvelope {
             }
             BackgroundProtocolEventPayload::NetworkWebSocketFrame(event) => {
                 return Some((
-                    network_websocket_frame_protocol_method(event.direction),
+                    network_websocket_frame_protocol_method(event.direction).method(),
                     Some("WebSocket"),
                     Some(event.request_id.as_str()),
                     None,
@@ -2835,7 +2894,7 @@ impl ProtocolDeliveryEnvelope {
                 Some("Network.webSocketHandshakeResponseReceived")
             }
             BackgroundProtocolEventPayload::NetworkWebSocketFrame(event) => {
-                Some(network_websocket_frame_protocol_method(event.direction))
+                Some(network_websocket_frame_protocol_method(event.direction).method())
             }
             BackgroundProtocolEventPayload::ConsoleMessageAdded(_) => Some("Console.messageAdded"),
             BackgroundProtocolEventPayload::LogEntryAdded(_) => Some("Log.entryAdded"),
@@ -2859,7 +2918,7 @@ impl ProtocolDeliveryEnvelope {
             }
             BackgroundProtocolEventPayload::DomSetChildNodes(_) => Some("DOM.setChildNodes"),
             BackgroundProtocolEventPayload::PageNavigationFrame(event) => {
-                Some(navigation_frame_protocol_method(event.event.kind))
+                Some(navigation_frame_protocol_method(event.event.kind).method())
             }
             BackgroundProtocolEventPayload::PageDocumentOpened(_) => Some("Page.documentOpened"),
             BackgroundProtocolEventPayload::PageDomContentLoaded(_) => {
@@ -3019,6 +3078,9 @@ impl ProtocolDeliveryEnvelope {
     }
 
     pub fn has_protocol_wire_message(&self) -> bool {
+        if self.cdp_contract_violation().is_some() {
+            return false;
+        }
         matches!(
             &self.payload,
             BackgroundProtocolEventPayload::Protocol(_)
@@ -3292,7 +3354,7 @@ impl BackgroundCommandResponse {
 impl BackgroundNetworkRequestWillBeSentExtraInfoEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Network.requestWillBeSentExtraInfo",
+            LocalCdpEvent::NetworkRequestWillBeSentExtraInfo,
             json!({
                 "requestId": self.request_id,
                 "associatedCookies": self.associated_cookies,
@@ -3312,7 +3374,7 @@ impl BackgroundNetworkRequestWillBeSentExtraInfoEvent {
 impl BackgroundNetworkResponseReceivedExtraInfoEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Network.responseReceivedExtraInfo",
+            LocalCdpEvent::NetworkResponseReceivedExtraInfo,
             json!({
                 "requestId": self.request_id,
                 "blockedCookies": self.blocked_cookies,
@@ -3333,7 +3395,7 @@ impl BackgroundNetworkResponseReceivedExtraInfoEvent {
 impl BackgroundNetworkWebSocketCreatedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Network.webSocketCreated",
+            LocalCdpEvent::NetworkWebSocketCreated,
             json!({
                 "requestId": self.request_id,
                 "url": self.url,
@@ -3351,7 +3413,7 @@ impl BackgroundNetworkWebSocketCreatedEvent {
 impl BackgroundNetworkWebSocketWillSendHandshakeRequestEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Network.webSocketWillSendHandshakeRequest",
+            LocalCdpEvent::NetworkWebSocketWillSendHandshakeRequest,
             json!({
                 "requestId": self.request_id,
                 "timestamp": self.timestamp,
@@ -3372,7 +3434,7 @@ impl BackgroundNetworkWebSocketWillSendHandshakeRequestEvent {
 impl BackgroundNetworkWebSocketHandshakeResponseReceivedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Network.webSocketHandshakeResponseReceived",
+            LocalCdpEvent::NetworkWebSocketHandshakeResponseReceived,
             json!({
                 "requestId": self.request_id,
                 "timestamp": self.timestamp,
@@ -3414,10 +3476,10 @@ impl BackgroundNetworkWebSocketFrameEvent {
     }
 }
 
-fn network_websocket_frame_protocol_method(direction: WebSocketFrameDirection) -> &'static str {
+fn network_websocket_frame_protocol_method(direction: WebSocketFrameDirection) -> LocalCdpEvent {
     match direction {
-        WebSocketFrameDirection::Sent => "Network.webSocketFrameSent",
-        WebSocketFrameDirection::Received => "Network.webSocketFrameReceived",
+        WebSocketFrameDirection::Sent => LocalCdpEvent::NetworkWebSocketFrameSent,
+        WebSocketFrameDirection::Received => LocalCdpEvent::NetworkWebSocketFrameReceived,
     }
 }
 
@@ -3431,7 +3493,7 @@ fn websocket_frame_opcode_number(opcode: WebSocketFrameOpcode) -> u8 {
 impl BackgroundRuntimeBindingCalledEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Runtime.bindingCalled",
+            LocalCdpEvent::RuntimeBindingCalled,
             json!({
                 "name": self.name,
                 "payload": self.payload,
@@ -3449,7 +3511,7 @@ impl BackgroundRuntimeBindingCalledEvent {
 impl BackgroundRuntimeExecutionContextEvent {
     fn into_context_created_protocol_message(self) -> Value {
         build_event(
-            "Runtime.executionContextCreated",
+            LocalCdpEvent::RuntimeExecutionContextCreated,
             runtime_context_created_protocol_params(self.event),
             self.session_id.as_deref(),
         )
@@ -3465,7 +3527,7 @@ impl BackgroundRuntimeExecutionContextEvent {
 
     fn into_context_destroyed_protocol_message(self) -> Value {
         build_event(
-            "Runtime.executionContextDestroyed",
+            LocalCdpEvent::RuntimeExecutionContextDestroyed,
             runtime_context_destroyed_protocol_params(self.event),
             self.session_id.as_deref(),
         )
@@ -3485,7 +3547,7 @@ impl BackgroundRuntimeExecutionContextEvent {
 impl BackgroundRuntimeExecutionContextsClearedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Runtime.executionContextsCleared",
+            LocalCdpEvent::RuntimeExecutionContextsCleared,
             runtime_contexts_cleared_protocol_params(self.event),
             self.session_id.as_deref(),
         )
@@ -3544,7 +3606,7 @@ fn runtime_contexts_cleared_protocol_params(_event: RuntimeExecutionContextsClea
 impl BackgroundDomSetChildNodesEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "DOM.setChildNodes",
+            LocalCdpEvent::DomSetChildNodes,
             json!({
                 "parentId": self.parent_node_id,
                 "nodes": self.nodes,
@@ -3585,7 +3647,7 @@ impl BackgroundPageNavigationFrameEvent {
 impl BackgroundNavigationLifecycleEvent {
     fn into_dom_content_loaded_protocol_message(self) -> Value {
         build_event(
-            "Page.domContentEventFired",
+            LocalCdpEvent::PageDomContentEventFired,
             navigation_lifecycle_protocol_params(self.event),
             self.session_id.as_deref(),
         )
@@ -3597,7 +3659,7 @@ impl BackgroundNavigationLifecycleEvent {
 
     fn into_load_protocol_message(self) -> Value {
         build_event(
-            "Page.loadEventFired",
+            LocalCdpEvent::PageLoadEventFired,
             navigation_lifecycle_protocol_params(self.event),
             self.session_id.as_deref(),
         )
@@ -3611,7 +3673,7 @@ impl BackgroundNavigationLifecycleEvent {
 impl BackgroundPageLifecycleEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.lifecycleEvent",
+            LocalCdpEvent::PageLifecycleEvent,
             json!({
                 "frameId": self.event.frame_id.as_str(),
                 "loaderId": self.event.loader_id.as_str(),
@@ -3630,7 +3692,7 @@ impl BackgroundPageLifecycleEvent {
 impl BackgroundSameDocumentNavigationEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.navigatedWithinDocument",
+            LocalCdpEvent::PageNavigatedWithinDocument,
             json!({
                 "frameId": self.event.frame_id.as_str(),
                 "url": self.event.url.as_str(),
@@ -3648,7 +3710,7 @@ impl BackgroundSameDocumentNavigationEvent {
 impl BackgroundPageFrameAttachedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.frameAttached",
+            LocalCdpEvent::PageFrameAttached,
             json!({
                 "frameId": self.frame_id,
                 "parentFrameId": self.parent_frame_id,
@@ -3683,7 +3745,7 @@ impl BackgroundPageDocumentOpenedEvent {
             frame["parentId"] = json!(parent_frame_id);
         }
         build_event(
-            "Page.documentOpened",
+            LocalCdpEvent::PageDocumentOpened,
             json!({ "frame": frame }),
             self.session_id.as_deref(),
         )
@@ -3693,7 +3755,7 @@ impl BackgroundPageDocumentOpenedEvent {
 impl BackgroundPageFrameDetachedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.frameDetached",
+            LocalCdpEvent::PageFrameDetached,
             json!({
                 "frameId": self.frame_id,
                 "reason": "remove",
@@ -3707,16 +3769,18 @@ impl BackgroundPageFrameDetachedEvent {
     }
 }
 
-fn navigation_frame_protocol_method(kind: NavigationFrameEventKind) -> &'static str {
+fn navigation_frame_protocol_method(kind: NavigationFrameEventKind) -> LocalCdpEvent {
     match kind {
-        NavigationFrameEventKind::Scheduled => "Page.frameScheduledNavigation",
-        NavigationFrameEventKind::Requested => "Page.frameRequestedNavigation",
-        NavigationFrameEventKind::StartedNavigating => "Page.frameStartedNavigating",
-        NavigationFrameEventKind::StartedLoading => "Page.frameStartedLoading",
-        NavigationFrameEventKind::ClearedScheduled => "Page.frameClearedScheduledNavigation",
-        NavigationFrameEventKind::Navigated => "Page.frameNavigated",
-        NavigationFrameEventKind::DocumentUpdated => "DOM.documentUpdated",
-        NavigationFrameEventKind::StoppedLoading => "Page.frameStoppedLoading",
+        NavigationFrameEventKind::Scheduled => LocalCdpEvent::PageFrameScheduledNavigation,
+        NavigationFrameEventKind::Requested => LocalCdpEvent::PageFrameRequestedNavigation,
+        NavigationFrameEventKind::StartedNavigating => LocalCdpEvent::PageFrameStartedNavigating,
+        NavigationFrameEventKind::StartedLoading => LocalCdpEvent::PageFrameStartedLoading,
+        NavigationFrameEventKind::ClearedScheduled => {
+            LocalCdpEvent::PageFrameClearedScheduledNavigation
+        }
+        NavigationFrameEventKind::Navigated => LocalCdpEvent::PageFrameNavigated,
+        NavigationFrameEventKind::DocumentUpdated => LocalCdpEvent::DomDocumentUpdated,
+        NavigationFrameEventKind::StoppedLoading => LocalCdpEvent::PageFrameStoppedLoading,
     }
 }
 
@@ -3790,7 +3854,7 @@ fn navigation_lifecycle_protocol_params(event: NavigationLifecycleEvent) -> Valu
 impl BackgroundPageFileChooserOpenedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.fileChooserOpened",
+            LocalCdpEvent::PageFileChooserOpened,
             json!({
                 "frameId": self.frame_id,
                 "mode": self.mode,
@@ -3815,7 +3879,7 @@ impl BackgroundPageFileChooserOpenedEvent {
 impl BackgroundBrowserDownloadWillBeginEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Browser.downloadWillBegin",
+            LocalCdpEvent::BrowserDownloadWillBegin,
             json!({
                 "frameId": self.frame_id,
                 "guid": self.guid,
@@ -3843,7 +3907,7 @@ impl BackgroundBrowserDownloadProgressEvent {
             params["filePath"] = json!(file_path);
         }
         build_event(
-            "Browser.downloadProgress",
+            LocalCdpEvent::BrowserDownloadProgress,
             params,
             self.session_id.as_deref(),
         )
@@ -3867,7 +3931,7 @@ impl BackgroundPageJavaScriptDialogOpeningEvent {
             params["frameId"] = json!(frame_id);
         }
         build_event(
-            "Page.javascriptDialogOpening",
+            LocalCdpEvent::PageJavascriptDialogOpening,
             params,
             self.session_id.as_deref(),
         )
@@ -3881,7 +3945,7 @@ impl BackgroundPageJavaScriptDialogOpeningEvent {
 impl BackgroundPageJavaScriptDialogClosedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.javascriptDialogClosed",
+            LocalCdpEvent::PageJavascriptDialogClosed,
             json!({
                 "frameId": self.frame_id,
                 "result": self.accepted,
@@ -3899,7 +3963,7 @@ impl BackgroundPageJavaScriptDialogClosedEvent {
 impl BackgroundPageScreencastVisibilityChangedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.screencastVisibilityChanged",
+            LocalCdpEvent::PageScreencastVisibilityChanged,
             json!({
                 "visible": self.visible,
             }),
@@ -3915,7 +3979,7 @@ impl BackgroundPageScreencastVisibilityChangedEvent {
 impl BackgroundPageScreencastFrameEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Page.screencastFrame",
+            LocalCdpEvent::PageScreencastFrame,
             json!({
                 "data": self.data,
                 "metadata": {
@@ -3941,7 +4005,7 @@ impl BackgroundPageScreencastFrameEvent {
 impl BackgroundInspectorTargetCrashedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Inspector.targetCrashed",
+            LocalCdpEvent::InspectorTargetCrashed,
             json!({}),
             self.session_id.as_deref(),
         )
@@ -3955,7 +4019,7 @@ impl BackgroundInspectorTargetCrashedEvent {
 impl BackgroundInspectorTargetReloadedAfterCrashEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Inspector.targetReloadedAfterCrash",
+            LocalCdpEvent::InspectorTargetReloadedAfterCrash,
             json!({}),
             self.session_id.as_deref(),
         )
@@ -3969,7 +4033,7 @@ impl BackgroundInspectorTargetReloadedAfterCrashEvent {
 impl BackgroundInspectorDetachedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Inspector.detached",
+            LocalCdpEvent::InspectorDetached,
             json!({
                 "reason": self.reason,
             }),
@@ -3985,7 +4049,7 @@ impl BackgroundInspectorDetachedEvent {
 impl BackgroundServiceWorkerRegistrationUpdatedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "ServiceWorker.workerRegistrationUpdated",
+            LocalCdpEvent::ServiceWorkerRegistrationUpdated,
             json!({
                 "registrations": self
                     .registrations
@@ -4005,7 +4069,7 @@ impl BackgroundServiceWorkerRegistrationUpdatedEvent {
 impl BackgroundServiceWorkerVersionUpdatedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "ServiceWorker.workerVersionUpdated",
+            LocalCdpEvent::ServiceWorkerVersionUpdated,
             json!({
                 "versions": self
                     .versions
@@ -4025,7 +4089,7 @@ impl BackgroundServiceWorkerVersionUpdatedEvent {
 impl BackgroundServiceWorkerErrorReportedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "ServiceWorker.workerErrorReported",
+            LocalCdpEvent::ServiceWorkerErrorReported,
             json!({
                 "errorMessage": self.error_message.into_protocol_value(),
             }),
@@ -4078,7 +4142,7 @@ impl BackgroundServiceWorkerErrorMessage {
 impl BackgroundTargetInfoChangedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Target.targetInfoChanged",
+            LocalCdpEvent::TargetInfoChanged,
             json!({
                 "targetInfo": self.target_info.into_cdp_value(),
             }),
@@ -4107,7 +4171,7 @@ impl BackgroundTargetCreatedEvent {
             moli_popup_id: None,
         });
         build_event(
-            "Target.targetCreated",
+            LocalCdpEvent::TargetCreated,
             json!({ "targetInfo": target_info.into_cdp_value() }),
             session_id.as_deref(),
         )
@@ -4124,7 +4188,7 @@ impl BackgroundTargetAttachedEvent {
         let event = self.event;
         let parent_session_id = event.parent_session_id;
         build_event(
-            "Target.attachedToTarget",
+            LocalCdpEvent::TargetAttachedToTarget,
             json!({
                 "sessionId": event.session_id.as_str(),
                 "targetInfo": event.target_info.into_cdp_value(),
@@ -4148,7 +4212,7 @@ impl BackgroundTargetDetachedEvent {
             "sessionId": event.session_id.as_str(),
         });
         build_event(
-            "Target.detachedFromTarget",
+            LocalCdpEvent::TargetDetachedFromTarget,
             params,
             event.parent_session_id.as_ref().map(|id| id.as_str()),
         )
@@ -4163,7 +4227,7 @@ impl BackgroundTargetDetachedEvent {
 impl BackgroundTargetDestroyedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Target.targetDestroyed",
+            LocalCdpEvent::TargetDestroyed,
             json!({
                 "targetId": self.event.target_id.as_str(),
             }),
@@ -4180,7 +4244,7 @@ impl BackgroundTargetDestroyedEvent {
 impl BackgroundTargetCrashedEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Target.targetCrashed",
+            LocalCdpEvent::TargetCrashed,
             json!({
                 "targetId": self.target_id,
                 "status": self.status,
@@ -4204,7 +4268,7 @@ impl BackgroundTargetReceivedMessageFromTargetEvent {
             nested_message.set_session_id(None);
         }
         build_event(
-            "Target.receivedMessageFromTarget",
+            LocalCdpEvent::TargetReceivedMessageFromTarget,
             json!({
                 "message": nested_message.to_string(),
                 "sessionId": self.target_session_id,
@@ -4283,7 +4347,7 @@ impl BackgroundLogEntryAddedEvent {
 impl BackgroundRuntimeConsoleApiCalledEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Runtime.consoleAPICalled",
+            LocalCdpEvent::RuntimeConsoleApiCalled,
             runtime_console_api_called_protocol_params(self.event),
             self.session_id.as_deref(),
         )
@@ -4301,7 +4365,7 @@ impl BackgroundRuntimeConsoleApiCalledEvent {
 impl BackgroundRuntimeExceptionThrownEvent {
     fn into_protocol_message(self) -> Value {
         build_event(
-            "Runtime.exceptionThrown",
+            LocalCdpEvent::RuntimeExceptionThrown,
             runtime_exception_thrown_protocol_params(self.event),
             self.session_id.as_deref(),
         )
@@ -4382,7 +4446,7 @@ fn build_console_message_added_protocol_message(
     url: &str,
 ) -> Value {
     build_event(
-        "Console.messageAdded",
+        LocalCdpEvent::ConsoleMessageAdded,
         json!({
             "message": {
                 "source": source,
@@ -4417,7 +4481,7 @@ fn build_log_entry_added_protocol_message(
         entry["networkRequestId"] = json!(network_request_id);
     }
     build_event(
-        "Log.entryAdded",
+        LocalCdpEvent::LogEntryAdded,
         json!({
             "entry": entry,
         }),
@@ -4449,7 +4513,7 @@ impl NavigationBackgroundEvent {
     pub(crate) fn protocol_message(token: DocumentNavigationToken, message: Value) -> Self {
         Self {
             token,
-            event: BackgroundProtocolEvent::immediate(message),
+            event: BackgroundProtocolEvent::inspector_message(message, None),
         }
     }
 
@@ -4483,8 +4547,8 @@ impl NavigationBackgroundEvent {
     }
 }
 
-pub fn build_event(method: &str, params: Value, session_id: Option<&str>) -> Value {
-    let mut v = json!({ "method": method, "params": params });
+pub(crate) fn build_event(event: LocalCdpEvent, params: Value, session_id: Option<&str>) -> Value {
+    let mut v = json!({ "method": event.method(), "params": params });
     if let Some(sid) = session_id {
         v["sessionId"] = json!(sid);
     }
@@ -4493,6 +4557,20 @@ pub fn build_event(method: &str, params: Value, session_id: Option<&str>) -> Val
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opaque_inspector_entry_records_unadvertised_event_for_its_route() {
+        let event = super::BackgroundProtocolEvent::inspector_message(
+            serde_json::json!({"method":"Runtime.someUnknownEvent","sessionId":"SID-owner","params":{}}),
+            None,
+        );
+        assert!(!event.has_protocol_wire_message());
+        assert_eq!(event.protocol_session_id(), Some("SID-owner"));
+        let violation = event.cdp_contract_violation().unwrap();
+        assert_eq!(violation.method(), "Runtime.someUnknownEvent");
+        assert_eq!(violation.session_id(), Some("SID-owner"));
+        assert_eq!(event.clone().cdp_contract_violation(), Some(violation));
+    }
+
     use crate::automation::{
         AutomationEvent, DevToolsBrowserContextId, DevToolsFrameId, DevToolsLoaderId,
         DevToolsNetworkResourceType, DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo,
@@ -4501,6 +4579,7 @@ mod tests {
         RuntimeExecutionContextsClearedEvent, TargetAttachmentEvent, TargetDetachmentEvent,
         TargetLifecycleEvent, UserPromptClosedEvent,
     };
+    use moli_protocol_cdp_defs::LocalCdpEvent;
     use serde_json::{Value, json};
 
     use super::{
@@ -4728,7 +4807,7 @@ mod tests {
             .start_document_navigation_for_active_target("LOADER-1".to_owned())
             .expect("active target should produce navigation token");
         let message = build_event(
-            "Page.frameStartedLoading",
+            LocalCdpEvent::PageFrameStartedLoading,
             json!({ "frameId": "TID-nav" }),
             Some("SID-nav"),
         );
@@ -4750,7 +4829,7 @@ mod tests {
             .start_document_navigation_for_active_target("LOADER-1".to_owned())
             .expect("active target should produce navigation token");
         let message = build_event(
-            "Page.frameStartedNavigating",
+            LocalCdpEvent::PageFrameStartedNavigating,
             json!({
                 "frameId": "TID-nav",
                 "loaderId": "LOADER-1",
@@ -4773,9 +4852,9 @@ mod tests {
 
         let event = NavigationBackgroundEvent::background_event(
             token,
-            BackgroundProtocolEvent::immediate_automation_event(
+            BackgroundProtocolEvent::inspector_message(
                 message.clone(),
-                automation_event.clone(),
+                Some(automation_event.clone()),
             ),
         );
         let background_event = event
@@ -5826,17 +5905,17 @@ mod tests {
             })
         };
 
-        let document = BackgroundProtocolEvent::immediate_automation_event(
+        let document = BackgroundProtocolEvent::inspector_message(
             json!({"method": "Network.responseReceived"}),
-            network_event(Some(DevToolsNetworkResourceType::Document)),
+            Some(network_event(Some(DevToolsNetworkResourceType::Document))),
         );
-        let script = BackgroundProtocolEvent::immediate_automation_event(
+        let script = BackgroundProtocolEvent::inspector_message(
             json!({"method": "Network.responseReceived"}),
-            network_event(Some(DevToolsNetworkResourceType::Script)),
+            Some(network_event(Some(DevToolsNetworkResourceType::Script))),
         );
-        let lifecycle = BackgroundProtocolEvent::immediate_automation_event(
+        let lifecycle = BackgroundProtocolEvent::inspector_message(
             json!({"method": "Page.frameStartedLoading"}),
-            AutomationEvent::NavigationFrame(NavigationFrameEvent {
+            Some(AutomationEvent::NavigationFrame(NavigationFrameEvent {
                 target_id: DevToolsTargetId::from("TID-nav"),
                 frame_id: DevToolsFrameId::from("TID-nav"),
                 parent_frame_id: None,
@@ -5846,50 +5925,68 @@ mod tests {
                 frame_name: None,
                 security_origin: None,
                 secure_context_type: None,
-            }),
+            })),
         );
-        let protocol_document = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-document",
-                "type": "Document"
-            }
-        }));
-        let protocol_script = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-script",
-                "type": "Script"
-            }
-        }));
-        let blocked_protocol_script = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.requestWillBeSent",
-            "params": {
-                "requestId": "REQ-protocol-script-blocked",
-                "type": "Script",
-                "__moliBlockedInterceptors": ["intercept-script"]
-            }
-        }));
-        let fetch_request_paused = BackgroundProtocolEvent::immediate(json!({
-            "method": "Fetch.requestPaused",
-            "params": {
-                "requestId": "INT-script",
-                "resourceType": "Script"
-            }
-        }));
-        let fetch_auth_required = BackgroundProtocolEvent::immediate(json!({
-            "method": "Fetch.authRequired",
-            "params": {
-                "requestId": "INT-auth",
-                "resourceType": "Script"
-            }
-        }));
-        let protocol_without_type = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-unknown"
-            }
-        }));
+        let protocol_document = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method": "Network.responseReceived",
+                "params": {
+                    "requestId": "REQ-protocol-document",
+                    "type": "Document"
+                }
+            }),
+            None,
+        );
+        let protocol_script = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method": "Network.responseReceived",
+                "params": {
+                    "requestId": "REQ-protocol-script",
+                    "type": "Script"
+                }
+            }),
+            None,
+        );
+        let blocked_protocol_script = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method": "Network.requestWillBeSent",
+                "params": {
+                    "requestId": "REQ-protocol-script-blocked",
+                    "type": "Script",
+                    "__moliBlockedInterceptors": ["intercept-script"]
+                }
+            }),
+            None,
+        );
+        let fetch_request_paused = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method": "Fetch.requestPaused",
+                "params": {
+                    "requestId": "INT-script",
+                    "resourceType": "Script"
+                }
+            }),
+            None,
+        );
+        let fetch_auth_required = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method": "Fetch.authRequired",
+                "params": {
+                    "requestId": "INT-auth",
+                    "resourceType": "Script"
+                }
+            }),
+            None,
+        );
+        let protocol_without_type = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method": "Network.responseReceived",
+                "params": {
+                    "requestId": "REQ-protocol-unknown"
+                }
+            }),
+            None,
+        );
 
         assert!(!document.should_wait_for_background_navigation_completion());
         assert!(script.should_wait_for_background_navigation_completion());
@@ -5913,7 +6010,7 @@ mod tests {
             .start_document_navigation_for_active_target("LOADER-2".to_owned())
             .expect("active target should produce current token");
         let message = build_event(
-            "Page.frameStoppedLoading",
+            LocalCdpEvent::PageFrameStoppedLoading,
             json!({ "frameId": "TID-nav" }),
             None,
         );
@@ -5933,14 +6030,17 @@ mod tests {
 
     #[test]
     fn protocol_message_output_strips_moli_private_fields() {
-        let message = BackgroundProtocolEvent::immediate(json!({
-            "method": "Fetch.authRequired",
-            "params": {
-                "requestId": "FETCH-1",
-                "__moliBlockedInterceptors": ["intercept-auth"],
-                "__moliFetchRequestId": "FETCH-1"
-            }
-        }))
+        let message = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method": "Fetch.authRequired",
+                "params": {
+                    "requestId": "FETCH-1",
+                    "__moliBlockedInterceptors": ["intercept-auth"],
+                    "__moliFetchRequestId": "FETCH-1"
+                }
+            }),
+            None,
+        )
         .into_protocol_message();
 
         assert_eq!(message["params"]["requestId"], json!("FETCH-1"));
@@ -5959,7 +6059,7 @@ mod tests {
                 "__moliBlockedInterceptors":["interceptor"]
             }});
             assert!(InspectorJson::from_slice(host.to_string().as_bytes()).is_err());
-            let wire = BackgroundProtocolEvent::immediate(host).into_cdp_message();
+            let wire = BackgroundProtocolEvent::inspector_message(host, None).into_cdp_message();
             assert_eq!(wire.value()["params"]["requestId"], "public-id");
             for key in PRIVATE_PROTOCOL_PARAM_FIELDS {
                 assert_eq!(
@@ -5973,13 +6073,13 @@ mod tests {
         )
         .unwrap();
         inspector.value_mut()["params"]["__moliFetchRequestId"] = json!("private-id");
-        let wire = BackgroundProtocolEvent::immediate(inspector).into_cdp_message();
+        let wire = BackgroundProtocolEvent::inspector_message(inspector, None).into_cdp_message();
         assert!(wire.value()["params"].get("__moliFetchRequestId").is_none());
         let inspector = InspectorJson::from_slice(
             br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":{"__moliFetchRequestId":"\ud800"}}]}}"#,
         )
         .unwrap();
-        let wire = BackgroundProtocolEvent::immediate(inspector).into_cdp_message();
+        let wire = BackgroundProtocolEvent::inspector_message(inspector, None).into_cdp_message();
         assert!(!wire.is_materialized());
         assert!(
             wire.to_string()
@@ -5993,7 +6093,7 @@ mod tests {
             br#"{"method":"Debugger.scriptParsed","params":{"description":"\ud800"}}"#,
         )
         .unwrap();
-        let event = BackgroundProtocolEvent::immediate(message);
+        let event = BackgroundProtocolEvent::inspector_message(message, None);
         assert!(!event.is_document_network_response_started());
         assert!(!event.protocol_json().unwrap().is_materialized());
     }
@@ -6004,7 +6104,7 @@ mod tests {
             br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":"\udfff"}]}}"#,
         )
         .unwrap();
-        let event = BackgroundProtocolEvent::immediate(message);
+        let event = BackgroundProtocolEvent::inspector_message(message, None);
         assert_eq!(event.trace_network_summary(), None);
         assert!(!event.protocol_json().unwrap().is_materialized());
     }
@@ -6025,7 +6125,7 @@ mod tests {
                 r#"{{"method":"{method}","params":{{"{type_field}":"{resource_type}","requestId":"REQ-1","{url_field}":{{"url":"https://example.test/"}}}}}}"#
             );
             let message = moli_inspector_json::InspectorJson::from_slice(raw.as_bytes()).unwrap();
-            let event = BackgroundProtocolEvent::immediate(message);
+            let event = BackgroundProtocolEvent::inspector_message(message, None);
             assert_eq!(
                 event.is_document_network_response_started(),
                 document_started

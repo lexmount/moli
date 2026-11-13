@@ -17,6 +17,7 @@ use moli_core::page::{
     SubresourceAuthChallenge, SubresourceAuthCredentials, extract_subresource_auth_challenge,
     subresource_auth_credentials_for_challenge,
 };
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde_json::{Value, json};
 use url::Url;
 
@@ -134,7 +135,9 @@ pub(crate) fn pending_fetch_auth_navigation_required_event(
     let (payload, event) =
         pending_fetch_auth_navigation_required_parts(pending, blocked_intercepts);
     BackgroundProtocolEvent::immediate_automation_event(
-        build_event("Fetch.authRequired", payload, session_id),
+        LocalCdpEvent::FetchAuthRequired,
+        payload,
+        session_id,
         event,
     )
 }
@@ -239,7 +242,9 @@ pub(crate) fn pending_subresource_auth_required_event(
     let (payload, event) =
         pending_subresource_auth_required_parts(request_id, pending, blocked_intercepts);
     BackgroundProtocolEvent::immediate_automation_event(
-        build_event("Fetch.authRequired", payload, session_id),
+        LocalCdpEvent::FetchAuthRequired,
+        payload,
+        session_id,
         event,
     )
 }
@@ -311,7 +316,9 @@ pub(crate) fn navigation_response_stage_request_paused_event(
         response_headers,
     );
     BackgroundProtocolEvent::immediate_automation_event(
-        build_event("Fetch.requestPaused", payload, session_id),
+        LocalCdpEvent::FetchRequestPaused,
+        payload,
+        session_id,
         event,
     )
 }
@@ -376,7 +383,9 @@ pub(crate) fn pending_subresource_response_stage_request_paused_event(
         blocked_intercepts,
     );
     BackgroundProtocolEvent::immediate_automation_event(
-        build_event("Fetch.requestPaused", payload, session_id),
+        LocalCdpEvent::FetchRequestPaused,
+        payload,
+        session_id,
         event,
     )
 }
@@ -522,9 +531,9 @@ pub(crate) fn request_paused_background_event(
     if let Some(previous) = &pending.redirected_request_id {
         payload["redirectedRequestId"] = json!(previous);
     }
-    let message = build_event("Fetch.requestPaused", payload, session_id);
-    BackgroundProtocolEvent::immediate_automation_event(
+    let message = build_event(LocalCdpEvent::FetchRequestPaused, payload, session_id);
+    BackgroundProtocolEvent::inspector_message(
         message,
-        AutomationEvent::RequestPaused(network_event),
+        Some(AutomationEvent::RequestPaused(network_event)),
     )
 }

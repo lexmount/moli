@@ -90,7 +90,10 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
         }}).to_string()).unwrap();
         let mut dispatch = CommandDispatchContext::default();
         let prefix = json!({"method":"Page.frameStartedLoading","params":{"frameId":"TID-nested-direct"},"sessionId":sid});
-        dispatch.push_protocol_event(BackgroundProtocolEvent::immediate(prefix.clone()));
+        dispatch.push_protocol_event(BackgroundProtocolEvent::inspector_message(
+            prefix.clone(),
+            None,
+        ));
         let CdpCommandTaskStep::Pending(pending) = handle
             .with_state(|state| {
                 if internal {

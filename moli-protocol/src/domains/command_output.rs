@@ -1,5 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_inspector_json::InspectorJson;
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde_json::{Value, json};
 
 use crate::automation::{
@@ -25,7 +26,7 @@ use moli_cookie_jar::{
 
 #[cfg(test)]
 use crate::conn::build_command_success_response;
-use crate::conn::{BackgroundProtocolEvent, RendererOutputDependencies, build_event};
+use crate::conn::{BackgroundProtocolEvent, RendererOutputDependencies};
 use crate::domains::observable_output::log_entry_event;
 
 #[derive(Debug, Default)]
@@ -607,7 +608,7 @@ pub(crate) fn protocol_message_background_event_for_target(
             qualify_automation_event_target(&mut event, DevToolsTargetId::from(target_id));
         }
         if matches!(message, InspectorJson::Raw(_)) {
-            return BackgroundProtocolEvent::immediate_automation_event(message, event);
+            return BackgroundProtocolEvent::inspector_message(message, Some(event));
         }
         let session_id = message.session_id();
         let method = message.method();
@@ -618,10 +619,10 @@ pub(crate) fn protocol_message_background_event_for_target(
             (Some("Runtime.exceptionThrown"), AutomationEvent::ScriptException(event)) => {
                 BackgroundProtocolEvent::runtime_exception_thrown(session_id, event)
             }
-            (_, event) => BackgroundProtocolEvent::immediate_automation_event(message, event),
+            (_, event) => BackgroundProtocolEvent::inspector_message(message, Some(event)),
         };
     }
-    BackgroundProtocolEvent::immediate(message)
+    BackgroundProtocolEvent::inspector_message(message, None)
 }
 
 fn qualify_automation_event_target(event: &mut AutomationEvent, target_id: DevToolsTargetId) {
@@ -2177,7 +2178,7 @@ impl CommandResponseOutput {
                     message.set_id(id);
                 }
                 message.set_session_id(session_id);
-                BackgroundProtocolEvent::immediate(message)
+                BackgroundProtocolEvent::inspector_message(message, None)
             }
             Self::Success(result) => BackgroundProtocolEvent::command_success(
                 command_id,
@@ -2225,16 +2226,14 @@ impl CommandOwnerEvent {
                     timestamp,
                 };
                 BackgroundProtocolEvent::immediate_automation_event(
-                    build_event(
-                        "Page.lifecycleEvent",
-                        json!({
-                            "frameId": lifecycle.frame_id.as_str(),
-                            "loaderId": lifecycle.loader_id.as_str(),
-                            "name": lifecycle.name.as_str(),
-                            "timestamp": lifecycle.timestamp,
-                        }),
-                        session_id.as_deref(),
-                    ),
+                    LocalCdpEvent::PageLifecycleEvent,
+                    json!({
+                        "frameId": lifecycle.frame_id.as_str(),
+                        "loaderId": lifecycle.loader_id.as_str(),
+                        "name": lifecycle.name.as_str(),
+                        "timestamp": lifecycle.timestamp,
+                    }),
+                    session_id.as_deref(),
                     AutomationEvent::DocumentLifecycle(lifecycle.into()),
                 )
             }

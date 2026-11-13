@@ -512,10 +512,7 @@ fn protocol_output_sequence_preserves_background_event_sidecar() {
     let automation_event = navigation_started_automation_event();
 
     let output = ProtocolOutputSequence::from_background_event(
-        BackgroundProtocolEvent::immediate_automation_event(
-            message.clone(),
-            automation_event.clone(),
-        ),
+        BackgroundProtocolEvent::inspector_message(message.clone(), Some(automation_event.clone())),
     );
     let mut events = output.into_background_events();
     let (actual_message, actual_automation_event) = events
@@ -541,7 +538,7 @@ fn load_ordering_splits_network_observations_from_page_side_effects() {
 }
 
 fn download_will_begin_event(frame_id: &str, guid: &str) -> BackgroundProtocolEvent {
-    BackgroundProtocolEvent::immediate_automation_event(
+    BackgroundProtocolEvent::inspector_message(
         json!({
             "method": "Browser.downloadWillBegin",
             "params": {
@@ -551,12 +548,14 @@ fn download_will_begin_event(frame_id: &str, guid: &str) -> BackgroundProtocolEv
                 "suggestedFilename": "download.bin"
             }
         }),
-        AutomationEvent::BrowserDownloadWillBegin(BrowserDownloadWillBeginEvent {
-            frame_id: DevToolsFrameId::from(frame_id),
-            guid: guid.to_owned(),
-            url: "https://example.test/download".to_owned(),
-            suggested_filename: "download.bin".to_owned(),
-        }),
+        Some(AutomationEvent::BrowserDownloadWillBegin(
+            BrowserDownloadWillBeginEvent {
+                frame_id: DevToolsFrameId::from(frame_id),
+                guid: guid.to_owned(),
+                url: "https://example.test/download".to_owned(),
+                suggested_filename: "download.bin".to_owned(),
+            },
+        )),
     )
 }
 
@@ -589,9 +588,9 @@ fn drain_pending_background_events_preserves_typed_sidecar() {
         }
     });
     let automation_event = navigation_started_automation_event();
-    tx.send(BackgroundProtocolEvent::immediate_automation_event(
+    tx.send(BackgroundProtocolEvent::inspector_message(
         message.clone(),
-        automation_event.clone(),
+        Some(automation_event.clone()),
     ))
     .expect("background event receiver should be open");
 
@@ -644,10 +643,13 @@ fn protocol_output_loose_response_take_ignores_typed_runtime_response() {
 fn protocol_output_loose_response_split_ignores_typed_runtime_response() {
     let mut output = ProtocolOutputSequence::from_background_events(vec![
         runtime_response_ready_event(42),
-        BackgroundProtocolEvent::immediate(json!({
-            "id": 7,
-            "result": {}
-        })),
+        BackgroundProtocolEvent::inspector_message(
+            json!({
+                "id": 7,
+                "result": {}
+            }),
+            None,
+        ),
     ]);
 
     assert!(
@@ -729,7 +731,7 @@ fn network_response_event_for_target(
 
         auth_challenge: None,
     });
-    BackgroundProtocolEvent::immediate_automation_event(message, automation_event)
+    BackgroundProtocolEvent::inspector_message(message, Some(automation_event))
 }
 
 fn network_request_event_for_target(
@@ -744,7 +746,7 @@ fn network_request_event_for_target(
     };
     network_event.status = None;
     network_event.encoded_data_length = None;
-    BackgroundProtocolEvent::immediate_automation_event(
+    BackgroundProtocolEvent::inspector_message(
         json!({
             "method": "Network.requestWillBeSent",
             "params": {
@@ -757,7 +759,7 @@ fn network_request_event_for_target(
                 }
             }
         }),
-        AutomationEvent::NetworkBeforeRequestSent(network_event),
+        Some(AutomationEvent::NetworkBeforeRequestSent(network_event)),
     )
 }
 
@@ -771,7 +773,7 @@ fn network_finished_event_for_target(
     else {
         unreachable!("network response fixture should retain its typed sidecar")
     };
-    BackgroundProtocolEvent::immediate_automation_event(
+    BackgroundProtocolEvent::inspector_message(
         json!({
             "method": "Network.loadingFinished",
             "params": {
@@ -780,7 +782,7 @@ fn network_finished_event_for_target(
                 "encodedDataLength": 0
             }
         }),
-        AutomationEvent::NetworkResponseCompleted(network_event),
+        Some(AutomationEvent::NetworkResponseCompleted(network_event)),
     )
 }
 
@@ -805,11 +807,14 @@ fn mixed_owner_protocol_output_retains_only_its_known_targets() {
         std::slice::from_ref(&target_id)
     );
 
-    let unresolved = BackgroundProtocolEvent::immediate(json!({
-        "method": "Runtime.consoleAPICalled",
-        "sessionId": "SID-missing",
-        "params": {}
-    }));
+    let unresolved = BackgroundProtocolEvent::inspector_message(
+        json!({
+            "method": "Runtime.consoleAPICalled",
+            "sessionId": "SID-missing",
+            "params": {}
+        }),
+        None,
+    );
     let mixed = ProtocolOutputSequence::from_background_events(vec![known, unresolved]);
     assert_eq!(
         owner
@@ -1406,8 +1411,9 @@ fn fenced_creation_stays_in_the_complete_source_publication() {
     queues.enqueue_protocol_work(protocol_work_from_renderer_output(
         renderer_fenced_output_work(
             1,
-            vec![BackgroundProtocolEvent::immediate(
+            vec![BackgroundProtocolEvent::inspector_message(
                 json!({"method":"Target.targetCreated"}),
+                None,
             )],
             vec![RendererOutputFence::new_for_test(native)],
         ),
@@ -1474,8 +1480,8 @@ async fn navigation_tail_waits_for_native_delivery_independently_of_source_facts
                     scheduler.queues.enqueue_renderer_output_publication(
                         source,
                         ProtocolOutputSequence::from_messages(vec![
-                            json!({"method":"Moli.sourceBefore"}),
-                            json!({"method":"Moli.sourceAfter"}),
+                            json!({"method":"CSS.styleSheetAdded"}),
+                            json!({"method":"CSS.styleSheetRemoved"}),
                         ]),
                         Vec::new(),
                         None,
@@ -1490,15 +1496,16 @@ async fn navigation_tail_waits_for_native_delivery_independently_of_source_facts
                         .append_renderer_output_projection(
                             native,
                             ProtocolOutputSequence::from_messages(vec![
-                                json!({"method":"Moli.nativeCommit"}),
+                                json!({"method":"Tracing.dataCollected"}),
                             ]),
                         )
                         .unwrap();
                     let mut tail = protocol_work_after_renderer_delivery(
                         renderer_fenced_output_work(
                             1,
-                            vec![BackgroundProtocolEvent::immediate(
-                                json!({"method":"Moli.navigationTail"}),
+                            vec![BackgroundProtocolEvent::inspector_message(
+                                json!({"method":"Tracing.tracingComplete"}),
+                                None,
                             )],
                             vec![RendererOutputFence::new_for_test(native)],
                         ),
@@ -1520,8 +1527,8 @@ async fn navigation_tail_waits_for_native_delivery_independently_of_source_facts
                     assert_eq!(
                         scheduler.complete_next_protocol_residence().into_messages(),
                         [
-                            json!({"method":"Moli.sourceBefore"}),
-                            json!({"method":"Moli.sourceAfter"}),
+                            json!({"method":"CSS.styleSheetAdded"}),
+                            json!({"method":"CSS.styleSheetRemoved"}),
                         ]
                     );
                     assert!(
@@ -1569,11 +1576,11 @@ async fn navigation_tail_waits_for_native_delivery_independently_of_source_facts
                     };
                     assert_eq!(
                         commit.into_messages(),
-                        [json!({"method":"Moli.nativeCommit"})]
+                        [json!({"method":"Tracing.dataCollected"})]
                     );
                     assert_eq!(
                         scheduler.complete_next_protocol_residence().into_messages(),
-                        [json!({"method":"Moli.navigationTail"})]
+                        [json!({"method":"Tracing.tracingComplete"})]
                     );
                     assert_eq!(scheduler.queues.protocol_residence_len(), 0);
                     assert!(scheduler.complete_next_protocol_residence().is_empty());
@@ -1586,8 +1593,9 @@ async fn navigation_tail_waits_for_native_delivery_independently_of_source_facts
 fn observable_protocol_work(sequence: u64) -> ProtocolSchedulerWork {
     moli_protocol::test_support::renderer_fenced_output_work(
         sequence,
-        vec![BackgroundProtocolEvent::immediate(
-            json!({"method":"Moli.workCompleted", "params":{"sequence":sequence}}),
+        vec![BackgroundProtocolEvent::inspector_message(
+            json!({"method":"Tracing.dataCollected", "params":{"sequence":sequence}}),
+            None,
         )],
         Vec::new(),
     )
@@ -1600,7 +1608,10 @@ fn command_output_keeps_its_response_while_admitting_shared_publications() {
     publish_protocol_work(&mut conn, observable_protocol_work);
     let response = json!({"id":41,"result":{}});
     let complete = moli_protocol::test_support::command_completion_with_scheduler_events(
-        vec![BackgroundProtocolEvent::immediate(response.clone())],
+        vec![BackgroundProtocolEvent::inspector_message(
+            response.clone(),
+            None,
+        )],
         conn.take_scheduler_events(),
     );
     publish_protocol_work(&mut conn, observable_protocol_work);
@@ -1629,7 +1640,7 @@ fn command_output_keeps_its_response_while_admitting_shared_publications() {
         let messages = scheduler.complete_next_protocol_residence().into_messages();
         assert_eq!(
             messages,
-            [json!({"method":"Moli.workCompleted", "params":{"sequence":sequence}})],
+            [json!({"method":"Tracing.dataCollected", "params":{"sequence":sequence}})],
             "coalesced wakes must retain publication order and execute each payload once"
         );
     }
@@ -1645,7 +1656,9 @@ fn renderer_output_handoff_keeps_before_and_after_response_order() {
     queues
         .append_renderer_output_projection(
             cursor,
-            ProtocolOutputSequence::from_messages(vec![json!({"method": "Moli.afterResponse"})]),
+            ProtocolOutputSequence::from_messages(vec![
+                json!({"method": "Tracing.tracingComplete"}),
+            ]),
         )
         .unwrap();
     assert!(queues.take_unconstrained_renderer_output(cursor).is_none());
@@ -1660,7 +1673,7 @@ fn renderer_output_handoff_keeps_before_and_after_response_order() {
             .into_messages(),
         vec![
             json!({"method": "Debugger.paused"}),
-            json!({"method": "Moli.afterResponse"})
+            json!({"method": "Tracing.tracingComplete"})
         ]
     );
     assert_eq!(queues.protocol_residence_len(), 0);
@@ -1916,7 +1929,7 @@ fn executing_ordinary_work_closes_a_later_provisional_load_binding_window() {
     let messages = scheduler.complete_next_protocol_residence().into_messages();
     assert_eq!(
         messages,
-        [json!({"method":"Moli.workCompleted", "params":{"sequence":1}})]
+        [json!({"method":"Tracing.dataCollected", "params":{"sequence":1}})]
     );
     let queues = &mut scheduler.queues;
 
@@ -3145,7 +3158,7 @@ fn foreground_load_wait_network_barrier_keeps_unrelated_raw_events_opaque() {
     );
     let message = moli_inspector_json::InspectorJson::from_slice(raw.as_bytes()).unwrap();
     let events = barrier
-        .route_event(BackgroundProtocolEvent::immediate(message))
+        .route_event(BackgroundProtocolEvent::inspector_message(message, None))
         .into_background_events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].protocol_method(), Some("Debugger.scriptParsed"));

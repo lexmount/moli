@@ -1,6 +1,6 @@
 use super::*;
-use crate::conn::build_event;
 use moli_core::page::RendererInterceptedDrag;
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde_json::{Value, json};
 
 #[derive(Deserialize)]
@@ -58,8 +58,8 @@ pub(super) fn drag_intercepted_event(
             value
         })
         .collect();
-    BackgroundProtocolEvent::immediate(build_event(
-        "Input.dragIntercepted",
+    BackgroundProtocolEvent::immediate_event(
+        LocalCdpEvent::InputDragIntercepted,
         json!({
             "data": {
                 "items": items,
@@ -73,7 +73,7 @@ pub(super) fn drag_intercepted_event(
             }
         }),
         session_id,
-    ))
+    )
 }
 
 #[cfg(test)]

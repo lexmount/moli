@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn runtime_deferred_initial_output_preserves_typed_event_sidecars() {
         let output = super::ProtocolOutputSequence::from_background_events(vec![
-            BackgroundProtocolEvent::immediate_automation_event(
+            BackgroundProtocolEvent::inspector_message(
                 json!({
                     "method": "Page.fileChooserOpened",
                     "params": {
@@ -483,12 +483,14 @@ mod tests {
                     },
                     "sessionId": "SID-runtime"
                 }),
-                AutomationEvent::PageFileChooserOpened(PageFileChooserOpenedEvent {
-                    frame_id: DevToolsFrameId::from("FRAME-runtime"),
-                    backend_node_id: 91,
-                    mode: "selectSingle".to_owned(),
-                    element_shared_id: None,
-                }),
+                Some(AutomationEvent::PageFileChooserOpened(
+                    PageFileChooserOpenedEvent {
+                        frame_id: DevToolsFrameId::from("FRAME-runtime"),
+                        backend_node_id: 91,
+                        mode: "selectSingle".to_owned(),
+                        element_shared_id: None,
+                    },
+                )),
             ),
         ]);
 
@@ -512,11 +514,14 @@ mod tests {
     #[test]
     fn runtime_deferred_initial_output_keeps_command_responses_sidecar_free() {
         let mut output = super::ProtocolOutputSequence::from_background_events(vec![
-            BackgroundProtocolEvent::immediate(json!({
-                "id": 71,
-                "result": {},
-                "sessionId": "SID-runtime"
-            })),
+            BackgroundProtocolEvent::inspector_message(
+                json!({
+                    "id": 71,
+                    "result": {},
+                    "sessionId": "SID-runtime"
+                }),
+                None,
+            ),
         ]);
 
         let responses = output
