@@ -4,7 +4,7 @@ use parley::PositionedLayoutItem;
 
 use crate::{
     LayoutBoxId, LayoutPosition, LayoutWorld,
-    inline::{InlineFormattingContext, InlineObjectRole, InlineSelection, glyph_cluster_ranges},
+    inline::{GlyphSourceCursor, InlineFormattingContext, InlineObjectRole, InlineSelection},
     text_overflow::TextOverflowVisibility,
 };
 
@@ -156,8 +156,7 @@ impl<'a> InlineOrder<'a> {
                     _ => None,
                 };
                 let mut covered = Vec::new();
-                let mut mapped_run = None;
-                let mut cluster_ranges = Vec::new().into_iter();
+                let mut sources = GlyphSourceCursor::default();
                 for (_, inline) in line.inline_box_indices() {
                     if let Some(object) = context.object(inline.id)
                         && object.role == InlineObjectRole::Atomic
@@ -169,21 +168,12 @@ impl<'a> InlineOrder<'a> {
                     let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
                         continue;
                     };
-                    if mapped_run != Some(glyphs.run().index()) {
-                        cluster_ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
-                        mapped_run = Some(glyphs.run().index());
-                    }
                     // Styled glyph segments can share one shaped run. Route
                     // each segment by its own source range, so hidden siblings
                     // cannot capture the independent inline's paint or hits.
-                    let Some(range) = glyphs
-                        .glyphs()
-                        .zip(cluster_ranges.by_ref())
-                        .map(|(_, range)| range)
-                        .reduce(|range, cluster| {
-                            range.start.min(cluster.start)..range.end.max(cluster.end)
-                        })
-                    else {
+                    let Some(range) = sources.segment(&glyphs).map(|(_, range)| range).reduce(
+                        |range, cluster| range.start.min(cluster.start)..range.end.max(cluster.end),
+                    ) else {
                         continue;
                     };
                     if selected.is_some() {

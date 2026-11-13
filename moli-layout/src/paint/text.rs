@@ -7,7 +7,7 @@ use super::{PaintProjectionMetrics, cull::rects_intersect};
 use crate::{
     LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
-    inline::{InlineFormattingContext, InlinePaintBounds, InlineSelection, glyph_cluster_ranges},
+    inline::{GlyphSourceCursor, InlineFormattingContext, InlinePaintBounds, InlineSelection},
 };
 
 const SELECTION_COLOR: PaintColor = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
@@ -124,8 +124,7 @@ fn project_text_phase<N>(
             .as_ref()
             .and_then(|overflow| overflow.lines.get(line_index))
             .and_then(Option::as_ref);
-        let mut mapped_run = None;
-        let mut cluster_ranges = Vec::new().into_iter();
+        let mut sources = GlyphSourceCursor::default();
         metrics.text_line_count = metrics.text_line_count.saturating_add(1);
         let line_is_culled =
             local_cull.is_some_and(|cull| {
@@ -155,21 +154,16 @@ fn project_text_phase<N>(
                 PositionedLayoutItem::InlineBox(_) => continue,
                 PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run,
             };
-            let run = glyph_run.run();
-            if (paint.text.is_some() || overflow.is_some()) && mapped_run != Some(run.index()) {
-                cluster_ranges = glyph_cluster_ranges(run).into_iter();
-                mapped_run = Some(run.index());
-            }
             // Advance even for masked/hidden style runs, so styled portions of
             // the same Parley run keep their original cluster associations.
-            let clusters = cluster_ranges
-                .by_ref()
-                .take(if paint.text.is_some() || overflow.is_some() {
-                    glyph_run.glyphs().count()
-                } else {
-                    0
-                })
-                .collect();
+            let clusters = if paint.text.is_some() || overflow.is_some() {
+                sources
+                    .segment(&glyph_run)
+                    .map(|(_, range)| range)
+                    .collect()
+            } else {
+                Vec::new()
+            };
             if let Some(TextClipMaskScope::InlineBox(target)) = mask_scope
                 && !context.style_is_within_box(usize::from(glyph_run.style_index()), target)
             {
@@ -415,8 +409,7 @@ impl<'a> InlineTextPaint<'a> {
                 .unwrap()
                 .items()
                 .collect::<Vec<_>>();
-            let mut mapped_run = None;
-            let mut ranges = Vec::new().into_iter();
+            let mut sources = GlyphSourceCursor::default();
             let clusters = items
                 .iter()
                 .map(|item| {
@@ -429,11 +422,7 @@ impl<'a> InlineTextPaint<'a> {
                     {
                         return Vec::new();
                     }
-                    if mapped_run != Some(glyphs.run().index()) {
-                        ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
-                        mapped_run = Some(glyphs.run().index());
-                    }
-                    ranges.by_ref().take(glyphs.glyphs().count()).collect()
+                    sources.segment(glyphs).map(|(_, range)| range).collect()
                 })
                 .collect();
             InlineTextLine { items, clusters }
@@ -527,18 +516,13 @@ fn project_ellipsis_phase<N>(
         return;
     };
     let layout = layout_box.final_layout;
-    let mut ranges = Vec::new().into_iter();
-    let mut mapped_run = None;
     for marker_line in overflow.marker.lines() {
+        let mut sources = GlyphSourceCursor::default();
         for item in marker_line.items() {
             let PositionedLayoutItem::GlyphRun(glyphs) = item else {
                 continue;
             };
-            if mapped_run != Some(glyphs.run().index()) {
-                ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
-                mapped_run = Some(glyphs.run().index());
-            }
-            let clusters = ranges.by_ref().take(glyphs.glyphs().count()).collect();
+            let clusters = sources.segment(&glyphs).map(|(_, range)| range).collect();
             let paint = TextRunPaint {
                 origin_x: layout.border.left + layout.padding.left + ellipsis.marker_offset,
                 origin_y: layout.border.top + layout.padding.top + placement.baseline

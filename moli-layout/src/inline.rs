@@ -389,8 +389,29 @@ pub(crate) enum InlineSelection {
     Caret { offset: usize, color: PaintColor },
 }
 
-/// Glyph-to-source mapping shared by semantic text and selection coverage.
-pub(crate) fn glyph_cluster_ranges(run: &parley::Run<'_, TextBrush>) -> Vec<Range<usize>> {
+/// Advances styled segments through their shared shaped run's source map.
+/// Create one cursor per line and consume every segment, including hidden or
+/// masked segments, before deciding which glyphs to paint.
+#[derive(Default)]
+pub(crate) struct GlyphSourceCursor {
+    run_index: Option<usize>,
+    ranges: std::vec::IntoIter<Range<usize>>,
+}
+
+impl GlyphSourceCursor {
+    pub(crate) fn segment<'a>(
+        &'a mut self,
+        glyphs: &'a parley::GlyphRun<'_, TextBrush>,
+    ) -> impl Iterator<Item = (parley::Glyph, Range<usize>)> + 'a {
+        if self.run_index != Some(glyphs.run().index()) {
+            self.ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
+            self.run_index = Some(glyphs.run().index());
+        }
+        glyphs.glyphs().zip(self.ranges.by_ref())
+    }
+}
+
+fn glyph_cluster_ranges(run: &parley::Run<'_, TextBrush>) -> Vec<Range<usize>> {
     // Join ligature continuations in logical order first: in RTL their
     // visual order puts the continuation before the glyph-bearing cluster.
     let mut atoms: Vec<(Range<usize>, usize)> = Vec::new();
@@ -3045,6 +3066,82 @@ fn bidi_controls(bidi: InlineUnicodeBidi, direction: InlineDirection) -> Vec<(ch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glyph_source_cursor_advances_styled_segments_in_both_directions_and_resets_per_line() {
+        for (text, font, direction, offsets, step) in [
+            (
+                "ABCD\nEFGH",
+                include_bytes!("../tests/fixtures/moli-ahem.ttf").as_slice(),
+                parley::BaseDirection::Ltr,
+                [0, 1, 2, 3, 5, 6, 7, 8],
+                1,
+            ),
+            (
+                "אבבא\nבאאב",
+                include_bytes!("../tests/fixtures/moli-hebrew-emoji.ttf").as_slice(),
+                parley::BaseDirection::Rtl,
+                [6, 4, 2, 0, 15, 13, 11, 9],
+                2,
+            ),
+        ] {
+            let mut services =
+                DocumentLayoutServices::with_system_font_policy(crate::SystemFontPolicy::Disabled);
+            services
+                .register_web_font(crate::WebFontRegistration::new(
+                    "cursor",
+                    crate::WebFontFace::new("CursorTest"),
+                    font.to_vec(),
+                ))
+                .unwrap();
+            let parley = services.parley_mut();
+            let mut style = TextStyle {
+                font_family: "CursorTest".into(),
+                ..TextStyle::default()
+            };
+            parley.resolve_font_families(&mut style, None);
+            let mut hidden = style.clone();
+            hidden.brush.paint = false;
+            let mut builder =
+                parley
+                    .layout_context
+                    .style_run_builder(&mut parley.font_context, text, 1.0, true);
+            builder.set_base_direction(direction);
+            let first = builder.push_style(style);
+            let skipped = builder.push_style(hidden);
+            builder.push_style_run(first, 0..step);
+            builder.push_style_run(skipped, step..3 * step);
+            builder.push_style_run(first, 3 * step..5 * step + 1);
+            builder.push_style_run(skipped, 5 * step + 1..7 * step + 1);
+            builder.push_style_run(first, 7 * step + 1..text.len());
+            let mut layout = builder.build(text);
+            layout.break_all_lines(None);
+            let mut ranges = Vec::new();
+            let mut shared_run = false;
+            for line in layout.lines() {
+                let mut sources = GlyphSourceCursor::default();
+                let mut previous = None;
+                for item in line.items() {
+                    let PositionedLayoutItem::GlyphRun(glyphs) = item else {
+                        continue;
+                    };
+                    shared_run |= previous == Some(glyphs.run().index());
+                    previous = Some(glyphs.run().index());
+                    // Even the segment excluded from paint must advance the cursor.
+                    ranges.extend(sources.segment(&glyphs).map(|(_, range)| range));
+                }
+            }
+            assert!(
+                shared_run,
+                "fixture must exercise styled segments sharing a shaped run"
+            );
+            assert_eq!(
+                ranges,
+                offsets.map(|offset| offset..offset + step),
+                "{direction:?}"
+            );
+        }
+    }
 
     #[test]
     fn carriage_returns_separate_space_styles_at_atomic_and_float_objects() {

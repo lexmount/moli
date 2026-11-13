@@ -7,9 +7,7 @@ use parley::{Layout, PositionedLayoutItem};
 
 use crate::{
     DocumentLayoutServices, LayoutBoxId, LayoutBoxKind, LayoutWorld,
-    inline::{
-        InlineFormattingContext, InlineObjectRole, InlineSourceMapEntry, glyph_cluster_ranges,
-    },
+    inline::{GlyphSourceCursor, InlineFormattingContext, InlineObjectRole, InlineSourceMapEntry},
     style::LayoutOverflowMode,
     stylo_to_parley::TextBrush,
 };
@@ -459,8 +457,7 @@ fn visual_children(
     line: &parley::Line<'_, TextBrush>,
 ) -> Vec<VisualChild> {
     let mut children: Vec<VisualChild> = Vec::new();
-    let mut mapped_run = None;
-    let mut ranges = Vec::new().into_iter();
+    let mut sources = GlyphSourceCursor::default();
     for item in line.items() {
         match item {
             PositionedLayoutItem::InlineBox(item) => {
@@ -475,12 +472,8 @@ fn visual_children(
                 }
             }
             PositionedLayoutItem::GlyphRun(glyphs) => {
-                if mapped_run != Some(glyphs.run().index()) {
-                    ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
-                    mapped_run = Some(glyphs.run().index());
-                }
                 let mut offset = glyphs.offset();
-                for (glyph, range) in glyphs.glyphs().zip(ranges.by_ref()) {
+                for (glyph, range) in sources.segment(&glyphs) {
                     let end = offset + glyph.advance;
                     if glyphs.style().brush.paint {
                         if let Some(last) = children.last_mut()
