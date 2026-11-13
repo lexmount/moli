@@ -119,6 +119,11 @@ fn project_text_phase<N>(
         text,
     };
     for (line_index, line) in text_layout.lines().enumerate() {
+        let overflow = context
+            .text_overflow
+            .as_ref()
+            .and_then(|overflow| overflow.lines.get(line_index))
+            .and_then(Option::as_ref);
         let mut mapped_run = None;
         let mut cluster_ranges = Vec::new().into_iter();
         metrics.text_line_count = metrics.text_line_count.saturating_add(1);
@@ -151,7 +156,7 @@ fn project_text_phase<N>(
                 PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run,
             };
             let run = glyph_run.run();
-            if paint.text.is_some() && mapped_run != Some(run.index()) {
+            if (paint.text.is_some() || overflow.is_some()) && mapped_run != Some(run.index()) {
                 cluster_ranges = glyph_cluster_ranges(run).into_iter();
                 mapped_run = Some(run.index());
             }
@@ -159,7 +164,7 @@ fn project_text_phase<N>(
             // the same Parley run keep their original cluster associations.
             let clusters = cluster_ranges
                 .by_ref()
-                .take(if paint.text.is_some() {
+                .take(if paint.text.is_some() || overflow.is_some() {
                     glyph_run.glyphs().count()
                 } else {
                     0
@@ -176,7 +181,12 @@ fn project_text_phase<N>(
             let vertical_offset = line_placement
                 .map(|placement| placement.item_offset(item_index))
                 .unwrap_or_default();
-            paint.project_run(&glyph_run, vertical_offset, clusters, snapshot);
+            paint.project_run(&glyph_run, vertical_offset, clusters, overflow, snapshot);
+        }
+        if mask_scope.is_none_or(|scope| matches!(scope, TextClipMaskScope::AllGlyphs)) {
+            project_ellipsis_phase(
+                layout_box, line_index, transform, local_cull, snapshot, phase,
+            );
         }
     }
 }
@@ -195,16 +205,35 @@ impl TextRunPaint {
         glyph_run: &parley::GlyphRun<'_, crate::stylo_to_parley::TextBrush>,
         vertical_offset: f32,
         clusters: Vec<std::ops::Range<usize>>,
+        overflow: Option<&crate::text_overflow::EllipsisLine>,
         snapshot: &mut PaintSnapshot,
     ) {
-        let glyphs = glyph_run
-            .positioned_glyphs()
-            .map(|glyph| PaintGlyph {
-                id: glyph.id,
-                x: self.origin_x + glyph.x,
-                y: self.origin_y + glyph.y + vertical_offset,
-            })
-            .collect::<Vec<_>>();
+        let mut glyphs = Vec::new();
+        let mut visible_clusters = Vec::new();
+        let mut advance = glyph_run.offset();
+        let mut visible_advance: Option<(f32, f32)> = None;
+        for (index, glyph) in glyph_run.positioned_glyphs().enumerate() {
+            let end = advance + glyph.advance;
+            if overflow.is_none_or(|overflow| {
+                clusters
+                    .get(index)
+                    .is_some_and(|range| overflow.text_is_visible(range))
+            }) {
+                glyphs.push(PaintGlyph {
+                    id: glyph.id,
+                    x: self.origin_x + glyph.x,
+                    y: self.origin_y + glyph.y + vertical_offset,
+                });
+                if self.text.is_some()
+                    && let Some(cluster) = clusters.get(index)
+                {
+                    visible_clusters.push(cluster.clone());
+                }
+                visible_advance =
+                    Some(visible_advance.map_or((advance, end), |(start, _)| (start, end)));
+            }
+            advance = end;
+        }
         if glyphs.is_empty() {
             return;
         }
@@ -239,7 +268,7 @@ impl TextRunPaint {
             glyphs,
             text: self.text.as_ref().map(|text| crate::PaintTextSemantics {
                 text: text.clone(),
-                clusters,
+                clusters: visible_clusters,
             }),
             transform: self.transform,
             // Text clipping uses both fill and stroke as opaque ink,
@@ -265,8 +294,13 @@ impl TextRunPaint {
 
         let metrics = run.font_metrics();
         let baseline = self.origin_y + glyph_run.baseline() + vertical_offset;
-        let x = self.origin_x + glyph_run.offset();
-        let width = glyph_run.advance().max(0.0);
+        let (start, end) = if overflow.is_some() {
+            visible_advance.unwrap()
+        } else {
+            (glyph_run.offset(), glyph_run.offset() + glyph_run.advance())
+        };
+        let x = self.origin_x + start;
+        let width = (end - start).max(0.0);
         let decoration = brush.decoration;
         let decoration_color = if self.phase == TextPaintPhase::ClipMask {
             PaintColor::BLACK
@@ -390,6 +424,7 @@ impl<'a> InlineTextPaint<'a> {
                         return Vec::new();
                     };
                     if self.text.is_none()
+                        && context.text_overflow.is_none()
                         && !matches!(context.selection, Some(InlineSelection::Range(_)))
                     {
                         return Vec::new();
@@ -432,16 +467,89 @@ impl<'a> InlineTextPaint<'a> {
             .line_placements
             .get(line_index)
             .map_or(0.0, |line| line.item_offset(item_index));
+        let overflow = context
+            .text_overflow
+            .as_ref()
+            .and_then(|overflow| overflow.lines.get(line_index))
+            .and_then(Option::as_ref);
         paint.project_run(
             glyphs,
             vertical_offset,
-            if paint.text.is_some() {
+            if paint.text.is_some() || overflow.is_some() {
                 clusters
             } else {
                 Vec::new()
             },
+            overflow,
             snapshot,
         );
+    }
+}
+
+pub(super) fn project_ellipsis<N>(
+    layout_box: &LayoutBox<N>,
+    line: usize,
+    transform: LayoutTransform2D,
+    local_cull: Option<LayoutRect>,
+    snapshot: &mut PaintSnapshot,
+) {
+    project_ellipsis_phase(
+        layout_box,
+        line,
+        transform,
+        local_cull,
+        snapshot,
+        TextPaintPhase::Foreground,
+    );
+}
+
+fn project_ellipsis_phase<N>(
+    layout_box: &LayoutBox<N>,
+    line: usize,
+    transform: LayoutTransform2D,
+    _local_cull: Option<LayoutRect>,
+    snapshot: &mut PaintSnapshot,
+    phase: TextPaintPhase,
+) {
+    if !layout_box.style.is_visible() {
+        return;
+    }
+    let Some(context) = layout_box.inline_layout.as_ref() else {
+        return;
+    };
+    let Some(overflow) = &context.text_overflow else {
+        return;
+    };
+    let Some(Some(ellipsis)) = overflow.lines.get(line) else {
+        return;
+    };
+    let Some(placement) = context.line_placements.get(line) else {
+        return;
+    };
+    let layout = layout_box.final_layout;
+    let mut ranges = Vec::new().into_iter();
+    let mut mapped_run = None;
+    for marker_line in overflow.marker.lines() {
+        for item in marker_line.items() {
+            let PositionedLayoutItem::GlyphRun(glyphs) = item else {
+                continue;
+            };
+            if mapped_run != Some(glyphs.run().index()) {
+                ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
+                mapped_run = Some(glyphs.run().index());
+            }
+            let clusters = ranges.by_ref().take(glyphs.glyphs().count()).collect();
+            let paint = TextRunPaint {
+                origin_x: layout.border.left + layout.padding.left + ellipsis.marker_offset,
+                origin_y: layout.border.top + layout.padding.top + placement.baseline
+                    - marker_line.metrics().baseline,
+                transform,
+                phase,
+                text: (snapshot.retain_text_semantics && phase == TextPaintPhase::Foreground)
+                    .then(|| overflow.marker_text.clone()),
+            };
+            paint.project_run(&glyphs, 0.0, clusters, None, snapshot);
+        }
     }
 }
 

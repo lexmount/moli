@@ -22,6 +22,11 @@ pub(crate) enum PaintOrderEvent {
     BoxText(LayoutBoxId),
     /// A mixed IFC's caret paints after its contents, including glyphless lines.
     BoxCaret(LayoutBoxId),
+    /// Generated line-end text; original source offsets are unchanged.
+    InlineEllipsis {
+        owner: LayoutBoxId,
+        line: usize,
+    },
     /// Selected text not covered by a drawable glyph run, placed in source order.
     InlineSelection {
         owner: LayoutBoxId,
@@ -96,6 +101,7 @@ struct StackingDescendants {
 /// the existing single-pass text projection for all other paragraphs.
 struct InlineOrder {
     split: Vec<bool>,
+    hidden: Vec<bool>,
     entries: Vec<Vec<PaintOrderEvent>>,
     atomic_lines: Vec<Option<(LayoutBoxId, usize)>>,
 }
@@ -107,6 +113,7 @@ impl InlineOrder {
     {
         let mut result = Self {
             split: vec![false; world.boxes.len()],
+            hidden: vec![false; world.boxes.len()],
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
@@ -114,6 +121,11 @@ impl InlineOrder {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };
+            if let Some(overflow) = &context.text_overflow {
+                for id in &overflow.hidden_boxes {
+                    result.hidden[id.index()] = true;
+                }
+            }
             if !context
                 .objects
                 .iter()
@@ -376,6 +388,9 @@ fn collect_subtree<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &world.boxes[id.index()];
+    if inline.hidden[id.index()] {
+        return;
+    }
     let flex_or_grid_item = is_flex_or_grid_item(world, id);
     if layout_box.creates_stacking_context(false, flex_or_grid_item) {
         let context = ChildContext {
@@ -480,6 +495,24 @@ fn collect_contents<N>(
             order: (tree_order, usize::MAX, usize::MAX, 0),
             kind: PaintEntryKind::Event(PaintOrderEvent::BoxCaret(id)),
         });
+    }
+    if inline.split[id.index()]
+        && let Some(overflow) = layout_box
+            .inline_layout
+            .as_ref()
+            .and_then(|context| context.text_overflow.as_ref())
+    {
+        for (line, ellipsis) in overflow.lines.iter().enumerate() {
+            if ellipsis.is_some() {
+                flow.inline_contents.push(PaintEntry {
+                    order: (tree_order, line, usize::MAX, usize::MAX),
+                    kind: PaintEntryKind::Event(PaintOrderEvent::InlineEllipsis {
+                        owner: id,
+                        line,
+                    }),
+                });
+            }
+        }
     }
     for event in &inline.entries[id.index()] {
         let (owner, line, item) = match *event {

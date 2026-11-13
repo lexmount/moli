@@ -183,6 +183,9 @@ pub(crate) struct InlineFormattingContext {
     /// capacity on every IFC increases the peak footprint of the fresh layout
     /// world more than it saves allocator traffic.
     pub(crate) content_widths: InlineContentWidthsMemo,
+    /// Root and all text runs prohibit soft wrapping. Inline objects must not
+    /// introduce a break before Parley has encountered the first text run.
+    pub(crate) no_soft_wrap: bool,
     pub(crate) text_units: Vec<InlineTextUnit>,
     pub(crate) source_map: Vec<InlineSourceMapEntry>,
     pub(crate) selection: Option<InlineSelection>,
@@ -207,6 +210,8 @@ pub(crate) struct InlineFormattingContext {
     pub(crate) structural_boxes: Vec<InlineStructuralBox>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
+    /// Visual truncation is separate from the accepted layout and source map.
+    pub(crate) text_overflow: Option<Box<crate::text_overflow::TextOverflow>>,
 }
 
 #[derive(Debug, Default)]
@@ -558,6 +563,18 @@ pub(crate) enum InlinePaintBounds {
 }
 
 impl InlinePaintBounds {
+    pub(crate) fn include_text_ink(
+        &mut self,
+        rect: PaintRect,
+        style: &parley::layout::Style<TextBrush>,
+        font_size: f32,
+    ) {
+        match text_style_paint_outsets(style) {
+            Some(outsets) => self.include(outsets.outset(rect, font_size.max(0.0) * 2.0 + 1.0)),
+            None => *self = Self::Unbounded,
+        }
+    }
+
     fn include(&mut self, rect: PaintRect) {
         *self = match *self {
             Self::Empty => Self::Bounded(rect),
@@ -880,6 +897,35 @@ pub(crate) fn break_inline_lines(
     layout: &mut Layout<TextBrush>,
     max_advance: Option<f32>,
 ) {
+    if context.no_soft_wrap
+        && context
+            .objects
+            .iter()
+            .any(|object| object.role == InlineObjectRole::Atomic)
+        && context
+            .objects
+            .iter()
+            .all(|object| object.role != InlineObjectRole::Float)
+        && let Some(width) = max_advance.filter(|width| width.is_finite())
+    {
+        // Parley's initial wrap policy is Wrap until a text atom updates it.
+        // A leading atomic box must obey the containing nowrap style too.
+        // Keep forced breaks and the real alignment width, only removing the
+        // soft width constraint for this non-wrapping paragraph.
+        let mut breaker = layout.break_lines();
+        breaker.state_mut().set_layout_max_advance(f32::INFINITY);
+        while !breaker.is_done() {
+            breaker.state_mut().set_line_max_advance(f32::MAX);
+            match breaker.break_next() {
+                Some(parley::YieldData::LineBreak(_)) => breaker.set_prior_line_width(width),
+                _ => break,
+            }
+        }
+        breaker.state_mut().set_layout_max_advance(width);
+        breaker.state_mut().set_line_max_advance(width);
+        breaker.finish();
+        return;
+    }
     layout.break_all_lines(max_advance);
     let Some(width) = max_advance.filter(|width| width.is_finite() && *width > 0.0) else {
         return;
@@ -2247,6 +2293,20 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
+        let no_soft_wrap = styles
+            .iter()
+            .chain(std::iter::once(&root_text_style))
+            .all(|style| style.text_wrap_mode == parley::style::TextWrapMode::NoWrap);
+        // CSS direction defines the paragraph, even when its first strong
+        // character has the opposite direction. Plaintext alone asks Unicode
+        // bidi analysis to choose it from the contents.
+        let root_style = &world.boxes[self.root_style.index()].style;
+        if root_style.unicode_bidi() != InlineUnicodeBidi::Plaintext {
+            builder.set_base_direction(match root_style.direction() {
+                InlineDirection::Ltr => parley::BaseDirection::Ltr,
+                InlineDirection::Rtl => parley::BaseDirection::Rtl,
+            });
+        }
         let style_indices = styles
             .iter()
             .map(|style| builder.push_style(style.clone()))
@@ -2313,6 +2373,7 @@ impl InlineBuildInput {
             measurement_layout: Some(layout),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
+            no_soft_wrap,
             text_units: self.units,
             source_map: self.source_map,
             selection,
@@ -2327,6 +2388,7 @@ impl InlineBuildInput {
             structural_boxes,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
+            text_overflow: None,
         }
     }
 }
@@ -3526,6 +3588,7 @@ mod tests {
             measurement_layout: Some(layout.clone()),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
+            no_soft_wrap: false,
             text_units: Vec::new(),
             source_map: Vec::new(),
             selection: None,
@@ -3538,6 +3601,7 @@ mod tests {
             structural_boxes: Vec::new(),
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
+            text_overflow: None,
         };
         let summary = measure_inline_lines(&context, &layout, &[], &[], &[]);
         let (placements, materialized_summary) =
@@ -3642,6 +3706,7 @@ mod tests {
                     measurement_layout: None,
                     laid_out: None,
                     content_widths: InlineContentWidthsMemo::default(),
+                    no_soft_wrap: false,
                     text_units: Vec::new(),
                     source_map,
                     selection: None,
@@ -3654,6 +3719,7 @@ mod tests {
                     structural_boxes: Vec::new(),
                     line_placements: Vec::new(),
                     fragments: InlineFragments::default(),
+                    text_overflow: None,
                 };
                 let fragments = build_inline_fragments(&context, &layout, &[]);
                 assert!(!fragments.text.is_empty());

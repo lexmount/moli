@@ -961,6 +961,351 @@ fn fixed_inline_font() -> (ResolvedLayoutStyle, DocumentLayoutServices) {
     (style, services)
 }
 
+fn ellipsis_style(
+    width: f32,
+    configure: impl FnOnce(&mut style::properties::ComputedValues),
+) -> (ResolvedLayoutStyle, DocumentLayoutServices) {
+    use style::properties::longhands::text_wrap_mode::computed_value::T as TextWrapMode;
+    use style::values::{
+        computed::{CSSPixelLength, LengthPercentage, length::Size as CssSize},
+        generics::NonNegative,
+        specified::{
+            box_::Display,
+            text::{TextOverflow, TextOverflowSide},
+        },
+    };
+    let (font, services) = fixed_inline_font();
+    let mut computed = (**font.stylo_computed_values().unwrap()).clone();
+    computed.mutate_box().set_display(Display::Block);
+    computed
+        .mutate_box()
+        .set_overflow_x(style::values::computed::Overflow::Hidden);
+    computed
+        .mutate_box()
+        .set_overflow_y(style::values::computed::Overflow::Hidden);
+    computed
+        .mutate_position()
+        .set_width(CssSize::LengthPercentage(NonNegative(
+            LengthPercentage::new_length(CSSPixelLength::new(width)),
+        )));
+    computed
+        .mutate_inherited_text()
+        .set_text_wrap_mode(TextWrapMode::Nowrap);
+    computed.mutate_text().set_text_overflow(TextOverflow {
+        first: TextOverflowSide::Clip,
+        second: TextOverflowSide::Ellipsis,
+        sides_are_logical: true,
+    });
+    configure(&mut computed);
+    (
+        ResolvedLayoutStyle::from_stylo(style::servo_arc::Arc::new(computed))
+            .with_text_metrics(16.0, 20.0),
+        services,
+    )
+}
+
+fn painted_text(output: &LayoutPassResult<usize>) -> String {
+    output
+        .paint_snapshot()
+        .unwrap()
+        .fragments
+        .iter()
+        .filter_map(|fragment| {
+            let PaintFragment::GlyphRun(run) = fragment else {
+                return None;
+            };
+            let text = run.text.as_ref()?;
+            Some(
+                text.clusters
+                    .iter()
+                    .map(|range| &text.text[range.clone()])
+                    .collect::<String>(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn text_overflow_ellipsis_reserves_marker_space_without_changing_source_geometry() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::text("text", "ABCDEFGHIJKL"),
+    ]);
+    let mut results = Vec::new();
+    for ellipsis in [false, true] {
+        let (style, mut services) = ellipsis_style(70.0, |computed| {
+            if !ellipsis {
+                computed.mutate_text().set_text_overflow(
+                    style::values::specified::text::TextOverflow::get_initial_value(),
+                );
+            }
+        });
+        let output = build_layout_pass(
+            &source,
+            &mut Styles(HashMap::from([(0, style)])),
+            &mut services,
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Print,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            painted_text(&output),
+            if ellipsis { "ABCD..." } else { "ABCDEFGHIJKL" }
+        );
+        let range = output.text_range_rects(1, 0..12);
+        assert_eq!(range.len(), 1);
+        assert!(
+            (range[0].bounding_rect().width - 115.2).abs() < 0.01,
+            "{range:?}"
+        );
+        results.push(output);
+    }
+    assert_eq!(
+        results[0].text_range_rects(1, 0..12),
+        results[1].text_range_rects(1, 0..12)
+    );
+    assert_eq!(
+        results[0].client_rects_for_source(1),
+        results[1].client_rects_for_source(1)
+    );
+    assert_eq!(
+        results[0].scroll_extent(results[0].root_box),
+        results[1].scroll_extent(results[1].root_box)
+    );
+    let hit = results[1]
+        .hit_test(LayoutPoint::new(50.0, 8.0), false)
+        .unwrap();
+    assert_eq!(
+        hit.source, 1,
+        "the generated marker targets the truncated text"
+    );
+    assert_eq!(
+        results[1]
+            .caret_position(LayoutPoint::new(50.0, 8.0))
+            .unwrap()
+            .utf16_offset,
+        Some(4)
+    );
+}
+
+#[test]
+fn text_overflow_requires_clipped_overflow_and_keeps_the_first_character_in_a_tiny_box() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::text("text", "ABCDEFGHIJKL"),
+    ]);
+    for (width, overflow, expected) in [
+        (
+            90.0,
+            style::values::computed::Overflow::Visible,
+            "ABCDEFGHIJKL",
+        ),
+        (
+            160.0,
+            style::values::computed::Overflow::Hidden,
+            "ABCDEFGHIJKL",
+        ),
+        (4.0, style::values::computed::Overflow::Hidden, "A..."),
+    ] {
+        let (style, mut services) = ellipsis_style(width, |computed| {
+            computed.mutate_box().set_overflow_x(overflow);
+            computed.mutate_box().set_overflow_y(overflow);
+        });
+        let output = build_layout_pass(
+            &source,
+            &mut Styles(HashMap::from([(0, style)])),
+            &mut services,
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Print,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            painted_text(&output),
+            expected,
+            "width={width}, overflow={overflow:?}"
+        );
+    }
+}
+
+#[test]
+fn text_overflow_rtl_uses_the_left_edge_and_keeps_full_source_offsets() {
+    use style::properties::longhands::direction::computed_value::T as Direction;
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::text("text", "ABCDEFGHIJKL"),
+    ]);
+    let (style, mut services) = ellipsis_style(70.0, |computed| {
+        computed
+            .mutate_inherited_box()
+            .set_direction(Direction::Rtl);
+    });
+    let output = build_layout_pass(
+        &source,
+        &mut Styles(HashMap::from([(0, style)])),
+        &mut services,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Print),
+    )
+    .unwrap();
+    assert_eq!(painted_text(&output), "IJKL...");
+    let runs = output
+        .paint_snapshot()
+        .unwrap()
+        .fragments
+        .iter()
+        .filter_map(|fragment| {
+            if let PaintFragment::GlyphRun(run) = fragment {
+                Some(run)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        runs.last().unwrap().glyphs[0].x < runs[0].glyphs[0].x,
+        "RTL marker is on the left"
+    );
+    assert_eq!(
+        output
+            .hit_test(LayoutPoint::new(12.0, 8.0), false)
+            .unwrap()
+            .source,
+        1
+    );
+    assert_eq!(
+        output
+            .caret_position(LayoutPoint::new(12.0, 8.0))
+            .unwrap()
+            .utf16_offset,
+        Some(8)
+    );
+    assert!((output.text_range_rects(1, 0..12)[0].bounding_rect().width - 115.2).abs() < 0.01);
+}
+
+#[test]
+fn text_overflow_hides_an_atomic_subtree_from_both_paint_and_hits_but_keeps_its_geometry() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 2, 3]),
+        Node::text("prefix", "ABC"),
+        Node::element("atomic", vec![4]),
+        Node::text("suffix", "XYZ"),
+        Node::text("atomic-text", "INNER"),
+    ]);
+    let (style, mut services) = ellipsis_style(70.0, |_| {});
+    let (atomic, _) = ellipsis_style(80.0, |computed| {
+        computed
+            .mutate_box()
+            .set_display(style::values::specified::box_::Display::InlineBlock);
+        computed
+            .mutate_box()
+            .set_overflow_x(style::values::computed::Overflow::Visible);
+        computed
+            .mutate_box()
+            .set_overflow_y(style::values::computed::Overflow::Visible);
+    });
+    let output = build_layout_pass(
+        &source,
+        &mut Styles(HashMap::from([(0, style), (2, atomic)])),
+        &mut services,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Print),
+    )
+    .unwrap();
+    assert_eq!(painted_text(&output), "ABC...");
+    assert_eq!(
+        output
+            .box_model_for_source(2)
+            .unwrap()
+            .border
+            .bounding_rect()
+            .width,
+        80.0
+    );
+    assert!(!output.text_range_rects(4, 0..5).is_empty());
+    assert_eq!(
+        output
+            .hit_test(LayoutPoint::new(45.0, 8.0), false)
+            .unwrap()
+            .source,
+        1
+    );
+    assert!(
+        !output
+            .hit_test_all(LayoutPoint::new(45.0, 8.0), false)
+            .iter()
+            .any(|hit| hit.source == 2 || hit.source == 4)
+    );
+}
+
+#[test]
+fn text_overflow_with_a_leading_atomic_keeps_nowrap_on_one_line() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 2]),
+        Node::element("atomic", vec![]),
+        Node::text("text", "ABCDEFGHIJKL"),
+    ]);
+    let (style, mut services) = ellipsis_style(80.0, |_| {});
+    let atomic = fixed_size(LayoutDisplay::InlineBlock, 24.0, 20.0);
+    let output = build_layout_pass(
+        &source,
+        &mut Styles(HashMap::from([(0, style), (1, atomic)])),
+        &mut services,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Print),
+    )
+    .unwrap();
+    assert_eq!(painted_text(&output), "AB...");
+    let lines = output
+        .fragments
+        .iter()
+        .filter(|fragment| matches!(fragment.kind, LayoutFragmentKind::Line { .. }))
+        .count();
+    assert_eq!(
+        lines, 1,
+        "an atomic prefix cannot introduce a soft break in nowrap content"
+    );
+}
+
+#[test]
+fn text_overflow_marker_does_not_inherit_character_spacing() {
+    use style::values::computed::{CSSPixelLength, LengthPercentage, text::GenericLetterSpacing};
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::text("text", "ABCDEFGHIJKL"),
+    ]);
+    let (style, mut services) = ellipsis_style(72.0, |computed| {
+        computed
+            .mutate_inherited_text()
+            .set_letter_spacing(GenericLetterSpacing(LengthPercentage::new_length(
+                CSSPixelLength::new(1.0),
+            )));
+    });
+    let output = build_layout_pass(
+        &source,
+        &mut Styles(HashMap::from([(0, style)])),
+        &mut services,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Print),
+    )
+    .unwrap();
+    assert_eq!(painted_text(&output), "ABCD...");
+    let marker = output
+        .paint_snapshot()
+        .unwrap()
+        .fragments
+        .iter()
+        .rev()
+        .find_map(|fragment| {
+            if let PaintFragment::GlyphRun(run) = fragment {
+                Some(run)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert!((marker.glyphs[1].x - marker.glyphs[0].x - 9.6).abs() < 0.01);
+}
+
 #[test]
 fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     const TEXT: &str = concat!(

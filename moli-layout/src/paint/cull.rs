@@ -207,7 +207,8 @@ where
             let id = projection.owner_paint_fragments[owner.index()][fragment];
             map_box_rect(projection, owner, projection.fragments[id.index()].rect)
         }
-        PaintOrderEvent::InlineText { owner, line, .. } => {
+        PaintOrderEvent::InlineText { owner, line, .. }
+        | PaintOrderEvent::InlineEllipsis { owner, line } => {
             let layout_box = &projection.world.boxes[owner.index()];
             let context = layout_box.inline_layout.as_ref().unwrap();
             match context.fragments.lines[line].paint_bounds {
