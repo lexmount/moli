@@ -14,6 +14,7 @@ mod forms;
 mod interception_route;
 mod json_response;
 mod misc;
+mod native_events;
 mod no_cors_redirect;
 mod receivers;
 mod reopen;
