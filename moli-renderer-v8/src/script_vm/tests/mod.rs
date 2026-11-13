@@ -20,6 +20,7 @@ mod native_drag_pointer_suppression;
 mod native_drag_source_events;
 mod picture_in_picture_interfaces;
 mod touch_native_receivers;
+mod touch_snapshot;
 mod visual_viewport_receiver;
 mod writable_stream_native_receivers;
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;
