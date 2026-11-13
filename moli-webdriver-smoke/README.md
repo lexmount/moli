@@ -371,6 +371,17 @@ result before that response is released, and the navigation must then finish.
 This avoids relying on Chrome's separate behavior of dismissing a prompt that
 was already open when navigation began.
 
+`classic-alert-progress` runs Get/Set/accept/dismiss with no navigation, with an
+existing prompt during a held script navigation, with a prompt arriving after
+the Classic request is sent, and with no prompt. The existing/arriving cases
+must return the actual JavaScript prompt value before the navigation response
+is released. Without a prompt, Classic still waits for navigation and then
+returns `no such alert`. This differs from BiDi's finite prompt handling.
+The same 16 cases run against Moli and ChromeDriver. Absence is observed for a
+bounded 250 ms after the HTTP request is written; deterministic Rust tests also
+poll the actual wait before installing a prompt. Gates open only after each
+verdict, never to rescue a blocked alert operation.
+
 The release/old/new input-generation case is calibrated against
 Chrome/ChromeDriver 156.0.8078.73. Upstream mapper commit
 [`49622edb`](https://github.com/GoogleChromeLabs/chromium-bidi/commit/49622edb9775aaacbf99ef9afa4b3736cbaaafcf)
