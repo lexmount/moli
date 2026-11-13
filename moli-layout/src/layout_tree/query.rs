@@ -23,6 +23,8 @@ pub struct LayoutNodeOutput {
     /// a `display: contents` source. They do not manufacture CSSOM rects for
     /// the box-suppressed element itself.
     pub scroll_proxy_boxes: Vec<LayoutOutputBoxId>,
+    /// Indices of non-CSS object geometry in the same frozen tree.
+    pub object_geometry: Vec<usize>,
 }
 
 /// Document-level dimensions returned from the unified output.

@@ -629,6 +629,18 @@ pub trait LayoutSource {
         None
     }
 
+    /// Resolves inline SVG after its CSS viewport has completed numeric layout.
+    /// Object quads use unzoomed CSS pixels relative to the SVG content origin.
+    /// The returned geometry and optional paint resource belong to this pass.
+    fn svg_content(
+        &self,
+        _node: Self::NodeId,
+        _style: &ResolvedLayoutStyle,
+        _viewport: crate::LayoutSize,
+    ) -> Option<LayoutSvgContent<Self::NodeId>> {
+        None
+    }
+
     /// Samples one renderer-owned CSS `url()` image into the current pass.
     ///
     /// The URL is already absolute according to Stylo's stylesheet base URL.
@@ -637,6 +649,12 @@ pub trait LayoutSource {
     fn css_image_resource(&self, _resolved_url: &str) -> Option<LayoutImageResource> {
         None
     }
+}
+
+/// Geometry and paint sampled from the same inline SVG input.
+pub struct LayoutSvgContent<N> {
+    pub image: Option<LayoutImageResource>,
+    pub objects: Vec<(N, crate::LayoutQuad)>,
 }
 
 /// One element's primary style and the pseudo styles eagerly cascaded with it.
