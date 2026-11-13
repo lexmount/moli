@@ -251,6 +251,41 @@ fn snapshot_svg_resource_rasterizes_at_its_resolved_destination_size() {
 }
 
 #[test]
+fn transformed_svg_text_matches_equivalent_authored_coordinates() {
+    let render = |content: &str| {
+        let source = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60" font-family="DejaVu Sans" font-size="18">{content}</svg>"#
+        );
+        let svg = Arc::new(moli_image::decode_svg_image(source.as_bytes()).unwrap());
+        let mut snapshot = snapshot(100, 60, 1.0);
+        let image = snapshot.add_svg_image(svg);
+        snapshot.push_fragment(PaintFragment::SvgImage(PaintSvgImage {
+            image,
+            destination: PaintRect::new(0.0, 0.0, 100.0, 60.0),
+            transform: PaintTransform2D::IDENTITY,
+        }));
+        raster_snapshot(&snapshot).unwrap()
+    };
+    let grouped = render(
+        r#"<g transform="translate(10 8)"><g transform="translate(10 7)"><text x="5" y="20">SVG</text></g></g>"#,
+    );
+    let positioned = render(r#"<text x="25" y="35">SVG</text>"#);
+    assert!(
+        positioned
+            .rgba
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] < 128)
+            .count()
+            > 20,
+        "the reference must contain glyph pixels"
+    );
+    assert_eq!(
+        grouped.rgba, positioned.rgba,
+        "flattened glyphs must apply their absolute ancestor transform exactly once"
+    );
+}
+
+#[test]
 fn fractional_svg_image_rows_share_pixel_snapped_boundaries() {
     let svg = Arc::new(
         moli_image::decode_svg_image(

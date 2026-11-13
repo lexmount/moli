@@ -108,7 +108,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "anyrender"
 version = "0.12.0"
-source = "git+https://github.com/ldm0/anyrender?rev=916ef982d2175081dafc1ba0f7489396124d9496#916ef982d2175081dafc1ba0f7489396124d9496"
+source = "git+https://github.com/ldm0/anyrender?rev=3ff99c18f3806c0064201f10a9cbc15336cfd005#3ff99c18f3806c0064201f10a9cbc15336cfd005"
 dependencies = [
  "kurbo",
  "peniko",
@@ -119,7 +119,7 @@ dependencies = [
 [[package]]
 name = "anyrender_svg"
 version = "0.13.0"
-source = "git+https://github.com/ldm0/anyrender?rev=916ef982d2175081dafc1ba0f7489396124d9496#916ef982d2175081dafc1ba0f7489396124d9496"
+source = "git+https://github.com/ldm0/anyrender?rev=3ff99c18f3806c0064201f10a9cbc15336cfd005#3ff99c18f3806c0064201f10a9cbc15336cfd005"
 dependencies = [
  "anyrender",
  "kurbo",
@@ -130,7 +130,7 @@ dependencies = [
 [[package]]
 name = "anyrender_vello_cpu"
 version = "0.15.0"
-source = "git+https://github.com/ldm0/anyrender?rev=916ef982d2175081dafc1ba0f7489396124d9496#916ef982d2175081dafc1ba0f7489396124d9496"
+source = "git+https://github.com/ldm0/anyrender?rev=3ff99c18f3806c0064201f10a9cbc15336cfd005#3ff99c18f3806c0064201f10a9cbc15336cfd005"
 dependencies = [
  "anyrender",
  "debug_timer",
@@ -6395,7 +6395,7 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 [[package]]
 name = "usvg"
 version = "0.48.1"
-source = "git+https://github.com/lexmount/resvg?rev=5b272517a9802de769d72b1cac9ac1d2f7a5c08d#5b272517a9802de769d72b1cac9ac1d2f7a5c08d"
+source = "git+https://github.com/lexmount/resvg?rev=614aaf4d21ca03a4773f1e4d07c6a404407589a2#614aaf4d21ca03a4773f1e4d07c6a404407589a2"
 dependencies = [
  "base64 0.23.1",
  "data-url",
