@@ -473,8 +473,6 @@ pub struct CompiledModuleSnapshot {
     pub effective_fetch_metadata: ModuleFetchMetadata,
     pub requested_modules: Vec<ModuleRequestRecord>,
     pub phase: ModuleImportPhase,
-    pub has_parse_error: bool,
-    pub parse_error: Option<ModuleLoadError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -528,6 +526,7 @@ pub enum ModuleSource {
 pub struct ModuleLoadError {
     pub stage: ModuleLoadStage,
     pub key: Option<Box<ModuleMapKey>>,
+    pub module_entry: Option<ModuleEntryId>,
     pub message: String,
     pub error_constructor: Option<ModuleErrorConstructorKind>,
 }
@@ -537,6 +536,7 @@ impl ModuleLoadError {
         Self {
             stage,
             key: None,
+            module_entry: None,
             message: message.into(),
             error_constructor: None,
         }
@@ -544,6 +544,11 @@ impl ModuleLoadError {
 
     pub fn with_key(mut self, key: ModuleMapKey) -> Self {
         self.key = Some(Box::new(key));
+        self
+    }
+
+    pub fn with_module_entry(mut self, entry: ModuleEntryId) -> Self {
+        self.module_entry = Some(entry);
         self
     }
 
