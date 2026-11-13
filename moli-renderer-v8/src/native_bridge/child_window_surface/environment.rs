@@ -11,7 +11,7 @@ pub(in crate::native_bridge) fn initialize_child_window_realm_environment<'s>(
     handle: DomHandle,
 ) -> anyhow::Result<()> {
     install_child_webassembly_realm_adapter(scope, window);
-    install_child_css_runtime_state(scope, window, handle)
+    rebind_child_window_document_environment(scope, window, handle)
 }
 
 /// Refreshes only Document-scoped backing when an initial child LocalWindow

@@ -16,7 +16,7 @@ pub(crate) fn define_custom_element_for_registry<'s>(
     name: &str,
     constructor: v8::Local<'s, v8::Function>,
     extends_local_name: Option<String>,
-) -> Result<bool, CustomElementDefineError> {
+) -> Result<Option<bool>, CustomElementDefineError> {
     let constructor_value: v8::Local<'_, v8::Value> = constructor.into();
     if constructor_value.is_async_function() || constructor_value.is_generator_function() {
         return Err(CustomElementDefineError::ConstructorNotConstructable);
@@ -26,6 +26,13 @@ pub(crate) fn define_custom_element_for_registry<'s>(
     }
     if !is_valid_custom_element_name(name) {
         return Err(CustomElementDefineError::InvalidName(name.to_owned()));
+    }
+    let registry_is_current = |host: &JsContextHost| match registry_key {
+        CustomElementRegistryKey::Child(key) => host.custom_element_registry_key_is_current(key),
+        _ => true,
+    };
+    if !registry_is_current(unsafe { &*host_ptr }) {
+        return Ok(None);
     }
 
     {
@@ -57,11 +64,24 @@ pub(crate) fn define_custom_element_for_registry<'s>(
     // Constructor property access can synchronously call define() again. Do
     // not retain a Rust reference to the registry store across that re-entry.
     let definition_result = build_custom_element_definition(scope, constructor, extends_local_name);
-    unsafe { &mut *host_ptr }
-        .custom_elements_mut_for_registry_key(registry_key)
-        .definition_is_running = false;
+    // A getter can replace the Document in the same iframe. Never recreate
+    // its retired store or reset the replacement registry's running flag.
+    if registry_is_current(unsafe { &*host_ptr }) {
+        unsafe { &mut *host_ptr }
+            .custom_elements_mut_for_registry_key(registry_key)
+            .definition_is_running = false;
+    }
 
     let definition = definition_result?;
+    // Constructor getters can retire the defining Realm. Do not retain the
+    // constructor or schedule upgrades after that Realm has been detached.
+    let host = unsafe { &*host_ptr };
+    let realm_is_current = host
+        .window_execution_context_identity_for_access_check(scope.get_current_context())
+        .is_some_and(|identity| host.window_execution_context_identity_is_current(identity));
+    if !realm_is_current || !registry_is_current(host) {
+        return Ok(None);
+    }
     let disables_shadow = definition.disables_shadow;
     let pending = {
         let store = unsafe { &mut *host_ptr }.custom_elements_mut_for_registry_key(registry_key);
@@ -72,7 +92,7 @@ pub(crate) fn define_custom_element_for_registry<'s>(
         let resolver = v8::Local::new(scope, &pending.resolver);
         let _ = resolver.resolve(scope, constructor.into());
     }
-    Ok(disables_shadow)
+    Ok(Some(disables_shadow))
 }
 
 impl CustomElementStore {

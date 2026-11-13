@@ -45,7 +45,7 @@ fn registry_constructor_prototype<'s>(
         }
         CustomElementRegistryKey::Child(handle) => {
             let window = unsafe { &*host_ptr }
-                .existing_child_browsing_context_window_wrapper(scope, handle)?;
+                .existing_child_browsing_context_window_wrapper(scope, handle.child_handle)?;
             constructor_prototype(scope, window, constructor_name)
         }
     }

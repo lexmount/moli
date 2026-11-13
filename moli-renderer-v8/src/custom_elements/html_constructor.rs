@@ -115,9 +115,7 @@ fn owner_document_for_registered_constructor(
         CustomElementRegistryKey::Global | CustomElementRegistryKey::Scoped(_) => {
             Some(unsafe { &*host_ptr }.dom_host().document_handle())
         }
-        CustomElementRegistryKey::Child(handle) => {
-            unsafe { &*host_ptr }.child_browsing_context_document_handle(handle)
-        }
+        CustomElementRegistryKey::Child(key) => Some(key.document_handle),
     }
 }
 
