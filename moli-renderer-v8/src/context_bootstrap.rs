@@ -1201,3 +1201,5 @@ pub(crate) fn set_event_private_bool<'s>(
         v8::Boolean::new(scope, value).into(),
     );
 }
+
+pub(crate) use self::events::event_trusted;

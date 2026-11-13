@@ -9,7 +9,7 @@ use super::*;
     constructor_length = 1
 )]
 struct ExtendableEventTemplateDeclaration {
-    #[webapi(method = "waitUntil", callback = extendable_event_wait_until_callback, length = 1)]
+    #[webapi(method = "waitUntil", callback = super::super::thread::service_worker_wait_until_callback, length = 1)]
     wait_until: (),
 }
 
@@ -564,17 +564,4 @@ fn frozen_empty_worker_array<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<
     let array = v8::Array::new(scope, 0);
     let _ = array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
     array
-}
-
-fn extendable_event_wait_until_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let exception = worker_dom_exception_value(
-        scope,
-        "ExtendableEvent.waitUntil() was called outside an active event dispatch.",
-        "InvalidStateError",
-    );
-    scope.throw_exception(exception);
 }
