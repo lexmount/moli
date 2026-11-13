@@ -22,6 +22,7 @@ from .groups.bidi_progress import (
 )
 from .groups.bidi_storage import run_bidi_storage_group
 from .groups.classic import run_classic_group
+from .groups.classic_alert_progress import run_classic_alert_progress_group
 from .groups.navigation_errors import run_navigation_errors_group
 from .groups.script_interrupt import (
     run_chromedriver_script_timeout_group,
@@ -85,6 +86,11 @@ async def _run_bidi_group(
 
 
 MOLI_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "classic-alert-progress",
+        "Classic alert Get/Set/Handle during held navigation; existing, arriving and absent prompts.",
+        run_classic_alert_progress_group,
+    ),
     SmokeGroup(
         "bidi-progress",
         "Pipelined navigation, script and input waits; shared top-level device state; independent dialog and renderer output.",
