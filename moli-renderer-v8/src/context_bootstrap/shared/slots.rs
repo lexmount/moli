@@ -56,8 +56,7 @@ pub(in crate::context_bootstrap) const STATIC_RANGE_END_CONTAINER_STORAGE_KEY: &
 pub(in crate::context_bootstrap) const STATIC_RANGE_END_OFFSET_STORAGE_KEY: &str =
     "__moliStaticRangeEndOffset";
 pub(in crate::context_bootstrap) const SELECTION_RANGE_SLOT: &str = "__moliSelectionRange";
-pub(crate) const DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT: &str =
-    "__moliDocumentSelectionChangeListener";
+
 pub(in crate::context_bootstrap) const MESSAGE_CHANNEL_PORT1_SLOT: &str =
     "__moliMessageChannelPort1";
 pub(in crate::context_bootstrap) const MESSAGE_CHANNEL_PORT2_SLOT: &str =
