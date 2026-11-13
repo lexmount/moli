@@ -118,6 +118,8 @@
 
   const frame = document.createElement('iframe');
   document.body.appendChild(frame);
+  const detached = {Promise: frame.contentWindow.Promise, ArrayBuffer: frame.contentWindow.ArrayBuffer,
+    Uint8Array: frame.contentWindow.Uint8Array};
   const methods = Object.fromEntries(['text', 'arrayBuffer', 'bytes', 'stream'].map(name => [name, frame.contentWindow.Blob.prototype[name]]));
   frame.remove();
   for (const kind of ['Blob', 'File']) for (const method of ['text', 'arrayBuffer', 'bytes', 'stream']) {
@@ -126,7 +128,8 @@
     const reader = method === 'stream' ? value.getReader() : null;
     const result = reader ? (await reader.read()).value : await value;
     checks.push({name: `detached-callee/${kind}/${method}/reads retain the live Blob realm`, passed:
-      Object.getPrototypeOf(value) === (reader ? ReadableStream.prototype : Promise.prototype)});
+      Object.getPrototypeOf(value) === (reader ? ReadableStream.prototype : Promise.prototype)
+        && (reader !== null || Object.getPrototypeOf(value) !== detached.Promise.prototype)});
     const text = method === 'text' ? result : new TextDecoder().decode(result);
     const expected = reader ? Uint8Array.prototype : method === 'arrayBuffer'
       ? ArrayBuffer.prototype : Uint8Array.prototype;
