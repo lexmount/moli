@@ -14,6 +14,7 @@ from ..png_image import decode_png
 CASES = (
     ("ltr", "ABCDEFGHIJKL", "ABCD...", ""),
     ("rtl", "ABCDEFGHIJKL", "...IJKL", "direction:rtl"),
+    ("plaintext-direction", "ABCDEFGHIJKL", "ABCD...", "direction:rtl;unicode-bidi:plaintext"),
     ("line-style", '<span style="color:red">ABCDEFGHIJKL</span>',
      '<span style="color:red">ABCD</span>...', "color:blue"),
     ("padding", "ABCDEFGHIJKL", "ABCD...", "padding:10px"),

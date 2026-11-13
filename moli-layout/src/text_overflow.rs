@@ -10,7 +10,7 @@ use crate::{
     inline::{
         InlineFormattingContext, InlineObjectRole, InlineSourceMapEntry, glyph_cluster_ranges,
     },
-    style::{InlineDirection, LayoutOverflowMode},
+    style::LayoutOverflowMode,
     stylo_to_parley::TextBrush,
 };
 
@@ -111,7 +111,10 @@ pub(crate) fn prepare_text_overflow<N>(
         let Some(text) = context.laid_out.as_ref() else {
             continue;
         };
-        let rtl = style.direction() == InlineDirection::Rtl;
+        // Use the same resolved paragraph base direction as line breaking and
+        // alignment. In plaintext it can differ from the CSS direction, and
+        // an individual bidi run's direction does not describe the paragraph.
+        let rtl = text.is_rtl();
         if !text.lines().any(|line| line_overflows(&line, width, rtl)) {
             continue;
         }

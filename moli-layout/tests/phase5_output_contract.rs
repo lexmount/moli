@@ -1186,6 +1186,69 @@ fn text_overflow_rtl_uses_the_left_edge_and_keeps_full_source_offsets() {
 }
 
 #[test]
+fn text_overflow_plaintext_uses_the_shaped_paragraph_direction() {
+    use style::properties::longhands::{
+        direction::computed_value::T as Direction, unicode_bidi::computed_value::T as UnicodeBidi,
+    };
+    for (text, resolved_direction) in [
+        ("ABCDEFGHIJKL", Direction::Ltr),
+        ("אבגדהוזחטיכל", Direction::Rtl),
+    ] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::text("text", text),
+        ]);
+        let mut results = Vec::new();
+        for plaintext in [false, true] {
+            let (style, mut services) = ellipsis_style(70.0, |computed| {
+                computed.mutate_inherited_box().set_direction(if plaintext {
+                    if resolved_direction == Direction::Ltr {
+                        Direction::Rtl
+                    } else {
+                        Direction::Ltr
+                    }
+                } else {
+                    resolved_direction
+                });
+                if plaintext {
+                    computed
+                        .mutate_text()
+                        .set_unicode_bidi(UnicodeBidi::Plaintext);
+                }
+            });
+            let output = build_layout_pass(
+                &source,
+                &mut Styles(HashMap::from([(0, style)])),
+                &mut services,
+                LayoutPassRequest::with_paint(
+                    LayoutViewport::new(320, 240, 1.0),
+                    LayoutFlushReason::Print,
+                ),
+            )
+            .unwrap();
+            let glyphs = output
+                .paint_snapshot()
+                .unwrap()
+                .fragments
+                .iter()
+                .filter_map(|fragment| {
+                    if let PaintFragment::GlyphRun(run) = fragment {
+                        Some(run.glyphs.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            results.push((painted_text(&output), glyphs));
+        }
+        assert_eq!(
+            results[0], results[1],
+            "plaintext must match the resolved {resolved_direction:?} paragraph"
+        );
+    }
+}
+
+#[test]
 fn text_overflow_hides_an_atomic_subtree_from_both_paint_and_hits_but_keeps_its_geometry() {
     let source = Source(vec![
         Node::element("root", vec![1, 2, 3]),
