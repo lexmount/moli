@@ -1,9 +1,12 @@
 //! Service Worker extendable events and their pending dispatch state.
 use moli_webapi::events::service_worker::{
     extendable_event_constructor_callback, extendable_message_event_constructor_callback,
+    InstallEventInit, install_event_constructor_callback, initialize_install_event_object,
 };
 
 use super::*;
+
+const INSTALL_EVENT_PROTOTYPE_SLOT: &str = "__moliInstallEventPrototype";
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
@@ -14,6 +17,36 @@ use super::*;
 struct ExtendableEventTemplateDeclaration {
     #[webapi(method = "waitUntil", callback = super::super::thread::service_worker_wait_until_callback, length = 1)]
     wait_until: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(
+    interface = web_api_interfaces::InstallEvent,
+    constructor_callback = install_event_constructor_callback,
+    constructor_length = 1,
+    readonly_prototype,
+)]
+struct InstallEventTemplateDeclaration {}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct InstallEventConstructorGlobalDeclaration<'scope> {
+    #[webapi(data_property = "InstallEvent")]
+    install_event: v8::Local<'scope, v8::Function>,
+}
+
+
+pub(in crate::worker) fn initialize_native_install_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    let global = scope.get_current_context().global(scope);
+    let prototype = get_private_value(scope, global, INSTALL_EVENT_PROTOTYPE_SLOT)
+        .expect("Service Worker InstallEvent prototype");
+    assert_eq!(event.set_prototype(scope, prototype), Some(true));
+    let event_type = v8str(scope, "install");
+    initialize_install_event_object(scope, event, event_type, InstallEventInit::default())
+        .expect("native InstallEvent state should initialize");
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -152,6 +185,24 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
     ExtendableEventConstructorGlobalDeclaration::new(extendable_ctor)
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize ExtendableEvent global: {error}"))?;
+
+    let install_template = InstallEventTemplateDeclaration::build(scope);
+    let install_ctor = install_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build InstallEvent constructor"))?;
+    let install_proto = constructor_prototype(scope, install_ctor, "InstallEvent")?;
+    set_worker_to_string_tag(scope, install_proto, "InstallEvent");
+    let _ = install_ctor.set_prototype(scope, extendable_ctor.into());
+    let _ = install_proto.set_prototype(scope, extendable_proto.into());
+    set_private_value(
+        scope,
+        global,
+        INSTALL_EVENT_PROTOTYPE_SLOT,
+        install_proto.into(),
+    );
+    InstallEventConstructorGlobalDeclaration::new(install_ctor)
+        .initialize(scope, global)
+        .map_err(|error| anyhow!("failed to initialize InstallEvent global: {error}"))?;
 
     let message_template = ExtendableMessageEventTemplateDeclaration::build(scope);
     let message_ctor = message_template
