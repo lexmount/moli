@@ -1,6 +1,8 @@
 //! One native loading/decision path for intercepted asynchronous and synchronous XHR.
 
+mod context;
 mod stream;
+pub(crate) use context::{ControlledXhrContext, XhrInterceptionRoute};
 pub(crate) use stream::{ControlledXhrBody, ControlledXhrCompletion, ControlledXhrStream};
 
 use moli_fetch::{FetchCancelHandle, Request, Response, ResponseHead};

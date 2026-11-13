@@ -3,7 +3,7 @@ mod request;
 
 use self::paths::{
     dispatch_service_worker_xhr, queue_local_xhr_response, record_bad_port_xhr_failure,
-    record_blocked_xhr_failure, record_csp_xhr_failure, record_intercepted_xhr,
+    record_blocked_xhr_failure, record_compatibility_intercepted_xhr, record_csp_xhr_failure,
     record_offline_xhr_failure, record_url_policy_xhr_failure, record_xhr_response_success,
     request_body_text, spawn_network_xhr_fetch,
 };
@@ -25,6 +25,7 @@ use super::events::{
 };
 use super::*;
 use crate::network::synchronous_load::{SynchronousLoadOutcome, wait_for_synchronous_load};
+use crate::network_host::controlled_xhr::{ControlledXhrContext, XhrInterceptionRoute};
 use crate::runtime::RendererPageContextCancelReason;
 use crossbeam_channel::bounded;
 use moli_fetch::{FetchCancelHandle, RequestMode};
@@ -189,15 +190,32 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    // Both delivery modes use the same native pause/decision controller.
-    // Only application of the terminal result belongs to the Page thread.
-    if async_request && host.should_intercept_subresource(SubresourceResourceType::Xhr) {
-        let internal_id = record_intercepted_xhr(scope, host, xhr, prepared);
+    let route = match host.xhr_interception_route(prepared.owner) {
+        Ok(route) => route,
+        Err(message) => {
+            if async_request {
+                record_url_policy_xhr_failure(scope, host, xhr, prepared, message.into());
+            } else {
+                record_synchronous_xhr_failure(scope, host, xhr, prepared, message.into());
+            }
+            return;
+        }
+    };
+    if async_request && !matches!(route, XhrInterceptionRoute::Ordinary) {
+        let internal_id = match route {
+            XhrInterceptionRoute::Native(control) => {
+                let loader = prepared.resource_loader.request_client().clone();
+                spawn_network_xhr_fetch(scope, host, xhr, prepared, loader, Some(control))
+            }
+            XhrInterceptionRoute::Compatibility => {
+                record_compatibility_intercepted_xhr(scope, host, xhr, prepared)
+            }
+            XhrInterceptionRoute::Ordinary => unreachable!(),
+        };
         set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, internal_id as f64);
         schedule_xhr_timeout(scope, host, xhr, internal_id);
         return;
     }
-
     if host.network_offline() {
         if async_request {
             record_offline_xhr_failure(scope, host, xhr, prepared);
@@ -224,11 +242,18 @@ pub(super) fn xhr_send_callback<'s>(
     let loader = prepared.resource_loader.request_client().clone();
 
     if async_request {
-        let internal_id = spawn_network_xhr_fetch(scope, host, xhr, prepared, loader);
+        let internal_id = spawn_network_xhr_fetch(scope, host, xhr, prepared, loader, None);
         set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, internal_id as f64);
         schedule_xhr_timeout(scope, host, xhr, internal_id);
     } else {
-        send_synchronous_network_xhr(scope, host, xhr, prepared, loader);
+        let control = match route.synchronous() {
+            Ok(control) => control,
+            Err(message) => {
+                record_synchronous_xhr_failure(scope, host, xhr, prepared, message.into());
+                return;
+            }
+        };
+        send_synchronous_network_xhr(scope, host, xhr, prepared, loader, control);
     }
 }
 
@@ -301,27 +326,9 @@ fn send_synchronous_network_xhr(
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     loader: ResourceRequestClient,
+    control: Option<ControlledXhrContext>,
 ) {
     let request = prepared.request().with_request_mode(RequestMode::Cors);
-
-    let requires_control = host.should_intercept_subresource(SubresourceResourceType::Xhr);
-    let control = if requires_control {
-        host.root_document_lifecycle_identity()
-            .zip(host.native_interception_output())
-            .zip(host.document_connect_policy_snapshot_for_owner(prepared.owner))
-    } else {
-        None
-    };
-    if requires_control && control.is_none() {
-        record_synchronous_xhr_failure(
-            scope,
-            host,
-            xhr,
-            prepared,
-            "Synchronous XMLHttpRequest interception requires a protocol output owner".into(),
-        );
-        return;
-    }
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -395,20 +402,11 @@ fn send_synchronous_network_xhr(
     let runner = loader.resource_task_runner();
     runner.spawn(async move {
         let result = match control {
-            Some(((source_document, output), connect_policy)) => {
-                crate::network_host::controlled_xhr::ControlledXhrLoad {
-                    initial_decision: None,
-                    request,
-                    info,
-                    load,
-                    cancel: worker_cancel_handle,
-                    source_document,
-                    output,
-                    connect_policy,
-                    preflight_headers,
-                }
-                .run()
-                .await
+            Some(control) => {
+                control
+                    .load(request, info, load, worker_cancel_handle, preflight_headers)
+                    .run()
+                    .await
             }
             None => crate::network_host::controlled_xhr::ControlledXhrResponse {
                 result: fetch_browser_subresource_with_preflight_headers(

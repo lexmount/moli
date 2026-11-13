@@ -1274,19 +1274,18 @@ impl CdpConnection {
         // A native pause already carries the target's shared eligibility.
         // Update that fact without queuing an ACK behind another session's
         // still-paused synchronous load. Legacy Page APIs read this same fact.
+        let (_, _, _, requests, auths, responses) = pending;
         let mut native = false;
-        for (_, request) in &pending.3 {
+        for (_, request) in requests {
             if let Some(target) = request.document_command_target() {
                 native |= target.update_native_interception_policy(enabled, resource_type);
             }
         }
-        for target in pending
-            .4
+        for target in auths
             .iter()
             .filter_map(|(_, request)| request.command_target.as_ref())
             .chain(
-                pending
-                    .5
+                responses
                     .iter()
                     .filter_map(|(_, request)| request.command_target.as_ref()),
             )
