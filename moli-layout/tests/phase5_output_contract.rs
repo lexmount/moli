@@ -1425,6 +1425,86 @@ fn text_overflow_distinguishes_contained_and_propagating_positioned_descendants(
 }
 
 #[test]
+fn truncated_atomic_routes_shared_inline_text_and_hits_without_restoring_hidden_siblings() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 2, 3]),
+        Node::text("prefix", "ABC"),
+        Node::html_element("atomic", "span", vec![4, 5, 7]),
+        Node::text("suffix", "XYZ"),
+        Node::text("hidden-before", "Q"),
+        Node::html_element("independent-inline", "span", vec![6]),
+        Node::text("independent-text", "INNER"),
+        Node::text("hidden-after", "Z"),
+    ]);
+    for (position, opacity, visible) in [
+        (LayoutPosition::Static, 1.0, true),
+        (LayoutPosition::Relative, 1.0, true),
+        (LayoutPosition::Static, 0.5, true),
+        (LayoutPosition::Relative, 1.0, false),
+        (LayoutPosition::Static, 0.5, false),
+    ] {
+        let independent = (position != LayoutPosition::Static || opacity < 1.0) && visible;
+        let (root, mut services) = ellipsis_style(70.0, |_| {});
+        let (atomic, _) = ellipsis_style(80.0, |computed| {
+            computed
+                .mutate_box()
+                .set_display(style::values::specified::box_::Display::InlineBlock);
+            computed
+                .mutate_box()
+                .set_overflow_x(style::values::computed::Overflow::Visible);
+            computed
+                .mutate_box()
+                .set_overflow_y(style::values::computed::Overflow::Visible);
+        });
+        let (inline, _) = fixed_inline_font();
+        let mut computed = (**inline.stylo_computed_values().unwrap()).clone();
+        if !visible {
+            computed.mutate_inherited_box().set_visibility(
+                style::properties::longhands::visibility::computed_value::T::Hidden,
+            );
+        }
+        let inline = ResolvedLayoutStyle::from_stylo(style::servo_arc::Arc::new(computed))
+            .with_text_metrics(16.0, 20.0);
+        let output = build_layout_pass(
+            &source,
+            &mut Styles(HashMap::from([
+                (0, root),
+                (2, atomic.with_position(LayoutPosition::Relative)),
+                (5, inline.with_position(position).with_opacity(opacity)),
+            ])),
+            &mut services,
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Print,
+            ),
+        )
+        .unwrap();
+        let text = painted_text(&output);
+        assert_eq!(
+            text,
+            if independent { "ABC...INNER" } else { "ABC..." },
+            "{position:?}, opacity={opacity}"
+        );
+        let hits = output.hit_test_all(LayoutPoint::new(43.0, 8.0), false);
+        assert_eq!(
+            hits.iter().any(|hit| hit.source == 6),
+            independent,
+            "{hits:?}"
+        );
+        let hidden_hits = output.hit_test_all(LayoutPoint::new(33.0, 8.0), false);
+        assert!(
+            !hidden_hits.iter().any(|hit| matches!(hit.source, 4 | 7)),
+            "{hidden_hits:?}"
+        );
+        assert!(
+            !output.text_range_rects(4, 0..1).is_empty(),
+            "hidden text retains CSSOM geometry"
+        );
+        assert_balanced_paint_stack(&output.paint_snapshot().unwrap().fragments);
+    }
+}
+
+#[test]
 fn text_overflow_with_a_leading_atomic_keeps_nowrap_on_one_line() {
     let source = Source(vec![
         Node::element("root", vec![1, 2]),

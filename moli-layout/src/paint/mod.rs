@@ -507,7 +507,9 @@ where
                     &mut snapshot,
                 );
             }
-            PaintOrderEvent::InlineText { owner, line, item } => {
+            PaintOrderEvent::InlineText {
+                owner, line, item, ..
+            } => {
                 let layout_box = &projection.world.boxes[owner.index()];
                 if !layout_box.style.is_visible() {
                     event_index += 1;

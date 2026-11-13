@@ -43,6 +43,8 @@ pub(crate) enum PaintOrderEvent {
         owner: LayoutBoxId,
         line: usize,
         item: usize,
+        start: usize,
+        end: usize,
     },
     BoxOutline(LayoutBoxId),
     PopStackingContext(LayoutBoxId),
@@ -98,8 +100,8 @@ struct StackingDescendants {
     positive: Vec<ChildContext>,
 }
 
-/// Only IFCs containing atomic objects need fragment-level interleaving. Keep
-/// the existing single-pass text projection for all other paragraphs.
+/// Fragment events interleave atomics and let independently painted inlines
+/// retain their share of a hidden host IFC. Other paragraphs use bulk text.
 struct InlineOrder<'a> {
     split: Vec<bool>,
     visibility: &'a TextOverflowVisibility,
@@ -122,14 +124,19 @@ impl<'a> InlineOrder<'a> {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };
-            if !context
+            let owner = LayoutBoxId::from_index(owner_index);
+            let has_atomic = context
                 .objects
                 .iter()
-                .any(|object| object.role == InlineObjectRole::Atomic)
-            {
+                .any(|object| object.role == InlineObjectRole::Atomic);
+            let has_independent_inline = visibility.is_hidden(owner)
+                && context
+                    .structural_boxes
+                    .iter()
+                    .any(|inline| !visibility.is_hidden(inline.box_id));
+            if !has_atomic && !has_independent_inline {
                 continue;
             }
-            let owner = LayoutBoxId::from_index(owner_index);
             result.split[owner_index] = true;
             for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
                 result.entries[inline.box_id.index()]
@@ -162,22 +169,26 @@ impl<'a> InlineOrder<'a> {
                     let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
                         continue;
                     };
-                    if selected.is_some() {
-                        if mapped_run != Some(glyphs.run().index()) {
-                            cluster_ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
-                            mapped_run = Some(glyphs.run().index());
-                        }
-                        if let Some(range) = cluster_ranges
-                            .by_ref()
-                            .take(glyphs.glyphs().count())
-                            .reduce(|range, cluster| {
-                                range.start.min(cluster.start)..range.end.max(cluster.end)
-                            })
-                        {
-                            covered.push(range);
-                        }
+                    if mapped_run != Some(glyphs.run().index()) {
+                        cluster_ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
+                        mapped_run = Some(glyphs.run().index());
                     }
-                    let range = glyphs.run().text_range();
+                    // Styled glyph segments can share one shaped run. Route
+                    // each segment by its own source range, so hidden siblings
+                    // cannot capture the independent inline's paint or hits.
+                    let Some(range) = glyphs
+                        .glyphs()
+                        .zip(cluster_ranges.by_ref())
+                        .map(|(_, range)| range)
+                        .reduce(|range, cluster| {
+                            range.start.min(cluster.start)..range.end.max(cluster.end)
+                        })
+                    else {
+                        continue;
+                    };
+                    if selected.is_some() {
+                        covered.push(range.clone());
+                    }
                     let source_index = context
                         .source_map
                         .partition_point(|source| source.output_range.end <= range.start);
@@ -186,10 +197,15 @@ impl<'a> InlineOrder<'a> {
                         .get(source_index)
                         .filter(|source| source.output_range.start < range.end)
                         .map_or(owner, |source| source.box_id);
+                    if !world.boxes[target.index()].style.is_visible() {
+                        continue;
+                    }
                     result.entries[target.index()].push(PaintOrderEvent::InlineText {
                         owner,
                         line: line_index,
                         item,
+                        start: range.start,
+                        end: range.end,
                     });
                 }
                 if let Some(selected) = selected {
@@ -541,7 +557,9 @@ fn collect_contents<N>(
                     .line_index,
                 0,
             ),
-            PaintOrderEvent::InlineText { owner, line, item } => (owner, line, item + 1),
+            PaintOrderEvent::InlineText {
+                owner, line, item, ..
+            } => (owner, line, item + 1),
             // Backgrounds precede the source's glyphs; sibling tree order is
             // still shared with inline fragments and atomic groups.
             PaintOrderEvent::InlineSelection { owner, line, .. } => (owner, line, 0),

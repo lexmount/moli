@@ -803,7 +803,13 @@ where
                         self.content_clips[owner.index()],
                     );
                 }
-                PaintOrderEvent::InlineText { owner, line, item } => {
+                PaintOrderEvent::InlineText {
+                    owner,
+                    line,
+                    start,
+                    end,
+                    ..
+                } => {
                     // Index the shaped line and its hit fragments once. Repeated
                     // runs must not scan the paragraph or all its text nodes.
                     let lines = text_owners.entry(owner).or_insert_with(|| {
@@ -811,36 +817,21 @@ where
                             .inline_layout
                             .as_ref()
                             .unwrap();
-                        let layout = context.laid_out.as_ref().unwrap();
-                        let mut lines = layout
-                            .lines()
-                            .map(|line| {
-                                let ranges = line
-                                    .items()
-                                    .map(|item| match item {
-                                        parley::PositionedLayoutItem::GlyphRun(run) => {
-                                            Some(run.run().text_range())
-                                        }
-                                        parley::PositionedLayoutItem::InlineBox(_) => None,
-                                    })
-                                    .collect::<Vec<_>>();
-                                (ranges, Vec::new())
-                            })
-                            .collect::<Vec<_>>();
+                        let mut lines = vec![Vec::new(); context.fragments.lines.len()];
                         for (index, text) in context.fragments.text.iter().enumerate() {
-                            lines[text.line_index].1.push((
+                            lines[text.line_index].push((
                                 text.output_range.clone(),
                                 self.owner_paint_fragments[owner.index()]
                                     [context.fragments.boxes.len() + index],
                             ));
                         }
-                        for (_, fragments) in &mut lines {
+                        for fragments in &mut lines {
                             fragments.sort_by_key(|(range, _)| (range.start, range.end));
                         }
                         lines
                     });
-                    let (ranges, fragments) = &lines[line];
-                    let range = ranges[item].as_ref().unwrap();
+                    let fragments = &lines[line];
+                    let range = start..end;
                     let start =
                         fragments.partition_point(|(fragment, _)| fragment.end <= range.start);
                     for (_, fragment) in fragments[start..]

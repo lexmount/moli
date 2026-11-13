@@ -60,6 +60,7 @@ async def run_text_overflow_group(
     try:
         page = await context.new_page()
         await _check_positioned_descendants(page, font, results)
+        await _check_shared_inline_descendants(page, font, results)
         for name, content, reference, extra in CASES:
             html = f"""<!doctype html><style>
               @font-face{{font-family:OverflowTest;src:url(data:font/ttf;base64,{font})}}
@@ -186,3 +187,49 @@ async def _check_positioned_descendants(page: Any, font: str,
             commands=["Page.captureScreenshot", "Runtime.evaluate"],
             observed={"greenPixels": green, "redPixels": red, "pureRedPixels": pure_red,
                       "opacity": opacity})
+
+
+async def _check_shared_inline_descendants(page: Any, font: str,
+                                          results: list[dict[str, Any]]) -> None:
+    for kind, css in (("relative", "position:relative"), ("opacity", "opacity:.5")):
+        for siblings in (False, True):
+            before = '<span class="ordinary">Q</span>' if siblings else ''
+            after = '<span class="ordinary">Z</span>' if siblings else ''
+            html = f"""<!doctype html><style>
+              @font-face{{font-family:OverflowTest;src:url(data:font/ttf;base64,{font})}}
+              body{{margin:0;background:white}}
+              #probe{{position:relative;width:90px;overflow:hidden;text-overflow:ellipsis;
+                font:20px/24px OverflowTest;white-space:nowrap}}
+              .atomic{{position:relative;display:inline-block;width:80px;height:24px;
+                vertical-align:top;background:lime;color:red}}
+              .inner{{{css}}}
+            </style><div id="probe">ABC<span class="atomic">{before}<span class="inner">INNER</span>{after}</span>XYZ</div>"""
+            await page.goto("data:text/html;base64," + base64.b64encode(html.encode()).decode(),
+                            wait_until="load")
+            await page.evaluate("document.fonts.ready")
+            capture = {"x": 0, "y": 0, "width": 200, "height": 100}
+            actual_png = await page.screenshot(clip=capture)
+            actual = decode_png(actual_png)
+            assert_equal(any(actual.rgba[i:i+4] == bytes((0, 255, 0, 255))
+                             for i in range(0, len(actual.rgba), 4)), False,
+                         f"{kind}: truncated atomic background stays hidden")
+            await page.evaluate("""() => {
+              for (const e of document.querySelectorAll('.ordinary')) e.style.visibility = 'hidden';
+            }""")
+            reference_png = await page.screenshot(clip=capture)
+            reference = decode_png(reference_png)
+            sibling_difference = sum(actual.rgba[i:i+4] != reference.rgba[i:i+4]
+                                     for i in range(0, len(actual.rgba), 4))
+            assert_equal(sibling_difference, 0, f"{kind}: ordinary siblings remain hidden")
+            await page.evaluate("document.querySelector('.inner').style.visibility = 'hidden'")
+            hidden = decode_png(await page.screenshot(clip=capture))
+            independent_difference = sum(reference.rgba[i:i+4] != hidden.rgba[i:i+4]
+                                         for i in range(0, len(reference.rgba), 4))
+            assert_equal(independent_difference > 0, True,
+                         f"{kind}: independently painted inline retains its shared IFC glyphs")
+            record_contract(results, f"text_overflow_shared_inline_{kind}_{siblings}",
+                contract="Independent inlines retain only their own glyphs from a truncated host IFC.",
+                source="Blink BoxFragmentPainter inline_box_cursor_ and PaintInlineItems",
+                commands=["Page.captureScreenshot", "Runtime.evaluate"],
+                observed={"siblingPixels": sibling_difference,
+                          "independentPixels": independent_difference})
