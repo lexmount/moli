@@ -285,6 +285,7 @@ impl ControlledXhrLoad {
         let mut intercept_response = false;
         let mut handle_auth_requests = false;
         let mut synthetic = None;
+        let mut network_request_headers = None;
         let preflight_observer =
             super::preflight_events::CorsPreflightNetworkObserver::for_native_xhr(
                 self.output.clone(),
@@ -296,6 +297,9 @@ impl ControlledXhrLoad {
                 return Err("net::ERR_ABORTED".into());
             }
             if next_request_pause {
+                // ExtraInfo describes the first on-wire request of this hop.
+                // Authentication retries retain it; a redirect starts a new hop.
+                network_request_headers = None;
                 self.sync_info();
                 let rx = if let Some(rx) = self.initial_decision.take() {
                     rx
@@ -381,7 +385,7 @@ impl ControlledXhrLoad {
             self.check_request()?;
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
-            let (response, mut is_synthetic, network_request_headers) = match synthetic.take() {
+            let (response, mut is_synthetic, observed_request_headers) = match synthetic.take() {
                 Some(response) => (LoadedXhrResponse::from_response(response), true, None),
                 None => {
                     let observed = super::async_fetch::fetch_controlled_subresource_hop(
@@ -397,6 +401,9 @@ impl ControlledXhrLoad {
                     (response, false, headers)
                 }
             };
+            if network_request_headers.is_none() {
+                network_request_headers = observed_request_headers;
+            }
             let mut response = response;
             if handle_auth_requests
                 && matches!(response.head.status, 401 | 407)
