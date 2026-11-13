@@ -15,6 +15,15 @@ enum WorkerServices {
     InitializedAfterRegistration,
 }
 
+#[test]
+fn binding_partition_cache_storage_keeps_worker_services_deferred() {
+    let context = RendererBrowserContextRuntime::new();
+    let store = crate::context_bootstrap::new_shared_storage_bucket_store();
+    context.bind_storage_bucket_store(store);
+    assert!(!context.inner.service_worker_runtime.is_initialized());
+    assert!(!context.inner.shared_worker_runtime.is_initialized());
+}
+
 struct ReceiverWake;
 
 // A static Waker::noop() cannot witness whether the channel retains its owner.
