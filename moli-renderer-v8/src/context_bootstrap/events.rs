@@ -110,6 +110,30 @@ pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
     Some(wrapper)
 }
 
+pub(crate) fn construct_original_text_input_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    text: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // TextEvent has no public constructor. Use its native legacy backing,
+    // without calling author-replaceable constructors or initTextEvent.
+    let event = new_uninitialized_text_event(scope)?;
+    let backing = event_backing(scope, event);
+    initialize_event_object(scope, backing, "textInput", true, true);
+    define_event_property(
+        scope,
+        backing,
+        "composed",
+        v8::Boolean::new(scope, true).into(),
+    );
+    let view = scope.get_current_context().global(scope);
+    ui::initialize_legacy_ui_event(scope, backing, Some(view), 0);
+    let data = v8_string(scope, text)?;
+    define_event_property(scope, backing, "data", data.into());
+    base::set_event_initialized(scope, backing, true);
+    mark_event_trusted(scope, event);
+    Some(event)
+}
+
 const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
 
 pub(in crate::context_bootstrap) fn new_uninitialized_before_unload_event<'s>(

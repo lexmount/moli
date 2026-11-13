@@ -176,6 +176,7 @@ pub(crate) use self::css_runtime::css_lazy_state_diagnostics;
 pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
+pub(crate) use self::events::construct_original_text_input_event;
 pub(crate) use self::events::{
     clear_input_event_target_ranges, construct_original_event,
     construct_original_page_transition_event, construct_original_storage_event_utf16,

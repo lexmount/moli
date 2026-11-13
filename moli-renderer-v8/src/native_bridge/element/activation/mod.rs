@@ -1,6 +1,9 @@
 mod click;
 mod default_action;
 mod targets;
+mod text_input;
+
+pub(crate) use text_input::{TextInputSource, perform_text_input};
 
 pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
 #[cfg(feature = "ace-protocol")]
