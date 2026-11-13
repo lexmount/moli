@@ -11,6 +11,7 @@ mod event_target_prototype;
 mod module_csp;
 mod notification_init;
 mod request_init;
+mod service_worker_client_messages;
 mod text_codecs;
 use std::pin::pin;
 use std::sync::Arc;

@@ -683,7 +683,7 @@ pub(crate) fn dispatch_service_worker_client_message_body(
     let scope = &mut v8::ContextScope::new(scope, context);
     let previous_owner_context = owner.enter(scope);
     let effect =
-        dispatch_service_worker_client_message_in_owner_scope(scope, container, completion);
+        dispatch_service_worker_client_message_in_owner_scope(scope, container, completion.into());
     if effect.dispatched() {
         owner.defer_restore(scope, previous_owner_context);
     } else {
@@ -692,25 +692,45 @@ pub(crate) fn dispatch_service_worker_client_message_body(
     effect
 }
 
+pub(crate) fn dispatch_worker_service_worker_client_message_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    message: crate::types::ServiceWorkerClientMessageData,
+) -> ServiceWorkerClientMessageDispatchEffect {
+    let Some(container) = crate::worker::worker_service_worker_container(scope) else {
+        return ServiceWorkerClientMessageDispatchEffect::CurrentTargetProducedNoDispatchableEvent;
+    };
+    dispatch_service_worker_client_message_in_owner_scope(scope, container, message)
+}
+
 fn dispatch_service_worker_client_message_in_owner_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     container: v8::Local<'s, v8::Object>,
-    completion: crate::types::ServiceWorkerClientMessageCompletion,
+    completion: crate::types::ServiceWorkerClientMessageData,
 ) -> ServiceWorkerClientMessageDispatchEffect {
-    let source = service_worker_container_cached_worker_for_version(
-        scope,
-        container,
-        completion.source_version_id,
-    )
-    .unwrap_or_else(|| {
-        let source = build_service_worker_object(
+    let source = if crate::worker::get_worker_state(scope).is_some() {
+        worker_client_service_worker_object(
             scope,
-            completion.source_script_url.as_str(),
+            container,
+            completion.source_version_id,
+            &completion.source_script_url,
             completion.source_state,
-        );
-        service_worker_worker_set_version_id(scope, source, completion.source_version_id);
-        source
-    });
+        )
+    } else {
+        service_worker_container_cached_worker_for_version(
+            scope,
+            container,
+            completion.source_version_id,
+        )
+        .unwrap_or_else(|| {
+            let source = build_service_worker_object(
+                scope,
+                completion.source_script_url.as_str(),
+                completion.source_state,
+            );
+            service_worker_worker_set_version_id(scope, source, completion.source_version_id);
+            source
+        })
+    };
     if !crate::context_bootstrap::runtime_message_allowed_for_current_target(
         scope,
         &completion.payload,
@@ -2631,11 +2651,57 @@ fn ensure_service_worker_constructor(scope: &mut v8::PinScope<'_, '_>, name: &'s
     }
 }
 
+const WORKER_CLIENT_SERVICE_WORKER_OBJECTS_SLOT: &str = "__moliWorkerClientServiceWorkers";
+
+fn worker_client_service_worker_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    container: v8::Local<'s, v8::Object>,
+    version: crate::service_worker_runtime::ServiceWorkerVersionId,
+    script_url: &url::Url,
+    state: &'static str,
+) -> v8::Local<'s, v8::Object> {
+    let cache = get_private_value(scope, container, WORKER_CLIENT_SERVICE_WORKER_OBJECTS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+        .unwrap_or_else(|| {
+            let cache = v8::Map::new(scope);
+            set_private_value(
+                scope,
+                container,
+                WORKER_CLIENT_SERVICE_WORKER_OBJECTS_SLOT,
+                cache.into(),
+            );
+            cache
+        });
+    let key = v8::BigInt::new_from_u64(scope, version.as_u64());
+    if let Some(worker) = cache
+        .get(scope, key.into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        service_worker_worker_set_state(scope, worker, state);
+        return worker;
+    }
+    let worker = crate::worker::worker_service_worker_object(scope, version, script_url, state)
+        .expect("Worker ServiceWorker bindings should be available");
+    let _ = cache.set(scope, key.into(), worker.into());
+    worker
+}
+
 fn build_service_worker_controller_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &crate::runtime::ServiceWorkerControlState,
     owner: OwnerDispatchScope,
 ) -> v8::Local<'s, v8::Object> {
+    if let Some(container) = crate::worker::worker_service_worker_container(scope)
+        && let Some(version) = state.active_version_id()
+    {
+        return worker_client_service_worker_object(
+            scope,
+            container,
+            version,
+            state.script_url(),
+            "activated",
+        );
+    }
     let controller = build_service_worker_object(scope, state.script_url().as_str(), "activated");
     if let Some(version_id) = state.active_version_id() {
         service_worker_worker_set_version_id(scope, controller, version_id);
@@ -2751,6 +2817,12 @@ fn service_worker_post_message_callback<'s>(
     ) else {
         return;
     };
+    if crate::worker::get_worker_state(scope).is_some() {
+        let _ = crate::worker::dispatch_service_worker_message_from_worker_client(
+            scope, version_id, payload,
+        );
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
@@ -2771,6 +2843,16 @@ fn service_worker_worker_set_version_id<'s>(
     worker: v8::Local<'s, v8::Object>,
     version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
 ) {
+    if crate::worker::get_worker_state(scope).is_some() {
+        let value = v8::BigInt::new_from_u64(scope, version_id.as_u64());
+        set_private_value(
+            scope,
+            worker,
+            SERVICE_WORKER_WORKER_VERSION_ID_SLOT,
+            value.into(),
+        );
+        return;
+    }
     if let Some(value) = v8_string(scope, &version_id.as_u64().to_string()) {
         define_non_enumerable_value_property(
             scope,
@@ -2833,7 +2915,13 @@ fn service_worker_worker_version_id(
     scope: &mut v8::PinScope<'_, '_>,
     worker: v8::Local<'_, v8::Object>,
 ) -> Option<String> {
-    object_own_hidden_value(scope, worker, SERVICE_WORKER_WORKER_VERSION_ID_SLOT)
+    let worker = v8::Local::new(scope, worker);
+    let value = if crate::worker::get_worker_state(scope).is_some() {
+        get_private_value(scope, worker, SERVICE_WORKER_WORKER_VERSION_ID_SLOT)
+    } else {
+        object_own_hidden_value(scope, worker, SERVICE_WORKER_WORKER_VERSION_ID_SLOT)
+    };
+    value
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
 }

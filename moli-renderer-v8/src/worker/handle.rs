@@ -83,6 +83,8 @@ impl WorkerSecureContextPolicy {
 pub(crate) enum WorkerMessage {
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
+    /// A ServiceWorker message targets the client container, not its parent port.
+    ServiceWorkerClientMessage(Box<crate::types::ServiceWorkerClientMessageData>),
     /// A transferred `MessagePort` has queued work ready for delivery.
     MessagePortWake(MessagePortId),
     /// A SharedWorker client connected with a freshly entangled worker-side port.
