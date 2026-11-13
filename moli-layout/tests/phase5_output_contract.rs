@@ -2528,6 +2528,90 @@ fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
 }
 
 #[test]
+fn inline_with_block_child_reports_the_block_geometry() {
+    // <root><a><div 120x20/></a></root>: the block split out of the inline
+    // is the inline's geometry, without zero-width edge fragments.
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("a", vec![2]),
+        Node::element("div", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 800.0, 600.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 120.0, 20.0));
+
+    let output = build(&source, &mut styles);
+    let block = output.client_rects_for_source(2)[0].bounding_rect();
+    let rects = output.client_rects_for_source(1);
+    assert_eq!(rects.len(), 1, "{rects:?}");
+    assert_rect(rects[0].bounding_rect(), block);
+    assert_eq!(block.width, 120.0);
+    let quads = output.content_quads_for_source(1);
+    assert_eq!(quads.len(), 1, "{quads:?}");
+    assert_rect(quads[0].bounding_rect(), block);
+}
+
+#[test]
+fn inline_with_nested_inline_block_child_reports_the_block_geometry() {
+    // <root><a><span><div 120x20/><inline-block/><abspos/></span></a></root>
+    // Only the block split out of the inlines is their geometry; atomic and
+    // out-of-flow boxes inside the nested inline are not.
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("a", vec![2]),
+        Node::element("span", vec![3, 4, 5]),
+        Node::element("div", Vec::new()),
+        Node::element("inline-block", Vec::new()),
+        Node::element("abspos", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 800.0, 600.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 120.0, 20.0));
+    styles
+        .0
+        .insert(4, fixed_size(LayoutDisplay::InlineBlock, 30.0, 10.0));
+    styles.0.insert(
+        5,
+        fixed_size(LayoutDisplay::Block, 40.0, 10.0).with_position(LayoutPosition::Absolute),
+    );
+
+    let output = build(&source, &mut styles);
+    let rect_of = |source| output.client_rects_for_source(source)[0].bounding_rect();
+    let (block, inline_block, abspos) = (rect_of(3), rect_of(4), rect_of(5));
+    for inline in [1, 2] {
+        let rects = output
+            .client_rects_for_source(inline)
+            .iter()
+            .map(|quad| quad.bounding_rect())
+            .collect::<Vec<_>>();
+        // The block, then the line fragment that holds the inline-block.
+        assert_eq!(rects.len(), 2, "{inline}: {rects:?}");
+        assert_rect(rects[0], block);
+        assert!(
+            !rects.contains(&inline_block) && !rects.contains(&abspos),
+            "{inline}: {rects:?}"
+        );
+    }
+}
+
+#[test]
 fn own_border_is_visual_geometry_not_scrollable_content() {
     let source = Source(vec![
         Node::element("root", vec![1]),
@@ -3063,12 +3147,15 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
 
     let output = build(&source, &mut styles);
     assert_fragment_batches_match_direct_queries(&output, 0..7);
+    // Before text, the block split out of the inline, after text.
     let rects = output.client_rects_for_source(1);
-    assert_eq!(rects.len(), 2, "{rects:?}");
+    assert_eq!(rects.len(), 3, "{rects:?}");
     let first = rects[0].bounding_rect();
-    let second = rects[1].bounding_rect();
+    let block = rects[1].bounding_rect();
+    let second = rects[2].bounding_rect();
     assert!(first.width > 0.0 && second.width > 0.0);
-    assert!(second.y > first.y, "{rects:?}");
+    assert_eq!(block.width, 50.0);
+    assert!(block.y > first.y && second.y > block.y, "{rects:?}");
     let union = output
         .box_model_for_source(1)
         .expect("split inline box model")
