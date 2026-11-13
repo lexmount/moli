@@ -1595,3 +1595,158 @@ async fn available_image_reuse_does_not_start_another_fetch_or_timing_entry() {
         );
     }
 }
+
+#[tokio::test]
+async fn image_decode_does_not_wait_for_another_elements_request() {
+    for cross_origin in ["unset", "anonymous"] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://image-decode-owner.test/page.html",
+            &loader,
+        );
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval(&format!("globalThis.__decodeCors = '{cross_origin}'"))
+            .unwrap();
+        vm.eval(
+            r#"
+            globalThis.__pendingDecodeImage = new Image();
+            globalThis.__pendingDecode = 'pending';
+            globalThis.__pendingDecodeEvents = [];
+            if (__decodeCors === 'anonymous') __pendingDecodeImage.crossOrigin = 'anonymous';
+            __pendingDecodeImage.onload = () => __pendingDecodeEvents.push('load');
+            __pendingDecodeImage.onerror = () => __pendingDecodeEvents.push('error');
+            __pendingDecodeImage.src = '/shared.gif';
+            __pendingDecodeImage.decode().then(() => __pendingDecode = 'fulfilled',
+              error => __pendingDecode = error.name);
+            "#,
+        )
+        .unwrap();
+        let pending = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(pending.len(), 1, "{cross_origin}");
+        assert_eq!(vm.eval("__pendingDecode").unwrap(), "pending");
+
+        vm.eval(
+            r#"
+            if (!document.documentElement) document.appendChild(document.createElement('html'));
+            if (!document.head) document.documentElement.prepend(document.createElement('head'));
+            const restriction = document.createElement('meta');
+            restriction.httpEquiv = 'Content-Security-Policy';
+            restriction.content = "img-src 'none'";
+            document.head.appendChild(restriction);
+            globalThis.__blockedDecodeImage = new Image();
+            globalThis.__blockedDecode = 'pending';
+            globalThis.__blockedDecodeEvents = [];
+            if (__decodeCors === 'anonymous') __blockedDecodeImage.crossOrigin = 'anonymous';
+            __blockedDecodeImage.onload = () => __blockedDecodeEvents.push('load');
+            __blockedDecodeImage.onerror = () => __blockedDecodeEvents.push('error');
+            __blockedDecodeImage.src = '/shared.gif';
+            __blockedDecodeImage.decode().then(() => __blockedDecode = 'fulfilled',
+              error => __blockedDecode = error.name);
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval("__blockedDecode").unwrap(),
+            "EncodingError",
+            "{cross_origin}: the blocked image must reject before the other response arrives"
+        );
+        assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+        run_next_image_event_task(&mut vm, &loader, "blocked image decode event").await;
+        assert_eq!(vm.eval("__blockedDecodeEvents.join('|')").unwrap(), "error");
+
+        vm.eval(
+            r#"
+            globalThis.__decodeAfterError = 'pending';
+            __blockedDecodeImage.decode().then(() => __decodeAfterError = 'fulfilled',
+              error => __decodeAfterError = error.name);
+            "#,
+        )
+        .unwrap();
+        assert_eq!(vm.eval("__decodeAfterError").unwrap(), "EncodingError");
+        assert_eq!(vm.eval("__pendingDecode").unwrap(), "pending");
+        assert_eq!(vm.eval("__pendingDecodeEvents.length").unwrap(), "0");
+
+        vm.fulfill_pending_subresource_fetch(
+            pending[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "independent pending image decode").await;
+        assert_eq!(vm.eval("__pendingDecode").unwrap(), "fulfilled");
+        assert_eq!(vm.eval("__pendingDecodeEvents.join('|')").unwrap(), "load");
+        assert_eq!(vm.eval("__blockedDecode").unwrap(), "EncodingError");
+        assert_eq!(vm.eval("__decodeAfterError").unwrap(), "EncodingError");
+        assert_eq!(vm.eval("__blockedDecodeEvents.join('|')").unwrap(), "error");
+        assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn image_decode_observes_insertions_after_its_initial_microtask() {
+    for source_attribute in ["src", "srcset"] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://image-decode-microtask.test/page.html",
+            &loader,
+        );
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Image),
+        );
+        vm.eval(&format!(
+            "globalThis.__decodeSourceAttribute = '{source_attribute}'"
+        ))
+        .unwrap();
+        vm.eval(
+            r#"
+            if (!document.documentElement) document.appendChild(document.createElement('html'));
+            if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+            globalThis.__initialDecodeImage = new Image();
+            globalThis.__initialDecode = 'pending';
+            __initialDecodeImage[__decodeSourceAttribute] = '/initial.gif';
+            __initialDecodeImage.decode().then(() => __initialDecode = 'fulfilled',
+              error => __initialDecode = error.name);
+            document.body.appendChild(__initialDecodeImage);
+            "#,
+        )
+        .unwrap();
+        let requests = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(requests.len(), 1, "{source_attribute}");
+        assert_eq!(
+            vm.eval("__initialDecode").unwrap(),
+            "pending",
+            "{source_attribute}: insertion must not inspect the request before its update microtask"
+        );
+        vm.fulfill_pending_subresource_fetch(
+            requests[0].internal_id,
+            200,
+            vec![("Content-Type".into(), b"image/gif".to_vec())],
+            one_by_one_gif_response_body(),
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "initial image decode microtask").await;
+        assert_eq!(vm.eval("__initialDecode").unwrap(), "fulfilled");
+
+        vm.eval(
+            r#"
+            globalThis.__cachedDecodeImage = new Image();
+            globalThis.__cachedDecode = 'pending';
+            __cachedDecodeImage[__decodeSourceAttribute] = '/initial.gif';
+            __cachedDecodeImage.decode().then(() => __cachedDecode = 'fulfilled',
+              error => __cachedDecode = error.name);
+            document.body.appendChild(__cachedDecodeImage);
+            "#,
+        )
+        .unwrap();
+        run_next_image_event_task(&mut vm, &loader, "cached image decode microtask").await;
+        assert_eq!(vm.eval("__cachedDecode").unwrap(), "fulfilled");
+        assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    }
+}
