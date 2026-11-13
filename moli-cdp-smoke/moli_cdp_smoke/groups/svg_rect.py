@@ -1,9 +1,80 @@
 from __future__ import annotations
 
+import base64
 from typing import Any
 
-from ..assertions import assert_equal, record_contract
-from ..config import REPO_ROOT
+from ..assertions import SmokeError, assert_equal, record_contract
+from ..config import REPO_ROOT, is_moli_browser
+from ..diagnostics import new_cdp_session
+from ..png_image import decode_png
+
+
+async def _check_inline_svg(page: Any, results: list[dict[str, Any]]) -> None:
+    session = await new_cdp_session(page.context, page)
+
+    async def capture() -> Any:
+        response = await session.send("Page.captureScreenshot", {"format": "png"})
+        return decode_png(base64.b64decode(response["data"]))
+
+    cases = [
+        ("original_style_selector", '<style>rect[style]{transform:matrix(1,0,0,1,40,0);fill:blue!important}</style><rect width="20" height="20" fill="red"/>', [0, 0, 20, 20]),
+        ("original_id_selector", '<style>rect[id]{transform:matrix(1,0,0,1,40,0)}</style><rect width="20" height="20" fill="red"/>', [0, 0, 20, 20]),
+        ("empty_clip_geometry", '<defs><clipPath id="empty"/></defs><rect x="10" y="20" width="30" height="40" clip-path="url(#empty)"/>', [10, 20, 30, 40]),
+        ("nested_visible_geometry", '<svg x="10" y="20" width="100" height="80" overflow="visible"><rect x="2" y="3" width="30" height="40"/></svg>', [12, 23, 30, 40]),
+    ]
+    try:
+        for name, content, expected in cases:
+            await page.evaluate("""content => {
+                document.head.innerHTML='<style>html,body{margin:0;background:white}svg{display:block}</style>';
+                document.body.innerHTML='<svg width="300" height="150">'+content+'</svg>';
+            }""", content)
+            image = await capture()
+            observed = await page.evaluate("""() => {
+                const e=document.querySelector('body>svg>svg,rect'), r=e.getBoundingClientRect();
+                return {rect:[r.x,r.y,r.width,r.height], count:e.getClientRects().length};
+            }""")
+            assert_equal(observed, {"rect": expected, "count": 1}, name)
+            if name.startswith("original_"):
+                assert_equal(image.pixel(10, 10), (255, 0, 0, 255), name + " paint")
+                assert_equal(image.pixel(50, 10), (255, 255, 255, 255), name + " unmatched transform")
+            record_contract(results, "svg/" + name, observed=observed,
+                            contract="Final computed styles and source geometry preserve original SVG XML identity.",
+                            source="Chromium 145.0.7632.116 executable comparison (2026-11-13)", commands=["Runtime.evaluate", "Page.captureScreenshot"])
+
+        await page.evaluate("""() => {
+            document.body.innerHTML='<svg width="100" height="100">'+'<circle r="1"></circle>'.repeat(30000)+'</svg>';
+        }""")
+        image = await capture()
+        if any(channel > 2 for channel in image.pixel(0, 0)[:3]):
+            raise SmokeError("690 KB SVG disappeared after applying computed styles")
+        record_contract(results, "svg/original_source_budget", observed={"circles": 30000},
+                        contract="Derived styles do not inflate the bounded encoded SVG input.",
+                        source="Chromium 145.0.7632.116 executable comparison (2026-11-13)", commands=["Page.captureScreenshot"])
+
+        await page.evaluate("""() => {
+            document.body.innerHTML='<svg style="position:absolute;left:100px;top:0" width="200" height="100">'+
+                '<rect x="10" width="10" height="10"/>'.repeat(1000)+'</svg>';
+        }""")
+        await capture()
+        count = await page.evaluate("""() => {
+            const r=document.createRange();r.selectNodeContents(document.querySelector('svg'));
+            return r.getClientRects().length;
+        }""")
+        assert_equal(count, 1000, "SVG Range geometry batch")
+        observed = await page.evaluate("""() => {
+            document.querySelector('svg').style.left='300px';
+            document.querySelector('rect').setAttribute('x','30');
+            return [document.querySelector('svg'),document.querySelector('rect')].map(e=>e.getBoundingClientRect().x);
+        }""")
+        assert_equal(observed, [100, 110] if is_moli_browser() else [300, 330], "coherent SVG geometry publication")
+        await capture()
+        updated = await page.evaluate("document.querySelector('rect').getBoundingClientRect().x")
+        assert_equal(updated, 330, "SVG geometry after publication")
+        record_contract(results, "svg/coherent_batch_publication", observed={"count": count, "immediate": observed, "published": updated},
+                        contract="SVG object and viewport coordinates come from one publication; Moli freezes ordinary queries, Chromium flushes live layout.",
+                        source="Chromium executable comparison and Moli frozen-layout contract", commands=["Runtime.evaluate", "Page.captureScreenshot"])
+    finally:
+        await session.detach()
 
 
 async def run_svg_rect_group(
@@ -24,5 +95,6 @@ async def run_svg_rect_group(
             commands=["Runtime.evaluate"],
             observed=observed,
         )
+        await _check_inline_svg(page, results)
     finally:
         await context.close()
