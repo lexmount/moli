@@ -1,6 +1,127 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_svg_client_rects_include_graphics_text_and_viewport_transforms() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/svg-client-rects.html")?,
+        );
+        page_vm.vm_mut().eval(&format!(
+            "document.documentElement.innerHTML = {}; 'installed'",
+            serde_json::to_string(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/inline-svg-client-rects.html")))?,
+        ))?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 300, 1.0))?;
+        let result = page_vm.vm_mut().eval(r#"JSON.stringify(Object.fromEntries(
+            ['scene','shape','axis','hidden','transparent','nested','nested-shape','clipped','label','group'].map(id => {
+                const e=document.getElementById(id), r=e.getBoundingClientRect();
+                return [id, {rect:[r.x,r.y,r.width,r.height],count:e.getClientRects().length}];
+            })))"#)?;
+        let values: serde_json::Value = serde_json::from_str(&result)?;
+        // Chromium 145.0.7632.116, with the same fixture and installed font.
+        for (id, expected) in [
+            ("scene", [40.0, 30.0, 300.0, 200.0]),
+            ("shape", [70.0, 84.0, 60.0, 30.0]),
+            ("axis", [70.0, 144.0, 160.0, 0.0]),
+            ("transparent", [240.0, 50.0, 40.0, 20.0]),
+            ("nested", [188.0, 122.0, 40.0, 20.0]),
+            ("nested-shape", [188.0, 122.0, 40.0, 20.0]),
+            ("clipped", [60.0, 40.0, 40.0, 20.0]),
+        ] {
+            for (actual, expected) in values[id]["rect"].as_array().unwrap().iter().zip(expected) {
+                assert!((actual.as_f64().unwrap() - expected).abs() < 0.01, "{id}: {values}");
+            }
+            assert_eq!(values[id]["count"], 1);
+        }
+        assert_eq!(values["hidden"]["count"], 0, "{values}");
+        assert_eq!(values["hidden"]["rect"], json!([0,0,0,0]));
+        assert!(values["label"]["rect"][2].as_f64().unwrap() > 100.0, "text must be shaped: {values}");
+        assert!(values["label"]["rect"][3].as_f64().unwrap() > 30.0, "text must be shaped: {values}");
+        assert!(values["group"]["rect"][3].as_f64().unwrap() > 120.0, "group must include text: {values}");
+
+        assert_eq!(page_vm.vm_mut().eval("document.getElementById('shape').getAttribute('fill')")?, "none", "geometry projection must not change authored paint");
+        page_vm.vm_mut().eval("document.getElementById('scene').style.cssText += ';transform:translate(11px,13px) scale(2);transform-origin:0 0'; 'changed'")?;
+        page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?;
+        assert_eq!(page_vm.vm_mut().eval("JSON.stringify((r=>[r.x,r.y,r.width,r.height])(document.getElementById('shape').getBoundingClientRect()))")?, "[111,151,120,60]");
+        page_vm.vm_mut().eval("document.getElementById('scene').style.transform = 'matrix(2,0,0,2,11,13)'; 'changed'")?;
+        page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?;
+        assert_eq!(page_vm.vm_mut().eval("JSON.stringify((r=>[r.x,r.y,r.width,r.height])(document.getElementById('shape').getBoundingClientRect()))")?, "[111,151,120,60]", "outer CSS transforms must be applied once");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("SVG client rects must include object geometry");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inline_svg_chart_can_size_itself_from_group_and_text_client_rects() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/svg-measured-chart.html")?,
+        );
+        page_vm.vm_mut().eval(r##"
+            document.head.innerHTML = `<style>
+              html,body {margin:0;background:white}
+              svg {display:block;font:12px "DejaVu Sans"}
+              .axis {stroke:rgb(17,99,41);stroke-width:2px}
+              .label {fill:rgb(89,99,110);font-size:12px}
+              .hidden {display:none}
+            </style>`;
+            document.body.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg"><g>
+              <line class="axis" x1="10" y1="125" x2="240" y2="125"/>
+              <line class="axis" x1="125" y1="10" x2="125" y2="240"/>
+              <path fill="#40c463" d="M125 125 L125 154 L14 125 Z"/>
+              <ellipse class="hidden" cx="500" cy="500" rx="5" ry="5"/>
+              <text class="label" x="125" y="0" text-anchor="middle">Code review</text>
+              <text class="label" x="250" y="125">Issues</text>
+              <text class="label" x="125" y="255" text-anchor="middle">Pull requests</text>
+              <text class="label" x="0" y="125" text-anchor="end">Commits</text>
+            </g></svg>`;
+            'installed'
+        "##)?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let result = page_vm.vm_mut().eval(r#"(() => {
+            const svg=document.querySelector('svg'), g=svg.querySelector('g');
+            const rect=g.getBoundingClientRect(), outer=svg.getBoundingClientRect();
+            g.setAttribute('transform', `translate(${-rect.left+outer.left} ${-rect.top+outer.top})`);
+            svg.setAttribute('width', Math.ceil(rect.width));
+            svg.setAttribute('height', Math.ceil(rect.height));
+            return JSON.stringify([rect.width,rect.height]);
+        })()"#)?;
+        let size: Vec<f64> = serde_json::from_str(&result)?;
+        assert!(size[0] > 280.0 && size[0] < 400.0, "chart width: {result}");
+        assert!(size[1] > 250.0 && size[1] < 300.0, "chart height: {result}");
+        let snapshot = page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 300, 1.0))?.unwrap();
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        // Text bounds give the group a fractional translation. Measure the
+        // antialiased color coverage over white, without requiring axes and
+        // glyphs to land on whole pixels in every font rasterizer.
+        let color_coverage = |color: [u8; 3]| {
+            raster.rgba.chunks_exact(4).map(|pixel| {
+                let alpha = f64::from(255 - pixel[0]) / f64::from(255 - color[0]);
+                if (1..3).all(|channel| {
+                    (f64::from(pixel[channel]) - (255.0 - alpha * f64::from(255 - color[channel]))).abs() < 2.0
+                }) { alpha } else { 0.0 }
+            }).sum::<f64>()
+        };
+        assert!(color_coverage([64,196,99]) > 500.0, "measured SVG must paint the area");
+        assert!(color_coverage([17,99,41]) > 400.0, "external CSS must paint both axes: {}", color_coverage([17,99,41]));
+        assert!(color_coverage([89,99,110]) > 50.0, "external CSS must paint the labels");
+        assert_eq!(page_vm.vm_mut().eval("document.querySelector('svg g').hasAttribute('id')")?, "false", "query identifiers must not leak into the live DOM");
+
+        // Referenced shapes outside <defs> must still inherit from <use>,
+        // rather than freezing the source element's original inherited fill.
+        page_vm.vm_mut().eval(r##"document.body.innerHTML = '<svg width="80" height="40" style="fill:blue"><rect id="shared" width="20" height="20"/><use href="#shared" x="30" style="fill:red"/></svg>'; 'installed'"##)?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(80,40,1.0))?.unwrap();
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: usize, y: usize| &raster.rgba[(y * raster.width as usize + x) * 4..][..4];
+        assert_eq!(pixel(10,10), [0,0,255,255]);
+        assert_eq!(pixel(40,10), [255,0,0,255]);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("SVG chart must measure and paint its group");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_sizes_viewbox_only_svg_from_available_inline_space() {
     run_page_vm_async_test(async move {
         let loader =

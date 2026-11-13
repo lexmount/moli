@@ -54,6 +54,7 @@ struct HtmlSerializationOptions<'a> {
     // whose owner Document has different scripting state from the outer tree.
     scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
     shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider>,
+    attribute_overrides: Option<&'a dyn Fn(NativeNodeId) -> Vec<(String, String)>>,
 }
 
 impl<'a> HtmlSerializationOptions<'a> {
@@ -65,6 +66,7 @@ impl<'a> HtmlSerializationOptions<'a> {
             target,
             scripting_enabled_for_node,
             shadow_root_provider: None,
+            attribute_overrides: None,
         }
     }
 
@@ -265,6 +267,9 @@ fn serialize_html_node_frame<'a, S>(
             out.push('>');
         }
         NodeData::Element(element) => {
+            let overrides = options
+                .attribute_overrides
+                .map(|attributes| attributes(node_id));
             out.push('<');
             out.push_str(element.local_name());
             if let Some(is_name) = element.custom_element_is_name()
@@ -278,11 +283,30 @@ fn serialize_html_node_frame<'a, S>(
                 if out.limit_exceeded() {
                     return;
                 }
+                if overrides.as_ref().is_some_and(|attributes| {
+                    attributes
+                        .iter()
+                        .any(|(name, _)| attribute.name_matches(name))
+                }) {
+                    continue;
+                }
                 out.push(' ');
                 attribute.push_html_serialized_name(|part| out.push_str(part));
                 out.push_str("=\"");
                 escape_html_attribute(attribute.value(), out);
                 out.push('"');
+            }
+            if let Some(overrides) = overrides {
+                for (name, value) in overrides {
+                    if out.limit_exceeded() {
+                        return;
+                    }
+                    out.push(' ');
+                    out.push_str(&name);
+                    out.push_str("=\"");
+                    escape_html_attribute(&value, out);
+                    out.push('"');
+                }
             }
             out.push('>');
 
@@ -483,17 +507,23 @@ pub(super) fn serialize_html_with_limit(
     node_id: NativeNodeId,
     max_bytes: usize,
 ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
+    serialize_html_with_limit_and_attributes(dom, node_id, max_bytes, None)
+}
+
+pub(super) fn serialize_html_with_limit_and_attributes(
+    dom: &NativeDom,
+    node_id: NativeNodeId,
+    max_bytes: usize,
+    attributes: Option<&dyn Fn(NativeNodeId) -> Vec<(String, String)>>,
+) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
     let scripting_enabled_for_node = |_: NativeNodeId| true;
     let mut out = BoundedHtmlSerialization::new(max_bytes);
-    if !serialize_html_into_sink(
-        dom,
-        node_id,
-        HtmlSerializationOptions::new(
-            HtmlSerializationTarget::IncludeNode,
-            &scripting_enabled_for_node,
-        ),
-        &mut out,
-    ) {
+    let mut options = HtmlSerializationOptions::new(
+        HtmlSerializationTarget::IncludeNode,
+        &scripting_enabled_for_node,
+    );
+    options.attribute_overrides = attributes;
+    if !serialize_html_into_sink(dom, node_id, options, &mut out) {
         return Ok(None);
     }
     out.finish().map(Some)
