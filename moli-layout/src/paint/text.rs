@@ -44,6 +44,7 @@ pub(super) enum TextClipMaskScope {
 /// resulting rectangles cross the owned snapshot boundary.
 pub(super) fn project_text<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -51,6 +52,7 @@ pub(super) fn project_text<N>(
 ) {
     project_text_phase(
         layout_box,
+        context,
         transform,
         local_cull,
         metrics,
@@ -68,6 +70,7 @@ pub(super) fn project_text<N>(
 /// is consumed by a `DestIn` layer, so only alpha is observable.
 pub(super) fn project_text_clip_mask<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -76,6 +79,7 @@ pub(super) fn project_text_clip_mask<N>(
 ) {
     project_text_phase(
         layout_box,
+        context,
         transform,
         local_cull,
         metrics,
@@ -87,6 +91,7 @@ pub(super) fn project_text_clip_mask<N>(
 
 fn project_text_phase<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -94,7 +99,7 @@ fn project_text_phase<N>(
     phase: TextPaintPhase,
     mask_scope: Option<TextClipMaskScope>,
 ) {
-    let Some(context) = layout_box.inline_layout.as_ref() else {
+    let Some(context) = context else {
         return;
     };
     let Some(text_layout) = context.laid_out.as_ref() else {
@@ -105,7 +110,14 @@ fn project_text_phase<N>(
     let origin_y = layout.border.top + layout.padding.top;
 
     if phase == TextPaintPhase::Foreground {
-        project_selection(layout_box, transform, local_cull, snapshot, None);
+        project_selection(
+            layout_box,
+            Some(context),
+            transform,
+            local_cull,
+            snapshot,
+            None,
+        );
     }
 
     let text: Option<std::sync::Arc<str>> = (snapshot.retain_text_semantics
@@ -419,7 +431,14 @@ impl<'a> InlineTextPaint<'a> {
                 .cloned()
                 .reduce(|range, cluster| range.start.min(cluster.start)..range.end.max(cluster.end))
         {
-            project_selection(layout_box, transform, local_cull, snapshot, Some(&range));
+            project_selection(
+                layout_box,
+                Some(context),
+                transform,
+                local_cull,
+                snapshot,
+                Some(&range),
+            );
         }
         let paint = TextRunPaint {
             origin_x,
@@ -447,21 +466,18 @@ impl<'a> InlineTextPaint<'a> {
 
 pub(super) fn project_selection<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     snapshot: &mut PaintSnapshot,
     text_range: Option<&std::ops::Range<usize>>,
 ) {
-    let Some(selection) = layout_box
-        .inline_layout
-        .as_ref()
-        .and_then(|context| context.selection.as_ref())
-    else {
+    let Some(selection) = context.and_then(|context| context.selection.as_ref()) else {
         return;
     };
     match selection {
         InlineSelection::Range(_) => {
-            range_selection_rects(layout_box, text_range, |rect| {
+            range_selection_rects(layout_box, context, text_range, |rect| {
                 if local_cull.is_none_or(|cull| rects_intersect(rect, cull)) {
                     snapshot.push_fragment(PaintFragment::Fill {
                         fill_rule: crate::PaintFillRule::NonZero,
@@ -473,7 +489,7 @@ pub(super) fn project_selection<N>(
             });
         }
         InlineSelection::Caret { color, .. } => {
-            let Some(rect) = caret_rect(layout_box) else {
+            let Some(rect) = caret_rect(layout_box, context) else {
                 return;
             };
             if local_cull.is_none_or(|cull| rects_intersect(rect, cull)) {
@@ -491,13 +507,14 @@ pub(super) fn project_selection<N>(
 /// One range geometry path for normal text, glyphless fragments, and culling.
 pub(super) fn range_selection_rects<N>(
     layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
     text_range: Option<&std::ops::Range<usize>>,
     mut emit: impl FnMut(LayoutRect),
 ) {
     if !layout_box.style.is_visible() {
         return;
     }
-    let Some(context) = layout_box.inline_layout.as_ref() else {
+    let Some(context) = context else {
         return;
     };
     let Some(text_layout) = context.laid_out.as_ref() else {
@@ -534,11 +551,14 @@ pub(super) fn range_selection_rects<N>(
 
 /// Use the same caret ink for event culling and painting, independently of
 /// glyph runs and the containing box's border bounds.
-pub(super) fn caret_rect<N>(layout_box: &LayoutBox<N>) -> Option<LayoutRect> {
+pub(super) fn caret_rect<N>(
+    layout_box: &LayoutBox<N>,
+    context: Option<&InlineFormattingContext>,
+) -> Option<LayoutRect> {
     if !layout_box.style.is_visible() {
         return None;
     }
-    let context = layout_box.inline_layout.as_ref()?;
+    let context = context?;
     let text_layout = context.laid_out.as_ref()?;
     let InlineSelection::Caret { offset, color } = context.selection.as_ref()? else {
         return None;

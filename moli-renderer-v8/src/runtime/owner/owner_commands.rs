@@ -1,5 +1,14 @@
 use super::*;
 
+impl RendererOwnerLocalContext {
+    pub(in crate::runtime) fn layout_configuration(&self) -> moli_page_types::LayoutConfiguration {
+        self.owner_state
+            .layout_configuration
+            .lock()
+            .unwrap_or_default()
+    }
+}
+
 impl RendererOwnerHandle {
     /// Selects the immutable layout policy for this renderer owner.
     ///
@@ -18,7 +27,7 @@ impl RendererOwnerHandle {
         })
     }
 
-    /// Seals the complete immutable layout configuration for this owner.
+    /// Seals the complete immutable layout configuration before Page creation.
     pub fn configure_layout_configuration(
         &self,
         configuration: moli_page_types::LayoutConfiguration,
@@ -37,9 +46,8 @@ impl RendererOwnerHandle {
                 configuration.policy,
                 configuration.scrollbars_hidden
             );
-        } else {
-            *state = Some(configuration);
         }
+        *state = Some(configuration);
         Ok(())
     }
 
@@ -867,6 +875,14 @@ impl RendererOwnerHandle {
                 owner_local_store_session(owner_local_store)
                     .host_unique_document_isolate_count_for_testing(token)
                     .map(RendererOwnerReply::TestingHostUniqueDocumentIsolateCount)
+                    .into()
+            }
+            #[cfg(test)]
+            RendererOwnerCommand::TestingLayoutWorkingSetObservation { token } => {
+                owner_local_store_session(owner_local_store)
+                    .layout_working_set_observation_for_testing(token)
+                    .map(Box::new)
+                    .map(RendererOwnerReply::TestingLayoutWorkingSetObservation)
                     .into()
             }
             #[cfg(test)]

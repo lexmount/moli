@@ -36,7 +36,7 @@ fn font_response(resource: &StylesheetSubresourceRequest) -> CompletedStylesheet
 
 // These regressions exercise explicit OnDemand layout, rather than changing
 // the legacy snapshot freshness contract to satisfy a Realtime fixture.
-fn refresh_child_geometry_without_paint(vm: &StandaloneScriptVmHarness) {
+pub(super) fn refresh_child_geometry_without_paint(vm: &StandaloneScriptVmHarness) {
     let host = vm._context_host.borrow();
     let document = host.document_handle();
     let pass = host

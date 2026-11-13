@@ -592,6 +592,7 @@ html,body{{margin:0;padding:0;background:white}}
                 .paint_layout_snapshot(
                     moli_layout::PaintViewport::new(80, 120, 1.0),
                     moli_layout::LayoutFlushReason::Screencast,
+                    crate::native_bridge::LayoutPublicationRequest::Screen,
                 )?
                 .expect("CSS image fixture must retain a layout root");
             let passes_after_first = page_vm.vm().layout_pass_observability_for_test().1;
@@ -626,6 +627,7 @@ html,body{{margin:0;padding:0;background:white}}
                 .paint_layout_snapshot(
                     moli_layout::PaintViewport::new(80, 120, 1.0),
                     moli_layout::LayoutFlushReason::Screencast,
+                    crate::native_bridge::LayoutPublicationRequest::Screen,
                 )?
                 .expect("ready CSS image fixture must retain a layout root");
             let passes_after_ready = page_vm.vm().layout_pass_observability_for_test().1;
@@ -667,6 +669,7 @@ html,body{{margin:0;padding:0;background:white}}
                 .paint_layout_snapshot(
                     moli_layout::PaintViewport::new(80, 120, 1.0),
                     moli_layout::LayoutFlushReason::Screencast,
+                    crate::native_bridge::LayoutPublicationRequest::Screen,
                 )?
                 .expect("style-mutated CSS image fixture must retain a layout root");
             assert_eq!(

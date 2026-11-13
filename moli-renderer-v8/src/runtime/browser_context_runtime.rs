@@ -593,6 +593,7 @@ impl RendererBrowserContextRuntime {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 debugger_enabled,
                 id,
+
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
                 window_names: Mutex::new(HashMap::new()),
                 auxiliary_windows: Mutex::new(HashMap::new()),

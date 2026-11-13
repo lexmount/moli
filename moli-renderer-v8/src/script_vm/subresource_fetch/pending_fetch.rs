@@ -430,6 +430,12 @@ impl ScriptVm {
         handle_auth_requests: bool,
     ) -> Result<AsyncSubresourceCommandExecution<PendingSubresourceContinueOutcome>> {
         let internal_id = pending.info.internal_id;
+        if let PendingSubresourceContinuation::CaptureResource(capture) = &pending.continuation
+            && (!capture.endpoint.is_active()
+                || !window_subresource_owner_is_current(&self._context_host, &pending))
+        {
+            bail!("capture resource Document owner changed while request was paused");
+        }
         // Captured resource requests choose SW before enforcing network
         // availability, just like direct dispatch. An offline worker can still
         // serve a synthetic/cached response; only network fallback must fail.

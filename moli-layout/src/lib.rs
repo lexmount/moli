@@ -1,9 +1,12 @@
-//! One-shot CSS box construction, numeric layout, and owned paint projection.
+//! Shared CSS box construction, numeric layout, and owned paint projection.
 //!
 //! The crate knows Stylo and Taffy but never knows Moli's live DOM or V8
 //! runtime. Renderer-owned adapters lend a canonical source view and resolve
-//! styles; all source/style borrows and per-pass caches are gone before the
-//! returned [`FrozenLayoutTree`] or [`PaintSnapshot`] crosses into a consumer.
+//! styles; source/resolver borrows never escape a pass. The default pipeline
+//! releases its working state, while an explicit [`LayoutWorkingSet`] can keep
+//! validated construction inputs, text preparation and eligible final inline
+//! results across passes. Published
+//! [`FrozenLayoutTree`] and [`PaintSnapshot`] values remain independent.
 
 /// Number of fixed layout subpixels in one CSS pixel, matching Blink's
 /// `LayoutUnit` precision.
@@ -41,6 +44,7 @@ mod table_role;
 mod taffy_tree;
 mod text;
 mod text_normalization;
+mod working_set;
 mod world;
 
 pub use anonymous_style::LayoutAnonymousStyleContext;
@@ -55,9 +59,9 @@ pub use form::{form_control_text, select_control_texts};
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
-    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImageReference,
-    LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason, LayoutFragment,
-    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
+    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImagePurpose,
+    LayoutCssImageReference, LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason,
+    LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
     LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
@@ -72,8 +76,9 @@ pub use normalize_source::{
     NormalizedLayoutSourceNode, NormalizedLayoutSourceTree, normalize_layout_source,
 };
 pub use pass::{
-    EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutPassRequest, ScreenshotLayoutRequest,
-    build_layout_pass, build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
+    EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage, LayoutPassRequest,
+    ScreenshotLayoutRequest, build_layout_pass, build_layout_pass_with_embedded_frames,
+    build_layout_pass_with_working_set, build_screenshot_snapshot,
 };
 pub use scrollbar::{
     LayoutControlSurfaceHit, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarCornerHit,
@@ -111,6 +116,7 @@ pub use text::{
     WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome,
     WebFontRegistrationScope, WebFontStyle, WebFontUnicodeRange, validate_web_font_bytes,
 };
+pub use working_set::{LayoutWorkingSet, LayoutWorkingSetStats};
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
     LayoutWorld,

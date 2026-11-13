@@ -15,7 +15,11 @@ fn collected_native_context_count(vm: &mut StandaloneScriptVmHarness) -> usize {
 
 #[test]
 fn retired_child_content_surfaces_do_not_root_unreachable_realms() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = new_parsed_test_vm(
             "https://child-content-retention.test/",
             "<!doctype html><body></body>",
@@ -50,7 +54,11 @@ fn retired_child_content_surfaces_do_not_root_unreachable_realms() {
 
 #[test]
 fn retained_child_content_surfaces_preserve_author_state_until_released() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = new_parsed_test_vm(
             "https://retained-child-content.test/",
             "<!doctype html><body></body>",
@@ -109,7 +117,11 @@ fn retained_child_content_surfaces_preserve_author_state_until_released() {
 
 #[test]
 fn promoted_child_content_surfaces_follow_author_reachability() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = new_parsed_test_vm(
             "https://promoted-child-content.test/",
             "<!doctype html><body></body>",
@@ -243,7 +255,11 @@ fn detached_content_surface_inventory(vm: &StandaloneScriptVmHarness) -> [usize;
 
 #[test]
 fn collected_child_content_surface_caches_release_entries_and_capacity() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = new_parsed_test_vm(
             "https://weak-content-inventory.test/",
             "<!doctype html><body></body>",
@@ -272,7 +288,11 @@ fn collected_child_content_surface_caches_release_entries_and_capacity() {
 
 #[test]
 fn child_content_surface_maintenance_preserves_author_identity() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::OnDemand,
+        LayoutPolicy::Realtime,
+    ] {
         let mut vm = new_parsed_test_vm(
             "https://weak-content-author-identity.test/",
             "<!doctype html><body></body>",

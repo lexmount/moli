@@ -21,7 +21,15 @@ pub(crate) fn notify_dom_mutation(
     host_ptr: *mut PageScriptHost,
     dom_host: &DomHost,
     effects: &DomMutationEffects,
+    state_preserving_move: bool,
 ) -> MutationNotificationTimings {
+    if !state_preserving_move {
+        observer_runtime::discard_realtime_resize_observer_tree_boxes(
+            unsafe { &*host_ptr },
+            dom_host,
+            effects,
+        );
+    }
     crate::native_bridge::document::detached_record_native_tree_mutations(
         scope, host_ptr, dom_host, effects,
     );
@@ -72,6 +80,7 @@ pub(crate) fn notify_native_dom_mutation(
         .map(|started| started.elapsed().as_micros())
         .unwrap_or_default();
 
+    host.request_realtime_rendering_opportunity();
     MutationNotificationTimings {
         style_effect_count,
         style_effects_us,

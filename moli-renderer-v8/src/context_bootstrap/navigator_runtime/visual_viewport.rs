@@ -181,6 +181,9 @@ fn visual_viewport_attribute_getter_callback<'s>(
             rv.set_double(0.0);
             return;
         }
+        if !super::super::window_accessors::prepare_window_viewport_read(scope, window) {
+            return;
+        }
         let value = if slot == VISUAL_VIEWPORT_WIDTH_SLOT {
             super::super::window_accessors::window_inner_surface_width(scope, window)
         } else {

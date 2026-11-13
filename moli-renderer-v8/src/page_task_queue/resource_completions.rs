@@ -187,6 +187,8 @@ pub(crate) enum RendererOwnerWakeSource {
     /// A callback entered the exact Window/Document miscellaneous-platform
     /// task source. The Host-local payload owns callback Realm identity.
     MiscPlatformApiTask,
+    IntersectionObserverTask,
+    FontLoadingTask,
     /// One exact Window/realm history traversal entered the stable HTML
     /// history-traversal task source.
     NavigationAndTraversalTask,
@@ -413,6 +415,15 @@ impl RendererResourceCompletionSender {
     ) -> Result<(), RendererResourceCompletionRouteClosed> {
         self.send_page_completion(|root_document| {
             RendererPageResourceCompletion::async_subresource(root_document, event)
+        })
+    }
+
+    pub(crate) fn send_capture_resource(
+        &self,
+        completion: crate::page_resource_completion::CaptureResourceCompletion,
+    ) -> Result<(), RendererResourceCompletionRouteClosed> {
+        self.send_page_completion(|root_document| {
+            RendererPageResourceCompletion::capture_resource(root_document, completion)
         })
     }
 

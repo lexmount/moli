@@ -299,7 +299,7 @@ impl ScriptVm {
             if host.viewport_surface() == viewport_surface {
                 return Ok(());
             }
-            host.queue_environment_change();
+            host.queue_viewport_change(viewport_surface);
             host.set_viewport_surface(viewport_surface);
         }
         self.sync_document_fonts_for_environment();
@@ -323,7 +323,7 @@ impl ScriptVm {
     ) -> Result<()> {
         let mut host = self._context_host.borrow_mut();
         if host.document_activity() != activity {
-            host.queue_environment_change();
+            host.queue_non_layout_environment_change();
             host.set_document_activity(activity);
         }
         Ok(())
@@ -340,6 +340,10 @@ impl ScriptVm {
 
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
         self._context_host.borrow_mut().set_layout_policy(policy);
+    }
+
+    pub(crate) fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
+        self._context_host.borrow().layout_policy()
     }
 
     pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) -> bool {

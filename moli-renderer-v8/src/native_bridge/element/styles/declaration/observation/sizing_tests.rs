@@ -81,6 +81,7 @@ fn computed_size_inspector_property_batch_shares_one_size_lookup() {
         &host, target,
     )
     .unwrap()
+    .unwrap()
     .into_iter()
     .collect::<std::collections::HashMap<_, _>>();
     for (name, value) in [
@@ -125,7 +126,9 @@ fn computed_size_dom_snapshot_batches_all_nodes_in_one_observation() {
     };
     let properties = ["width", "height", "inline-size", "block-size"].map(String::from);
     take_query_counts();
-    let values = vm.computed_style_property_values_for_document_snapshot(handles, &properties);
+    let values = vm
+        .computed_style_property_values_for_document_snapshot(handles, &properties)
+        .unwrap();
     assert_eq!(values.len(), 128);
     for sizes in values {
         assert_eq!(sizes, ["120px", "80px", "120px", "80px"]);

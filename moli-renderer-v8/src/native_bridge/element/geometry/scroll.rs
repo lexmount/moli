@@ -46,7 +46,15 @@ pub(super) fn set_node_scroll_position(
             document,
         )
     };
+    if changed {
+        // Freshness must be visible even while ActionBatch defers events and
+        // observer work until its checkpoint.
+        unsafe { &*runtime_ptr }.note_realtime_layout_input_change();
+    }
     if changed && queue_observable_effects {
+        // Admission only: ActionBatch still owns its checkpoints and the
+        // Page arbiter decides when the asynchronous frame may execute.
+        unsafe { &*runtime_ptr }.queue_realtime_element_scroll_events(scope, handle);
         queue_scroll_observable_effects(scope, runtime_ptr, document, false);
     }
     changed

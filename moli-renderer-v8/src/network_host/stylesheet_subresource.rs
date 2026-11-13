@@ -6,9 +6,13 @@ use crate::{
     },
     frame_owner_model::StylesheetSubresourceLoadDelayBinding,
     native_bridge::{OwnerDispatchScope, PageScriptHost},
-    types::SubresourceRequestInitiatorType,
+    types::{
+        AsyncSubresourceFetchCompletion, SubresourceFetchRegistration,
+        SubresourceRequestInitiatorType,
+    },
 };
 use anyhow::{Context, Result, ensure};
+use moli_fetch::FetchCancelHandle;
 
 #[derive(Debug)]
 pub(crate) enum StylesheetSubresourceFetchStart {
@@ -150,4 +154,130 @@ fn synchronous_failure_terminal(
             CompletedStylesheetWebFont::failure(font),
         ),
     }
+}
+
+pub(crate) fn start_capture_resource_fetch(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &mut PageScriptHost,
+    request_url: url::Url,
+    capture: crate::types::PendingCaptureResource,
+) -> std::result::Result<Option<u64>, String> {
+    use crate::capture_resources::CaptureResourceKind;
+    let target = capture.target;
+    let client_id = capture.service_worker_client_id;
+    let owner = target.dispatch_scope();
+    if !capture.endpoint.is_active()
+        || host.current_window_document_task_target_for_dispatch_scope(owner) != Some(target)
+    {
+        return Err("capture resource Document owner is stale".to_owned());
+    }
+    let resource_loader = host
+        .document_resource_loader_for_window_owner(target.owner())
+        .ok_or_else(|| "capture Document resource authority is unavailable".to_owned())?;
+    let environment = host
+        .subresource_request_environment(&resource_loader, owner)
+        .ok_or_else(|| "capture Document request environment is unavailable".to_owned())?;
+    let options = match capture.kind {
+        CaptureResourceKind::Image => SubresourceFetchOptions::CSS_IMAGE,
+        CaptureResourceKind::Font => SubresourceFetchOptions::FONT,
+    };
+    let resource_type = options.resource_type;
+    let request_mode = options.request_mode;
+    let credentials_mode = options.credentials_mode;
+    // As with live stylesheet resources, local responses precede optional
+    // network-family admission. They still use an owned, exact-target terminal.
+    if let Some(response) = local_url_response(&request_url) {
+        let mut response: crate::protocol_types::NavigationResponse = response.into();
+        let encoded = (capture.kind == CaptureResourceKind::Image).then(|| {
+            let runner = resource_loader.task_runner();
+            resource_loader
+                .request_client()
+                .parkable_image_manager(&runner)
+                .from_frozen_bytes(response.take_body_bytes())
+        });
+        let context = v8::Global::new(scope, scope.get_current_context());
+        let network_partition_key = active_subresource_network_partition_key(host, owner);
+        let policy_context = effective_subresource_policy_context(scope, host, owner);
+        let internal_id = host
+            .record_capture_resource_fetch(
+                context,
+                capture,
+                SubresourceFetchRegistration::Direct(FetchCancelHandle::new()),
+                None,
+                credentials_mode,
+                request_mode,
+                network_partition_key,
+                policy_context,
+                PendingSubresourceFetchInfo {
+                    internal_id: 0,
+                    network_request_handle: None,
+                    frame_id: environment.frame_id,
+                    document_url: environment.document_url,
+                    url: request_url.clone(),
+                    websocket_socket_id: None,
+                    method: "GET".to_owned(),
+                    request_headers: Default::default(),
+                    request_body: None,
+                    request_body_bytes: None,
+                    resource_type,
+                    request_cookie_report: None,
+                },
+            )
+            .ok_or_else(|| "capture resource owner changed before request binding".to_owned())?;
+        let result = match encoded {
+            Some(encoded) => crate::types::AsyncSubresourceFetchResult::Image { response, encoded },
+            None => crate::types::AsyncSubresourceFetchResult::Response(response),
+        };
+        if host
+            .resource_completion_sender()
+            .send_async_subresource(AsyncSubresourceFetchCompletion {
+                internal_id,
+                request_url,
+                request_method: "GET".to_owned(),
+                request_headers: Default::default(),
+                request_body: None,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
+                network_error_text: None,
+                result,
+            })
+            .is_err()
+        {
+            let _ = host.abort_subresource_fetch(internal_id);
+            return Err("capture resource completion route is closed".to_owned());
+        }
+        return Ok(Some(internal_id));
+    }
+    if !resource_loader
+        .request_client()
+        .optional_resource_fetch_enabled(resource_type)
+    {
+        return Ok(None);
+    }
+    let prepared = PreparedSubresourceFetch::prepare(
+        scope,
+        host,
+        owner,
+        &resource_loader,
+        environment,
+        request_url,
+        options,
+    )
+    .with_service_worker_client(client_id);
+    let internal_id = host
+        .record_capture_resource_fetch(
+            v8::Global::new(scope, scope.get_current_context()),
+            capture,
+            prepared.registration.clone(),
+            Some(&prepared.dispatch),
+            credentials_mode,
+            request_mode,
+            prepared.network_partition_key.clone(),
+            prepared.network_context.policy_context,
+            prepared.pending_info.clone(),
+        )
+        .ok_or_else(|| "capture resource owner changed before request binding".to_owned())?;
+    prepared.dispatch(host, internal_id);
+    Ok(Some(internal_id))
 }

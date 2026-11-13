@@ -350,6 +350,7 @@ impl PageScriptHost {
             layout_policy: moli_page_types::LayoutPolicy::default(),
             scrollbars_hidden: false,
             document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
+            realtime_layout_state: None,
             layout_pass_active: Cell::new(false),
             completed_layout_pass_count: Cell::new(0),
             completed_layout_pass_time: Cell::new(std::time::Duration::ZERO),
@@ -454,6 +455,7 @@ impl PageScriptHost {
             file_reading_tasks: super::file_reading_tasks::FileReadingState::default(),
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
+            intersection_observer_tasks: None,
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             user_interaction_tasks:
@@ -690,6 +692,10 @@ impl PageScriptHost {
             let runtime: &mut DocumentRuntime = self;
             runtime.open_document();
         }
+        crate::observer_runtime::discard_realtime_resize_observer_document_boxes(
+            self,
+            retired_document_handle,
+        );
         let retired_descendant_count =
             descendant_count_before.saturating_sub(self.child_browsing_contexts.len());
         let document_handle = self.document_handle();
@@ -743,6 +749,10 @@ impl PageScriptHost {
             transition.retired_owner(),
             transition.current_owner(),
         );
+        self.rebind_realtime_document_after_open(
+            transition.retired_owner(),
+            transition.current_owner(),
+        );
         let image_decode_retirement =
             self.retire_image_decode_requests_for_document_owner(scope, transition.retired_owner());
         self.apply_main_service_worker_document_owner_transition(transition);
@@ -766,6 +776,12 @@ impl PageScriptHost {
         self.inline_style_declarations.clear();
         self.style_engine
             .clear_for_document_replacement(document_handle);
+        if self.layout_policy().is_realtime() {
+            // Retire services before author code can measure the rewritten
+            // document. The deferred ScriptVm journal must not later erase a
+            // new layout already published by a getter or this frame's body.
+            self.reset_document_layout_state();
+        }
         if let Some(lifecycle) = &self.root_document_lifecycle {
             lifecycle.did_open_document();
         }
@@ -779,6 +795,8 @@ impl PageScriptHost {
             self.page_task_capabilities.set(capabilities).is_ok(),
             "PageVm must install its complete Page task capability set exactly once"
         );
+        self.initialize_realtime_document_fonts();
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) fn page_websocket_sender(
@@ -917,6 +935,29 @@ impl PageScriptHost {
                 "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
             )
             .misc_platform_api()
+            .clone()
+    }
+
+    pub(crate) fn page_intersection_observer_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageIntersectionObserverSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before miscellaneous-platform callback admission",
+            )
+            .intersection_observer()
+            .clone()
+    }
+    pub(crate) fn page_font_loading_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageFontLoadingSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before font readiness admission",
+            )
+            .font_loading()
             .clone()
     }
 
@@ -1832,6 +1873,10 @@ impl PageScriptHost {
         {
             self.active_form_submission_forms.remove(index);
         }
+    }
+
+    pub(crate) fn observers(&self, _access: &ObserverStoreAccessToken) -> &ObserverStore {
+        &self.observers
     }
 
     pub(crate) fn observers_mut(

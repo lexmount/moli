@@ -209,6 +209,7 @@ impl PageScriptHost {
         self.pending_window_messages.clear();
         drop(std::mem::take(&mut self.file_reading_tasks));
         drop(std::mem::take(&mut self.misc_platform_api_tasks));
+        self.intersection_observer_tasks.take();
         drop(std::mem::take(&mut self.file_entry_file_callbacks));
         drop(std::mem::take(&mut self.user_interaction_tasks));
         self.pending_font_face_loads.clear();
@@ -431,6 +432,18 @@ impl PageScriptHost {
             return;
         }
         let previous = self.window_execution_contexts.insert(owner, binding);
+        if self.layout_policy().is_realtime() {
+            let document = match current_dispatch_scope {
+                OwnerDispatchScope::Top => Some(self.document_handle()),
+                OwnerDispatchScope::Child(frame) => {
+                    self.child_browsing_context_document_handle(frame)
+                }
+                OwnerDispatchScope::LightweightPopup(_) => None,
+            };
+            if let Some(document) = document {
+                self.initialize_realtime_font_readiness(document);
+            }
+        }
         if let Some(previous) = previous.as_ref()
             && previous.realm_token() != current_realm
         {
@@ -518,6 +531,8 @@ impl PageScriptHost {
     ) -> bool {
         self.local_storage_areas.remove(&owner);
         self.retire_font_face_loads_for_execution_context_owner(owner);
+        self.retire_realtime_animation_frame_owner(owner);
+        self.retire_realtime_media_query_owner(owner);
         self.retire_event_callbacks_for_execution_context(owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
@@ -548,6 +563,8 @@ impl PageScriptHost {
         context_token: RuntimeObservableContextToken,
     ) -> usize {
         self.retire_font_face_loads_for_context_token(context_token);
+        self.retire_realtime_animation_frame_realm(context_token);
+        self.retire_realtime_media_query_realm(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let retired_indexed_db_connections = self.retire_indexed_db_context(context_token);
         let owners = self
@@ -560,6 +577,8 @@ impl PageScriptHost {
         let retired_count = owners.len();
         for owner in owners {
             self.local_storage_areas.remove(&owner);
+            self.retire_realtime_animation_frame_owner(owner);
+            crate::observer_runtime::retire_realtime_resize_observer_controller(self, owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
@@ -597,6 +616,8 @@ impl PageScriptHost {
         context_token: RuntimeObservableContextToken,
     ) -> usize {
         self.retire_font_face_loads_for_context_token(context_token);
+        self.retire_realtime_animation_frame_realm(context_token);
+        self.retire_realtime_media_query_realm(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         self.retire_indexed_db_context(context_token);
         let retired_realm_count = self

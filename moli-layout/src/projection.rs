@@ -648,7 +648,7 @@ where
                 self.register_box_fragment(index, fragment);
             }
 
-            let Some(context) = layout_box.inline_layout.as_ref() else {
+            let Some(context) = self.world.inline_layouts[index].as_ref() else {
                 continue;
             };
             let layout = layout_box.final_layout;
@@ -775,10 +775,7 @@ where
                     // Index the shaped line and its hit fragments once. Repeated
                     // runs must not scan the paragraph or all its text nodes.
                     let lines = text_owners.entry(owner).or_insert_with(|| {
-                        let context = self.world.boxes[owner.index()]
-                            .inline_layout
-                            .as_ref()
-                            .unwrap();
+                        let context = self.world.inline_layouts[owner.index()].as_ref().unwrap();
                         let layout = context.laid_out.as_ref().unwrap();
                         let mut lines = layout
                             .lines()

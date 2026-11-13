@@ -56,6 +56,8 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
+mod realtime_animation_frames;
+
 const WINDOW_SCROLL_X_SLOT: &str = "__moliWindowScrollX";
 const WINDOW_SCROLL_Y_SLOT: &str = "__moliWindowScrollY";
 const WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT: &str =
@@ -754,6 +756,12 @@ pub(super) fn window_cancel_animation_frame_callback<'s>(
     if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && unsafe { &*host_ptr }.layout_policy().is_realtime()
+    {
+        realtime_animation_frames::cancel(scope, args, host_ptr);
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<WindowCancelAnimationFrameArgs>(scope, &args) else {
         return;
     };
@@ -801,6 +809,10 @@ pub(super) fn window_request_animation_frame_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
+    if unsafe { &*host_ptr }.layout_policy().is_realtime() {
+        realtime_animation_frames::request(scope, args, rv, host_ptr);
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<WindowRequestAnimationFrameArgs>(scope, &args) else {
         return;
     };
@@ -1278,12 +1290,12 @@ pub(crate) fn build_computed_style_object<'s>(
     let host_ref = unsafe { &*host_ptr };
     let target_context =
         computed_style_target_context(scope, host_ref, handle, child_window_handle);
-    if target_context.returns_empty_style() {
+    if target_context.returns_empty_style(host_ref) {
         host_ref.retire_computed_style_for_inactive_handle(handle);
     }
     let cached_target_empty = match target_context {
         ComputedStyleTargetContext::ChildFrameDocument { .. } => {
-            Some(target_context.returns_empty_style())
+            Some(target_context.returns_empty_style(host_ref))
         }
         ComputedStyleTargetContext::ActiveDocument
         | ComputedStyleTargetContext::EmptyForDetached => None,

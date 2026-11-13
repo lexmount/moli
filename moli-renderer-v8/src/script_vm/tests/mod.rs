@@ -2287,6 +2287,7 @@ mod import_meta;
 mod indexed_db;
 mod indexed_db_gc;
 mod inspector_unwrap;
+mod lazy_main_world_recovery;
 mod lazy_storage;
 
 mod svg_matrix_native_receivers;
@@ -2327,6 +2328,12 @@ mod queue_microtask;
 mod svg_gradient_native_receivers;
 
 mod readable_algorithm_arrays;
+mod realtime_cssom;
+mod realtime_frames;
+mod realtime_layout;
+mod realtime_publication;
+mod realtime_resources;
+mod realtime_working_sets;
 mod remote_playback_interface;
 mod rendering_update;
 mod rtc_configuration;

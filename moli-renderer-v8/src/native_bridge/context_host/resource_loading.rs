@@ -1304,6 +1304,107 @@ impl PageScriptHost {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_capture_resource_fetch(
+        &mut self,
+        context: v8::Global<v8::Context>,
+        capture: crate::types::PendingCaptureResource,
+        registration: SubresourceFetchRegistration,
+        dispatch: Option<&crate::network_host::SubresourceRequestDispatch>,
+        credentials_mode: moli_fetch::RequestCredentialsMode,
+        request_mode: moli_fetch::RequestMode,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        mut info: PendingSubresourceFetchInfo,
+    ) -> Option<u64> {
+        let target = capture.target;
+        if !capture.endpoint.is_active()
+            || self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+                != Some(target)
+        {
+            return None;
+        }
+        let (load, request_origin) = self.register_document_resource_load(
+            target.owner(),
+            info.resource_type,
+            ResourceLoadDisposition::Ordinary,
+            registration.cancel_handle(),
+        )?;
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        match registration {
+            SubresourceFetchRegistration::Intercepted => {
+                self.push_pending_subresource_fetch_info(info.clone());
+            }
+            SubresourceFetchRegistration::Direct(_) => {
+                self.record_pending_subresource_request_started_with_initiator(
+                    &info,
+                    SubresourceRequestInitiatorType::Css,
+                    load.disposition(),
+                );
+            }
+        }
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                // Capture auth retries also retain the original partition,
+                // browser metadata and page policy, even without a request pause.
+                dispatch: dispatch.cloned().map(Box::new),
+                redirect_headers: None,
+                request_origin,
+                info,
+                load,
+                execution_context: PendingSubresourceExecutionContext::adapter(
+                    target.dispatch_scope(),
+                    context,
+                ),
+                credentials_mode,
+                request_mode,
+                network_partition_key,
+                policy_context,
+                continuation: PendingSubresourceContinuation::CaptureResource(capture),
+                deferred_request_started: false,
+            },
+        );
+        self.note_subresource_activity();
+        Some(internal_id)
+    }
+
+    pub(crate) fn cancel_capture_resource_fetches(
+        &mut self,
+        fetches: &[crate::capture_resources::CaptureResourceFetch],
+        endpoint: &crate::capture_resources::CaptureResourceEndpoint,
+    ) {
+        for fetch in fetches {
+            // A Document replacement may have transferred the load registry,
+            // but it must not transfer this job's capability to another fetch.
+            // Inspect all transport stages before mutating any of their maps.
+            let client_id = self.subresource_fetch_states().find_map(|pending| {
+                let PendingSubresourceContinuation::CaptureResource(capture) =
+                    &pending.continuation
+                else {
+                    return None;
+                };
+                (pending.info.internal_id == fetch.internal_id
+                    && capture.target == fetch.target
+                    && capture.entry_id == fetch.entry_id
+                    && capture.kind == fetch.kind
+                    && capture.endpoint.same_capture(endpoint))
+                .then_some(capture.service_worker_client_id)
+            });
+            let Some(client_id) = client_id else {
+                continue;
+            };
+            // The original target may now be retired: that forbids delivery,
+            // not cancellation of its still-resident transport. Do not compare
+            // it against the new Document's current target here.
+            let _ = self
+                .browser_context_runtime
+                .abort_service_worker_fetch_for_client(client_id, fetch.internal_id);
+            let _ = self.abort_subresource_fetch(fetch.internal_id);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_font_face_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
@@ -2375,10 +2476,18 @@ impl PageScriptHost {
                 pending.load.registry_id() == registry_id
                     && pending.load.disposition() == ResourceLoadDisposition::Ordinary
             })
-            .map(|pending| pending.info.internal_id)
+            .map(|pending| {
+                let client_id = match &pending.continuation {
+                    PendingSubresourceContinuation::CaptureResource(capture) => {
+                        Some(capture.service_worker_client_id)
+                    }
+                    _ => None,
+                };
+                (pending.info.internal_id, client_id)
+            })
             .collect::<Vec<_>>();
-        ordinary_ids.sort_unstable();
-        ordinary_ids.dedup();
+        ordinary_ids.sort_unstable_by_key(|(internal_id, _)| *internal_id);
+        ordinary_ids.dedup_by_key(|(internal_id, _)| *internal_id);
 
         let mut detached_window_fetches = 0;
         self.for_each_subresource_fetch_state_mut(|pending| {
@@ -2390,15 +2499,24 @@ impl PageScriptHost {
         });
 
         let mut aborted = 0;
-        for internal_id in ordinary_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
+        for (internal_id, client_id) in ordinary_ids.iter().copied() {
+            // This general retirement path also owns Capture continuations.
+            // Preserve their original client rather than guessing from the
+            // replacement Document or using a shared-runtime bare local id.
+            if let Some(client_id) = client_id {
+                let _ = self
+                    .browser_context_runtime
+                    .abort_service_worker_fetch_for_client(client_id, internal_id);
+            } else {
+                let _ = self
+                    .browser_context_runtime
+                    .abort_service_worker_fetch(internal_id);
+            }
             aborted += usize::from(self.abort_subresource_fetch(internal_id));
         }
         #[cfg(test)]
         self.pending_subresource_fetch_infos
-            .retain(|info| !ordinary_ids.contains(&info.internal_id));
+            .retain(|info| !ordinary_ids.iter().any(|(id, _)| *id == info.internal_id));
         (aborted, detached_window_fetches)
     }
 

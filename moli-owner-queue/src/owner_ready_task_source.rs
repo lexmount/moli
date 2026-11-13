@@ -67,6 +67,19 @@ impl<T, S> Clone for OwnerReadyTaskRoute<T, S> {
 }
 
 impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskRoute<T, S> {
+    /// Inspect the fixed source notification capability without locking or
+    /// accepting queued work. Specialized adapters may keep admission hints
+    /// here; the payload queue remains the authority for accepted work.
+    pub fn signal(&self) -> &S {
+        &self.shared.signal
+    }
+
+    /// Whether the owning consumer still accepts work. This is an admission
+    /// hint; producers must still handle closure when publishing a payload.
+    pub fn is_open(&self) -> bool {
+        lock_state(&self.shared.state).source_open
+    }
+
     /// Enqueue one task and publish a wake only when the source becomes ready.
     pub fn send_and_signal_if_newly_ready(
         &self,
@@ -149,6 +162,11 @@ where
 }
 
 impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskSource<T, S> {
+    /// The same notification capability shared by this source's producers.
+    pub fn signal(&self) -> &S {
+        &self.shared.signal
+    }
+
     pub fn new(signal: S) -> Self {
         Self {
             tasks: VecDeque::new(),
@@ -394,8 +412,10 @@ mod tests {
     fn a_closed_source_rejects_work_without_publishing_a_wake() {
         let (source, wakes) = counting_source();
         let route = source.route();
+        assert!(route.is_open());
         drop(source);
 
+        assert!(!route.is_open());
         assert!(route.send_and_signal_if_newly_ready(1).is_err());
         assert_eq!(wakes.load(Ordering::Relaxed), 0);
     }

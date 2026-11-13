@@ -322,6 +322,7 @@ impl PageScriptHost {
             root.stylesheet_id,
         );
         if refreshed {
+            self.request_realtime_rendering_opportunity();
             self.clear_layout_rect_cache();
             self.queue_stylesheet_source_css_projection(root.owner);
         }
@@ -845,10 +846,14 @@ impl PageScriptHost {
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
-        if self.emulated_media() != overrides {
+        let changed = self.emulated_media() != overrides;
+        if changed {
             self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         unsafe { &mut *self.document_runtime }.set_emulated_media(overrides);
+        if changed {
+            self.sample_realtime_media_queries(None);
+        }
     }
 
     pub(crate) fn emulated_media(&self) -> &crate::protocol_types::EmulatedMediaOverrides {
@@ -860,10 +865,24 @@ impl PageScriptHost {
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
         let changed = self.viewport_surface() != viewport_surface;
+        let previous =
+            (changed && self.layout_policy().is_realtime()).then(|| self.style_viewport());
         if changed {
             self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         unsafe { &mut *self.document_runtime }.set_viewport_surface(viewport_surface);
+        if let Some(previous_viewport) = previous {
+            let viewport = self.style_viewport();
+            if (previous_viewport.width != viewport.width
+                || previous_viewport.height != viewport.height)
+                && let Some(target) = self.current_window_document_task_target_for_dispatch_scope(
+                    super::OwnerDispatchScope::Top,
+                )
+            {
+                self.queue_realtime_environment_notification(target);
+            }
+            self.sample_realtime_media_queries(None);
+        }
         changed
     }
 
@@ -912,8 +931,12 @@ impl PageScriptHost {
         document: DomHandle,
         installations: Vec<AdoptedStyleSheetInstallation>,
     ) {
-        self.style_engine
-            .set_document_adopted_style_sheet_installations(document, installations);
+        if self
+            .style_engine
+            .set_document_adopted_style_sheet_installations(document, installations)
+        {
+            self.request_realtime_rendering_opportunity();
+        }
     }
 
     pub(crate) fn adopted_style_sheet_sources_for_document(
@@ -1112,6 +1135,7 @@ impl PageScriptHost {
             owner,
             stylesheet_id,
         ) {
+            self.request_realtime_rendering_opportunity();
             let canceled_load_event_bindings =
                 unsafe { &mut *self.document_runtime }.invalidate_style_related_state(owner);
             for binding in canceled_load_event_bindings {
@@ -1134,6 +1158,7 @@ impl PageScriptHost {
             owner,
             stylesheet_id,
         ) {
+            self.request_realtime_rendering_opportunity();
             self.clear_layout_rect_cache();
             self.queue_stylesheet_source_css_projection(owner);
             let host_ptr = self as *mut Self;
@@ -1160,6 +1185,7 @@ impl PageScriptHost {
             stylesheet_id,
         );
         if refreshed {
+            self.request_realtime_rendering_opportunity();
             self.clear_layout_rect_cache();
         }
         refreshed
@@ -1228,6 +1254,7 @@ impl PageScriptHost {
                 prepared.source().clone(),
                 live_stylesheet,
             );
+        self.request_realtime_rendering_opportunity();
         self.queue_stylesheet_source_css_projection(owner);
     }
 
@@ -1304,6 +1331,7 @@ impl PageScriptHost {
                 source,
                 live_stylesheet,
             );
+        self.request_realtime_rendering_opportunity();
         self.queue_stylesheet_source_css_projection(owner);
         true
     }
@@ -1343,12 +1371,16 @@ impl PageScriptHost {
     ) {
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
-        self.style_engine
+        if self
+            .style_engine
             .set_shadow_root_adopted_style_sheet_installations_with_host(
                 unsafe { &*dom_host },
                 root,
                 installations,
-            );
+            )
+        {
+            self.request_realtime_rendering_opportunity();
+        }
     }
 
     pub(crate) fn shadow_root_adopted_style_sheet_sources(
@@ -1372,11 +1404,15 @@ impl PageScriptHost {
     ) -> Result<(), CssCustomPropertyRegistrationError> {
         self.clear_layout_rect_cache();
         let base_url = self.style_base_url_for_document(document);
-        self.style_engine.register_css_custom_property_for_document(
+        let result = self.style_engine.register_css_custom_property_for_document(
             document,
             registration,
             base_url,
-        )
+        );
+        if result.is_ok() {
+            self.note_realtime_layout_input_change();
+        }
+        result
     }
 
     pub(crate) fn validate_css_custom_property_registration_for_document(
@@ -1963,8 +1999,13 @@ impl PageScriptHost {
         document_handle: DomHandle,
         ready_state: DocumentReadyState,
     ) -> bool {
-        self.dom_host_mut()
-            .set_document_ready_state_for_handle(document_handle, ready_state)
+        let changed = self
+            .dom_host_mut()
+            .set_document_ready_state_for_handle(document_handle, ready_state);
+        if changed && ready_state == DocumentReadyState::Complete {
+            self.queue_realtime_font_readiness(document_handle);
+        }
+        changed
     }
 
     pub(crate) fn note_focus_style_activity(
@@ -1972,6 +2013,9 @@ impl PageScriptHost {
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
     ) {
+        if previous != next {
+            self.note_realtime_layout_input_change();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -1990,6 +2034,7 @@ impl PageScriptHost {
         next: Option<DomHandle>,
         previous_focus_within: Option<Vec<DomHandle>>,
     ) {
+        self.note_realtime_layout_input_change();
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -2009,6 +2054,9 @@ impl PageScriptHost {
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
     ) {
+        if previous != next {
+            self.note_realtime_layout_input_change();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -2028,6 +2076,11 @@ impl PageScriptHost {
         state: StyloElementState,
         old_state: Option<StyloElementState>,
     ) {
+        if self.layout_policy().is_realtime()
+            && (old_state.is_none() || old_state != self.retained_current_element_state(element))
+        {
+            self.note_realtime_layout_input_change();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -2094,6 +2147,9 @@ impl PageScriptHost {
         state_names: Vec<String>,
         old_custom_states: Vec<String>,
     ) {
+        if !state_names.is_empty() {
+            self.note_realtime_layout_input_change();
+        }
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -2209,6 +2265,9 @@ impl PageScriptHost {
                     );
                 }
             }
+            // The native commit already advances dom_version. Its selected
+            // content must also request observer work without a geometry read.
+            self.request_realtime_rendering_opportunity();
         }
         changed
     }
@@ -2335,6 +2394,9 @@ impl PageScriptHost {
                 Some(*old_state),
             );
         }
+        // Native values already advance dom_version, but their content and
+        // intrinsic sizing can change without any pseudo-class transition.
+        self.request_realtime_rendering_opportunity();
     }
 
     pub(crate) fn set_checked_state(
@@ -2441,6 +2503,9 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_style_mutation_effects(&mut self, effects: &[StyleMutationEffect]) {
+        if !effects.is_empty() {
+            self.note_realtime_layout_input_change();
+        }
         if style_mutation_effects_affect_layout_metric(effects) {
             self.clear_layout_rect_cache();
         }
@@ -2476,6 +2541,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
+        self.note_realtime_layout_input_change();
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
         self.style_engine
@@ -2483,6 +2549,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_style_subtree_context_change(&mut self, root: DomHandle) {
+        self.note_realtime_layout_input_change();
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
         self.style_engine
