@@ -1613,6 +1613,32 @@ mod tests {
     }
 
     #[test]
+    fn worker_native_inspector_owns_object_namespaces_and_groups() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        inspector.attach_context(
+            context,
+            v8::Global::new(scope, context),
+            "https://worker-native-objects.test/worker.js",
+        );
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::inspector_session::tests::object_lifecycle::assert_object_namespaces_and_groups(
+            |session, request| {
+                inspector
+                    .dispatch_protocol_message(scope, Some(session), request)
+                    .expect("Worker native Inspector dispatch")
+                    .into_iter()
+                    .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                    .collect()
+            },
+        );
+    }
+
+    #[test]
     fn detached_worker_inspector_session_is_not_lazily_recreated() {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());

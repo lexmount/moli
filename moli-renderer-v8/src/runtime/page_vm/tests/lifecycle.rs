@@ -3718,6 +3718,22 @@ fn runtime_evaluate_without_enable_uses_inspector_default_context() {
 }
 
 #[test]
+fn page_native_inspector_owns_object_namespaces_and_groups() {
+    let mut page_vm = test_page_vm();
+    crate::inspector_session::tests::object_lifecycle::assert_object_namespaces_and_groups(
+        |session, request| {
+            page_vm
+                .vm_mut()
+                .dispatch_inspector_protocol_message_for_session(Some(session), request)
+                .expect("Page native Inspector dispatch")
+                .into_iter()
+                .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                .collect()
+        },
+    );
+}
+
+#[test]
 fn runtime_stack_capture_follows_session_lifecycle() {
     let mut page_vm = test_page_vm();
     crate::inspector_session::tests::assert_session_lifecycle(|request| {
