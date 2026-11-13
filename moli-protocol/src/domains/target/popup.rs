@@ -161,10 +161,14 @@ pub(crate) fn prepare_popup_target(
             .is_none_or(|window| !window.accepts_pending_navigation(generation))
     });
     let navigation_requested = navigation_requested && !navigation_cancelled;
+    let initial_document_url = pending_auxiliary_page
+        .as_ref()
+        .map(|page| page.initial_document_url().as_str().to_owned())
+        .unwrap_or_else(|| "about:blank".to_owned());
     // The Window already exists in script. Adopt that exact initial Page,
     // while discarding the request revoked before its browser target existed.
     let (url, document_response, blob_resource) = if navigation_cancelled {
-        ("about:blank".to_owned(), None, None)
+        (initial_document_url.clone(), None, None)
     } else {
         (url, document_response, blob_resource)
     };
@@ -336,7 +340,7 @@ pub(crate) fn prepare_popup_target(
             target_id.clone(),
             auto_attached_background_session_id.clone(),
             url,
-            Some("about:blank".to_owned()),
+            Some(initial_document_url.clone()),
             popup_creator,
             session_storage_store,
             initial_empty_document_storage_key,
@@ -349,7 +353,7 @@ pub(crate) fn prepare_popup_target(
             .owner_state
             .navigation_history_state;
         history.mark_auxiliary_document_entry(initial_empty);
-        if requested_url != "about:blank" {
+        if requested_url != initial_document_url {
             history.mark_replace_initial_empty_document("link");
         }
         if let Some(opener) = opener {

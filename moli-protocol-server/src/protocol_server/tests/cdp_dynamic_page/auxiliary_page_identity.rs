@@ -64,6 +64,140 @@ async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: se
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initial_about_blank_popup_urls_keep_the_created_document_after_adoption() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async { axum::response::Html("<p>creator</p>") })),
+        "initial-blank-url-adoption",
+    );
+    let base = format!("http://{fixture_addr}");
+    let parent_url = format!("{base}/creator");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let parent_id = create_dynamic_target(&mut browser, 1).await;
+    let mut parent = connect_dynamic_page(addr, &parent_id).await;
+    send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut parent, 2, &parent_url).await;
+    evaluate_window_name_probe(&mut parent, 3,
+        "localStorage.setItem('blank-url','local');sessionStorage.setItem('blank-url','session');true").await;
+    for url in [
+        "about:blank",
+        "about:blank#fragment",
+        "about:blank?query",
+        "about:blank?query#fragment",
+    ] {
+        for stop in [false, true] {
+            // Match the original WPT's stability interval, after the opener
+            // has saved the exact synchronously created Document and realm.
+            let script = format!(
+                r#"
+                window.initialBlankDocument=p.document;window.initialBlankArray=p.Array;
+                initialBlankDocument.body.innerHTML='<p>retained</p>';
+                window.blankRetention=null;
+                if ({stop}) p.stop();
+                setTimeout(()=>{{
+                    try {{blankRetention=[p.document===initialBlankDocument,p.Array===initialBlankArray,
+                        p.document.body.innerHTML,p.document.URL,p.origin,p.document.baseURI,
+                        p.localStorage.getItem('blank-url'),p.sessionStorage.getItem('blank-url')];}}
+                    catch(e){{blankRetention={{error:e.name}};}}
+                }},100);
+            "#
+            );
+            let (child_id, mut child) =
+                open_auxiliary_with_url(addr, &mut parent, url, &script).await;
+            send_cdp_command(&mut child, 2, "Runtime.enable", None, json!({})).await;
+            wait_for_value(&mut parent, "blankRetention!==null", json!(true)).await;
+            assert_eq!(
+                evaluate_window_name_probe(&mut parent, 4, "blankRetention").await,
+                json!([
+                    true,
+                    true,
+                    "<p>retained</p>",
+                    url,
+                    base,
+                    parent_url,
+                    "local",
+                    "session"
+                ]),
+                "{url}, stop={stop}"
+            );
+            let frames =
+                send_cdp_command(&mut child, 3, "Page.getFrameTree", None, json!({})).await;
+            let frames = frames.iter().find(|message| message["id"] == 3).unwrap();
+            assert_eq!(frames["result"]["frameTree"]["frame"]["url"], url);
+            send_cdp_command(
+                &mut browser,
+                20,
+                "Target.closeTarget",
+                None,
+                json!({"targetId":child_id}),
+            )
+            .await;
+        }
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn about_blank_query_reuse_and_explicit_navigation_create_new_documents() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async { axum::response::Html("<p>creator</p>") })),
+        "blank-query-navigation-boundaries",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let parent_id = create_dynamic_target(&mut browser, 1).await;
+    let mut parent = connect_dynamic_page(addr, &parent_id).await;
+    send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut parent, 2, &format!("{base}/creator")).await;
+    let (child_id, mut child) = open_auxiliary_with_url(
+        addr,
+        &mut parent,
+        "about:blank?initial",
+        "window.initialBlankDocument=p.document;p.document.body.textContent='old'",
+    )
+    .await;
+    evaluate_window_name_probe(
+        &mut parent,
+        3,
+        "open('about:blank?named','actual-page');true",
+    )
+    .await;
+    wait_for_value(&mut child,"document.URL==='about:blank?named' && document.readyState==='complete' && document.body!==null",json!(true)).await;
+    assert_eq!(evaluate_window_name_probe(&mut parent,4,
+        "[p.document!==initialBlankDocument,p.document.URL,p.origin,p.document.body.textContent]").await,
+        json!([true,"about:blank?named",base,""]));
+    navigate_dynamic_page_and_wait_for_load(&mut child, 4, "about:blank?browser").await;
+    assert_eq!(evaluate_window_name_probe(&mut child,5,
+        "[origin,document.URL,(()=>{try{return localStorage.getItem('blank-url')}catch(e){return e.name}})()]").await,
+        json!(["null","about:blank?browser","SecurityError"]));
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut parent,
+            5,
+            "(()=>{try{return p.document.URL}catch(e){return e.name}})()"
+        )
+        .await,
+        json!("SecurityError")
+    );
+    send_cdp_command(
+        &mut browser,
+        20,
+        "Target.closeTarget",
+        None,
+        json!({"targetId":child_id}),
+    )
+    .await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retired_auxiliary_realm_follows_inherited_domain_changes() {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().fallback(get(|uri: axum::http::Uri| async move {

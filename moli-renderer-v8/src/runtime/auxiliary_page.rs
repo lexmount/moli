@@ -12,6 +12,7 @@ pub struct RendererPendingAuxiliaryPage {
 struct PendingAuxiliaryPageReservation {
     reservation: RendererPageReservationToken,
     popup_id: u64,
+    initial_document_url: url::Url,
     runtime: Arc<dyn super::page::RendererRuntimeLease>,
 }
 
@@ -38,6 +39,11 @@ impl RendererPendingAuxiliaryPage {
 
     pub fn popup_id(&self) -> u64 {
         self.inner.popup_id
+    }
+
+    /// The URL of the exact Document created before browser adoption.
+    pub fn initial_document_url(&self) -> &url::Url {
+        &self.inner.initial_document_url
     }
 
     pub fn renderer_runtime(&self) -> JsRuntime {
@@ -106,6 +112,11 @@ impl RendererAuxiliaryPageAllocator {
             source_environment.page_id() == self.source_page.as_u64(),
             "an auxiliary Page must use its exact creator's allocator"
         );
+        let initial_document_url = init
+            .dom_host
+            .document_url_for_handle(init.dom_host.document_handle())
+            .cloned()
+            .ok_or_else(|| anyhow!("an auxiliary initial Document must have a URL"))?;
         let page_id = PageId::new(
             self.owner
                 .owner_state
@@ -116,6 +127,7 @@ impl RendererAuxiliaryPageAllocator {
             inner: Arc::new(PendingAuxiliaryPageReservation {
                 reservation: RendererPageReservationToken::new(self.owner.local_host_id, page_id),
                 popup_id: init.window.id(),
+                initial_document_url,
                 runtime: self
                     .runtime_lease()
                     .ok_or_else(|| anyhow!("auxiliary creator renderer is shutting down"))?,
