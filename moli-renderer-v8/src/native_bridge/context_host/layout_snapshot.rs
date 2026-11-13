@@ -1,23 +1,10 @@
-use moli_layout::{FrozenLayoutTree, LayoutViewport};
+use moli_layout::FrozenLayoutTree;
 
 use crate::document_runtime::DomHandle;
 
 struct LatestFrozenLayout {
     document: DomHandle,
     tree: Box<FrozenLayoutTree<DomHandle>>,
-    inputs: LayoutInputSnapshot,
-}
-
-/// Native input generations, without retaining a DOM or style world.
-/// SVG measurements are explicit observations of these inputs; ordinary HTML
-/// geometry continues to read the last publication regardless of this key.
-#[derive(PartialEq)]
-pub(super) struct LayoutInputSnapshot {
-    pub(super) dom: u64,
-    pub(super) styles: Vec<(DomHandle, u64, u64)>,
-    pub(super) interaction: u64,
-    pub(super) resources: u64,
-    pub(super) viewport: LayoutViewport,
 }
 
 /// Single-slot storage for the latest successful frozen layout tree.
@@ -45,22 +32,10 @@ impl LatestLayoutTreeCache {
         self.latest.as_ref()?.tree.tree_for_root(root)
     }
 
-    pub(super) fn inputs_are_current(&self, inputs: &LayoutInputSnapshot) -> bool {
-        self.latest
-            .as_ref()
-            .is_some_and(|latest| latest.inputs == *inputs)
-    }
-
-    pub(super) fn publish(
-        &mut self,
-        document: DomHandle,
-        tree: FrozenLayoutTree<DomHandle>,
-        inputs: LayoutInputSnapshot,
-    ) {
+    pub(super) fn publish(&mut self, document: DomHandle, tree: FrozenLayoutTree<DomHandle>) {
         self.latest = Some(LatestFrozenLayout {
             document,
             tree: Box::new(tree),
-            inputs,
         });
     }
 
