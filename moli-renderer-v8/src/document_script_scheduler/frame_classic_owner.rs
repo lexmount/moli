@@ -569,9 +569,6 @@ mod tests {
                 metadata: ParserClassicScriptMetadata::new(DomHandle::new(6), 1),
                 script_url: script_url("missing.js"),
                 error: "network error".to_owned(),
-                prepared_script: None,
-                source_network_result: None,
-                network_request_handle: None,
             },
             Some(FrameDocumentScriptElementEvent::error(
                 DomHandle::new(5),

@@ -338,9 +338,6 @@ mod tests {
                     script_url: url::Url::parse("https://child-ready-route.test/missing.js")
                         .expect("classic script URL should parse"),
                     error: "network error".to_owned(),
-                    prepared_script: None,
-                    source_network_result: None,
-                    network_request_handle: None,
                 },
                 None,
             ),
