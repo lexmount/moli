@@ -64,6 +64,12 @@ where
                 found = true;
             }
         }
+        for (index, object) in self.object_geometry.iter().enumerate() {
+            if object.source == source {
+                output.object_geometry.push(index);
+                found = true;
+            }
+        }
         found.then_some(output)
     }
 
@@ -71,6 +77,11 @@ where
     /// sources remain explicit None entries; fragment and proxy order follow
     /// the canonical vectors exactly as in the direct source query.
     pub(super) fn source_outputs(&self, outputs: &mut HashMap<N, Option<LayoutNodeOutput>>) {
+        for (index, object) in self.object_geometry.iter().enumerate() {
+            if let Some(output) = outputs.get_mut(&object.source) {
+                output.get_or_insert_default().object_geometry.push(index);
+            }
+        }
         for layout_box in &self.boxes {
             #[cfg(test)]
             SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(count.get() + 1));
@@ -393,7 +404,24 @@ where
                 self.coordinate_space(fragment.coordinate_space)
                     .map(|space| space.local_to_viewport.map_rect(fragment.rect))
             })
+            .chain(self.object_quads_for_output(output))
             .collect()
+    }
+
+    fn object_quads_for_output<'a>(
+        &'a self,
+        output: &'a LayoutNodeOutput,
+    ) -> impl Iterator<Item = LayoutQuad> + 'a {
+        output.object_geometry.iter().filter_map(|index| {
+            let object = self.object_geometry.get(*index)?;
+            let space = &self.boxes.get(object.owner.index())?.coordinate_space;
+            Some(LayoutQuad {
+                points: object
+                    .quad
+                    .points
+                    .map(|point| space.local_to_viewport.map_point(point)),
+            })
+        })
     }
 
     pub fn content_quads_for_source(&self, source: N) -> Vec<LayoutQuad> {
@@ -423,6 +451,7 @@ where
                 self.coordinate_space(fragment.coordinate_space)
                     .map(|space| space.local_to_viewport.map_rect(rect))
             })
+            .chain(self.object_quads_for_output(output))
             .collect()
     }
 
@@ -937,10 +966,53 @@ mod tests {
                 fragment(valid_fragment, Some(valid_box_model)),
             ],
             Vec::new(),
+            Vec::new(),
             identity_space(None),
             Vec::new(),
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn object_geometry_uses_owner_coordinates_and_batch_source_provenance() {
+        let mut tree = inline_fragment_tree();
+        tree.boxes[0].coordinate_space.local_to_viewport =
+            LayoutTransform2D::translation(100.0, 200.0);
+        tree.object_geometry.push(crate::LayoutObjectGeometry {
+            source: 2,
+            owner: LayoutOutputBoxId::from_index(0),
+            quad: LayoutQuad {
+                points: [
+                    LayoutPoint::new(10.0, 20.0),
+                    LayoutPoint::new(40.0, 20.0),
+                    LayoutPoint::new(40.0, 60.0),
+                    LayoutPoint::new(10.0, 60.0),
+                ],
+            },
+        });
+        let expected = LayoutQuad {
+            points: [
+                LayoutPoint::new(110.0, 220.0),
+                LayoutPoint::new(140.0, 220.0),
+                LayoutPoint::new(140.0, 260.0),
+                LayoutPoint::new(110.0, 260.0),
+            ],
+        };
+        assert_eq!(tree.client_rects_for_source(2), vec![expected]);
+        assert_eq!(tree.content_quads_for_source(2), vec![expected]);
+        let mut outputs = HashMap::from([(1, None), (2, None), (3, None)]);
+        tree.source_outputs(&mut outputs);
+        assert_eq!(
+            tree.client_rects_for_output(outputs[&2].as_ref().unwrap()),
+            vec![expected]
+        );
+        assert_eq!(outputs[&2].as_ref().unwrap().principal_box, None);
+        assert!(outputs[&3].is_none());
+        assert_eq!(
+            tree.boxes.len(),
+            1,
+            "SVG objects must not become synthetic CSS boxes"
+        );
     }
 
     #[test]
@@ -953,6 +1025,7 @@ mod tests {
             principal_box: Some(box_id),
             fragments: vec![skipped_fragment, valid_fragment],
             scroll_proxy_boxes: Vec::new(),
+            object_geometry: Vec::new(),
         };
 
         let geometry = tree

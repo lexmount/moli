@@ -58,13 +58,13 @@ pub use layout_tree::{
     LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImageReference,
     LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason, LayoutFragment,
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
-    LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
-    LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
-    LayoutResolvedGridTrackList, LayoutResolvedGridTracks, LayoutScrollContainerMetrics,
-    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D,
-    LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
-    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutIntersectionGeometry, LayoutNodeOutput, LayoutObjectGeometry, LayoutOutputBoxId,
+    LayoutPaintedSurfaceHit, LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad,
+    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics,
+    LayoutResizeObserverSize, LayoutResolvedGridTrackList, LayoutResolvedGridTracks,
+    LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport,
+    MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use list::{ListCounter, list_marker_text};
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
@@ -98,9 +98,9 @@ pub use source::{
     ChildBoxPolicy, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
     LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink, LayoutImageResource,
     LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
-    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
-    LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles,
-    ResolvedLayoutPseudoStyle, html_display_contents_is_none,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutSvgContent,
+    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, html_display_contents_is_none,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,

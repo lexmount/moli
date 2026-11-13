@@ -60,6 +60,7 @@ pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
     reason: LayoutFlushReason,
     started: Instant,
     paint_capture: Option<PaintCaptureRequest>,
+    mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
     phase_metrics: LayoutPassPhaseMetrics,
 ) -> Result<LayoutPassResult<N>, LayoutError>
@@ -72,6 +73,15 @@ where
     projection.build_local_box_geometry(&overflow);
     projection.build_scroll_extents(&overflow);
     projection.build_coordinate_spaces()?;
+    for object in &mut object_geometry {
+        let owner = object.owner.index();
+        let content = projection.boxes[owner].content_box;
+        let zoom = world.boxes[owner].style.effective_zoom();
+        object.quad.points = object
+            .quad
+            .points
+            .map(|point| LayoutPoint::new(content.x + point.x * zoom, content.y + point.y * zoom));
+    }
     projection.build_fragments();
     projection.assign_clip_and_paint_order();
 
@@ -161,7 +171,12 @@ where
             tree: Box::new(snapshot.tree),
         })
         .collect();
-    let tree = projection.into_frozen_tree(source.root(), content_size, embedded_frames);
+    let tree = projection.into_frozen_tree(
+        source.root(),
+        content_size,
+        object_geometry,
+        embedded_frames,
+    );
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
@@ -967,6 +982,7 @@ where
         self,
         source_root: N,
         content_size: LayoutSize,
+        object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
         embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
     ) -> FrozenLayoutTree<N> {
         let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
@@ -1042,6 +1058,7 @@ where
             boxes,
             self.fragments,
             self.scroll_proxy_links,
+            object_geometry,
             viewport_coordinate_space,
             self.clip_chain,
             embedded_frames,
