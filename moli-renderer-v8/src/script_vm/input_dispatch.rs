@@ -9,7 +9,9 @@ use std::rc::Rc;
 #[cfg(feature = "ace-protocol")]
 mod ace_page_tasks;
 mod drag_source;
+mod mouse_boundary;
 use drag_source::dispatch_drag_source_event;
+use mouse_boundary::dispatch_mouse_boundary_events;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{mouse_button_mask, single_changed_mouse_button};
@@ -613,53 +615,29 @@ fn dispatch_touch_tap_activation(
             root_coordinates.with_client(f64::from(p.x), f64::from(p.y))
         });
     if previous_hover != Some(tap.target) {
-        if let Some(previous) =
-            previous_hover.filter(|h| unsafe { &*runtime_ptr }.dom_host().is_connected(*h))
-        {
-            let previous_coordinates = unsafe { &*runtime_ptr }
-                .dom_host()
-                .owner_document_handle(previous)
-                .and_then(|document| root_to_document_frame(unsafe { &*runtime_ptr }, document))
-                .map(|transform| {
-                    transform.map_point(moli_layout::LayoutPoint::new(x as f32, y as f32))
-                })
-                .map_or(root_coordinates, |p| {
-                    root_coordinates.with_client(f64::from(p.x), f64::from(p.y))
-                });
-            for name in ["mouseout", "mouseleave"] {
-                let related = related_target_value(scope, Some(tap.target));
-                if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                    scope,
-                    runtime_ptr,
-                    previous,
-                    name,
-                    previous_coordinates,
-                    0,
-                    0,
-                    related,
-                    0,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous, event);
-                }
-            }
-        }
+        let previous_coordinates = previous_hover
+            .and_then(|node| {
+                unsafe { &*runtime_ptr }
+                    .dom_host()
+                    .owner_document_handle(node)
+            })
+            .and_then(|document| root_to_document_frame(unsafe { &*runtime_ptr }, document))
+            .map(|transform| transform.map_point(moli_layout::LayoutPoint::new(x as f32, y as f32)))
+            .map_or(root_coordinates, |point| {
+                root_coordinates.with_client(f64::from(point.x), f64::from(point.y))
+            });
         unsafe { &mut *runtime_ptr }.set_hovered_element_for_input(Some(tap.target));
-        for name in ["mouseover", "mouseenter"] {
-            let related = related_target_value(scope, previous_hover);
-            if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                scope,
-                runtime_ptr,
-                tap.target,
-                name,
-                coordinates,
-                0,
-                0,
-                related,
-                0,
-            ) {
-                let _ = dispatch_public_event(scope, runtime_ptr, tap.target, event);
-            }
-        }
+        dispatch_mouse_boundary_events(
+            scope,
+            runtime_ptr,
+            previous_hover,
+            Some(tap.target),
+            previous_coordinates,
+            coordinates,
+            0,
+            0,
+            0,
+        );
     }
     if is_disabled_form_control(unsafe { &*runtime_ptr }, tap.target) {
         return input_dispatch_outcome(true);
@@ -1630,77 +1608,21 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
                 }
             }
-            if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
-                let previous_client_point = previous_root_to_frame.map_point(root_point);
-                let previous_coordinates = InputEventCoordinates::from_root(x, y).with_client(
-                    f64::from(previous_client_point.x),
-                    f64::from(previous_client_point.y),
-                );
-                let related_target = related_target_value(scope, Some(handle));
-                if let Some(event) = construct_mouse_event_with_related_target_for_target(
+            if let Some((previous_handle, previous_root_to_frame)) = hover_transition {
+                let point = previous_root_to_frame.map_point(root_point);
+                let previous_coordinates = InputEventCoordinates::from_root(x, y)
+                    .with_client(f64::from(point.x), f64::from(point.y));
+                dispatch_mouse_boundary_events(
                     scope,
                     runtime_ptr,
                     previous_handle,
-                    "mouseout",
+                    Some(handle),
                     previous_coordinates,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
-                }
-                let remains_inside_previous = {
-                    let dom = unsafe { &*runtime_ptr }.dom_host();
-                    std::iter::successors(Some(handle), |node| dom.flat_tree_parent(*node))
-                        .any(|ancestor| ancestor == previous_handle)
-                };
-                if !remains_inside_previous {
-                    let related_target = related_target_value(scope, Some(handle));
-                    if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                        scope,
-                        runtime_ptr,
-                        previous_handle,
-                        "mouseleave",
-                        previous_coordinates,
-                        button,
-                        buttons,
-                        related_target,
-                        modifiers,
-                    ) {
-                        let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
-                    }
-                }
-            }
-            if let Some((previous_handle, _)) = hover_transition {
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    "mouseover",
                     coordinates,
                     button,
                     buttons,
-                    related_target,
                     modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
-                let related_target = related_target_value(scope, previous_handle);
-                if let Some(event) = construct_mouse_event_with_related_target_for_target(
-                    scope,
-                    runtime_ptr,
-                    handle,
-                    "mouseenter",
-                    coordinates,
-                    button,
-                    buttons,
-                    related_target,
-                    modifiers,
-                ) {
-                    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-                }
+                );
             }
             if let Some(pointer_event_name) = pointer_event_name_for_mouse_event(event_name)
                 && let Some(event) = construct_pointer_event_with_modifiers(
