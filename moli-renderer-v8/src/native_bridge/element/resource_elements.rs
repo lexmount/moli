@@ -2536,7 +2536,7 @@ pub(super) struct HtmlAreaElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
         getter = html_ping_getter_function,
-        setter = usv_string_reflection_setter_function,
+        setter = html_ping_setter_function,
         setter_data = UsvStringReflection::AreaPing
     )]
     ping: (),

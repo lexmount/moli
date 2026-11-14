@@ -1,5 +1,7 @@
 use super::*;
 
+mod ping_namespaces;
+
 mod attribute_lookup;
 mod custom_elements;
 mod detached;
