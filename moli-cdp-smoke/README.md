@@ -53,8 +53,14 @@ disk extent lifetime, non-UTF-8 bytes and release are checked by Rust regression
 The default `fetch-headers` group compares fetch, asynchronous XHR and synchronous
 XHR using real redirect and echo endpoints. It checks replayed upload headers,
 no-op method/body edits, fresh Content-Type values, generated Origin visibility,
-and Authorization scoped to one redirect origin. Each request must retain its
+and Authorization scoped to one redirect origin. Explicit URL overrides restart
+header application even when the URL is unchanged, matching Chromium; the GET
+still has no upload body or stale Content-Length. Each request must retain its
 Network identity and emit exactly one terminal event.
+CI runs this group against the pinned Chrome for Testing 156.0.8078.73 oracle,
+also used by `dom-input`. For local Chromium runs, select it with
+`--chromium-bin-for-group fetch-headers=/path/to/chrome`. Chromium 145 differs
+when an intervening override lets a later hop explicitly reintroduce Origin.
 
 The default `fetch-media` group drives real audio, video and text-track element
 loads. Eleven scenarios cover single Media filters, mixed Image/Media/Font
