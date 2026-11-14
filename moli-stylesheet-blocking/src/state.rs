@@ -362,9 +362,17 @@ impl StylesheetBlockingState {
             resource_cache_scope,
             document_url.clone(),
             resource_key.clone(),
-        )) {
+        )) && !url_fetch.terminal().is_some_and(|terminal| {
+            matches!(
+                terminal.physical(),
+                crate::StylesheetPhysicalOutcome::NetworkError(_)
+            )
+        }) {
             return url_fetch.clone();
         }
+        // A failed transfer has no resource to reuse. A later owner can retry;
+        // existing owners retain their own terminal and concurrent loads join
+        // the newly pending physical request as usual.
         let start_unix_millis = moli_time::unix_epoch_millis();
         let request_url = resource_key.request_url().clone();
         let fetch = StylesheetFetch::new(

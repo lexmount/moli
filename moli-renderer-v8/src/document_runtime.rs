@@ -356,6 +356,7 @@ struct StylesheetLifecycleState {
     task_sender: crate::page_task_queue::RendererPageStylesheetTaskSender,
     task_producer: Option<crate::page_task_queue::RendererPageStylesheetTaskProducer>,
     service_worker_connected_link_context: Option<ServiceWorkerConnectedLinkContext>,
+    interception_context: Option<crate::network::interception_output::ResourceInterceptionContext>,
     #[cfg(test)]
     task_test_residence: Option<crate::page_task_queue::RendererPageStylesheetTaskTestResidence>,
 }
@@ -377,6 +378,7 @@ impl StylesheetLifecycleState {
             task_sender,
             task_producer: None,
             service_worker_connected_link_context: None,
+            interception_context: None,
             #[cfg(test)]
             task_test_residence: None,
         }
@@ -448,6 +450,7 @@ pub(crate) struct ConnectedLoadNetworkResult {
     pub(crate) resource_type: SubresourceResourceType,
     pub(crate) start_unix_millis: Option<f64>,
     pub(crate) origin_clean: bool,
+    pub(crate) network_observed: bool,
     pub(crate) result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
 }
 
@@ -2688,6 +2691,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: None,
                 blocking_operation: None,
                 source_operation: None,
@@ -2735,6 +2739,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: Some(active_load.fetch().clone()),
                 blocking_operation: None,
                 source_operation: None,
@@ -2787,6 +2792,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: Some(detached_load.fetch().clone()),
                 blocking_operation: None,
                 source_operation: None,
@@ -2839,6 +2845,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: Some(detached_load.fetch().clone()),
                 blocking_operation: None,
                 source_operation: None,
@@ -3445,6 +3452,7 @@ mod tests {
             operation,
             successful: false,
             network_results: vec![ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: None,
                 blocking_operation: None,
                 source_operation: None,
@@ -3539,6 +3547,7 @@ mod tests {
                 operation: first_a,
                 successful: true,
                 network_results: vec![ConnectedLoadNetworkResult {
+                    network_observed: false,
                     stylesheet_fetch: None,
                     blocking_operation: None,
                     source_operation: None,
@@ -3611,6 +3620,7 @@ mod tests {
             operation,
             successful: true,
             network_results: vec![ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: None,
                 blocking_operation: None,
                 source_operation: None,
@@ -3671,6 +3681,7 @@ mod tests {
             operation: first_a,
             successful: true,
             network_results: vec![ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: None,
                 blocking_operation: None,
                 source_operation: None,
@@ -3807,6 +3818,7 @@ mod tests {
             .stylesheet_lifecycle
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
+                network_observed: false,
                 stylesheet_fetch: None,
                 blocking_operation: None,
                 source_operation: None,

@@ -772,6 +772,9 @@ impl PageScriptHost {
         if let Some(lifecycle) = &self.root_document_lifecycle {
             lifecycle.did_open_document();
         }
+        let context = self.native_interception_context();
+        let runtime: &mut DocumentRuntime = self;
+        runtime.bind_stylesheet_interception_context(context);
     }
 
     pub(crate) fn install_page_task_capabilities(

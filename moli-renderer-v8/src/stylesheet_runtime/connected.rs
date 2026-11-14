@@ -1103,6 +1103,7 @@ impl DocumentRuntime {
                         .as_ref()
                         .is_ok_and(|response| response.load_event_successful),
                     network_results: vec![ConnectedLoadNetworkResult {
+                        network_observed: false,
                         stylesheet_fetch: None,
                         blocking_operation: None,
                         source_operation: None,

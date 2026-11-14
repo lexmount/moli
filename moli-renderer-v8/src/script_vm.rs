@@ -1203,6 +1203,12 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .set_root_document_lifecycle(lifecycle);
+        let context = self
+            ._context_host
+            .borrow_mut()
+            .native_interception_context();
+        self.document_runtime
+            .bind_stylesheet_interception_context(context);
     }
 
     pub(super) fn run_v8_foreground_task(

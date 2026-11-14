@@ -38,15 +38,15 @@ impl ControlledXhrContext {
         load: ResourceLoadLease,
         cancel: moli_fetch::FetchCancelHandle,
         preflight_headers: Vec<(String, String)>,
-    ) -> super::ControlledXhrLoad {
-        super::ControlledXhrLoad {
+    ) -> super::ControlledResourceLoad {
+        super::ControlledResourceLoad {
             request,
             info,
             load,
             cancel,
             source_document: self.interception.source_document,
             output: self.interception.output,
-            connect_policy: self.connect_policy,
+            connect_policy: Some(self.connect_policy),
             preflight_headers,
             initial_decision: None,
         }

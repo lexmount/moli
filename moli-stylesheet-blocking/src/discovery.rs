@@ -420,7 +420,8 @@ pub fn stylesheet_preload_link_request(
         element.nonce.as_deref(),
         element.charset.as_deref(),
         element.fetch_priority.as_deref(),
-    );
+    )
+    .with_quirks_mode_mime_compatibility(document.document_is_quirks_mode());
     Some(StylesheetPreloadLinkRequest { url, options })
 }
 
@@ -932,6 +933,13 @@ mod tests {
         );
         assert_eq!(request.options().cross_origin(), Some("anonymous"));
         assert_eq!(request.options().integrity(), Some("sha256-test"));
+        assert!(host.set_attribute(link, "rel", "stylesheet"));
+        let stylesheet = stylesheet_link_disposition(&host, node_id).expect("promoted stylesheet");
+        assert_eq!(
+            request.options().resource_key(request.url().clone()),
+            stylesheet.options().resource_key(stylesheet.url().clone())
+        );
+        assert!(host.set_attribute(link, "rel", "preload"));
         assert!(
             stylesheet_link_disposition(&host, node_id).is_none(),
             "a preload client must not become a stylesheet install client"
