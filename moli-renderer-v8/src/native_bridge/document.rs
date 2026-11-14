@@ -966,12 +966,45 @@ fn document_referrer_getter_function<'s>(
     set_document_string_return_value(scope, &mut rv, referrer);
 }
 
+const DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT: &str = "__moliDetachedDocumentOriginSource";
+
+fn document_origin_source_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let mut source = document;
+    for _ in 0..16 {
+        let Some(next) =
+            crate::util::get_private_object(scope, source, DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT)
+        else {
+            break;
+        };
+        source = next;
+    }
+    source
+}
+
+pub(crate) fn inherit_detached_document_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    source_document: v8::Local<'s, v8::Object>,
+) {
+    let source_document = document_origin_source_object(scope, source_document);
+    crate::util::set_private_value(
+        scope,
+        document,
+        DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT,
+        source_document.into(),
+    );
+}
+
 fn document_domain_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
+    let origin_source = document_origin_source_object(scope, args.this());
+    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, origin_source)
     else {
         rv.set_undefined();
         return;
