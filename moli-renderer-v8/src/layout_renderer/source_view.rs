@@ -165,10 +165,18 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn element_semantics(&self, node: Self::NodeId) -> Option<LayoutElementSemantics> {
-        self.host()
-            .node(node)
-            .and_then(Node::as_element)
-            .map(|element| layout_element_semantics_for_source(self.host(), node, element))
+        let element = self.host().node(node)?.as_element()?;
+        let mut semantics = layout_element_semantics_for_source(self.host(), node, element);
+        let editing_host = crate::native_bridge::element::contenteditable_editing_host;
+        semantics.metadata.has_line_if_empty = semantics.namespace == LayoutNamespace::Html
+            && element.attribute("contenteditable").is_some()
+            && editing_host(self.runtime, node) == Some(node)
+            && self
+                .host()
+                .dom()
+                .parent_node(node)
+                .is_none_or(|parent| editing_host(self.runtime, parent).is_none());
+        Some(semantics)
     }
 
     fn text(&self, node: Self::NodeId) -> Option<&str> {

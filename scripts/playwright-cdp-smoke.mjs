@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { checkEmptyEditorFill } from './playwright-cdp-smoke-empty-editor.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -745,6 +746,8 @@ async function runSmoke({ chromium, endpoint, fixture }) {
 
     const context = await browser.newContext({ acceptDownloads: true });
     record(results, 'browser_new_context');
+    await checkEmptyEditorFill(context, fixture);
+    record(results, 'empty_contenteditable_fill_matrix');
 
     const page = await context.newPage();
     if (process.env.MOLI_SMOKE_TRACE === '1') {

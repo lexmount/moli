@@ -1121,6 +1121,31 @@ impl ResolvedLayoutStyle {
         )
     }
 
+    pub(crate) fn supports_empty_editing_line(&self) -> bool {
+        // The IFC backend currently measures horizontal text. Preserve its
+        // existing orthogonal geometry until vertical inline sizing is supported.
+        self.writing_mode.is_horizontal()
+            && matches!(
+                self.display,
+                LayoutDisplay::Block
+                    | LayoutDisplay::FlowRoot
+                    | LayoutDisplay::InlineBlock
+                    | LayoutDisplay::Flex
+                    | LayoutDisplay::InlineFlex
+                    | LayoutDisplay::Grid
+                    | LayoutDisplay::InlineGrid
+                    | LayoutDisplay::BlockListItem
+                    | LayoutDisplay::TableCell
+                    | LayoutDisplay::TableCaption
+            )
+            && self.computed.as_ref().is_none_or(|computed| {
+                computed.clone_content_visibility() != StyloContentVisibility::Hidden
+                    && !computed
+                        .clone_contain()
+                        .contains(style::values::computed::Contain::SIZE)
+            })
+    }
+
     /// Returns the retained Stylo allocation backing this pass-local style.
     ///
     /// Renderer-owned anonymous box construction uses the parent computed
