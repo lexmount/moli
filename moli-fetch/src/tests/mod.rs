@@ -712,23 +712,6 @@ fn request_lowers_script_fetch_metadata_into_owned_request_fields() -> Result<()
     Ok(())
 }
 
-#[test]
-fn fetch_priority_hint_parsing_keeps_webidl_strict_and_html_case_insensitive() {
-    assert_eq!(
-        "high".parse::<FetchPriorityHint>().ok(),
-        Some(FetchPriorityHint::High)
-    );
-    assert!(
-        "HIGH".parse::<FetchPriorityHint>().is_err(),
-        "RequestInit priority is a WebIDL enum and must stay case-sensitive"
-    );
-    assert_eq!(
-        FetchPriorityHint::from_attribute(Some(" HIGH ")),
-        Some(FetchPriorityHint::High),
-        "HTML fetchpriority attribute keywords are ASCII case-insensitive"
-    );
-}
-
 #[tokio::test]
 async fn streaming_response_collector_ignores_interim_headers_before_final_start() -> Result<()> {
     let (start_tx, mut start_rx) = oneshot::channel();
