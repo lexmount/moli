@@ -29,7 +29,14 @@ pub(crate) async fn fetch_intercepted_window_hop(
     cancel_handle: Option<FetchCancelHandle>,
 ) -> Result<NetworkFetchResult<Response>, String> {
     let mode = request.redirect_mode();
-    let preflight_headers = request.request_headers.to_byte_strings();
+    // DevTools can echo generated fields (Origin, Host, Content-Length,
+    // Sec-*). Those are not author CORS headers requiring preflight permission.
+    let preflight_headers = request
+        .request_headers
+        .to_byte_strings()
+        .into_iter()
+        .filter(|(name, _)| !moli_fetch::is_forbidden_request_header_name(name))
+        .collect();
     let cancel = cancel_handle.unwrap_or_default();
     let response_cancel = cancel.child_for_subrequest();
     let observed = fetch_subresource_hop(

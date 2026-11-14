@@ -226,15 +226,17 @@ fn outgoing_request_header_bytes_for_url(
 
     // Scope custom credentials to the transfer's initial origin. Preserve the
     // configured headers so returning to that origin can restore them.
-    let send_authorization = same_origin(request.initial_url(), request_url);
+    let initial_origin = same_origin(request.initial_url(), request_url);
+    let send_authorization =
+        initial_origin || request.allows_interception_authorization_for_url(request_url);
     let send_explicit_cookies = match request.cookie_header_policy() {
         CookieHeaderPolicy::PreferStore => cookie_header.is_none(),
-        CookieHeaderPolicy::PreserveExplicit => send_authorization,
+        CookieHeaderPolicy::PreserveExplicit => initial_origin,
     };
 
     for (name, value) in config.default_request_headers() {
         if (!send_explicit_cookies && name.eq_ignore_ascii_case("cookie"))
-            || (!send_authorization && name.eq_ignore_ascii_case("authorization"))
+            || (!initial_origin && name.eq_ignore_ascii_case("authorization"))
             || (name.eq_ignore_ascii_case("accept")
                 && header_present(&request.request_headers, "accept"))
         {
@@ -289,7 +291,7 @@ fn outgoing_request_header_bytes_for_url(
     append_browser_subresource_headers(&mut outgoing, config, request, request_url);
     append_browser_storage_access_header(&mut outgoing, request, request_url);
 
-    if let Some(origin) = request_origin_header_value(request, request_url) {
+    if let Some(origin) = request.origin_header_value(request_url) {
         append_encoded_header_if_missing(&mut outgoing, "Origin", origin);
     }
 
@@ -454,22 +456,6 @@ fn append_fetch_metadata_headers(
     {
         append_encoded_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
     }
-}
-
-fn request_origin_header_value(request: &Request, request_url: &Url) -> Option<String> {
-    request.request_origin()?;
-    if !matches!(request_url.scheme(), "http" | "https") {
-        return None;
-    }
-    let safe_method =
-        request.method.eq_ignore_ascii_case("GET") || request.method.eq_ignore_ascii_case("HEAD");
-    if safe_method
-        && (request.request_mode != crate::RequestMode::Cors
-            || !request.has_cross_origin_url(request_url))
-    {
-        return None;
-    }
-    Some(request.serialized_origin())
 }
 
 fn append_browser_client_hints(
