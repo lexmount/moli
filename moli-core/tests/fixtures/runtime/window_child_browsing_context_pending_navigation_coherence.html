@@ -1,9 +1,10 @@
 <!doctype html>
 <html>
   <body>
-    <iframe id="child" src="about:blank"></iframe>
     <script>
-      const iframe = document.getElementById("child");
+      const iframe = document.createElement("iframe");
+      iframe.id = "child";
+      iframe.src = "about:blank";
       let loadCount = 0;
       let initialWindow = null;
       let initialDocument = null;
@@ -137,6 +138,7 @@
           iframe.contentDocument.body.getAttribute("data-script-ran") ?? "null"
         );
       });
+      document.body.insertBefore(iframe, document.currentScript);
     </script>
   </body>
 </html>
