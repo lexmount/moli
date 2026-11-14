@@ -345,12 +345,10 @@ async fn fulfilled_window_fetch_redirect_modes_and_missing_location() {
         .await;
         let expected = if mode == "manual" {
             json!({"status":0,"type":"opaqueredirect","body":"","redirected":false})
-        } else if !location {
-            json!({"status":302,"type":"basic","body":"noloc","redirected":false})
         } else if mode == "error" {
             json!({"error":"TypeError"})
         } else {
-            json!({"status":0,"type":"opaqueredirect","body":"","redirected":false})
+            json!({"status":302,"type":"basic","body":"noloc","redirected":false})
         };
         assert_eq!(
             result["result"]["result"]["value"], expected,
@@ -550,7 +548,10 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         ("error", 302, true, Some("http://[")),
         ("manual", 302, false, Some("http://[")),
         ("manual", 302, true, None),
+        ("error", 302, true, None),
+        ("follow", 302, true, None),
         ("manual", 200, true, Some("http://[")),
+        ("error", 200, true, Some("http://[")),
     ];
     let observed = Arc::new(Mutex::new(Vec::new()));
     let server_observed = observed.clone();
@@ -614,7 +615,7 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         command(&mut ctx, 60_000, "Fetch.disable", json!({})).await;
     }
     let mut expected_requests = Vec::new();
-    for (index, (mode, status, cors_allowed, _)) in cases.into_iter().enumerate() {
+    for (index, (mode, status, cors_allowed, location)) in cases.into_iter().enumerate() {
         let id = 60_010 + index as u64 * 10;
         let source = format!("{cross_origin}/{index}");
         command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
@@ -651,9 +652,11 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         expected_requests.extend([(index, "OPTIONS".to_owned()), (index, "PUT".to_owned())]);
         assert_eq!(*observed.lock(), expected_requests, "{stage:?}/{index}");
         let value = &result["result"]["result"]["value"];
-        if !cors_allowed || mode != "manual" {
+        if !cors_allowed
+            || (status == 302 && (mode == "error" || (mode == "follow" && location.is_some())))
+        {
             assert_eq!(value, &json!({"error":"TypeError"}), "{stage:?}/{index}");
-        } else if status == 302 {
+        } else if status == 302 && mode == "manual" {
             assert_eq!(
                 value,
                 &json!({
@@ -662,7 +665,7 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
                 "{stage:?}/{index}"
             );
         } else {
-            assert_eq!(value["status"], 200);
+            assert_eq!(value["status"], status);
             assert_eq!(value["type"], "cors");
             assert_eq!(value["body"], "response");
             assert_eq!(value["url"], source);

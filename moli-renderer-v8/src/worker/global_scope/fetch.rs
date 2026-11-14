@@ -2944,7 +2944,13 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
-            let response_filter = response.response_filter();
+            // Request mode determines redirect filtering, even without Location.
+            // Select it at settlement so response interception cannot lose it.
+            let response_filter = response.response_filter().or_else(|| {
+                (pending.redirect_mode == RequestRedirectMode::Manual
+                    && matches!(response_head.status, 301 | 302 | 303 | 307 | 308))
+                .then_some(crate::types::FetchResponseType::OpaqueRedirect.into())
+            });
             let security_validation = if response_filter
                 .as_ref()
                 .is_some_and(|filter| filter.service_worker_metadata().is_some())
