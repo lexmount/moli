@@ -63,6 +63,8 @@ mod readiness;
 mod redirect_chain;
 #[path = "fetch_cli/subprocess.rs"]
 mod subprocess;
+#[path = "fetch_cli/web_security.rs"]
+mod web_security;
 
 struct Output {
     status: OutputStatus,

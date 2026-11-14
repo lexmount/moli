@@ -632,7 +632,7 @@ impl ControlledResourceLoad {
                     .iter()
                     .any(|(name, _)| name.eq_ignore_ascii_case("location"))
             {
-                if self.response_filter.is_none() {
+                if self.response_filter.is_none() && !self.load.request_client().cors_disabled() {
                     self.request.validate_cors_response_for_url(
                         &response.head.final_url,
                         &response.head.headers,
@@ -646,7 +646,10 @@ impl ControlledResourceLoad {
                     false,
                 )?
             } else {
-                advance_subresource_response(&mut self.request, response.head.clone(), false)?
+                advance_subresource_response(
+                    &mut self.request, response.head.clone(), false,
+                    self.load.request_client().cors_disabled(),
+                )?
             };
             let manual = matches!(
                 transition,
@@ -669,6 +672,7 @@ impl ControlledResourceLoad {
                             .expect("XHR has a requesting origin"),
                         &response.head,
                         self.request.credentials_mode,
+                        self.load.request_client().cors_disabled(),
                     )?;
                 }
                 if !is_synthetic {

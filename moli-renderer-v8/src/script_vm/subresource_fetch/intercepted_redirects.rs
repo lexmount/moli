@@ -6,6 +6,7 @@ pub(super) fn follow_intercepted_redirect(
     head: &ResponseHead,
     document_url: &Url,
     network_headers: Option<&[(String, String)]>,
+    cors_disabled: bool,
 ) -> Result<Option<(Request, RedirectInfo)>, String> {
     // A manual response does not follow Location, so even an invalid URL must
     // remain opaque. The completion path still checks the response's CORS policy.
@@ -15,7 +16,9 @@ pub(super) fn follow_intercepted_redirect(
     if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
         // A fulfilled network response has the same CORS gate as a real hop.
         // Preserve that failure before rejecting an error-mode redirect.
-        request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+        if !cors_disabled {
+            request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+        }
         if request.redirect_mode() == RequestRedirectMode::Error
             && head
                 .headers

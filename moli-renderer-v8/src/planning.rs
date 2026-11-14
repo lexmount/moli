@@ -350,6 +350,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                         request_origin,
                         response,
                         document_character_set,
+                        loader.cors_disabled(),
                     )
                 }
                 Err(error) => {
@@ -473,6 +474,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
                     request_origin,
                     response,
                     document_character_set,
+                    false,
                 )
             }
             None => failed_external_script_source_load_outcome(format!(
@@ -550,6 +552,7 @@ pub(crate) fn external_script_source_load_outcome_from_response(
     request_origin: &moli_url::WebOrigin,
     response: crate::protocol_types::NavigationResponse,
     document_character_set: Option<&str>,
+    cors_disabled: bool,
 ) -> PreparedScriptSourceLoadOutcome {
     let request_mode = external_script_request_mode(script.kind, &script.fetch_metadata);
     let head = response.head();
@@ -560,6 +563,7 @@ pub(crate) fn external_script_source_load_outcome_from_response(
             request_origin,
             &head,
             external_script_credentials_mode(script.kind, &script.fetch_metadata),
+            cors_disabled,
         )
         .err()
     } else {
@@ -579,6 +583,7 @@ pub(crate) fn external_script_source_load_outcome_from_result(
     request_origin: &moli_url::WebOrigin,
     result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     document_character_set: Option<&str>,
+    cors_disabled: bool,
 ) -> PreparedScriptSourceLoadOutcome {
     match result {
         Ok(response) => external_script_source_load_outcome_from_response(
@@ -586,6 +591,7 @@ pub(crate) fn external_script_source_load_outcome_from_result(
             request_origin,
             response,
             document_character_set,
+            cors_disabled,
         ),
         Err(message) => failed_external_script_source_load_outcome(message),
     }
@@ -1363,6 +1369,7 @@ mod tests {
                 body.to_vec(),
             ),
             None,
+            false,
         );
         assert_eq!(
             matching.source_result.expect("matching integrity"),
@@ -1379,6 +1386,7 @@ mod tests {
                 body.to_vec(),
             ),
             None,
+            false,
         );
         assert!(
             mismatch
@@ -1431,6 +1439,7 @@ mod tests {
             &moli_url::WebOrigin::from_url(&script.initiator_url),
             response,
             None,
+            false,
         );
 
         assert!(

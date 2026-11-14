@@ -1002,6 +1002,10 @@ impl ResourceRequestClient {
         self.resource_runtime.client().tls_verify_host()
     }
 
+    pub fn cors_disabled(&self) -> bool {
+        self.resource_runtime.client().cors_disabled()
+    }
+
     pub fn websocket_connector(&self) -> moli_fetch::CurlWebSocketConnector {
         self.resource_runtime.client().websocket_connector()
     }

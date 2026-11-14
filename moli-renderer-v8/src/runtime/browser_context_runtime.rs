@@ -286,6 +286,7 @@ impl DetachedParserScriptFetchContinuation {
                 &inner.request_origin,
                 Err(error_text),
                 inner.document_character_set.as_deref(),
+                inner.request_client.cors_disabled(),
             ));
         true
     }
@@ -323,6 +324,7 @@ impl DetachedParserScriptFetchContinuation {
                 &inner.request_origin,
                 Ok(response),
                 inner.document_character_set.as_deref(),
+                inner.request_client.cors_disabled(),
             ));
         true
     }

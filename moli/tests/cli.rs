@@ -119,6 +119,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
             wait_response_json_regex: None,
             timeout: 25_000,
             common: CommonArgs {
+                disable_web_security: false,
                 insecure_disable_tls_host_verification: false,
                 ca_cert: None,
                 client_cert: None,
@@ -1804,6 +1805,32 @@ fn app_config_from_serve_cli_enables_image_fetch() {
 
     let config = AppConfig::from_cli(&cli).unwrap();
     assert!(config.browser.image_fetch_enabled());
+}
+
+#[test]
+fn cors_checks_are_opt_out_for_fetch_and_serve() {
+    for mut args in [
+        vec!["moli", "fetch", "https://example.com"],
+        vec!["moli", "serve"],
+    ] {
+        let cli = Cli::try_parse_from(normalize_args_for_compat(args.clone())).unwrap();
+        assert!(
+            !AppConfig::from_cli(&cli)
+                .unwrap()
+                .browser
+                .fetch()
+                .cors_disabled()
+        );
+        args.push("--disable-web-security");
+        let cli = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap();
+        assert!(
+            AppConfig::from_cli(&cli)
+                .unwrap()
+                .browser
+                .fetch()
+                .cors_disabled()
+        );
+    }
 }
 
 #[test]

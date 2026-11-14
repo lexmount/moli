@@ -1144,6 +1144,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                 &pending.document_url,
                 &observable_head,
                 pending.credentials_mode,
+                pending.policy_context.cors_disabled,
             );
             pending.streaming_body_source_id = Some(started.body_source_id);
             Some((
@@ -1326,6 +1327,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     &pending.document_url,
                     &response_head,
                     pending.credentials_mode,
+                    pending.policy_context.cors_disabled,
                 )
             };
             let (mut head, body) = response.into_fetch_parts();

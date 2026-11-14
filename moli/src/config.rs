@@ -98,6 +98,10 @@ impl AppConfig {
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
+    config
+        .browser
+        .fetch_mut()
+        .set_cors_disabled(common.disable_web_security);
     if common.scrollbars && !common.layout {
         bail!("--scrollbars requires --layout or MOLI_LAYOUT=true");
     }

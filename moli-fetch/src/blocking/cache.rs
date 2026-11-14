@@ -149,13 +149,14 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     status: u16,
     headers: &[(String, Vec<u8>)],
     redirect_count: usize,
+    cors_disabled: bool,
 ) -> Result<Option<Url>> {
     // HTTP fetch checks the network response before HTTP-redirect fetch. This
     // also applies to cached redirects and manual/error redirect modes.
     request
         .validate_cross_origin_resource_policy_for_url(final_url, headers)
         .map_err(anyhow::Error::msg)?;
-    if matches!(status, 301 | 302 | 303 | 307 | 308) {
+    if !cors_disabled && matches!(status, 301 | 302 | 303 | 307 | 308) {
         request
             .validate_cors_response_for_url(final_url, headers)
             .map_err(anyhow::Error::msg)?;
@@ -215,16 +216,18 @@ mod tests {
         )];
 
         let request = Request::get_with_url(current.clone());
-        let error = next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0)
-            .expect_err("followed file redirect must be rejected");
+        let error =
+            next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0, false)
+                .expect_err("followed file redirect must be rejected");
         assert_eq!(
             error.to_string(),
             "URL scheme \"file\" is not supported by the HTTP network transport."
         );
 
         let request = request.with_single_hop();
-        let manual = next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0)?
-            .expect("a browser-followed redirect URL should remain observable");
+        let manual =
+            next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0, false)?
+                .expect("a browser-followed redirect URL should remain observable");
         assert_eq!(manual.as_str(), "file:///moli-policy-must-not-open");
         Ok(())
     }
@@ -252,16 +255,18 @@ mod tests {
                 302,
                 &headers,
                 super::super::MAX_REDIRECTS,
+                false,
             )?
             .is_none()
         );
         let denied =
-            next_followed_redirect_url_from_parts(&request, &current, 302, &headers[..1], 0)
+            next_followed_redirect_url_from_parts(&request, &current, 302, &headers[..1], 0, false)
                 .expect_err("manual redirects still require CORS permission");
         assert!(denied.to_string().contains("CORS"));
         let follow = request.with_redirect_mode(crate::RequestRedirectMode::Follow);
         assert!(
-            next_followed_redirect_url_from_parts(&follow, &current, 302, &headers, 0).is_err()
+            next_followed_redirect_url_from_parts(&follow, &current, 302, &headers, 0, false)
+                .is_err()
         );
         Ok(())
     }
@@ -296,6 +301,7 @@ mod tests {
             302,
             &headers,
             super::super::MAX_REDIRECTS,
+            false,
         )?;
         assert_eq!(next, Some(current.join("/next")?));
         let automatic = request
@@ -307,6 +313,7 @@ mod tests {
             302,
             &headers,
             super::super::MAX_REDIRECTS,
+            false,
         )
         .expect_err("automatically followed transport requests retain their redirect limit");
         assert!(error.to_string().contains("redirect limit exceeded"));
@@ -316,9 +323,19 @@ mod tests {
             302,
             &headers[..1],
             super::super::MAX_REDIRECTS,
+            false,
         )
         .expect_err("a manually followed browser hop still requires CORS permission");
         assert!(denied.to_string().contains("CORS"));
+        let next = next_followed_redirect_url_from_parts(
+            &request,
+            &current,
+            302,
+            &headers[..1],
+            super::super::MAX_REDIRECTS,
+            true,
+        )?;
+        assert_eq!(next, Some(current.join("/next")?));
         Ok(())
     }
 

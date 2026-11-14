@@ -1699,6 +1699,7 @@ impl RuntimeOwner {
             response.status,
             &response.headers,
             job.redirect_count,
+            self.config.cors_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((job.response_tx, error)),
@@ -1976,6 +1977,7 @@ impl RuntimeOwner {
             status,
             &headers,
             job.redirect_count,
+            self.config.cors_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => {
@@ -2370,6 +2372,7 @@ impl RuntimeOwner {
             status,
             &headers,
             job.redirect_count,
+            self.config.cors_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => {
@@ -2534,6 +2537,7 @@ impl RuntimeOwner {
             cached.status,
             &cached.headers,
             job.redirect_count,
+            self.config.cors_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((Box::new(job), error)),
@@ -2595,6 +2599,7 @@ impl RuntimeOwner {
             cached.status,
             &cached.headers,
             job.redirect_count,
+            self.config.cors_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((Box::new(job), error)),
