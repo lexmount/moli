@@ -14,14 +14,16 @@ enum TrustedTypesGlobalProperty {
     Script,
     ScriptUrl,
     Factory,
+    Policy,
 }
 
 impl TrustedTypesGlobalProperty {
-    const ALL: [(Self, &'static str); 4] = [
+    const ALL: [(Self, &'static str); 5] = [
         (Self::Html, "TrustedHTML"),
         (Self::Script, "TrustedScript"),
         (Self::ScriptUrl, "TrustedScriptURL"),
         (Self::Factory, "trustedTypes"),
+        (Self::Policy, "TrustedTypePolicy"),
     ];
 
     const fn callback_data(self) -> u32 {
@@ -30,6 +32,7 @@ impl TrustedTypesGlobalProperty {
             Self::Script => 1,
             Self::ScriptUrl => 2,
             Self::Factory => 3,
+            Self::Policy => 4,
         }
     }
 
@@ -39,6 +42,7 @@ impl TrustedTypesGlobalProperty {
             1 => Some(Self::Script),
             2 => Some(Self::ScriptUrl),
             3 => Some(Self::Factory),
+            4 => Some(Self::Policy),
             _ => None,
         }
     }
@@ -48,7 +52,7 @@ impl TrustedTypesGlobalProperty {
             Self::Html => Some(TrustedTypeKind::Html),
             Self::Script => Some(TrustedTypeKind::Script),
             Self::ScriptUrl => Some(TrustedTypeKind::ScriptUrl),
-            Self::Factory => None,
+            Self::Factory | Self::Policy => None,
         }
     }
 }
@@ -148,6 +152,27 @@ fn build_and_cache_trusted_types_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
+    // Register the intrinsic prototype before any policy object is bound.
+    // The public global remains independently replaceable by author script.
+    let policy_constructor = TrustedTypePolicyInterfaceDeclaration::build(scope)
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build TrustedTypePolicy interface"))?;
+    set_private_value(
+        scope,
+        global,
+        TRUSTED_TYPE_POLICY_CONSTRUCTOR_SLOT,
+        policy_constructor.into(),
+    );
+    let policy_prototype = policy_constructor
+        .get(scope, v8str(scope, "prototype").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("missing intrinsic TrustedTypePolicy prototype"))?;
+    set_private_value(
+        scope,
+        global,
+        TRUSTED_TYPE_POLICY_PROTOTYPE_SLOT,
+        policy_prototype.into(),
+    );
     let factory = TrustedTypesFactoryDeclaration::default()
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind TrustedTypePolicyFactory: {error}"))?;
@@ -179,10 +204,13 @@ fn cached_public_value<'s>(
     property: TrustedTypesGlobalProperty,
 ) -> Result<v8::Local<'s, v8::Value>> {
     let global = scope.get_current_context().global(scope);
-    let slot = property.trusted_type_kind().map_or(
-        TRUSTED_TYPES_FACTORY_SLOT,
-        TrustedTypeKind::constructor_slot,
-    );
+    let slot = match property {
+        TrustedTypesGlobalProperty::Policy => TRUSTED_TYPE_POLICY_CONSTRUCTOR_SLOT,
+        _ => property.trusted_type_kind().map_or(
+            TRUSTED_TYPES_FACTORY_SLOT,
+            TrustedTypeKind::constructor_slot,
+        ),
+    };
     get_private_value(scope, global, slot)
         .ok_or_else(|| anyhow!("materialized Trusted Types value is missing"))
 }

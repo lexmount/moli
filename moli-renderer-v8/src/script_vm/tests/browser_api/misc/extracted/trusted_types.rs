@@ -17,7 +17,7 @@ fn trusted_type_policy_declared_methods_preserve_surface() {
     createScriptURL: value => value
   });
   const describe = (object, name) => {
-    const descriptor = Object.getOwnPropertyDescriptor(object, name);
+    const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(object), name);
     if (!descriptor) {
       return `${name}:missing`;
     }
@@ -63,7 +63,7 @@ fn trusted_type_policy_declared_methods_preserve_surface() {
 
     assert_eq!(
         result,
-        r#"{"htmlOnlyKeys":"","fullKeys":"","htmlOnlyMethods":["createHTML:false:true:true:function:createHTML:1","createScript:false:true:true:function:createScript:1","createScriptURL:false:true:true:function:createScriptURL:1"],"fullMethods":["createHTML:false:true:true:function:createHTML:1","createScript:false:true:true:function:createScript:1","createScriptURL:false:true:true:function:createScriptURL:1"],"trusted":[true,true,true],"values":["<b>ok</b>","1 + 1","data:text/javascript,"],"missingCallbackErrors":["TypeError","TypeError"]}"#
+        r#"{"htmlOnlyKeys":"","fullKeys":"","htmlOnlyMethods":["createHTML:true:true:true:function:createHTML:1","createScript:true:true:true:function:createScript:1","createScriptURL:true:true:true:function:createScriptURL:1"],"fullMethods":["createHTML:true:true:true:function:createHTML:1","createScript:true:true:true:function:createScript:1","createScriptURL:true:true:true:function:createScriptURL:1"],"trusted":[true,true,true],"values":["<b>ok</b>","1 + 1","data:text/javascript,"],"missingCallbackErrors":["TypeError","TypeError"]}"#
     );
 }
 #[test]
