@@ -9,7 +9,9 @@ use url::Url;
 use crate::network::ResourceRequestClient;
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerRequestDestination};
 use crate::subresource_integrity::response_matches_subresource_integrity_metadata;
-use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourceResourceType};
+use crate::types::{
+    AsyncSubresourceFetchResponseFilter, SubresourceRequestInitiatorType, SubresourceResourceType,
+};
 
 pub(crate) use moli_stylesheet_blocking::{
     DocumentBlockingStylesheetSignature, DocumentOwnedStylesheetDiscoveryInput,
@@ -42,9 +44,18 @@ pub(crate) struct RendererStylesheetFetcher {
     csp_context: Option<crate::content_security_policy::StylesheetFetchCspContext>,
     interception: Option<crate::network::interception_output::ResourceInterceptionContext>,
     frame_id: Option<String>,
+    request_initiator_type: SubresourceRequestInitiatorType,
 }
 
 impl RendererStylesheetFetcher {
+    pub(crate) fn with_request_initiator_type(
+        mut self,
+        initiator: SubresourceRequestInitiatorType,
+    ) -> Self {
+        self.request_initiator_type = initiator;
+        self
+    }
+
     pub(crate) fn with_interception(
         mut self,
         context: Option<crate::network::interception_output::ResourceInterceptionContext>,
@@ -81,6 +92,7 @@ impl RendererStylesheetFetcher {
             csp_context: None,
             interception: None,
             frame_id: None,
+            request_initiator_type: SubresourceRequestInitiatorType::Parser,
         }
     }
 
@@ -98,6 +110,7 @@ impl RendererStylesheetFetcher {
             csp_context: None,
             interception: None,
             frame_id: None,
+            request_initiator_type: SubresourceRequestInitiatorType::Parser,
         }
     }
 
@@ -120,6 +133,13 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
     fn resource_cache_scope(&self) -> u64 {
         self.loader.identity().value()
     }
+    fn reuse_completed_stylesheets(&self) -> bool {
+        !self
+            .loader
+            .request_client()
+            .page_network_policy()
+            .cache_disabled()
+    }
     fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
         self.loader.spawn_resource_task(task);
     }
@@ -140,6 +160,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         let authority = self.loader.clone();
         let interception = self.interception.clone();
         let frame_id = self.frame_id.clone();
+        let request_initiator_type = self.request_initiator_type;
         let loader = self.loader.request_client().clone();
         let request_origin = self.loader.fetch_context().request_origin();
         let resource_task_runner = self.loader.task_runner();
@@ -165,6 +186,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 authority,
                 interception,
                 frame_id,
+                request_initiator_type,
             )
             .await
         })
@@ -205,6 +227,7 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
     authority: crate::network::context::DocumentResourceLoader,
     interception: Option<crate::network::interception_output::ResourceInterceptionContext>,
     frame_id: Option<String>,
+    request_initiator_type: SubresourceRequestInitiatorType,
 ) -> StylesheetFetchTerminal {
     let mut request = stylesheet_readiness_request(
         &document_url,
@@ -306,7 +329,12 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
         };
         let completed =
             crate::network_host::controlled_xhr::ControlledResourceLoad::for_stylesheet(
-                context, request, info, load, cancel,
+                context,
+                request,
+                info,
+                load,
+                cancel,
+                request_initiator_type,
             )
             .run()
             .await;

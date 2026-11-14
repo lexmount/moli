@@ -165,8 +165,20 @@ impl DocumentRuntime {
         owner: DomHandle,
         host_ptr: *mut PageScriptHost,
     ) -> crate::stylesheet_blocking::RendererStylesheetFetcher {
+        let request_initiator_type = if self
+            .dom_host
+            .node(owner)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.link_created_by_parser())
+        {
+            crate::types::SubresourceRequestInitiatorType::Parser
+        } else {
+            crate::types::SubresourceRequestInitiatorType::Script
+        };
         if host_ptr.is_null() {
-            return self.stylesheet_fetcher();
+            return self
+                .stylesheet_fetcher()
+                .with_request_initiator_type(request_initiator_type);
         }
         let host = unsafe { &*host_ptr };
         let scope = host
@@ -190,6 +202,7 @@ impl DocumentRuntime {
             host.subresource_request_environment(&loader, scope)
                 .and_then(|environment| environment.frame_id),
         )
+        .with_request_initiator_type(request_initiator_type)
     }
 
     pub(super) fn speculative_stylesheet_fetcher(

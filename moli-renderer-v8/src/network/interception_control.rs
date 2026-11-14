@@ -5,7 +5,9 @@ use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use url::Url;
 
-use crate::{RendererPageCommand, RendererSyntheticResponseBody};
+use crate::{
+    RendererPageCommand, RendererSyntheticResponseBody, types::SubresourceRequestInitiatorType,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InterceptionPhase {
@@ -22,6 +24,7 @@ pub struct ResourceInterceptionPause {
     phase: InterceptionPhase,
     target_policy: crate::network::PageNetworkPolicy,
     request_redirect: Option<Arc<moli_fetch::RedirectInfo>>,
+    request_initiator_type: SubresourceRequestInitiatorType,
     response_body: Option<super::ResourceInterceptionBody>,
     sender: Arc<Mutex<Option<oneshot::Sender<ResourceInterceptionDecision>>>>,
 }
@@ -78,6 +81,7 @@ impl ResourceInterceptionPause {
                 phase,
                 target_policy,
                 request_redirect: None,
+                request_initiator_type: SubresourceRequestInitiatorType::Script,
                 response_body: None,
                 sender: Arc::new(Mutex::new(Some(tx))),
             },
@@ -95,6 +99,18 @@ impl ResourceInterceptionPause {
 
     pub fn request_redirect(&self) -> Option<&moli_fetch::RedirectInfo> {
         self.request_redirect.as_deref()
+    }
+
+    pub(crate) fn with_request_initiator_type(
+        mut self,
+        initiator: SubresourceRequestInitiatorType,
+    ) -> Self {
+        self.request_initiator_type = initiator;
+        self
+    }
+
+    pub fn request_initiator_type(&self) -> SubresourceRequestInitiatorType {
+        self.request_initiator_type
     }
 
     pub(crate) fn with_response_body(mut self, body: super::ResourceInterceptionBody) -> Self {

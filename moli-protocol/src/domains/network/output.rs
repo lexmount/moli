@@ -1,6 +1,7 @@
 use moli_cookie_jar::StoredCookieQueryReport;
 use moli_core::page::{
-    PendingSubresourceFetchInfo, SubresourceNetworkRequestHandle, SubresourceResourceType,
+    PendingSubresourceFetchInfo, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
+    SubresourceResourceType,
 };
 use serde_json::Value;
 use url::Url;
@@ -71,6 +72,7 @@ pub(crate) struct TargetSubresourceFetchPauseNetworkOutput {
     request_body: Option<String>,
     request_body_bytes: Option<bytes::Bytes>,
     resource_type: SubresourceResourceType,
+    request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
     blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     fetch_request_id: Option<String>,
@@ -100,6 +102,7 @@ impl TargetSubresourceFetchPauseNetworkOutput {
             request_body: info.request_body.clone(),
             request_body_bytes: info.request_body_bytes.clone(),
             resource_type: info.resource_type,
+            request_initiator_type: SubresourceRequestInitiatorType::Script,
             request_cookie_report: info.request_cookie_report.clone(),
             blocked_intercepts: Vec::new(),
             fetch_request_id: None,
@@ -114,6 +117,18 @@ impl TargetSubresourceFetchPauseNetworkOutput {
     ) -> Self {
         self.redirect = redirect;
         self
+    }
+
+    pub(crate) fn with_request_initiator_type(
+        mut self,
+        initiator: SubresourceRequestInitiatorType,
+    ) -> Self {
+        self.request_initiator_type = initiator;
+        self
+    }
+
+    pub(crate) fn request_initiator_type(&self) -> SubresourceRequestInitiatorType {
+        self.request_initiator_type
     }
 
     pub(crate) fn redirect(&self) -> Option<&moli_page_types::NavigationRedirect> {

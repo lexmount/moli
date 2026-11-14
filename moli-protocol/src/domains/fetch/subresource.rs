@@ -16,6 +16,7 @@ use crate::conn::{
     PendingSubresourceFetchResponseRequest, monotonic_timestamp_seconds,
 };
 use crate::domains::network;
+use moli_core::page::SubresourceRequestInitiatorType;
 use moli_core::runtime::DetachedParserScriptFetchContinuation;
 
 use super::subresource_continuation::{
@@ -59,6 +60,7 @@ struct PendingSubresourceFetchPauseSource {
     /// Network request id is the loader id of the Document it creates.
     child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
     native_network: bool,
+    request_initiator_type: SubresourceRequestInitiatorType,
     redirect: Option<moli_page_types::NavigationRedirect>,
 }
 
@@ -94,6 +96,11 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
         return network::NetworkPreparedOutputs::default();
     };
     let native_network = network_pause.is_some();
+    let request_initiator_type = network_pause
+        .as_ref()
+        .map_or(SubresourceRequestInitiatorType::Script, |pause| {
+            pause.request_initiator_type()
+        });
     let network_redirect = network_pause
         .as_ref()
         .and_then(|pause| pause.request_redirect().cloned())
@@ -116,6 +123,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
             detached_parser_script_fetch_continuation: None,
             child_document,
             native_network,
+            request_initiator_type,
             redirect,
         }],
     )
@@ -145,6 +153,7 @@ pub(crate) fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_r
             detached_parser_script_fetch_continuation: Some(continuation),
             child_document: None,
             native_network: false,
+            request_initiator_type: SubresourceRequestInitiatorType::Script,
             redirect: None,
         }],
     )
@@ -188,6 +197,7 @@ fn prepare_subresource_fetch_pause_sources(
             detached_parser_script_fetch_continuation,
             child_document,
             native_network,
+            request_initiator_type,
             redirect,
         } = source;
         let redirect = redirect.or_else(|| {
@@ -269,6 +279,7 @@ fn prepare_subresource_fetch_pause_sources(
                         &info,
                     )
                     .with_fetch_request_id(request_id.clone())
+                    .with_request_initiator_type(request_initiator_type)
                     .with_child_document(child_document.clone())
                     .with_redirect(redirect.clone());
                 outputs.push(network::TargetSubresourceFetchPauseOutput::network_only(
@@ -483,6 +494,7 @@ fn prepare_subresource_fetch_pause_sources(
                 &info,
             )
             .with_blocked_intercepts(blocked_intercepts)
+            .with_request_initiator_type(request_initiator_type)
             .with_fetch_request_id(request_id.clone())
             .with_child_document(child_document)
             .with_redirect(redirect);
@@ -578,6 +590,14 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
             })
             .collect::<Vec<_>>();
         let Some(fetch) = output.into_fetch_event_parts() else {
+            // Response-only and URL-nonmatching native interceptions still
+            // publish this initial Network event. Their terminal record must
+            // not synthesize another start for the same physical request.
+            if !network_events.is_empty()
+                && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
+            {
+                slot.record_fetch_pause_announced_request_id(network_request_id);
+            }
             out.extend(network_events);
             continue;
         };

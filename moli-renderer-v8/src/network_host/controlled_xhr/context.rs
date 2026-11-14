@@ -49,6 +49,7 @@ impl ControlledXhrContext {
             connect_policy: Some(self.connect_policy),
             preflight_headers,
             initial_decision: None,
+            request_initiator_type: crate::types::SubresourceRequestInitiatorType::Script,
         }
     }
 }
