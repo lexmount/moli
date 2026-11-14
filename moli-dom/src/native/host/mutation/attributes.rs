@@ -237,7 +237,7 @@ impl DomHost {
         if self
             .node(select)
             .and_then(Node::as_element)
-            .is_some_and(|element| element.has_attribute("multiple"))
+            .is_some_and(|element| element.has_attribute_ns("", "multiple"))
         {
             return;
         }

@@ -235,7 +235,7 @@ impl DomHost {
         let Some(select) = self.node(select_handle).and_then(Node::as_element) else {
             return Vec::new();
         };
-        if select.has_attribute("multiple") {
+        if select.has_attribute_ns("", "multiple") {
             return options
                 .into_iter()
                 .filter(|handle| {
@@ -310,7 +310,7 @@ impl DomHost {
 
 fn select_display_size(select: &Element) -> i32 {
     select
-        .attribute("size")
+        .attribute_ns("", "size")
         .map(parse_non_negative_integer_prefix)
         .unwrap_or(0)
         .max(1)
@@ -325,5 +325,86 @@ fn is_listed_form_control_element(element: &Element) -> bool {
         "input" => element.input_type() != InputType::Image,
         "button" | "fieldset" | "object" | "output" | "select" | "textarea" => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod namespace_tests {
+    use super::*;
+    use crate::native::NativeDom;
+
+    fn host_with_select(attribute: &str, native: bool) -> (DomHost, DomHandle) {
+        let mut host = DomHost::from_dom(NativeDom::new_html(
+            url::Url::parse("https://select-namespace.test/").unwrap(),
+        ));
+        let select = host.create_element("select");
+        assert!(host.append_child(host.document_handle(), select));
+        host.set_attribute_ns(
+            select,
+            Some("urn:foreign"),
+            None,
+            attribute,
+            if attribute == "size" { "2" } else { "" },
+        );
+        if native {
+            host.set_attribute_ns(
+                select,
+                None,
+                None,
+                attribute,
+                if attribute == "size" { "2" } else { "" },
+            );
+        }
+        (host, select)
+    }
+
+    #[test]
+    fn select_default_selection_ignores_foreign_namespace_size() {
+        for native in [false, true] {
+            let (mut host, select) = host_with_select("size", native);
+            let first = host.create_element("option");
+            let second = host.create_element("option");
+            assert!(host.append_child(select, first));
+            assert!(host.append_child(select, second));
+            let expected = if native { vec![] } else { vec![first] };
+            assert_eq!(host.select_selected_option_elements(select), expected);
+            assert_eq!(host.dom().select_selected_option_elements(select), expected);
+            assert_eq!(
+                host.get_attribute_ns(select, Some("urn:foreign"), "size"),
+                Some("2".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn select_single_selection_ignores_foreign_namespace_multiple() {
+        for native in [false, true] {
+            let (mut host, select) = host_with_select("multiple", native);
+            let first = host.create_element("option");
+            let second = host.create_element("option");
+            host.set_attribute(first, "selected", "");
+            host.set_attribute(second, "selected", "");
+            assert!(host.append_child(select, first));
+            assert!(host.append_child(select, second));
+            let expected = if native {
+                vec![first, second]
+            } else {
+                vec![second]
+            };
+            assert_eq!(host.select_selected_option_elements(select), expected);
+            assert_eq!(host.dom().select_selected_option_elements(select), expected);
+            host.set_attribute(first, "selected", "again");
+            let expected = if native {
+                vec![first, second]
+            } else {
+                vec![first]
+            };
+            assert_eq!(host.select_selected_option_elements(select), expected);
+            assert_eq!(host.dom().select_selected_option_elements(select), expected);
+            assert_eq!(
+                host.get_attribute_ns(select, Some("urn:foreign"), "multiple"),
+                Some("".to_owned())
+            );
+        }
     }
 }
