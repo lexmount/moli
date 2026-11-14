@@ -5,15 +5,25 @@
     <script>
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "/assets/dynamic_blocking_stylesheet_gated.css?stale=1";
+      link.href =
+        "/assets/runtime_inserted_stylesheet_href_mutation_stale.css";
       document.head.appendChild(link);
-      link.href = "/assets/chrome_stylesheetlist_1.css?fresh=1";
+      link.href =
+        "/assets/runtime_inserted_stylesheet_href_mutation_fresh.css";
     </script>
+    <!-- stylesheet-blocking-control -->
     <script>
-      window.runtimeInsertedHrefMutationParserNotBlocked = true;
-      fetch('/assets/dynamic_blocking_stylesheet_script_executed', { cache: 'no-store' });
+      window.runtimeInsertedHrefMutationParserNotBlocked = "pending";
       window.runtimeInsertedHrefMutationSawLate =
         !!document.getElementById("late");
+      fetch("/assets/runtime_inserted_stylesheet_href_mutation_script_executed", {
+        cache: "no-store"
+      }).then(response => response.text()).then(value => {
+        window.runtimeInsertedHrefMutationParserNotBlocked = value === "true";
+      }).catch(error => {
+        window.runtimeInsertedHrefMutationParserNotBlocked = false;
+        window.runtimeInsertedHrefMutationProbeError = String(error);
+      });
     </script>
   </head>
   <body>
