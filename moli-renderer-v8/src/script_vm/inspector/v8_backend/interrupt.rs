@@ -99,6 +99,7 @@ pub(super) unsafe extern "C" fn dispatch_inspector_interrupt(
         return;
     }
     dispatch_environment_notifications(&session_executor, isolate);
+    session_executor.apply_document_replacement();
     with_scoped_inspector_microtasks(isolate, || {
         session_executor.dispatch_next_io_command_from_interrupt();
     });
@@ -171,6 +172,7 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
     }
     let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
     dispatch_environment_notifications(&session_executor, isolate);
+    session_executor.apply_document_replacement();
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     with_scoped_inspector_microtasks(scope, || {

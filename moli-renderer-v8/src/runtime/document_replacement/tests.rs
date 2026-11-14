@@ -1,17 +1,26 @@
 use super::*;
 use crate::devtools::pause::RendererInspectorPauseExitReason;
 
+fn test_agent() -> RendererDevToolsAgentToken {
+    static AGENT: std::sync::OnceLock<RendererDevToolsAgentToken> = std::sync::OnceLock::new();
+    *AGENT.get_or_init(RendererDevToolsAgentToken::allocate)
+}
+
 fn replacement(pause: &RendererInspectorPauseBridge) -> RendererDocumentReplacement {
-    RendererDocumentReplacement::new(pause.clone(), moli_fetch::FetchCancelHandle::new())
+    RendererDocumentReplacement::new(
+        pause.clone(),
+        test_agent(),
+        moli_fetch::FetchCancelHandle::new(),
+    )
 }
 
 fn assert_debugging_enabled(pause: &RendererInspectorPauseBridge) {
-    assert_eq!(pause.wait_for_pause_work(|| Some(42)), Ok(42));
+    assert_eq!(pause.wait_for_pause_work(test_agent(), || Some(42)), Ok(42));
 }
 
 fn assert_replacement_exit(pause: &RendererInspectorPauseBridge) {
     assert_eq!(
-        pause.wait_for_pause_work(|| Some(42)),
+        pause.wait_for_pause_work(test_agent(), || Some(42)),
         Err(RendererInspectorPauseExitReason::DocumentReplacement)
     );
 }
@@ -94,7 +103,7 @@ fn replacement_is_document_local() {
 fn observed_exit_reason_survives_the_end_of_replacement() {
     let pause = RendererInspectorPauseBridge::default();
     let scope = replacement(&pause).begin().unwrap();
-    let reason = pause.wait_for_pause_work(|| Some(42));
+    let reason = pause.wait_for_pause_work(test_agent(), || Some(42));
     drop(scope);
     assert_eq!(
         reason,
@@ -111,7 +120,7 @@ fn target_closure_takes_precedence_and_prevents_new_replacement() {
     assert!(replacement(&pause).begin().is_err());
     drop(scope);
     assert_eq!(
-        pause.wait_for_pause_work(|| Some(42)),
+        pause.wait_for_pause_work(test_agent(), || Some(42)),
         Err(RendererInspectorPauseExitReason::TargetClosed)
     );
 }
@@ -125,7 +134,7 @@ fn preparation_wakes_the_pause_loop_and_covers_repeated_pauses() {
     let waiter = std::thread::spawn(move || {
         let mut waiting_tx = Some(waiting_tx);
         exited_tx
-            .send(waiter_pause.wait_for_pause_work(|| {
+            .send(waiter_pause.wait_for_pause_work(test_agent(), || {
                 if let Some(tx) = waiting_tx.take() {
                     tx.send(()).unwrap();
                 }
@@ -373,7 +382,8 @@ async fn canceled_existing_page_target_never_reserves_or_wakes_the_document() {
     let pause = RendererInspectorPauseBridge::default();
     let cancellation = moli_fetch::FetchCancelHandle::new();
     let mut target = page.document_replacement_target(cancellation.clone());
-    target.replacement = RendererDocumentReplacement::new(pause.clone(), cancellation.clone());
+    target.replacement =
+        RendererDocumentReplacement::new(pause.clone(), test_agent(), cancellation.clone());
     cancellation.cancel();
     let result = prepare(&runtime, target).await;
     assert!(matches!(result, Err(error) if error.is::<moli_fetch::FetchCancelled>()));
