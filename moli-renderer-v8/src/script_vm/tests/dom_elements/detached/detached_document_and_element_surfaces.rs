@@ -1744,3 +1744,50 @@ fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
         r#"{"quirks":"BackCompat","standards":"CSS1Compat","noscriptChildren":["first","second"]}"#
     );
 }
+
+#[test]
+fn domparser_xml_uses_document_interface_and_chromium_error_documents() {
+    let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  return JSON.stringify([
+    "text/xml",
+    "application/xml",
+    "application/xhtml+xml",
+    "image/svg+xml"
+  ].map(contentType => {
+    const valid = parser.parseFromString("<root/>", contentType);
+    const invalid = parser.parseFromString("<foo>", contentType);
+    const namespaceInvalid = parser.parseFromString(
+      '<span x:test="testing">1</span>',
+      contentType
+    );
+    const invalidError = invalid.getElementsByTagName("parsererror")[0];
+    const namespaceError = namespaceInvalid.getElementsByTagName("parsererror")[0];
+    return [
+      valid.contentType,
+      Object.getPrototypeOf(valid) === Document.prototype,
+      valid instanceof XMLDocument,
+      invalid.contentType,
+      Object.getPrototypeOf(invalid) === Document.prototype,
+      invalid instanceof XMLDocument,
+      invalid.documentElement.localName,
+      invalidError.namespaceURI,
+      namespaceInvalid.documentElement.localName,
+      namespaceError.namespaceURI
+    ];
+  }));
+})()
+"#,
+        )
+        .expect("DOMParser XML content type probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"[["text/xml",true,false,"text/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xml",true,false,"application/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xhtml+xml",true,false,"application/xhtml+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["image/svg+xml",true,false,"image/svg+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"]]"#
+    );
+}

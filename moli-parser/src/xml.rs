@@ -62,6 +62,7 @@ struct XmlLiveTreeSinkTarget<'a> {
     construction: ParserConstruction,
     dom_host: XmlDomHost<'a>,
     document_handle: NativeNodeId,
+    stopped_at_namespace_attribute_error: bool,
 }
 
 impl XmlParser {
@@ -179,6 +180,7 @@ impl XmlLiveTreeSinkTarget<'static> {
             construction: ParserConstruction::default(),
             dom_host: XmlDomHost::Owned(Box::new(dom_host)),
             document_handle,
+            stopped_at_namespace_attribute_error: false,
         }
     }
 
@@ -204,6 +206,7 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
             construction: ParserConstruction::default(),
             dom_host: XmlDomHost::Borrowed(dom_host),
             document_handle,
+            stopped_at_namespace_attribute_error: false,
         })
     }
 
@@ -214,6 +217,16 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
     }
 
     fn create_element(&mut self, name: XmlQualName, attrs: Vec<XmlAttribute>) -> XmlParseHandle {
+        // An unresolved attribute prefix makes this start tag invalid. Keep
+        // already-built ancestors, but omit this element and subsequent input.
+        self.stopped_at_namespace_attribute_error |= attrs.iter().any(|attribute| {
+            attribute
+                .name
+                .prefix
+                .as_ref()
+                .is_some_and(|prefix| !AsRef::<str>::as_ref(prefix).is_empty())
+                && AsRef::<str>::as_ref(&attribute.name.ns).is_empty()
+        });
         let element_name = Rc::new(name.clone());
         let attributes = attrs
             .into_iter()
@@ -368,6 +381,9 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
     }
 
     fn append(&mut self, parent_id: NativeNodeId, child: XmlNodeOrText<XmlParseHandle>) {
+        if self.stopped_at_namespace_attribute_error {
+            return;
+        }
         let parent_id = self.template_contents_id(parent_id).unwrap_or(parent_id);
         match child {
             XmlNodeOrText::AppendNode(handle) => {
@@ -385,6 +401,9 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
         sibling_id: NativeNodeId,
         child: XmlNodeOrText<XmlParseHandle>,
     ) {
+        if self.stopped_at_namespace_attribute_error {
+            return;
+        }
         let Some(parent_id) = self.dom_host.node(sibling_id).and_then(Node::parent_node) else {
             return;
         };
@@ -422,6 +441,9 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
     }
 
     fn append_doctype(&mut self, name: String, public_id: String, system_id: String) {
+        if self.stopped_at_namespace_attribute_error {
+            return;
+        }
         let doctype = self.dom_host.create_document_type_for_document(
             self.document_handle,
             &name,
@@ -449,6 +471,9 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
     }
 
     fn add_attrs_if_missing(&mut self, node_id: NativeNodeId, attrs: Vec<XmlAttribute>) {
+        if self.stopped_at_namespace_attribute_error {
+            return;
+        }
         let Some(node) = self.dom_host.node_mut(node_id) else {
             return;
         };
@@ -476,6 +501,9 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
     }
 
     fn remove_from_parent(&mut self, node_id: NativeNodeId) {
+        if self.stopped_at_namespace_attribute_error {
+            return;
+        }
         let Some(parent_id) = self.dom_host.node(node_id).and_then(Node::parent_node) else {
             return;
         };
@@ -483,6 +511,9 @@ impl<'a> XmlLiveTreeSinkTarget<'a> {
     }
 
     fn reparent_children(&mut self, node_id: NativeNodeId, new_parent_id: NativeNodeId) {
+        if self.stopped_at_namespace_attribute_error {
+            return;
+        }
         let child_ids = self.dom_host.child_handles(node_id).collect::<Vec<_>>();
         for child_id in child_ids {
             let _ = self.dom_host.append_child(new_parent_id, child_id);
@@ -1212,5 +1243,47 @@ mod tests {
         dom.child_ids(dom.document_node_id())
             .find(|node_id| dom.node(*node_id).is_some_and(|node| node.is_element()))
             .expect("document element")
+    }
+
+    #[test]
+    fn xml_parser_stops_before_root_with_unbound_attribute_prefix() {
+        for source in [
+            "<span p:attr='x'/>",
+            "<span p:attr='x'>ignored</span><later/>",
+        ] {
+            let dom = XmlParser.parse(
+                Url::parse("https://xml.test/unbound.xml").unwrap(),
+                source.to_owned(),
+            );
+            assert!(!dom.parse_errors().is_empty(), "{source}");
+            assert!(dom.document_element_handle().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn xml_parser_keeps_ancestors_but_stops_after_unbound_attribute_prefix() {
+        let dom = XmlParser.parse(
+            Url::parse("https://xml.test/unbound-child.xml").unwrap(),
+            "<root>before<child p:attr='x'/>after<later/></root>".to_owned(),
+        );
+        assert!(!dom.parse_errors().is_empty());
+        let root = document_element(&dom);
+        assert_eq!(dom.text_content(root).as_deref(), Some("before"));
+        let host = DomHost::from_dom(dom);
+        assert!(host.child_handles(root).all(|child| {
+            host.node(child)
+                .is_some_and(|node| node.as_element().is_none())
+        }));
+    }
+
+    #[test]
+    fn xml_parser_resolves_attribute_prefixes_declared_later_in_start_tag() {
+        let dom = XmlParser.parse(
+            Url::parse("https://xml.test/bound.xml").unwrap(),
+            "<root p:attr='ok' xmlns:p='urn:valid' xml:lang='en'>tail</root>".to_owned(),
+        );
+        assert!(dom.parse_errors().is_empty(), "{:?}", dom.parse_errors());
+        let root = document_element(&dom);
+        assert_eq!(dom.text_content(root).as_deref(), Some("tail"));
     }
 }
