@@ -12,6 +12,7 @@ use crate::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const MESSAGE_PORT_ID_SLOT: &str = "__lmMessagePortId";
+const MESSAGE_PORT_INTERNAL_SLOT: &str = "__lmMessagePortInternal";
 
 /// A closed connection remains transferable; a neutered wrapper does not.
 #[derive(Clone, Copy, Debug)]
@@ -447,6 +448,19 @@ pub(in crate::context_bootstrap::message_ports) fn message_port_is_closed<'s>(
     message_port_bool_slot(scope, port, MESSAGE_PORT_CLOSED_SLOT).unwrap_or(false)
 }
 
+/// Inspect native slots and listener storage, without invoking author getters.
+pub(crate) fn message_port_keeps_event_loop_alive<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    port: v8::Local<'s, v8::Object>,
+) -> bool {
+    !message_port_is_closed(scope, port)
+        && message_port_is_started(scope, port)
+        && !message_port_bool_slot(scope, port, MESSAGE_PORT_INTERNAL_SLOT).unwrap_or(false)
+        && ["message", "messageerror"].iter().any(|event_type| {
+            !simple_object_event_listeners_snapshot(scope, port, event_type).is_empty()
+        })
+}
+
 fn message_port_onmessage_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -563,6 +577,9 @@ pub(in crate::context_bootstrap) fn set_internal_message_port_handlers<'s>(
     onmessage: v8::Local<'s, v8::Function>,
     onmessageerror: v8::Local<'s, v8::Function>,
 ) {
+    // Transferable streams use private ports for bookkeeping. A pending read
+    // without an active producer must not keep the host event loop alive.
+    set_message_port_bool_slot(scope, port, MESSAGE_PORT_INTERNAL_SLOT, true);
     set_message_port_event_handler(
         scope,
         port,

@@ -799,6 +799,7 @@ mod browsing_contexts;
 mod child_frame_runtime;
 mod document_environment;
 mod document_settings;
+mod event_loop;
 pub(crate) use document_settings::{
     DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
 };

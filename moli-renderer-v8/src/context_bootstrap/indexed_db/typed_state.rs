@@ -597,6 +597,46 @@ pub(super) fn ensure_indexed_db_runtime_state_table(
     ensure_indexed_db_runtime_state_table_for_context(context)
 }
 
+/// Includes native work whose completion is not ready yet, blocked factory
+/// requests, and transactions through delivery of their terminal event.
+/// Open connections and backend maintenance do not retain the event loop.
+pub(crate) fn indexed_db_has_pending_work(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    let Some(table) = scope
+        .get_current_context()
+        .get_slot::<RefCell<IndexedDbRuntimeStateTable>>()
+    else {
+        return false;
+    };
+    let Some(host) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let host = unsafe { &*host };
+    let is_current = |owner: IndexedDbExecutionOwner| {
+        owner
+            .execution_context()
+            .is_some_and(|target| host.window_execution_context_identity_is_current(target))
+    };
+    let table = table.borrow();
+    table.tasks.iter().any(|(id, task)| {
+        is_current(task.owner)
+            && match task.kind {
+                // A factory continuation can finish from a SQL receipt, leaving
+                // its dormant queue ticket and metadata behind. Only its native
+                // payload represents unfinished work.
+                IndexedDbTaskKind::FactoryRequest => table.factory_requests.contains_key(id),
+                IndexedDbTaskKind::SqlCompletion => table.sql_tasks.contains_key(id),
+                _ => true,
+            }
+    }) || table.transactions.iter().any(|(id, transaction)| {
+        // This edge is released after complete/abort dispatch, while the
+        // finished wrapper may remain reachable from JavaScript.
+        transaction.database.is_some()
+            && table
+                .wrapper(*id)
+                .is_some_and(|wrapper| is_current(wrapper.owner))
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn indexed_db_has_in_flight_sql_tasks_for_test(
     scope: &mut v8::PinScope<'_, '_>,

@@ -336,7 +336,8 @@ pub(super) enum LivePagePendingNavigationCompletion {
         reply: Box<RendererPageReply>,
         capture_policy: super::RendererPageStateCapturePolicy,
     },
-    ContinueNetworkIdle {
+    ContinueIdle {
+        state: PageVmIdleWaitState,
         deadline: std::time::Instant,
         loader: ResourceRequestClient,
     },
@@ -372,7 +373,10 @@ impl LivePagePendingNavigationCompletion {
             Self::CompletePageCreation { .. } => "creating page",
             Self::CompletePageReplacement { .. } => "replacing page Document",
             Self::ReplyWithSnapshot { .. } => "refreshing page",
-            Self::ContinueNetworkIdle { .. } => "waiting for networkidle",
+            Self::ContinueIdle { state, .. } => match state {
+                PageVmIdleWaitState::Network { .. } => "waiting for networkidle",
+                PageVmIdleWaitState::EventLoop => "waiting for idle",
+            },
             Self::ContinueDomStable { .. } => "waiting for domstable",
             Self::ContinueSubresourceResponse { .. } => "waiting for subresource response",
         }
@@ -392,7 +396,7 @@ impl LivePagePendingNavigationCompletion {
             Self::CompletePageCreation { .. }
             | Self::CompletePageReplacement { .. }
             | Self::ReplyWithSnapshot { .. }
-            | Self::ContinueNetworkIdle { .. }
+            | Self::ContinueIdle { .. }
             | Self::ContinueDomStable { .. }
             | Self::ContinueSubresourceResponse { .. } => {
                 LivePageNavigationFailureRecipient::Initiator
@@ -414,7 +418,7 @@ impl LivePagePendingNavigationCompletion {
             } => navigation_reply_policy.returns_with_pending_navigation(),
             Self::Background
             | Self::ReplyWithSnapshot { .. }
-            | Self::ContinueNetworkIdle { .. }
+            | Self::ContinueIdle { .. }
             | Self::ContinueDomStable { .. }
             | Self::ContinueSubresourceResponse { .. } => false,
         }
@@ -437,7 +441,7 @@ impl LivePagePendingNavigationCompletion {
             Self::Background
             | Self::PublishedPageCreation { .. }
             | Self::ReplyWithSnapshot { .. }
-            | Self::ContinueNetworkIdle { .. }
+            | Self::ContinueIdle { .. }
             | Self::ContinueDomStable { .. }
             | Self::ContinueSubresourceResponse { .. } => (Self::Background, true),
         }

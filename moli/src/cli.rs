@@ -274,9 +274,10 @@ pub struct FetchArgs {
 
     /// Maximum total readiness time in milliseconds. Initial and HTTP-error
     /// replacement navigations, the selected lifecycle stage, response match,
-    /// selector, and script waits share one absolute deadline. Network-idle and
-    /// DOM-stable return the current page when it expires. Pass `--log-level warn`
-    /// to see timeout warnings.
+    /// selector, and script waits share one absolute deadline. Idle also bounds
+    /// --delay-ms and --eval/--eval-file. Network-idle and DOM-stable return the
+    /// current page when it expires; idle fails with a timeout error. Pass
+    /// `--log-level warn` to see timeout warnings.
     #[arg(
         short,
         long = "timeout-ms",
@@ -765,6 +766,9 @@ pub enum FetchWaitUntil {
     Load,
     NetworkIdle,
     DomStable,
+    /// Wait for user async work and callbacks to finish. Active intervals,
+    /// Workers, WebSockets and receiving MessagePorts keep the wait pending.
+    Idle,
     Done,
 }
 

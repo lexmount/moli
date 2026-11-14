@@ -1,7 +1,9 @@
 use super::*;
 
 use crate::page_task_queue::{RendererPageReadyDescriptor, RendererPageSchedulerTask};
-use crate::runtime::{PageVmNetworkIdleWaitAdvance, PageVmNetworkIdleWaitState};
+use crate::runtime::{PageVmIdleWaitAdvance, PageVmIdleWaitState};
+
+mod blob_io;
 
 #[tokio::test(flavor = "current_thread")]
 async fn network_idle_wait_observes_deadline_without_checkpointing_the_agent() {
@@ -21,15 +23,11 @@ Promise.resolve().then(() => __networkIdleObserverCheckpoint += 1);
             )?;
 
         let advance = page_vm
-            .advance_network_idle_wait_turn(
-                PageVmNetworkIdleWaitState::default(),
-                Duration::from_secs(1),
-            )
+            .advance_idle_wait_turn(PageVmIdleWaitState::default(), Duration::from_secs(1))
             .await?;
         assert!(matches!(
             advance,
-            PageVmNetworkIdleWaitAdvance::Waiting { .. }
-                | PageVmNetworkIdleWaitAdvance::Progressed { .. }
+            PageVmIdleWaitAdvance::Waiting { .. } | PageVmIdleWaitAdvance::Progressed { .. }
         ));
         assert_eq!(
             page_vm
@@ -44,6 +42,56 @@ Promise.resolve().then(() => __networkIdleObserverCheckpoint += 1);
     })
     .await
     .expect("NetworkIdle observer authority test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn event_loop_idle_checkpoints_before_observing_future_work() {
+    run_page_vm_async_test(async move {
+        let loader_owner =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let loader = loader_owner.handle();
+        let mut page_vm = test_page_vm_with_loader(&loader, Vec::new());
+        page_vm
+            .vm_mut()
+            .eval_without_microtask_checkpoint_for_test(
+                r#"
+globalThis.__idleCheckpoint = 0;
+globalThis.__unbackedPromise = new Promise(() => {});
+Promise.resolve().then(() => {
+  __idleCheckpoint += 1;
+  globalThis.__idleTimer = setTimeout(() => {}, 60000);
+});
+"queued"
+"#,
+            )?;
+
+        let advance = page_vm
+            .advance_idle_wait_turn(PageVmIdleWaitState::EventLoop, Duration::from_secs(1))
+            .await?;
+        assert!(matches!(
+            advance,
+            PageVmIdleWaitAdvance::Waiting { .. } | PageVmIdleWaitAdvance::Progressed { .. }
+        ));
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval_without_microtask_checkpoint_for_test("String(__idleCheckpoint)")?,
+            "1",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval_without_microtask_checkpoint_for_test("clearTimeout(__idleTimer); 'cleared'")?;
+        assert!(matches!(
+            page_vm
+                .advance_idle_wait_turn(PageVmIdleWaitState::EventLoop, Duration::from_secs(1))
+                .await?,
+            PageVmIdleWaitAdvance::Completed,
+        ));
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("event-loop idle checkpoint test should run");
 }
 
 #[tokio::test(flavor = "current_thread")]

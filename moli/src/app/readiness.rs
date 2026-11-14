@@ -13,11 +13,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use moli_core::{
     page::{Page, SubresourceResponseWaitCriteria},
     runtime::{
-        Browser, FetchDeadline, FetchedDocument, RawDocumentFetchPolicy, RenderedDomWaitUntil,
+        Browser, FetchDeadline, FetchTimeoutPhase, FetchedDocument, RawDocumentFetchPolicy,
+        RenderedDomWaitUntil,
     },
 };
 use moli_fetch::Request;
-use std::{path::Path, time::Duration};
+use std::{future::Future, path::Path, time::Duration};
 
 #[derive(Debug)]
 pub(super) struct ReadinessPlan {
@@ -70,7 +71,9 @@ impl ReadinessPlan {
                 )
                 .await
             }
-            RenderedDomWaitUntil::NetworkIdle | RenderedDomWaitUntil::DomStable => {
+            RenderedDomWaitUntil::NetworkIdle
+            | RenderedDomWaitUntil::DomStable
+            | RenderedDomWaitUntil::Idle => {
                 browser
                     .fetch_request_document_allow_http_error_with_wait_until_deadline(
                         request,
@@ -107,6 +110,31 @@ impl ReadinessPlan {
 
         Ok(())
     }
+
+    /// Include work scheduled by automation predicates, delays and --eval in
+    /// the explicit idle lifecycle, sharing the original readiness deadline.
+    pub(super) async fn wait_for_idle(&self, browser: &Browser, page: &mut Page) -> Result<()> {
+        if self.wait_until == RenderedDomWaitUntil::Idle {
+            browser
+                .wait_for_page_readiness_with_deadline(page, self.wait_until, self.deadline)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Idle bounds execution as well as the subsequent resource observation.
+    /// Other modes retain their existing delay and evaluation policy.
+    pub(super) async fn within_idle_deadline<T>(
+        &self,
+        phase: FetchTimeoutPhase,
+        operation: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        if self.wait_until == RenderedDomWaitUntil::Idle {
+            self.deadline.wait(phase, operation).await
+        } else {
+            operation.await
+        }
+    }
 }
 
 fn rendered_wait_until(wait_until: FetchWaitUntil) -> RenderedDomWaitUntil {
@@ -115,6 +143,7 @@ fn rendered_wait_until(wait_until: FetchWaitUntil) -> RenderedDomWaitUntil {
         FetchWaitUntil::Load => RenderedDomWaitUntil::Load,
         FetchWaitUntil::NetworkIdle => RenderedDomWaitUntil::NetworkIdle,
         FetchWaitUntil::DomStable => RenderedDomWaitUntil::DomStable,
+        FetchWaitUntil::Idle => RenderedDomWaitUntil::Idle,
         FetchWaitUntil::Done => RenderedDomWaitUntil::Done,
     }
 }

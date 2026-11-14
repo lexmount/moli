@@ -1136,13 +1136,13 @@ impl RendererOwnerHandle {
                 self.signal_internal_document_lifecycle_turn_if_resident(token, document);
                 RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()))
             }
-            RenderRuntimeTurn::WaitLivePageNetworkIdle {
+            RenderRuntimeTurn::WaitLivePageIdle {
                 token,
                 state,
                 deadline,
                 loader,
             } => {
-                self.wait_live_page_network_idle_turn(token, state, deadline, loader)
+                self.wait_live_page_idle_turn(token, state, deadline, loader)
                     .await
             }
             RenderRuntimeTurn::WaitLivePageDomStable {

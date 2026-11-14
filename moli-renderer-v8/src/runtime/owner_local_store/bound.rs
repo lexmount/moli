@@ -541,17 +541,17 @@ pub(in crate::runtime) async fn commit_page_state_on_entry_via_local_task_with_p
     .await
 }
 
-pub(in crate::runtime) async fn advance_network_idle_wait_turn_on_entry_via_local_task(
+pub(in crate::runtime) async fn advance_idle_wait_turn_on_entry_via_local_task(
     local_executor: JsLocalExecutor,
     entry: LivePageEntry,
-    state: PageVmNetworkIdleWaitState,
+    state: PageVmIdleWaitState,
     remaining: std::time::Duration,
-) -> (LivePageEntry, Result<PageVmNetworkIdleWaitAdvance>) {
+) -> (LivePageEntry, Result<PageVmIdleWaitAdvance>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
             entry
                 .page_vm_mut()
-                .advance_network_idle_wait_turn(state, remaining)
+                .advance_idle_wait_turn(state, remaining)
                 .await
         })
     })
@@ -741,6 +741,28 @@ impl PageReadyDescriptorSnapshot {
     pub(super) const fn has_ready_ordinary_source(&self) -> bool {
         self.stable_source_was_ready || self.due_deadline_was_ready
     }
+}
+
+/// Observe the same runnable sources used by the Page arbiter while a command
+/// has its VM checked out. An exhausted resource set must still drain queued
+/// completion callbacks before an event-loop idle wait may return.
+pub(in crate::runtime) fn has_ready_page_tasks_on_bound_owner_local_store(
+    token: RendererPageToken,
+    entry: &mut LivePageEntry,
+) -> bool {
+    with_bound_render_runtime_owner_local_store_session(|session| {
+        let Some(slot) = session
+            .store
+            .page_hosts
+            .get_mut(&token.local_host_id)
+            .and_then(|host| host.pages.get_mut(&token.page_id))
+        else {
+            return false;
+        };
+        !page_ready_descriptor_snapshot(entry, &mut slot.task_sources)
+            .eligible
+            .is_empty()
+    })
 }
 
 pub(super) fn page_ready_descriptor_snapshot(

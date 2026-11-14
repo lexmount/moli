@@ -100,6 +100,7 @@ fn is_fetch_readiness_timeout(error: &anyhow::Error, wait_until: RenderedDomWait
         RenderedDomWaitUntil::DomStable => "timed out waiting for domstable",
         RenderedDomWaitUntil::DomContentLoaded
         | RenderedDomWaitUntil::Load
+        | RenderedDomWaitUntil::Idle
         | RenderedDomWaitUntil::Done => return false,
     };
 
@@ -179,6 +180,10 @@ pub enum RenderedDomWaitUntil {
     Load,
     NetworkIdle,
     DomStable,
+    /// Drain user-owned asynchronous work and its callbacks after Load.
+    /// Future timers and live resources keep this wait pending; an unbacked
+    /// Promise does not. Unlike NetworkIdle, timeout is an error.
+    Idle,
     Done,
 }
 
@@ -189,7 +194,7 @@ impl RenderedDomWaitUntil {
     fn base_stage(self) -> PageVmInitStage {
         match self {
             Self::DomContentLoaded | Self::DomStable => PageVmInitStage::DomContentLoaded,
-            Self::Load | Self::NetworkIdle | Self::Done => PageVmInitStage::Load,
+            Self::Load | Self::NetworkIdle | Self::Idle | Self::Done => PageVmInitStage::Load,
         }
     }
 
@@ -500,8 +505,8 @@ impl Browser {
     }
 
     /// Reaches the concrete lifecycle boundary that makes a live Page
-    /// available. For NetworkIdle and DomStable this is only the Load or DCL
-    /// base stage; their best-effort observation runs outside materialization.
+    /// available. For Idle, NetworkIdle and DomStable this is only the Load or
+    /// DCL base stage; their observations run outside materialization.
     async fn fetch_document_to_base_stage(
         &self,
         request: Request,
@@ -719,6 +724,14 @@ impl Browser {
             .await
     }
 
+    /// Waits for user timers, network operations and live Worker, WebSocket and
+    /// receiving MessagePort resources to finish, including their callbacks.
+    pub async fn wait_for_page_idle(&self, page: &mut Page, timeout: Duration) -> Result<()> {
+        let deadline = FetchDeadline::new(timeout)?;
+        self.wait_for_page_readiness_with_deadline(page, RenderedDomWaitUntil::Idle, deadline)
+            .await
+    }
+
     pub async fn wait_for_selector(
         &self,
         page: &mut Page,
@@ -809,18 +822,28 @@ impl Browser {
             .await
     }
 
-    /// Observes NetworkIdle or DomStable with the unspent part of `deadline`.
+    /// Observes Idle, NetworkIdle or DomStable with the unspent deadline.
     ///
     /// A timeout in this observation is deliberately best-effort: the Page
     /// has already reached its required Load/DCL base stage, so the current
     /// snapshot is returned with a warning. Errors unrelated to timeout still
-    /// fail the fetch. Concrete lifecycle modes are no-ops here.
+    /// fail the fetch. Idle requires resource exhaustion and propagates timeout
+    /// as an error. Concrete lifecycle modes are no-ops here.
     pub async fn wait_for_page_readiness_with_deadline(
         &self,
         page: &mut Page,
         wait_until: RenderedDomWaitUntil,
         deadline: FetchDeadline,
     ) -> Result<()> {
+        if wait_until == RenderedDomWaitUntil::Idle {
+            let loader = self.resource_request_client();
+            return deadline
+                .wait(
+                    FetchTimeoutPhase::WaitingForIdle,
+                    page.wait_for_idle(&loader, deadline.timeout()),
+                )
+                .await;
+        }
         if !wait_until.has_best_effort_page_wait() {
             return Ok(());
         }
@@ -841,6 +864,7 @@ impl Browser {
             }
             RenderedDomWaitUntil::DomContentLoaded
             | RenderedDomWaitUntil::Load
+            | RenderedDomWaitUntil::Idle
             | RenderedDomWaitUntil::Done => unreachable!(
                 "concrete lifecycle modes returned before starting a best-effort Page wait"
             ),

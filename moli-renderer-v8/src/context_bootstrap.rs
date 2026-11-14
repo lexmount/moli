@@ -364,9 +364,9 @@ pub(crate) use self::image_data::{
 pub(crate) use self::indexed_db::{
     IndexedDbTaskId, discard_indexed_db_task_by_id, flush_indexed_db_task_by_id,
     flush_indexed_db_transaction_starts, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
-    install_worker_indexed_db_runtime_state, retain_indexed_db_state_in_retired_realm,
-    retire_indexed_db_context, set_indexed_db_manager_for_context,
-    set_worker_indexed_db_task_wake_for_context,
+    indexed_db_has_pending_work, install_worker_indexed_db_runtime_state,
+    retain_indexed_db_state_in_retired_realm, retire_indexed_db_context,
+    set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
     Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions, SharedIndexedDbManager,
@@ -419,7 +419,8 @@ pub(crate) use self::message_ports::{
     discard_message_port_channel, dispatch_message_port_events_for_port_collecting_errors,
     dispatch_one_authorized_message_port_event, ensure_message_port_wrapper_for_id,
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
-    message_port_transfer_from_object, new_disconnected_message_port_object,
+    message_port_keeps_event_loop_alive, message_port_transfer_from_object,
+    new_disconnected_message_port_object,
 };
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,

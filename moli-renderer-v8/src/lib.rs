@@ -365,6 +365,13 @@ pub enum PageVmInitStage {
     Load,
 }
 
+/// Host observations of a live Page, independent of its browser lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RendererPageIdleWaitMode {
+    Network,
+    EventLoop,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RendererReplyBoundary {
     /// Resolve page creation only after the requested lifecycle milestone.
