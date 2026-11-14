@@ -450,6 +450,17 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    pub fn attach_shared_worker_runtime_inspector_session(
+        &self,
+        instance_id: SharedWorkerInstanceId,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.shared_worker_runtime_if_initialized()
+            .is_some_and(|runtime| {
+                runtime.attach_runtime_inspector_session(instance_id, inspector_session_id)
+            })
+    }
+
     pub async fn dispatch_shared_worker_runtime_protocol_message(
         &self,
         instance_id: SharedWorkerInstanceId,

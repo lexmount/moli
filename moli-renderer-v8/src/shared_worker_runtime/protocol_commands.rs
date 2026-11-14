@@ -6,6 +6,14 @@ use super::host::RendererSharedWorkerHost;
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 
 impl RendererSharedWorkerHost {
+    pub(super) fn attach_runtime_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.running_devtools_handle()
+            .is_some_and(|handle| handle.attach_runtime_inspector_session(inspector_session_id))
+    }
+
     pub(super) async fn dispatch_runtime_protocol_message(
         &self,
         inspector_session_id: Option<String>,

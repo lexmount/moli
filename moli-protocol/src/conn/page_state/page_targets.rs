@@ -937,7 +937,11 @@ impl BrowserContext {
         let Some(target) = self.shared_worker_target_mut(target_id) else {
             return false;
         };
-        target.attach_session(session_id);
+        target.attach_session(session_id.clone());
+        let instance_id = target.renderer_instance_id;
+        let _ = self
+            .renderer_runtime()
+            .attach_shared_worker_runtime_inspector_session(instance_id, Some(session_id));
         true
     }
 
@@ -1205,15 +1209,18 @@ impl BrowserContext {
         if self.closing {
             return false;
         }
-        let attached_version_id = {
+        let (version_id, was_attached) = {
             let Some(target) = self.service_worker_target_mut(target_id) else {
                 return false;
             };
             let was_attached = target.has_session();
-            target.attach_session(session_id);
-            (!was_attached).then_some(target.renderer_version_id)
+            target.attach_session(session_id.clone());
+            (target.renderer_version_id, was_attached)
         };
-        if let Some(version_id) = attached_version_id {
+        let _ = self
+            .renderer_runtime()
+            .attach_service_worker_runtime_inspector_session(version_id, Some(session_id));
+        if !was_attached {
             self.renderer_runtime()
                 .set_service_worker_devtools_attached(version_id, true);
         };
