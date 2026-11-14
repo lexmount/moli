@@ -230,8 +230,8 @@ fn submit_task(
     target: BlobReadTarget,
 ) -> bool {
     let result = Arc::new(Mutex::new(None));
-    // FileReading ownership follows the Blob; borrowed promise methods still
-    // allocate their binary result in the method's realm.
+    // FileReading ownership follows submission. Blob readers enter the Blob's
+    // realm before creating their resolver, preserving that result realm.
     let context = match &target {
         BlobReadTarget::Promise { resolver, .. } => {
             v8::Local::new(scope, resolver).get_creation_context(scope)

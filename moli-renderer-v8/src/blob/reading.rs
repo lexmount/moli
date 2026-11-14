@@ -109,6 +109,9 @@ pub(super) fn read_blob<'s>(
     mode: BlobReadMode,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let context = blob_relevant_context(scope, blob)?;
+    // The Blob owns both the read promise and its binary result, including
+    // when its method was borrowed from another (possibly retired) Window.
+    let scope = &mut v8::ContextScope::new(scope, context);
     let data = blob_data_from_object(scope, blob)?;
     let Some(bytes) = data.as_bytes() else {
         let format = match mode {
