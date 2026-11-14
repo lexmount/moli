@@ -157,6 +157,7 @@ pub(super) fn record_service_worker_target_started(
         let Some(run) = target.mark_worker_started(browser_context_id, renderer_run) else {
             return outputs;
         };
+        let session_ids = target.session_ids();
         let reloaded_events = target
             .take_inspector_target_reloaded_after_crash_session_ids()
             .into_iter()
@@ -174,7 +175,16 @@ pub(super) fn record_service_worker_target_started(
                 ))
             })
             .collect::<Vec<_>>();
-        Some((run.version().clone(), reloaded_events))
+        let version = run.version().clone();
+        for session_id in session_ids {
+            let _ = context
+                .renderer_runtime()
+                .attach_service_worker_runtime_inspector_session(
+                    renderer_version_id,
+                    Some(session_id),
+                );
+        }
+        Some((version, reloaded_events))
     }) else {
         return outputs;
     };

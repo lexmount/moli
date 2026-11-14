@@ -6,6 +6,15 @@ use super::super::ids::ServiceWorkerVersionId;
 use super::ServiceWorkerRuntimeService;
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) fn attach_runtime_inspector_session(
+        &self,
+        version_id: ServiceWorkerVersionId,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.running_host_for_version(version_id)
+            .is_some_and(|host| host.attach_worker_runtime_inspector_session(inspector_session_id))
+    }
+
     pub(crate) async fn dispatch_runtime_protocol_message(
         &self,
         version_id: ServiceWorkerVersionId,

@@ -7,6 +7,15 @@ use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorRe
 use super::service::SharedWorkerRuntimeService;
 
 impl SharedWorkerRuntimeService {
+    pub(crate) fn attach_runtime_inspector_session(
+        &self,
+        instance_id: SharedWorkerInstanceId,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.running_host_for_instance(instance_id)
+            .is_some_and(|host| host.attach_runtime_inspector_session(inspector_session_id))
+    }
+
     pub(crate) async fn dispatch_runtime_protocol_message(
         &self,
         instance_id: SharedWorkerInstanceId,

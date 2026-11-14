@@ -58,6 +58,7 @@ async fn indexed_db_worker_cursor_graphs_collect_and_retained_cursors_survive_gc
         .expect("worker IndexedDB GC setup timeout")
         .expect("worker IndexedDB GC setup closed");
     assert_eq!(expect_post_json(message), "\"prepared\"");
+    assert!(handle.attach_runtime_inspector_session(Some("SID-idb-gc".into())));
     cursor_gc_command(
         &handle,
         1,

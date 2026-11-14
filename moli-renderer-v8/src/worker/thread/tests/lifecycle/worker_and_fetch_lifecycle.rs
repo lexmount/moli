@@ -374,6 +374,7 @@ async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap
             .collect()
     }
 
+    assert!(handle.attach_runtime_inspector_session(Some("SID-worker-pause".into())));
     let enable_messages = dispatch_runtime(&handle, 1, "Runtime.enable").await;
     let created_context = enable_messages
         .iter()
@@ -556,6 +557,7 @@ async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_j
         WorkerToParentMessage::Post(ref payload) if stringify_payload(payload) == r#""ready""#
     ));
 
+    assert!(handle.attach_runtime_inspector_session(Some("SID-worker-interrupt".into())));
     let enable = dispatch_runtime(&handle, 1, "Runtime.enable", None);
     timeout(TIMEOUT, enable)
         .await
