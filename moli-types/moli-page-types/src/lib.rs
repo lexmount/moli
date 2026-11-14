@@ -1139,6 +1139,8 @@ pub struct SubresourceRequestStarted {
     request_body: Option<String>,
     request_body_bytes: Option<bytes::Bytes>,
     keepalive: bool,
+    document_loader_id: Option<String>,
+    interception_request_announcement: bool,
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
@@ -1217,6 +1219,26 @@ impl PartialEq for SubresourceNetworkRecord {
 impl Eq for SubresourceNetworkRecord {}
 
 impl SubresourceRequestStarted {
+    /// A Document request owns its loader before any response or commit exists.
+    pub fn with_document_loader_id(mut self, loader_id: String) -> Self {
+        self.document_loader_id = Some(loader_id);
+        self
+    }
+    /// The native request is admitted now; its protocol request announcement
+    /// is owned by the associated interception output (even when auto-continued).
+    pub fn with_interception_request_announcement(mut self) -> Self {
+        self.interception_request_announcement = true;
+        self
+    }
+
+    pub fn interception_request_announcement(&self) -> bool {
+        self.interception_request_announcement
+    }
+
+    pub fn document_loader_id(&self) -> Option<&str> {
+        self.document_loader_id.as_deref()
+    }
+
     pub fn new(
         handle: SubresourceNetworkRequestHandle,
         frame_id: Option<String>,
@@ -1240,6 +1262,8 @@ impl SubresourceRequestStarted {
             request_body,
             request_body_bytes,
             keepalive: false,
+            document_loader_id: None,
+            interception_request_announcement: false,
             resource_type,
             request_initiator_type,
             request_cookie_report,
@@ -3473,6 +3497,9 @@ pub struct ChildFrameNavigationSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ChildFrameDocumentNetworkSnapshot {
+    /// Native staged Network output already published this physical transfer.
+    #[serde(skip)]
+    pub network_observed: bool,
     pub request_url: String,
     pub request_method: String,
     #[serde(default)]

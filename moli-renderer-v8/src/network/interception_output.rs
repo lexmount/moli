@@ -40,7 +40,9 @@ struct InterceptionOutputState {
 /// A coalesced networking task drains native facts only. Erase its captured
 /// publisher so a queued wake does not expose the journal/queue's recursive
 /// implementation types through every resource-completion envelope.
-pub(crate) struct InterceptionOutputWake(Box<dyn FnOnce() + Send>);
+pub(crate) struct InterceptionOutputWake(
+    Box<dyn FnOnce() -> crate::types::ScriptNetworkOutput + Send>,
+);
 
 impl std::fmt::Debug for InterceptionOutputWake {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -50,8 +52,8 @@ impl std::fmt::Debug for InterceptionOutputWake {
 }
 
 impl InterceptionOutputWake {
-    pub(crate) fn drain(self) {
-        (self.0)();
+    pub(crate) fn drain(self) -> crate::types::ScriptNetworkOutput {
+        (self.0)()
     }
 }
 
@@ -86,6 +88,48 @@ impl InterceptionOutput {
         source_document: crate::runtime::RendererDocumentLifecycleIdentity,
         record: crate::types::SubresourceNetworkRecord,
     ) -> bool {
+        // Script HTTP errors keep their response headers, but terminate as a
+        // failed script load. This is the same contract as Page-owned source
+        // completions; native transport facts must not turn them into success.
+        if record.resource_type() == crate::types::SubresourceResourceType::Script
+            && let Some(handle) = record.request_handle()
+            && let crate::types::SubresourceNetworkOutcome::Success {
+                redirect_chain,
+                final_url,
+                status,
+                response_headers,
+                ..
+            } = record.outcome()
+            && *status >= 400
+        {
+            let response = crate::types::SubresourceResponseStarted::new(
+                handle,
+                redirect_chain.clone(),
+                final_url.clone(),
+                *status,
+                response_headers.clone(),
+                record.cookie_set_reports().to_vec(),
+            )
+            .with_from_cache(record.from_cache())
+            .with_negotiated_http_version(record.negotiated_http_version())
+            .with_network_request_headers(record.network_request_headers().map(<[_]>::to_vec));
+            let started = self.publish_network(
+                source_document,
+                moli_page_types::ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(
+                    response,
+                )),
+            );
+            let finished = self.publish_network(
+                source_document,
+                moli_page_types::ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(
+                    crate::types::SubresourceBodyFinished::failed(
+                        handle,
+                        moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+                    ),
+                )),
+            );
+            return started && finished;
+        }
         self.publish_network(
             source_document,
             moli_page_types::ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
@@ -127,9 +171,11 @@ impl InterceptionOutput {
             .send_async_subresource_event(AsyncSubresourceFetchEvent::InterceptionOutputReady({
                 let output = Arc::downgrade(&self.inner);
                 InterceptionOutputWake(Box::new(move || {
-                    if let Some(inner) = output.upgrade() {
-                        InterceptionOutput { inner }.drain();
-                    }
+                    output
+                        .upgrade()
+                        .map_or_else(crate::types::ScriptNetworkOutput::default, |inner| {
+                            InterceptionOutput { inner }.drain()
+                        })
                 }))
             }))
             .is_err()
@@ -150,10 +196,23 @@ impl InterceptionOutput {
     }
 
     /// Called on the selected networking task, after earlier Page output.
-    pub(crate) fn drain(&self) {
+    pub(crate) fn drain(&self) -> crate::types::ScriptNetworkOutput {
         let mut state = self.inner.state.lock();
+        // The same immutable facts feed live protocol output and the Page's
+        // diagnostic/resource report. Sharing body handles keeps resource
+        // search available without replaying Network events or refetching.
+        let report =
+            crate::types::ScriptNetworkOutput::from_items(state.pending.iter().filter_map(
+                |record| match record.item() {
+                    crate::runtime::RendererOutputItem::Observation(
+                        crate::runtime::RendererProtocolObservation::Network { item, .. },
+                    ) => Some(item.clone()),
+                    _ => None,
+                },
+            ));
         self.inner.journal.append_records(state.pending.drain(..));
         state.wake_pending = false;
+        report
     }
 
     /// The caller has published its command/related-context prefix. Future

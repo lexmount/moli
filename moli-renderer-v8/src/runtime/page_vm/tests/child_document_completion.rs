@@ -118,7 +118,29 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
         let (handle, target) =
             start_external_child_document_load(&mut page_vm, "typed-child-frame", &child_url).await;
 
-        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "typed child fetch").await;
+        let expected =
+            RendererPageResourceCompletionOwner::child_document_navigation(root_document, target);
+        loop {
+            wait_for_page_resource_completion(&mut queue, &mut wake_rx, "typed child fetch").await;
+            if queue.next_ready_owner() == Some(expected) {
+                break;
+            }
+            assert_eq!(
+                queue.next_ready_owner(),
+                Some(RendererPageResourceCompletionOwner::async_subresource(
+                    root_document,
+                    crate::types::AsyncSubresourceFetchEventTarget::ObservedNetworkRecord,
+                )),
+                "only the preceding native network observation may precede this child terminal"
+            );
+            let observation = page_vm
+                .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
+                .expect("native networking observation consumes its own typed turn");
+            assert_eq!(
+                observation.action.source,
+                RendererOwnerResourceActivitySource::AsyncSubresource
+            );
+        }
         assert_eq!(
             queue.next_ready_owner(),
             Some(
@@ -842,6 +864,7 @@ pub(super) fn stale_loaded_completion(
                 character_set: "UTF-8".to_owned(),
                 markup: "<!doctype html>".to_owned(),
                 document_network: Some(crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+                    network_observed: false,
                     request_url: request_url.to_owned(),
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),

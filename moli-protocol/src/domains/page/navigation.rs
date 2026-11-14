@@ -73,6 +73,8 @@ pub(super) struct PendingChildFrameNavigateCommand {
     activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
     url: String,
     wait: DevToolsNavigationWait,
+    frame_id: String,
+    previous_loader_id: Option<String>,
     result_projection: NavigationResultProjection,
 }
 
@@ -86,6 +88,8 @@ pub(super) struct ChildFrameNavigationInput {
     pub(super) activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
     pub(super) url: String,
     pub(super) wait: DevToolsNavigationWait,
+    pub(super) frame_id: String,
+    pub(super) previous_loader_id: Option<String>,
     pub(super) result_projection: NavigationResultProjection,
 }
 
@@ -214,6 +218,8 @@ impl PendingChildFrameNavigateCommand {
             activity_binding: self.activity_binding,
             url: self.url,
             wait: self.wait,
+            frame_id: self.frame_id,
+            previous_loader_id: self.previous_loader_id,
             result_projection: self.result_projection,
         };
         CompletedChildFrameNavigateCommand { input, completed }
@@ -816,7 +822,7 @@ fn protocol_neutral_navigate_result_payload(
     }
 }
 
-fn update_navigation_result_payload_identity(
+pub(super) fn update_navigation_result_payload_identity(
     result_projection: &mut NavigationResultProjection,
     frame_id: &str,
     loader_id: &str,
@@ -1296,6 +1302,9 @@ fn start_child_frame_navigate_command(
             crate::conn::NoDocumentLoaded,
         ));
     };
+    let previous_loader_id = conn
+        .browsing_context_owner(frame_id)
+        .and_then(|frame| frame.loader_id);
     let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
@@ -1310,6 +1319,8 @@ fn start_child_frame_navigate_command(
                 activity_binding,
                 url: url.to_owned(),
                 wait,
+                frame_id: frame_id.to_owned(),
+                previous_loader_id,
                 result_projection,
             }))
         }
@@ -2107,6 +2118,11 @@ pub(crate) fn emit_prepared_child_frame_activity(
     // Playwright associates the navigation Request after this start marker.
     // Publishing a later start would erase the request/loader association.
     for commit in &document.commits {
+        if document.document_networks.iter().any(|network| {
+            network.loader_id == commit.loader_id && network.snapshot.network_observed
+        }) {
+            continue;
+        }
         if conn
             .runtime_session_owner_slot_mut_for_owner(&owner)
             .is_some_and(|slot| slot.request_was_announced_by_fetch_pause(&commit.loader_id))

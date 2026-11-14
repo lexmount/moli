@@ -1,4 +1,4 @@
-//! Shared native interception transport for XHR and stylesheet resources.
+//! Shared native interception transport for XHR and Document resources.
 
 mod context;
 mod result;
@@ -81,7 +81,7 @@ impl LoadedResponse {
 }
 
 impl ControlledResourceLoad {
-    pub(crate) fn for_stylesheet(
+    pub(crate) fn for_resource(
         interception: crate::network::interception_output::ResourceInterceptionContext,
         request: Request,
         info: PendingSubresourceFetchInfo,
@@ -289,6 +289,32 @@ impl ControlledResourceLoad {
         mut stream: Option<&mut ControlledXhrStream>,
     ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
         use ResourceInterceptionDecision as D;
+        if self.connect_policy.is_none() {
+            let started = crate::types::SubresourceRequestStarted::new(
+                self.info
+                    .network_request_handle
+                    .expect("native resource has a network handle"),
+                self.info.frame_id.clone(),
+                self.info.document_url.clone(),
+                self.info.url.clone(),
+                self.info.method.clone(),
+                self.info.request_headers.clone(),
+                self.info.request_body.clone(),
+                self.info.resource_type,
+                self.request_initiator_type,
+                self.info.request_cookie_report.clone(),
+            )
+            .with_request_body_bytes(self.info.request_body_bytes.clone())
+            .with_interception_request_announcement();
+            if !self.output.publish_network(
+                self.source_document,
+                moli_page_types::ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+                    started,
+                )),
+            ) {
+                return Err("network interception output owner is closed".into());
+            }
+        }
         let mut next_request_pause = true;
         let mut intercept_response = false;
         let mut handle_auth_requests = false;

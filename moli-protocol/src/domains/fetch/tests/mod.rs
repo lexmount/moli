@@ -312,3 +312,5 @@ mod runtime_websocket;
 mod runtime_xhr;
 mod stylesheets;
 mod subresource_auth_retry;
+
+mod child_frame_inflight;

@@ -1423,6 +1423,9 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     timestamp: f64,
     network: &moli_core::page::ChildFrameDocumentNetworkSnapshot,
 ) {
+    if network.network_observed {
+        return;
+    }
     let Ok(request_url) = Url::parse(&network.request_url) else {
         return;
     };

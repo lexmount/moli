@@ -228,6 +228,7 @@ impl PreparedProtocolOutputs {
         )
         .append_to_output_sink(&mut prepared);
         crate::domains::network::NetworkPreparedOutputs::from_renderer_live_delivery(renderer_live)
+            .with_child_document_start(item)
             .append_to_output_sink(&mut prepared);
         prepared.emit_root_network_idle_after_projection = true;
         Some(prepared)

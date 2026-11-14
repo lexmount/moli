@@ -288,6 +288,13 @@ fn request_started_charge(request: &SubresourceRequestStarted) -> usize {
         .as_deref()
         .map(string_charge)
         .unwrap_or(0)
+        .saturating_add(
+            request
+                .document_loader_id
+                .as_deref()
+                .map(string_charge)
+                .unwrap_or(0),
+        )
         .saturating_add(url_charge(&request.document_url))
         .saturating_add(url_charge(&request.url))
         .saturating_add(string_charge(&request.method))

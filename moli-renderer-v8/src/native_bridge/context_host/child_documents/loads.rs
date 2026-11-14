@@ -229,6 +229,7 @@ impl PageScriptHost {
             target,
             network_attribution,
             network_info: None,
+            network_output: None,
             redirect: None,
             request: child_document_load_request(bootstrap)
                 .map(|request| {
@@ -341,6 +342,9 @@ impl PageScriptHost {
         attribution: &ChildDocumentLoadNetworkAttribution,
         snapshot: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
     ) -> bool {
+        if snapshot.network_observed {
+            return true;
+        }
         let event = crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
             frame_id: attribution.frame_id().to_owned(),
             parent_frame_id: attribution.parent_frame_id().map(ToOwned::to_owned),
@@ -868,6 +872,49 @@ impl PageScriptHost {
             matches!(request.request().url.scheme(), "http" | "https")
                 && self.should_intercept_subresource(SubresourceResourceType::Document)
         }) else {
+            if let Some(request) = fetch.request.as_ref().map(|request| request.request())
+                && matches!(request.url.scheme(), "http" | "https")
+                && let Some(output) = self.native_interception_context()
+            {
+                let mut info = PendingSubresourceFetchInfo {
+                    internal_id: 0,
+                    network_request_handle: None,
+                    frame_id: Some(fetch.network_attribution.frame_id().to_owned()),
+                    document_url: request.url.clone(),
+                    url: request.url.clone(),
+                    websocket_socket_id: None,
+                    method: request.method.clone(),
+                    request_headers: request.request_headers.clone(),
+                    request_body: request.body_text().map(|body| body.into_owned()),
+                    request_body_bytes: request.body.clone(),
+                    resource_type: SubresourceResourceType::Document,
+                    request_cookie_report: None,
+                };
+                self.assign_pending_subresource_fetch_identity(&mut info);
+                self.record_subresource_request_started(
+                    crate::types::SubresourceRequestStarted::new(
+                        info.network_request_handle
+                            .expect("assigned network handle"),
+                        info.frame_id.clone(),
+                        info.document_url.clone(),
+                        info.url.clone(),
+                        info.method.clone(),
+                        info.request_headers.clone(),
+                        info.request_body.clone(),
+                        info.resource_type,
+                        crate::types::SubresourceRequestInitiatorType::Parser,
+                        None,
+                    )
+                    .with_request_body_bytes(info.request_body_bytes.clone())
+                    .with_document_loader_id(fetch.network_attribution.loader_id().to_owned()),
+                );
+                fetch.network_info = Some(info);
+                // Erase the captured journal type at the async navigation
+                // boundary; ChildDocumentFetch is itself carried by that journal.
+                fetch.network_output = Some(Box::new(move |item| {
+                    output.output.publish_network(output.source_document, item);
+                }));
+            }
             fetch.start();
             return None;
         };
@@ -1027,6 +1074,7 @@ pub(crate) struct ChildDocumentFetch {
     network_attribution: ChildDocumentLoadNetworkAttribution,
     request: Option<crate::network::navigation::NavigationInterception>,
     network_info: Option<PendingSubresourceFetchInfo>,
+    network_output: Option<Box<dyn Fn(moli_page_types::ScriptNetworkOutputItem) + Send>>,
     redirect: Option<crate::protocol_types::NavigationRedirect>,
     service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
@@ -1336,7 +1384,7 @@ impl ChildDocumentFetch {
         }
         let navigation_url = request.navigation_url(&head);
         let request = request.request();
-        child_document_load_outcome_from_response(
+        let mut outcome = child_document_load_outcome_from_response(
             request.url.as_str().to_owned(),
             request.method.clone(),
             request.request_headers.to_byte_strings(),
@@ -1346,8 +1394,60 @@ impl ChildDocumentFetch {
             &self.parent_character_set,
             self.download_policy,
             self.response_body.take(),
-        )
-        .map(Some)
+        )?;
+        if let (Some(context), Some(info)) = (&self.network_output, &self.network_info) {
+            let network = match &mut outcome {
+                ChildDocumentLoadOutcome::Loaded(loaded) => loaded.document_network.as_mut(),
+                ChildDocumentLoadOutcome::IgnoredNavigation(network) => Some(network.as_mut()),
+                ChildDocumentLoadOutcome::Download(download) => Some(&mut download.network),
+                ChildDocumentLoadOutcome::Redirect(_) => None,
+            };
+            if let Some(network) = network {
+                let handle = info
+                    .network_request_handle
+                    .expect("announced child request");
+                let response = crate::types::SubresourceResponseStarted::new(
+                    handle,
+                    Vec::new(),
+                    url::Url::parse(&network.final_url).expect("response URL"),
+                    network.status,
+                    network.response_headers.clone(),
+                    Vec::new(),
+                )
+                .with_from_cache(network.from_cache);
+                // Download handoff aborts the Document request without consuming
+                // its body, which remains owned by the download manager.
+                let body = if !matches!(network.status, 204 | 205)
+                    && moli_web_mime::response_headers_indicate_attachment_download(
+                        &network.response_headers,
+                    ) {
+                    crate::types::SubresourceBodyFinished::failed(
+                        handle,
+                        moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+                    )
+                } else {
+                    crate::types::SubresourceBodyFinished::ready(
+                        handle,
+                        network
+                            .response_body
+                            .clone()
+                            .unwrap_or_else(|| SubresourceResponseBody::from_bytes(Vec::new())),
+                    )
+                };
+                context(
+                    moli_page_types::ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(
+                        response,
+                    )),
+                );
+                context(
+                    moli_page_types::ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(
+                        body,
+                    )),
+                );
+                network.network_observed = true;
+            }
+        }
+        Ok(Some(outcome))
     }
 
     fn complete_hop(self, result: Result<Option<ChildDocumentLoadOutcome>, String>) {
@@ -1390,10 +1490,19 @@ impl ChildDocumentFetch {
     }
 
     fn finish(self, result: Result<ChildDocumentLoadOutcome, String>) {
-        let failure = result
+        let mut failure = result
             .as_ref()
             .err()
             .and_then(|error| self.network_failure_record(error));
+        if let Some(context) = &self.network_output
+            && let Some(record) = failure.take()
+        {
+            context(
+                moli_page_types::ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+                    record,
+                )),
+            );
+        }
         let _ = self.completion_tx.send_child_document(
             ChildDocumentLoadCompletion::new(self.target, self.network_attribution, result)
                 .with_network_failure(failure),
@@ -1416,6 +1525,7 @@ fn child_document_load_outcome_from_response(
         .try_into_materialized_bytes()
         .map_err(|_| "child document response body should remain materialized".to_owned())?;
     let mut network = crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+        network_observed: false,
         request_url,
         request_method,
         request_headers,
@@ -1608,6 +1718,7 @@ mod tests {
                     "retired-loader".to_owned(),
                 ),
                 network_info: None,
+                network_output: None,
                 redirect: None,
                 request: Some(crate::network::navigation::NavigationInterception::new(
                     resource_loader.clone(),

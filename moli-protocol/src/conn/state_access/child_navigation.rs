@@ -1,12 +1,18 @@
 use anyhow::Result;
 
 use super::ProtocolWorkflowState;
+use crate::conn::PreparedRuntimePageQuery;
 use crate::conn::activity_source::{
     CompletedChildFrameLifecycleWork, PendingChildFrameLifecycleWork,
 };
 use crate::conn::{CommandOwnerScope, TargetRootDocumentProtocolAttachmentIdentity};
 use crate::domains::command_output::CommandOutputPlan;
-use moli_core::page::{CompletedPageCommand, RendererCommandTurnOutput};
+use moli_core::page::{CompletedPageCommand, Page, RendererCommandTurnOutput};
+
+pub(crate) struct ChildNavigationDocument {
+    pub(crate) loader_id: String,
+    pub(crate) url: String,
+}
 
 pub(crate) struct StartedChildNavigationCompletion {
     pub(crate) output: Option<RendererCommandTurnOutput>,
@@ -54,16 +60,61 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn finish_child_navigation_lifecycle(
         self,
         binding: TargetRootDocumentProtocolAttachmentIdentity,
+        frame_id: &str,
         completed: CompletedChildFrameLifecycleWork,
-    ) -> Result<(bool, RendererCommandTurnOutput), CommandOutputPlan> {
+    ) -> Result<
+        (
+            bool,
+            Option<ChildNavigationDocument>,
+            RendererCommandTurnOutput,
+        ),
+        CommandOutputPlan,
+    > {
         if !self
             .connection
             .target_root_document_protocol_attachment_identity_is_current(&binding)
         {
             return Err(CommandOutputPlan::error(-31998, "NoSuchTarget"));
         }
-        self.connection
+        let (loaded, output) = self
+            .connection
             .complete_child_frame_lifecycle_work_command_turn_for_session_owner(completed)
-            .map_err(|error| CommandOutputPlan::error(-32000, error))
+            .map_err(|error| CommandOutputPlan::error(-32000, error))?;
+        let frame = self
+            .connection
+            .browsing_context_owner(frame_id)
+            .and_then(|frame| {
+                Some(ChildNavigationDocument {
+                    loader_id: frame.loader_id?,
+                    url: frame.url,
+                })
+            });
+        Ok((loaded, frame, output))
+    }
+
+    pub(crate) fn prepare_child_navigation_document_query(
+        self,
+        owner: &CommandOwnerScope,
+        frame_id: String,
+    ) -> Result<PreparedRuntimePageQuery<Option<ChildNavigationDocument>>> {
+        PreparedRuntimePageQuery::prepare_resident(
+            self.connection,
+            owner,
+            "child navigation identity lookup failed",
+            |page| page.start_child_frame_tree_snapshot(),
+            move |page, completion| {
+                let mut pending = Page::finish_child_frame_tree_snapshot(page, completion)?;
+                while let Some(frame) = pending.pop() {
+                    if frame.frame_id == frame_id {
+                        return Ok(Some(ChildNavigationDocument {
+                            loader_id: frame.loader_id,
+                            url: frame.url,
+                        }));
+                    }
+                    pending.extend(frame.child_frames);
+                }
+                Ok(None)
+            },
+        )
     }
 }

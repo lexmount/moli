@@ -1110,6 +1110,15 @@ impl TargetRuntimeSlot {
             && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
         {
             let loader_id = binding.loader_id.clone();
+            if let ScriptNetworkOutputItem::SubresourceRequestStarted(request) = item
+                && let Some(document_loader) = request.document_loader_id()
+            {
+                self.network_agent
+                    .record_subresource_request_id_for_handle_if_absent(
+                        request.handle(),
+                        document_loader.to_owned(),
+                    );
+            }
             self.log_output_queue
                 .ingest_renderer_network_output_item(item);
             return Some(
@@ -1125,6 +1134,10 @@ impl TargetRuntimeSlot {
             );
         }
 
+        if matches!(item, ScriptNetworkOutputItem::SubresourceRequestStarted(request) if request.document_loader_id().is_some())
+        {
+            return None;
+        }
         let event_session_ids = self
             .network_agent
             .event_session_ids(trigger_session_id, primary_session_id);
