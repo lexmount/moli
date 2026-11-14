@@ -166,3 +166,99 @@ async fn lazy_uploaded_files_keep_metadata_and_reject_changed_or_missing_content
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn directory_upload_symlink_replacements_reject_blob_and_file_reader_reads() {
+    use std::os::unix::fs::symlink;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    for replace_parent in [false, true] {
+        let scratch = std::env::temp_dir().join(format!(
+            "moli-cdp-directory-symlinks-{}-{}-{replace_parent}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let root = scratch.join("chosen");
+        let original = root.join("nested/file.txt");
+        fs::create_dir_all(original.parent().unwrap()).unwrap();
+        fs::write(&original, b"public").unwrap();
+        let outside = scratch.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("file.txt");
+        fs::write(&secret, b"SECRET").unwrap();
+        fs::File::open(&secret)
+            .unwrap()
+            .set_modified(fs::metadata(&original).unwrap().modified().unwrap())
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&original).unwrap().len(),
+            fs::metadata(&secret).unwrap().len()
+        );
+        assert_eq!(
+            fs::metadata(&original).unwrap().modified().unwrap(),
+            fs::metadata(&secret).unwrap().modified().unwrap()
+        );
+
+        let mut ctx = TestContext::new();
+        load_bc(&mut ctx, "BID-directory-symlinks");
+        navigate_to_data_html_async(
+            &mut ctx,
+            31200,
+            "<!doctype html><input id=upload type=file webkitdirectory>",
+        )
+        .await;
+        ctx.process_async(json!({"id":31201,"method":"Runtime.evaluate","params":{"expression":"document.getElementById('upload')"}})).await;
+        let object = take_response_by_id(&mut ctx, 31201)["result"]["result"]["objectId"].clone();
+        ctx.process_and_wait_for_response_async(json!({"id":31202,"method":"DOM.setFileInputFiles","params":{"objectId":object,"files":[root.to_string_lossy()]}})).await;
+        assert_eq!(take_response_by_id(&mut ctx, 31202)["result"], json!({}));
+        // Freeze the exposed File/clone before swapping the filesystem entry.
+        ctx.process_async(json!({"id":31203,"method":"Runtime.evaluate","params":{"expression":"globalThis.file = document.getElementById('upload').files[0];globalThis.copy = structuredClone(file);"}})).await;
+        take_response_by_id(&mut ctx, 31203);
+        if replace_parent {
+            fs::rename(root.join("nested"), scratch.join("retained")).unwrap();
+            symlink(&outside, root.join("nested")).unwrap();
+        } else {
+            fs::remove_file(&original).unwrap();
+            symlink(&secret, &original).unwrap();
+        }
+        ctx.process_and_wait_for_response_async(json!({
+            "id":31204,"method":"Runtime.evaluate","params":{
+                "expression":r#"(async () => {
+                    const errors = [];
+                    for (const blob of [file, copy, file.slice(1, 3)]) {
+                        try { await blob.text(); errors.push('unexpected success'); }
+                        catch (error) { errors.push(error.name); }
+                    }
+                    const reader = await new Promise(resolve => {
+                        const reader = new FileReader();
+                        reader.onerror = () => resolve(reader.error.name);
+                        reader.onload = () => resolve('unexpected success');
+                        reader.readAsArrayBuffer(file);
+                    });
+                    let stream;
+                    try { await file.stream().getReader().read(); stream = 'unexpected success'; }
+                    catch (error) { stream = error.name; }
+                    return { size:file.size, relative:file.webkitRelativePath, errors, reader, stream };
+                })()"#,
+                "awaitPromise":true,"returnByValue":true
+            }
+        })).await;
+        let reply = take_response_by_id(&mut ctx, 31204);
+        assert_eq!(
+            reply["result"]["result"]["value"],
+            json!({
+                "size":6,"relative":"chosen/nested/file.txt",
+                "errors":["NotReadableError","NotReadableError","NotReadableError"],
+                "reader":"NotReadableError","stream":"NotReadableError"
+            }),
+            "parent={replace_parent}: {reply}"
+        );
+        fs::remove_dir_all(scratch).unwrap();
+    }
+}
