@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use moli_layout::{
     DocumentLayoutServices, LayoutControlSurfaceHit, LayoutDisplay, LayoutElementCategory,
     LayoutElementSemantics, LayoutEnvironment, LayoutError, LayoutFlushReason, LayoutFragmentKind,
-    LayoutNamespace, LayoutPaintedSurfaceHit, LayoutPassRequest, LayoutPassResult, LayoutPoint,
-    LayoutPosition, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect,
-    LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth,
-    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport,
-    PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment, PaintShape,
-    ResolvedLayoutElementStyles, ResolvedLayoutStyle, build_layout_pass,
+    LayoutFragmentRole, LayoutNamespace, LayoutPaintedSurfaceHit, LayoutPassRequest,
+    LayoutPassResult, LayoutPoint, LayoutPosition, LayoutQuery, LayoutQueryAnswer,
+    LayoutQueryBatch, LayoutRect, LayoutScrollbarColors, LayoutScrollbarGutter,
+    LayoutScrollbarPart, LayoutScrollbarWidth, LayoutSource, LayoutSourceKind, LayoutStyleResolver,
+    LayoutTransform2D, LayoutViewport, PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment,
+    PaintShape, ResolvedLayoutElementStyles, ResolvedLayoutStyle, build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -1096,6 +1096,63 @@ fn text_overflow_ellipsis_reserves_marker_space_without_changing_source_geometry
             .utf16_offset,
         Some(4)
     );
+}
+
+#[test]
+fn layout_only_ellipsis_keeps_source_geometry_and_generated_hits_after_working_data_is_dropped() {
+    use style::properties::longhands::direction::computed_value::T as Direction;
+
+    for (direction, marker_x, anchor) in [(Direction::Ltr, 50.0, 4), (Direction::Rtl, 12.0, 8)] {
+        let tree = {
+            let source = Source(vec![
+                Node::element("root", vec![1]),
+                Node::text("text", "ABCDEFGHIJKL"),
+            ]);
+            let (style, mut services) = ellipsis_style(70.0, |computed| {
+                computed.mutate_inherited_box().set_direction(direction);
+            });
+            let output = build_layout_pass(
+                &source,
+                &mut Styles(HashMap::from([(0, style)])),
+                &mut services,
+                LayoutPassRequest::new(
+                    LayoutViewport::new(320, 240, 1.0),
+                    LayoutFlushReason::SynchronousGeometry,
+                ),
+            )
+            .unwrap();
+            assert!(output.paint_snapshot().is_none());
+            output.into_tree()
+        };
+        let source = tree.source_output(1).unwrap();
+        assert!(
+            source
+                .fragments
+                .iter()
+                .all(|id| { tree.fragment(*id).unwrap().role.has_source_geometry() })
+        );
+        let generated = tree
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.role == LayoutFragmentRole::DisplayOnly)
+            .collect::<Vec<_>>();
+        assert_eq!(generated.len(), 1);
+        assert!(!source.fragments.contains(&generated[0].id));
+        assert_eq!(tree.content_quads_for_source(1).len(), 12);
+        assert!((tree.text_range_rects(1, 0..12)[0].bounding_rect().width - 115.2).abs() < 0.01);
+        let point = LayoutPoint::new(marker_x, 8.0);
+        let hit = tree.hit_test(point, false).unwrap();
+        assert_eq!(hit.source, 1);
+        assert_eq!(hit.fragment, Some(generated[0].id));
+        assert_eq!(
+            tree.caret_position(point).unwrap().utf16_offset,
+            Some(anchor)
+        );
+        assert_eq!(
+            tree.retention_metrics().fragment_count,
+            tree.fragments.len()
+        );
+    }
 }
 
 #[test]

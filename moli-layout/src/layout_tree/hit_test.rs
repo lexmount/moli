@@ -313,6 +313,9 @@ where
     /// the explicit paint ordinal only after resolving geometric hits.
     fn hit_test_entries(&self) -> impl Iterator<Item = LayoutHitTestEntry<N>> + '_ {
         self.fragments.iter().filter_map(|fragment| {
+            if !fragment.role.has_display_geometry() {
+                return None;
+            }
             let paint_order = fragment.paint_order?;
             let (box_id, is_text) = match fragment.kind {
                 LayoutFragmentKind::Box { box_id }

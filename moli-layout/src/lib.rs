@@ -58,7 +58,7 @@ pub use layout_tree::{
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
     LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImageReference,
     LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason, LayoutFragment,
-    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
+    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutFragmentRole, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutObjectGeometry, LayoutOutputBoxId,
     LayoutPaintedSurfaceHit, LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad,
     LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics,

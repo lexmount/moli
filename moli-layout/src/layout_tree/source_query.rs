@@ -52,7 +52,8 @@ where
                     .fragments
                     .extend(layout_box.fragments.iter().copied().filter(|id| {
                         self.fragment(*id).is_some_and(|fragment| {
-                            !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
+                            fragment.role.has_source_geometry()
+                                && !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
                         })
                     }));
                 found = true;
@@ -98,7 +99,8 @@ where
                 output.get_or_insert_default().fragments.extend(
                     layout_box.fragments.iter().copied().filter(|id| {
                         self.fragment(*id).is_some_and(|fragment| {
-                            !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
+                            fragment.role.has_source_geometry()
+                                && !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
                         })
                     }),
                 );
@@ -871,7 +873,7 @@ mod tests {
     use super::*;
     use crate::layout_tree::{
         FrozenCoordinateSpace, FrozenLayoutBox, LayoutBoxGeometry, LayoutFragment,
-        LayoutFragmentId, LayoutScrollExtent, LayoutViewport,
+        LayoutFragmentId, LayoutFragmentRole, LayoutScrollExtent, LayoutViewport,
     };
 
     fn identity_space(owner: Option<LayoutOutputBoxId>) -> FrozenCoordinateSpace {
@@ -889,6 +891,7 @@ mod tests {
         let valid_fragment = LayoutFragmentId::from_index(1);
         let fragment = |id, box_model| LayoutFragment {
             id,
+            role: LayoutFragmentRole::SourceOnly,
             kind: LayoutFragmentKind::InlineBox {
                 box_id,
                 line_index: 0,
@@ -971,6 +974,61 @@ mod tests {
             Vec::new(),
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn source_and_display_queries_use_separate_fragment_roles() {
+        let mut tree = inline_fragment_tree();
+        let box_id = LayoutOutputBoxId::from_index(0);
+        let mut source = tree.fragments[0].clone();
+        source.kind = LayoutFragmentKind::Text {
+            box_id,
+            line_index: 0,
+            source_utf16_range: 0..10,
+            rtl: false,
+        };
+        source.rect = LayoutRect::new(0.0, 0.0, 100.0, 20.0);
+        // Even an ordinal cannot make source-only geometry interactive.
+        source.paint_order = Some(u32::MAX);
+        let mut display = source.clone();
+        display.id = LayoutFragmentId::from_index(1);
+        display.kind = LayoutFragmentKind::Text {
+            box_id,
+            line_index: 0,
+            source_utf16_range: 4..4,
+            rtl: false,
+        };
+        display.role = LayoutFragmentRole::DisplayOnly;
+        display.rect = LayoutRect::new(10.0, 0.0, 10.0, 20.0);
+        display.paint_order = Some(1);
+        tree.fragments = vec![source, display];
+
+        // The role also protects batched provenance if an association contains
+        // a display-only fragment. Generated anchors are not source characters.
+        let output = tree.source_output(1).unwrap();
+        assert_eq!(output.fragments, vec![LayoutFragmentId::from_index(0)]);
+        let mut batch = HashMap::from([(1, None)]);
+        tree.source_outputs(&mut batch);
+        assert_eq!(batch[&1], Some(output));
+        assert_eq!(
+            tree.text_range_rects(1, 0..10)[0].bounding_rect(),
+            LayoutRect::new(0.0, 0.0, 100.0, 20.0)
+        );
+        assert_eq!(tree.content_quads_for_source(1).len(), 1);
+        assert!(tree.hit_test(LayoutPoint::new(50.0, 10.0), false).is_none());
+        assert_eq!(
+            tree.hit_test(LayoutPoint::new(15.0, 10.0), false)
+                .unwrap()
+                .fragment,
+            Some(LayoutFragmentId::from_index(1))
+        );
+        assert_eq!(
+            tree.caret_position(LayoutPoint::new(15.0, 10.0))
+                .unwrap()
+                .utf16_offset,
+            Some(4)
+        );
+        assert_eq!(tree.retention_metrics().fragment_count, 2);
     }
 
     #[test]

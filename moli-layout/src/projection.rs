@@ -31,10 +31,10 @@ use crate::{
     FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, LayoutAnonymousReason,
     LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
     LayoutError, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
-    LayoutFragmentKind, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPoint,
-    LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize,
-    LayoutTransform2D, LayoutViewport, LayoutWorld, PaintCaptureRequest, PaintDiagnostic,
-    PaintDiagnosticSeverity,
+    LayoutFragmentKind, LayoutFragmentRole, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult,
+    LayoutPoint, LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis, LayoutScrollbarGeometry,
+    LayoutSize, LayoutTransform2D, LayoutViewport, LayoutWorld, PaintCaptureRequest,
+    PaintDiagnostic, PaintDiagnosticSeverity,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -650,6 +650,7 @@ where
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
                     kind: LayoutFragmentKind::Box { box_id: output_box },
+                    role: LayoutFragmentRole::SourceOnly,
                     rect: self.boxes[index].border_box,
                     box_model: Some(LayoutFragmentBoxModel {
                         content: self.boxes[index].content_box,
@@ -697,6 +698,7 @@ where
                         owner: output_box,
                         line_index: line.line_index,
                     },
+                    role: LayoutFragmentRole::SourceOnly,
                     rect: offset_rect(line.rect, content_origin),
                     box_model: None,
                     coordinate_space,
@@ -716,6 +718,7 @@ where
                         has_start_edge: inline.has_start_edge,
                         has_end_edge: inline.has_end_edge,
                     },
+                    role: LayoutFragmentRole::SourceOnly,
                     rect: box_model.border,
                     box_model: Some(box_model),
                     coordinate_space,
@@ -735,6 +738,7 @@ where
                         source_utf16_range: text.source_utf16_range.clone(),
                         rtl: text.rtl,
                     },
+                    role: LayoutFragmentRole::SourceOnly,
                     rect: offset_rect(text.rect, content_origin),
                     box_model: None,
                     coordinate_space,
@@ -748,7 +752,13 @@ where
     }
 
     fn register_box_fragment(&mut self, box_index: usize, fragment: LayoutFragmentId) {
+        assert!(self.fragments[fragment.index()].role.has_source_geometry());
         self.boxes[box_index].fragments.push(fragment);
+    }
+
+    fn push_display_fragment(&mut self, fragment: LayoutFragment) -> LayoutFragmentId {
+        assert_eq!(fragment.role, LayoutFragmentRole::DisplayOnly);
+        self.push_fragment(fragment)
     }
 
     fn push_fragment(&mut self, mut fragment: LayoutFragment) -> LayoutFragmentId {
@@ -882,7 +892,7 @@ where
         // Generated text participates in paint/hit order, but is deliberately
         // absent from source-box fragments: CSSOM/Range still see the original
         // untruncated text and no invented DOM characters.
-        let fragment = self.push_fragment(LayoutFragment {
+        let fragment = self.push_display_fragment(LayoutFragment {
             id: LayoutFragmentId::from_index(0),
             kind: LayoutFragmentKind::Text {
                 box_id: LayoutOutputBoxId::from_index(ellipsis.target.index()),
@@ -890,6 +900,7 @@ where
                 source_utf16_range: ellipsis.source_offset..ellipsis.source_offset,
                 rtl: ellipsis.rtl,
             },
+            role: LayoutFragmentRole::DisplayOnly,
             rect: LayoutRect::new(
                 layout.border.left
                     + layout.padding.left
@@ -1016,6 +1027,9 @@ where
         }
         let order = self.next_paint_order();
         let fragment = &mut self.fragments[fragment_id.index()];
+        if fragment.role == LayoutFragmentRole::SourceOnly {
+            fragment.role = LayoutFragmentRole::SourceAndDisplay;
+        }
         fragment.clip_chain = clip_chain;
         fragment.paint_order = Some(order);
     }
