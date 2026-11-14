@@ -329,7 +329,6 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         if !dispatch_xhr_loadstart(scope, xhr, prepared.send_body.as_deref()) {
             return true;
         }
-        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
         if xhr_state_bool_property(scope, xhr, XHR_ABORTED_SLOT).unwrap_or(false)
             || worker_xhr_open_generation_changed(scope, xhr, open_generation)
         {
@@ -386,6 +385,16 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         local_url_response_result(&prepared.resolved_url, &prepared.method)
             .map(|response| response.map_err(|error| error.to_string()))
     });
+    // Locally rejected requests never transmit their body. Leave the upload
+    // incomplete so the queued failure (or abort before delivery) reports it.
+    if async_request && !matches!(&local_response, Some(Err(_))) {
+        dispatch_xhr_upload_complete(scope, xhr, prepared.send_body.as_deref());
+        if xhr_state_bool_property(scope, xhr, XHR_ABORTED_SLOT).unwrap_or(false)
+            || worker_xhr_open_generation_changed(scope, xhr, open_generation)
+        {
+            return true;
+        }
+    }
     if !async_request && let Some(result) = local_response {
         match result {
             Ok(response) => apply_xhr_response(scope, xhr, response),
