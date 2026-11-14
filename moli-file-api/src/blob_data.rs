@@ -110,6 +110,18 @@ impl BlobData {
         })
     }
 
+    /// A cheap cache identity for an immutable backing and range. Equal bytes
+    /// stored in a different allocation may have a different identity; this is
+    /// deliberately not a content hash. Hold a clone while caching this value.
+    pub fn identity_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        Arc::as_ptr(&self.backing).hash(&mut hash);
+        self.offset.hash(&mut hash);
+        self.length.hash(&mut hash);
+        hash.finish()
+    }
+
     pub fn len(&self) -> usize {
         self.length
     }

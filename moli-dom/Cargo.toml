@@ -10,6 +10,7 @@ test-support = []
 [dependencies]
 html5ever = "0.40"
 indexmap = "2.14.2"
+moli-file-api = { path = "../moli-file-api" }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-html-input-type = { path = "../moli-html-input-type" }
 moli-html2md = { path = "../moli-html2md" }

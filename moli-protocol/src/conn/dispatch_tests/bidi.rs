@@ -734,7 +734,7 @@ async fn set_file_input_files_shared_id_uses_renderer_binding_without_protocol_r
                 object_id: fake_shared_id,
                 files: vec![moli_core::page::SelectedFile {
                     relative_path: String::new(),
-                    bytes: upload_bytes.to_vec(),
+                    data: upload_bytes.to_vec().into(),
                     mime_type: "text/plain".to_owned(),
                     name: "renderer-binding.txt".to_owned(),
                     last_modified: 0.0,

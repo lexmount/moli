@@ -212,26 +212,15 @@ pub(crate) fn build_file_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     file: &SelectedFile,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = build_file_object_from_shared_parts(
+    let (object, _) = build_file_object_unpublished(
         scope,
-        std::sync::Arc::from(file.bytes.as_slice()),
+        file.data.clone(),
         file.mime_type.clone(),
         &file.name,
         file.last_modified,
     )?;
     set_file_relative_path(scope, object, &file.relative_path);
     Some(object)
-}
-
-pub(crate) fn build_file_object_from_shared_parts<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    bytes: std::sync::Arc<[u8]>,
-    mime_type: String,
-    name: &str,
-    last_modified: f64,
-) -> Option<v8::Local<'s, v8::Object>> {
-    build_file_object_unpublished(scope, bytes.into(), mime_type, name, last_modified)
-        .map(|(object, _)| object)
 }
 
 pub(crate) fn build_file_object_unpublished<'s>(
@@ -299,7 +288,7 @@ pub(crate) fn selected_file_from_object<'s>(
     if !web_api_interfaces::File::is_instance(scope, object) {
         return None;
     }
-    let bytes = blob::blob_bytes_from_object(scope, object)?;
+    let data = blob::blob_data_from_object(scope, object)?;
     let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
     let name = file_name_from_object(scope, object)?;
     let last_modified = get_private_value(scope, object, FILE_LAST_MODIFIED_SLOT)
@@ -308,7 +297,7 @@ pub(crate) fn selected_file_from_object<'s>(
         .unwrap_or_else(unix_epoch_millis);
     Some(SelectedFile {
         relative_path: file_relative_path_from_object(scope, object).unwrap_or_default(),
-        bytes,
+        data,
         mime_type,
         name,
         last_modified,

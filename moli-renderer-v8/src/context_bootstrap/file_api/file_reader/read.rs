@@ -229,7 +229,7 @@ pub(crate) fn finish_file_reader_read<'s>(
         Err(error) => crate::context_bootstrap::new_dom_exception_value(
             scope,
             &error.to_string(),
-            "NotReadableError",
+            moli_file_api::file::read_error_name(&error),
         ),
     };
     set_file_reader_pending_result(scope, reader, result);

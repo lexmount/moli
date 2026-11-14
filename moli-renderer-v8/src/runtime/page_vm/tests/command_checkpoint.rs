@@ -98,7 +98,7 @@ input.addEventListener("change", () => {
                 backend_node_id,
                 vec![crate::dom::native::SelectedFile {
                     relative_path: String::new(),
-                    bytes: b"checkpoint".to_vec(),
+                    data: b"checkpoint".to_vec().into(),
                     mime_type: "text/plain".to_owned(),
                     name: "checkpoint.txt".to_owned(),
                     last_modified: 1.0,

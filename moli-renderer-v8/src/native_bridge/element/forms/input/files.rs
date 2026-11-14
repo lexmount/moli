@@ -11,11 +11,6 @@ const INPUT_FILES_CACHE_SIGNATURE_SLOT: &str = "__lmInputFilesSignature";
 fn selected_files_cache_signature(selected_files: &[SelectedFile]) -> String {
     let mut signature = String::new();
     for file in selected_files {
-        let mut bytes_hash = 0xcbf29ce484222325u64;
-        for byte in &file.bytes {
-            bytes_hash ^= u64::from(*byte);
-            bytes_hash = bytes_hash.wrapping_mul(0x100000001b3);
-        }
         let _ = write!(
             signature,
             "{}:{}:{}:{}:{}:{}:{}:{};",
@@ -26,7 +21,7 @@ fn selected_files_cache_signature(selected_files: &[SelectedFile]) -> String {
             file.mime_type.len(),
             file.mime_type,
             file.last_modified.to_bits(),
-            bytes_hash
+            file.data.identity_hash()
         );
     }
     signature

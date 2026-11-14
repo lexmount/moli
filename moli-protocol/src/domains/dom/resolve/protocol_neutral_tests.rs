@@ -1374,8 +1374,8 @@ fn devtools_dom_entry_routes_object_reference_command_to_dom_owner() {
     assert_eq!(error.message, "NoDocumentLoaded");
 }
 
-#[test]
-fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
+#[tokio::test]
+async fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
     let conn = CdpConnection::new();
     let file_path = unique_test_file_path("set-file-object");
     std::fs::write(&file_path, b"upload bytes").expect("test upload file should be writable");
@@ -1392,7 +1392,6 @@ fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
     );
 
     let command = super::super::set_file_input::build_cdp_set_file_input_files_command(&conn, &cmd);
-    let _ = std::fs::remove_file(&file_path);
     let Ok(Some(command)) = command else {
         panic!("valid setFileInputFiles object command");
     };
@@ -1404,7 +1403,10 @@ fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
     );
     assert_eq!(command.object_id.as_str(), "remote-file-input");
     assert_eq!(command.files.len(), 1);
-    assert_eq!(command.files[0].bytes, b"upload bytes");
+    assert_eq!(
+        command.files[0].data.read_blocking().unwrap(),
+        b"upload bytes"
+    );
     assert!(
         command.files[0]
             .name
@@ -1413,6 +1415,7 @@ fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
         command.files[0].name
     );
     assert!(!command.append);
+    let _ = std::fs::remove_file(&file_path);
 }
 
 #[test]
