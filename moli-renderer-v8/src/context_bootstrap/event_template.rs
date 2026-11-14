@@ -7,24 +7,27 @@ use super::{
     },
     events::{
         before_unload_event_return_value_getter, before_unload_event_return_value_setter,
-        close_event_code_getter_function, close_event_reason_getter_function,
-        close_event_was_clean_getter_function, event_bubbles_getter_function,
-        event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
-        event_cancelable_getter_function, event_composed_getter_function,
-        event_composed_path_callback, event_current_target_getter_function,
-        event_default_prevented_getter_function, event_event_phase_getter_function,
-        event_get_modifier_state_callback, event_platform_attribute_getter,
-        event_prevent_default_callback, event_return_value_getter_function,
-        event_return_value_setter_function, event_src_element_getter_function,
-        event_stop_immediate_propagation_callback, event_stop_propagation_callback,
-        event_target_getter_function, event_time_stamp_getter_function, event_type_getter_function,
-        event_value_attribute_getter, focus_event_related_target_getter_function,
-        form_data_event_form_data_getter_function, input_event_get_target_ranges_callback,
-        keyboard_event_init_callback, message_event_init_callback,
-        mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
-        submit_event_agent_invoked_getter_function, submit_event_respond_with_callback,
-        submit_event_submitter_getter_function, track_event_track_getter_function,
-        ui_event_pseudo_target_getter_function, ui_event_which_getter_function,
+        clipboard_change_event_change_id_getter_function,
+        clipboard_change_event_types_getter_function,
+        clipboard_event_clipboard_data_getter_function, close_event_code_getter_function,
+        close_event_reason_getter_function, close_event_was_clean_getter_function,
+        event_bubbles_getter_function, event_cancel_bubble_getter_function,
+        event_cancel_bubble_setter_function, event_cancelable_getter_function,
+        event_composed_getter_function, event_composed_path_callback,
+        event_current_target_getter_function, event_default_prevented_getter_function,
+        event_event_phase_getter_function, event_get_modifier_state_callback,
+        event_platform_attribute_getter, event_prevent_default_callback,
+        event_return_value_getter_function, event_return_value_setter_function,
+        event_src_element_getter_function, event_stop_immediate_propagation_callback,
+        event_stop_propagation_callback, event_target_getter_function,
+        event_time_stamp_getter_function, event_type_getter_function, event_value_attribute_getter,
+        focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
+        input_event_get_target_ranges_callback, keyboard_event_init_callback,
+        message_event_init_callback, mouse_event_related_target_getter_function,
+        pointer_event_get_predicted_events_callback, submit_event_agent_invoked_getter_function,
+        submit_event_respond_with_callback, submit_event_submitter_getter_function,
+        track_event_track_getter_function, ui_event_pseudo_target_getter_function,
+        ui_event_which_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
@@ -528,6 +531,12 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
+        "ClipboardEvent" => {
+            EventTemplateDeclaration::new::<ClipboardEventTemplateAccessorsDeclaration>()
+        }
+        "ClipboardChangeEvent" => {
+            EventTemplateDeclaration::new::<ClipboardChangeEventTemplateAccessorsDeclaration>()
+        }
         "ErrorEvent" => EventTemplateDeclaration::new::<ErrorEventTemplateAccessorsDeclaration>(),
         "SecurityPolicyViolationEvent" => EventTemplateDeclaration::new::<
             SecurityPolicyViolationEventTemplateAccessorsDeclaration,
@@ -598,4 +607,27 @@ pub(super) fn install_event_template_bindings<'s>(
     if let Some(declaration) = event_template_declaration(interface) {
         (declaration.install)(scope, template);
     }
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ClipboardEvent, enumerable, receiver)]
+struct ClipboardEventTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "clipboardData",
+        getter = clipboard_event_clipboard_data_getter_function
+    )]
+    clipboard_data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ClipboardChangeEvent, enumerable, receiver)]
+struct ClipboardChangeEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = clipboard_change_event_types_getter_function)]
+    types: (),
+
+    #[webapi(
+        accessor_property = "changeId",
+        getter = clipboard_change_event_change_id_getter_function
+    )]
+    change_id: (),
 }
