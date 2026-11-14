@@ -245,6 +245,12 @@ pub(super) struct HtmlInputElementValuePrototypeDeclaration {
     multiple: (),
     #[webapi(
         accessor_property,
+        getter = input_webkitdirectory_getter_function,
+        setter = input_webkitdirectory_setter_function
+    )]
+    webkitdirectory: (),
+    #[webapi(
+        accessor_property,
         getter = input_pattern_getter_function,
         setter = input_pattern_setter_function
     )]

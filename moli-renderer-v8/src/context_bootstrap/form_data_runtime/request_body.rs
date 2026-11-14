@@ -56,7 +56,9 @@ fn form_data_request_value<'s>(
             .read_blocking()
             .map_err(|_| WebIdlError::custom_message("Failed to read Blob body"))?;
         return Ok(MultipartFormDataPartValue::Blob {
-            filename: file_api::file_name_from_object(scope, object)
+            filename: file_api::file_relative_path_from_object(scope, object)
+                .filter(|path| !path.is_empty())
+                .or_else(|| file_api::file_name_from_object(scope, object))
                 .unwrap_or_else(|| "blob".to_owned()),
             content_type: blob::blob_mime_type_from_object(scope, object).unwrap_or_default(),
             body: bytes,

@@ -181,3 +181,65 @@ fn input_files_accessors_reject_incompatible_receivers() {
         .expect("files getters and setters must validate their HTMLInputElement receivers");
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn directory_selected_files_keep_relative_paths_in_wrappers_clones_and_file_lists() {
+    let mut vm = new_parsed_test_vm(
+        "https://directory-upload.test/",
+        "<!doctype html><input id=upload type=file webkitdirectory>",
+    );
+    let handle = vm.document_runtime.get_element_by_id("upload").unwrap();
+    let files = ["folder/a.txt", "folder/sub/b.txt"]
+        .into_iter()
+        .map(|relative_path| crate::dom::native::SelectedFile {
+            bytes: relative_path.as_bytes().to_vec(),
+            mime_type: "text/plain".into(),
+            name: relative_path.rsplit('/').next().unwrap().into(),
+            relative_path: relative_path.into(),
+            last_modified: 7.0,
+        })
+        .collect();
+    assert!(vm.set_file_input_files(handle, files, false).unwrap());
+    assert_eq!(vm.eval(r#"(() => {
+        const assert = (condition, message) => { if (!condition) throw new Error(message); };
+        const input = document.getElementById('upload');
+        assert(input.webkitdirectory && !input.multiple && input.files.length === 2, 'directory permits multiple files');
+        const expected = ['folder/a.txt', 'folder/sub/b.txt'];
+        const files = input.files;
+        assert(Array.from(files, f => f.webkitRelativePath).join('|') === expected.join('|'), 'relative paths');
+        const copy = structuredClone(files[1]);
+        assert(copy.name === 'b.txt' && copy.webkitRelativePath === expected[1], 'structured clone metadata');
+        const transfer = new DataTransfer(); transfer.items.add(files[0]);
+        assert(transfer.files[0].webkitRelativePath === expected[0], 'DataTransfer metadata');
+        input.files = transfer.files;
+        assert(input.files[0].webkitRelativePath === expected[0], 'FileList round trip');
+        assert(new File(['x'], 'ordinary.txt').webkitRelativePath === '', 'ordinary File default');
+        input.webkitdirectory = false; assert(!input.hasAttribute('webkitdirectory'), 'IDL setter removes attribute');
+        input.setAttribute('webkitdirectory', 'false'); assert(input.webkitdirectory, 'boolean attribute presence');
+        globalThis.directoryMultipart = new FormData();
+        directoryMultipart.append('upload', input.files[0]);
+        Object.defineProperty(input.files[0], 'webkitRelativePath', {get() { throw new Error('public path must not be read for upload'); }});
+        return 'ok';
+    })()"#).unwrap(), "ok");
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(|isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let global = context.global(scope);
+            let key = v8::String::new(scope, "directoryMultipart").unwrap();
+            let form = global.get(scope, key.into()).unwrap();
+            let form = v8::Local::<v8::Object>::try_from(form).unwrap();
+            let (body, _) = crate::context_bootstrap::form_data_request_body(scope, form)
+                .unwrap()
+                .unwrap();
+            let body = String::from_utf8(body).unwrap();
+            assert!(body.contains("filename=\"folder/a.txt\""), "{body}");
+            assert!(body.contains("\r\n\r\nfolder/a.txt\r\n"), "{body}");
+            Ok(())
+        })
+        .unwrap();
+}

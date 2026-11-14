@@ -8,6 +8,7 @@ use moli_file_api::file::normalize_file_last_modified;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const FILE_NAME_SLOT: &str = "__lmFileName";
+const FILE_RELATIVE_PATH_SLOT: &str = "__lmFileRelativePath";
 const FILE_LAST_MODIFIED_SLOT: &str = "__lmFileLastModified";
 
 pub(in crate::context_bootstrap) fn bind_file_world_wrapper<'s>(
@@ -19,6 +20,8 @@ pub(in crate::context_bootstrap) fn bind_file_world_wrapper<'s>(
     let modified =
         get_private_value(scope, source, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)?;
     initialize_file_metadata(scope, wrapper, &name, modified);
+    let relative_path = file_relative_path_from_object(scope, source).unwrap_or_default();
+    set_file_relative_path(scope, wrapper, &relative_path);
     let prototype = super::super::ensure_intrinsic_interface_prototype(scope, "File").ok()?;
     wrapper
         .set_prototype(scope, prototype.into())?
@@ -33,6 +36,8 @@ struct FileMetadataDeclaration {
     name: String,
     #[webapi(slot = FILE_LAST_MODIFIED_SLOT)]
     last_modified: f64,
+    #[webapi(slot = FILE_RELATIVE_PATH_SLOT)]
+    relative_path: String,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -46,6 +51,8 @@ struct FilePrototypeAccessorsDeclaration {
         enumerable
     )]
     last_modified: (),
+    #[webapi(accessor_property, getter = file_relative_path_attribute_getter_callback, enumerable)]
+    webkit_relative_path: (),
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -147,7 +154,7 @@ pub(super) fn initialize_file_metadata<'s>(
     last_modified: f64,
 ) {
     let last_modified = normalize_file_last_modified(last_modified, unix_epoch_millis());
-    FileMetadataDeclaration::new(name.to_owned(), last_modified)
+    FileMetadataDeclaration::new(name.to_owned(), last_modified, String::new())
         .initialize(scope, object)
         .expect("File metadata declaration should initialize object");
 }
@@ -159,7 +166,7 @@ pub(super) fn file_object_with_metadata<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let _ = super::super::ensure_intrinsic_interface_prototype(scope, "File").ok()?;
     let last_modified = normalize_file_last_modified(last_modified, unix_epoch_millis());
-    FileMetadataDeclaration::new(name.to_owned(), last_modified)
+    FileMetadataDeclaration::new(name.to_owned(), last_modified, String::new())
         .bind(scope)
         .ok()
 }
@@ -205,13 +212,15 @@ pub(crate) fn build_file_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     file: &SelectedFile,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    build_file_object_from_shared_parts(
+    let object = build_file_object_from_shared_parts(
         scope,
         std::sync::Arc::from(file.bytes.as_slice()),
         file.mime_type.clone(),
         &file.name,
         file.last_modified,
-    )
+    )?;
+    set_file_relative_path(scope, object, &file.relative_path);
+    Some(object)
 }
 
 pub(crate) fn build_file_object_from_shared_parts<'s>(
@@ -237,17 +246,50 @@ pub(crate) fn build_file_object_unpublished<'s>(
     Some((object, id))
 }
 
+fn file_relative_path_attribute_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let relative_path = file_relative_path_from_object(scope, args.this()).unwrap_or_default();
+    rv.set(
+        v8::String::new(scope, &relative_path)
+            .expect("File path string allocation")
+            .into(),
+    );
+}
+
+pub(in crate::context_bootstrap) fn file_relative_path_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    private_string_value(scope, object, FILE_RELATIVE_PATH_SLOT)
+}
+
+pub(crate) fn set_file_relative_path<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    path: &str,
+) {
+    let value = v8::String::new(scope, path).expect("File path string allocation");
+    crate::util::set_private_value(scope, object, FILE_RELATIVE_PATH_SLOT, value.into());
+}
+
 pub(crate) fn file_clone_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Option<(String, f64)> {
+) -> Option<(String, f64, String)> {
     if !web_api_interfaces::File::is_instance(scope, object) {
         return None;
     }
     let name = file_name_from_object(scope, object)?;
     let modified =
         get_private_value(scope, object, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)?;
-    Some((name, modified))
+    Some((
+        name,
+        modified,
+        file_relative_path_from_object(scope, object).unwrap_or_default(),
+    ))
 }
 
 pub(crate) fn selected_file_from_object<'s>(
@@ -265,6 +307,7 @@ pub(crate) fn selected_file_from_object<'s>(
         .filter(|value| value.is_finite())
         .unwrap_or_else(unix_epoch_millis);
     Some(SelectedFile {
+        relative_path: file_relative_path_from_object(scope, object).unwrap_or_default(),
         bytes,
         mime_type,
         name,

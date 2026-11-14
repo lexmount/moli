@@ -286,6 +286,7 @@ fn empty_file_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'
             bytes: Vec::new(),
             mime_type: "application/octet-stream".to_owned(),
             name: String::new(),
+            relative_path: String::new(),
             last_modified: unix_epoch_millis(),
         },
     )

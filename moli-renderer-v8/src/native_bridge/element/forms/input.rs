@@ -43,7 +43,8 @@ pub(in crate::native_bridge) use self::reflected::{
     input_placeholder_setter_function, input_read_only_getter_function,
     input_read_only_setter_function, input_required_getter_function,
     input_required_setter_function, input_src_getter_function, input_src_setter_function,
-    input_step_getter_function, input_step_setter_function, input_width_getter_function,
+    input_step_getter_function, input_step_setter_function, input_webkitdirectory_getter_function,
+    input_webkitdirectory_setter_function, input_width_getter_function,
     input_width_setter_function,
 };
 pub(in crate::native_bridge) use self::textarea::{
