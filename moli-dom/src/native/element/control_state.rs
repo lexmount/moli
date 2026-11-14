@@ -10,7 +10,8 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectedFile {
-    pub bytes: Vec<u8>,
+    /// Immutable backing shared by DOM state, File wrappers and clones.
+    pub data: moli_file_api::BlobData,
     pub mime_type: String,
     pub name: String,
     /// Path relative to the selected directory's parent; empty for ordinary files.
@@ -567,11 +568,11 @@ impl ElementControlState {
     }
 
     pub fn set_selected_files(&mut self, files: Vec<SelectedFile>) -> bool {
-        if self.selected_files == files {
-            return false;
-        }
+        let changed = self.selected_files != files;
+        // A FileList assignment still adopts its immutable backings when the
+        // visible values compare equal, preserving the supplied wrapper cache.
         self.selected_files = files;
-        true
+        changed
     }
 
     pub fn set_checked(&mut self, checked: bool) -> bool {

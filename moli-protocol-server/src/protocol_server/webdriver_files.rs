@@ -64,7 +64,7 @@ fn selected_file_from_path(path: &str, label: &str) -> Result<SelectedFile, DevT
         });
     Ok(SelectedFile {
         relative_path: String::new(),
-        bytes,
+        data: bytes.into(),
         mime_type: String::new(),
         name,
         last_modified,

@@ -10,6 +10,7 @@ mod cdp_projection;
 pub mod conn;
 pub mod domains;
 
+pub mod file_upload;
 pub mod frame_index;
 #[cfg(feature = "test-support")]
 pub mod test_support;

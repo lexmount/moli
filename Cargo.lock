@@ -2888,6 +2888,7 @@ dependencies = [
  "html5ever 0.40.1",
  "indexmap",
  "moli-css-parse",
+ "moli-file-api",
  "moli-html-input-temporal",
  "moli-html-input-type",
  "moli-html2md",

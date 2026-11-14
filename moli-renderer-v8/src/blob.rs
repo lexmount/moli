@@ -389,13 +389,6 @@ pub(super) fn blob_data_from_object<'s>(
     blob_store().blob_data(blob_id_from_object(scope, object)?)
 }
 
-pub(super) fn blob_bytes_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<Vec<u8>> {
-    blob_id_from_object(scope, object).and_then(blob_bytes)
-}
-
 pub(super) fn blob_uuid_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -499,10 +492,6 @@ pub(super) fn object_url_body_and_type(url: &str) -> Option<(String, String)> {
 
 pub(super) fn object_url_bytes_and_type(url: &str) -> Option<(Vec<u8>, String)> {
     blob_store().object_url_bytes_and_type(url)
-}
-
-fn blob_bytes(blob_id: BlobId) -> Option<Vec<u8>> {
-    blob_store().blob_bytes(blob_id)
 }
 
 fn blob_uuid(blob_id: BlobId) -> Option<String> {

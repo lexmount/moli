@@ -4192,7 +4192,7 @@ fn settle_get_file_task_result<'s>(
         FileSystemFileSnapshotState::new(locator.clone(), &result.path, snapshot.identity);
     let file = SelectedFile {
         relative_path: String::new(),
-        bytes: snapshot.bytes,
+        data: snapshot.bytes.into(),
         mime_type: String::new(),
         name: snapshot.name,
         last_modified: snapshot.modified_ms as f64,

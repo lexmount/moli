@@ -283,7 +283,7 @@ fn empty_file_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'
     file_api::build_file_object(
         scope,
         &SelectedFile {
-            bytes: Vec::new(),
+            data: Vec::new().into(),
             mime_type: "application/octet-stream".to_owned(),
             name: String::new(),
             relative_path: String::new(),

@@ -192,7 +192,7 @@ fn directory_selected_files_keep_relative_paths_in_wrappers_clones_and_file_list
     let files = ["folder/a.txt", "folder/sub/b.txt"]
         .into_iter()
         .map(|relative_path| crate::dom::native::SelectedFile {
-            bytes: relative_path.as_bytes().to_vec(),
+            data: relative_path.as_bytes().to_vec().into(),
             mime_type: "text/plain".into(),
             name: relative_path.rsplit('/').next().unwrap().into(),
             relative_path: relative_path.into(),
@@ -242,4 +242,29 @@ fn directory_selected_files_keep_relative_paths_in_wrappers_clones_and_file_list
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn equal_file_values_keep_the_supplied_filelist_identity() {
+    let mut vm = new_parsed_test_vm(
+        "https://file-list.test/",
+        "<!doctype html><input id=upload type=file>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const input = document.getElementById('upload');
+        const first = new DataTransfer();
+        first.items.add(new File(['same'], 'file.txt', {lastModified: 1}));
+        input.files = first.files;
+        const second = new DataTransfer();
+        second.items.add(new File(['same'], 'file.txt', {lastModified: 1}));
+        const list = second.files;
+        input.files = list;
+        return input.files === list && input.files[0] === list[0];
+    })()"#
+        )
+        .unwrap(),
+        "true"
+    );
 }

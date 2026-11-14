@@ -168,13 +168,25 @@ fn file_reader_sync_blob_bytes<'s>(
 ) -> Option<(Vec<u8>, String)> {
     let object =
         moli_webapi_declare::web_api_object_target(scope, value).expect("converted Blob argument");
-    let bytes = match blob::blob_bytes_from_object(scope, object) {
-        Some(bytes) => bytes,
+    let data = match blob::blob_data_from_object(scope, object) {
+        Some(data) => data,
         None => {
             throw_type_error(
                 scope,
                 &format!("FileReaderSync.{operation} requires a Blob or File"),
             );
+            return None;
+        }
+    };
+    let bytes = match data.read_blocking() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let exception = crate::context_bootstrap::new_dom_exception_value(
+                scope,
+                &error.to_string(),
+                moli_file_api::file::read_error_name(&error),
+            );
+            scope.throw_exception(exception);
             return None;
         }
     };
