@@ -1150,7 +1150,6 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_controller_getter_c
     });
     let controller = cached_for_version
         .unwrap_or_else(|| build_service_worker_controller_object(scope, &state, owner));
-    service_worker_worker_set_state(scope, controller, "activated");
     service_worker_worker_set_owner_scope(scope, controller, owner);
     set_private_value(
         scope,
@@ -2636,7 +2635,11 @@ fn build_service_worker_controller_object<'s>(
     state: &crate::runtime::ServiceWorkerControlState,
     owner: OwnerDispatchScope,
 ) -> v8::Local<'s, v8::Object> {
-    let controller = build_service_worker_object(scope, state.script_url().as_str(), "activated");
+    let controller = build_service_worker_object(
+        scope,
+        state.script_url().as_str(),
+        state.active_version_state(),
+    );
     if let Some(version_id) = state.active_version_id() {
         service_worker_worker_set_version_id(scope, controller, version_id);
     }

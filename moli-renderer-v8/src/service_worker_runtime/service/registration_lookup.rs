@@ -368,6 +368,7 @@ fn service_worker_control_state_from_registration_active_version(
     Some(ServiceWorkerControlState::new(
         registration.id,
         Some(active_version_id),
+        active_version.lifecycle_state.as_str(),
         active_version.script_url.clone(),
         registration.scope_url.clone(),
     ))
