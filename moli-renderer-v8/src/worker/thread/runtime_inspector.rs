@@ -398,11 +398,16 @@ struct WorkerInspectorSession {
     retirement: WorkerInspectorSessionRetirement,
 }
 
-struct WorkerInspectorSessionRetirement(WorkerInspectorSessionLifetime);
+struct WorkerInspectorSessionRetirement {
+    lifetime: WorkerInspectorSessionLifetime,
+    task_runner: WorkerInspectorTaskRunner,
+    session_key: String,
+}
 
 impl Drop for WorkerInspectorSessionRetirement {
     fn drop(&mut self) {
-        self.0.complete_retirement(Ok(()));
+        self.task_runner
+            .complete_retirement(Some(&self.session_key), &self.lifetime);
     }
 }
 
@@ -601,8 +606,9 @@ impl WorkerRuntimeInspector {
 
     #[cfg(test)]
     pub(super) fn detach_session(&self, inspector_session_id: Option<&str>) {
-        let lifetime = self.task_runner.retire_lifetime(inspector_session_id);
-        self.detach_session_incarnation(inspector_session_id, &lifetime);
+        if let Ok(lifetime) = self.task_runner.retire_lifetime(inspector_session_id) {
+            self.detach_session_incarnation(inspector_session_id, &lifetime);
+        }
     }
 
     fn detach_session_incarnation(
@@ -614,7 +620,7 @@ impl WorkerRuntimeInspector {
         let mut sessions = self.sessions.borrow_mut();
         if sessions
             .get(&key)
-            .is_some_and(|session| session.retirement.0.matches(lifetime))
+            .is_some_and(|session| session.retirement.lifetime.matches(lifetime))
         {
             let session = sessions.remove(&key).expect("matching native session");
             drop(sessions);
@@ -637,14 +643,17 @@ impl WorkerRuntimeInspector {
             // final Inspector roots; frontend detachment must not wait on it.
             drop(session);
         } else if !lifetime.native_was_created() {
-            lifetime.complete_retirement(Ok(()));
+            self.task_runner.complete_retirement(id, lifetime);
         }
         lifetime.complete_detachment(Ok(()));
     }
 
     #[cfg(test)]
     pub(super) fn attach_session(&self, inspector_session_id: Option<&str>) {
-        let lifetime = self.task_runner.attach_lifetime(inspector_session_id);
+        let lifetime = self
+            .task_runner
+            .attach_lifetime(inspector_session_id)
+            .unwrap();
         self.ensure_session(
             &worker_inspector_session_key(inspector_session_id),
             &lifetime,
@@ -688,7 +697,7 @@ impl WorkerRuntimeInspector {
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let lifetime = self.task_runner.session_lifetime(inspector_session_id);
+        let lifetime = self.task_runner.session_lifetime(inspector_session_id)?;
         self.dispatch_protocol_message_for_incarnation(
             inspector_session_id,
             raw_json,
@@ -898,7 +907,7 @@ impl WorkerRuntimeInspector {
     ) -> Rc<WorkerInspectorSession> {
         let existing = self.sessions.borrow().get(session_key).cloned();
         if let Some(session) = existing {
-            if session.retirement.0.matches(lifetime) {
+            if session.retirement.lifetime.matches(lifetime) {
                 return session;
             }
             // Attach can overtake a queued detach after ingress was revoked.
@@ -906,7 +915,7 @@ impl WorkerRuntimeInspector {
             // session; its paused dispatch may still own a native Rc.
             self.detach_session_incarnation(
                 worker_inspector_session_id_from_key(session_key).as_deref(),
-                &session.retirement.0,
+                &session.retirement.lifetime,
             );
         }
         let session = self.inspector.connect(
@@ -923,7 +932,11 @@ impl WorkerRuntimeInspector {
         lifetime.mark_native_created();
         let session = Rc::new(WorkerInspectorSession {
             native: session,
-            retirement: WorkerInspectorSessionRetirement(lifetime.clone()),
+            retirement: WorkerInspectorSessionRetirement {
+                lifetime: lifetime.clone(),
+                task_runner: self.task_runner.clone(),
+                session_key: session_key.to_owned(),
+            },
         });
         self.sessions
             .borrow_mut()
@@ -1305,9 +1318,13 @@ mod tests {
                 "https://worker-debugger.test/worker.js",
             );
             for key in ["", "peer"] {
+                inspector.attach_session(Some(key));
                 let state = v8::crdtp::cbor_to_json(
                     &inspector
-                        .ensure_session(key, &inspector.task_runner.session_lifetime(Some(key)))
+                        .ensure_session(
+                            key,
+                            &inspector.task_runner.session_lifetime(Some(key)).unwrap(),
+                        )
                         .state(),
                 )
                 .expect("worker session state");
@@ -1338,7 +1355,7 @@ mod tests {
                 .expect("worker Debugger.enable");
             let state = v8::crdtp::cbor_to_json(
                 &inspector
-                    .ensure_session("", &inspector.task_runner.session_lifetime(None))
+                    .ensure_session("", &inspector.task_runner.session_lifetime(None).unwrap())
                     .state(),
             )
             .expect("worker state");
@@ -1441,6 +1458,7 @@ mod tests {
             .dispatch_protocol_message(scope, None, r#"{"id":44,"method":"Runtime.disable"}"#)
             .expect("disable the default session before testing independent limits");
         crate::inspector_session::tests::assert_multiple_sessions(|session, request| {
+            inspector.attach_session(Some(session));
             inspector
                 .dispatch_protocol_message(scope, Some(session), request)
                 .expect("Worker Inspector session dispatch")
@@ -1749,6 +1767,7 @@ mod tests {
         let scope = &mut v8::ContextScope::new(scope, context);
         crate::inspector_session::tests::object_lifecycle::assert_object_namespaces_and_groups(
             |session, request| {
+                inspector.attach_session(Some(session));
                 inspector
                     .dispatch_protocol_message(scope, Some(session), request)
                     .expect("Worker native Inspector dispatch")
@@ -1757,6 +1776,25 @@ mod tests {
                     .collect()
             },
         );
+    }
+
+    #[test]
+    fn worker_inspector_session_churn_reclaims_retired_runner_entries() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        let initial_sessions = inspector.task_runner.session_count();
+        for index in 0..4096 {
+            let id = format!("churn-{index}");
+            inspector.attach_session(Some(&id));
+            let lifetime = inspector.task_runner.session_lifetime(Some(&id)).unwrap();
+            let mut retired = lifetime.retirement();
+            inspector.detach_session(Some(&id));
+            retired.try_recv().unwrap().unwrap();
+            assert!(!lifetime.is_active());
+        }
+        assert!(inspector.sessions.borrow().is_empty());
+        assert_eq!(inspector.task_runner.session_count(), initial_sessions);
     }
 
     #[test]
@@ -1785,6 +1823,8 @@ mod tests {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        inspector.attach_session(Some("A"));
+        let initial_sessions = inspector.task_runner.session_count();
         let (id, weak) = {
             let scope = pin!(v8::HandleScope::new(&mut isolate));
             let scope = &mut scope.init();
@@ -1810,9 +1850,10 @@ mod tests {
             )
         };
         let held = inspector.sessions.borrow()["A"].clone();
-        let lifetime = inspector.task_runner.retire_lifetime(Some("A"));
+        let lifetime = inspector.task_runner.retire_lifetime(Some("A")).unwrap();
         let mut receipt = lifetime.retirement();
         inspector.detach_session_incarnation(Some("A"), &lifetime);
+        assert_eq!(inspector.task_runner.session_count(), initial_sessions);
         isolate.clear_kept_objects();
         isolate.low_memory_notification();
         assert!(!weak.is_empty());
@@ -1821,6 +1862,7 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
         drop(held);
+        assert_eq!(inspector.task_runner.session_count(), initial_sessions - 1);
         receipt
             .try_recv()
             .expect("the native destructor settles the receipt")
@@ -1835,6 +1877,8 @@ mod tests {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        inspector.attach_session(Some("A"));
+        inspector.attach_session(Some("B"));
         let scope = pin!(v8::HandleScope::new(&mut isolate));
         let scope = &mut scope.init();
         let context = v8::Context::new(scope, Default::default());

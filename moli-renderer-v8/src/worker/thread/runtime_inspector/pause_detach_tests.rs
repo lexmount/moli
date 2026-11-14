@@ -44,6 +44,7 @@ fn assert_detach_during_pause(peer_debugger: bool) {
             },
         ),
     ] {
+        inspector.attach_session(Some(session));
         inspector
             .dispatch_protocol_message_scoped(
                 Some(session),
@@ -73,7 +74,7 @@ fn assert_detach_during_pause(peer_debugger: bool) {
                 let result = tokio::time::timeout(Duration::from_secs(5), async {
                     let mut frames = HashMap::new();
                     wait_for_paused_session(&mut parent_rx, &mut frames, "A").await;
-                    let lifetime = runner.session_lifetime(Some("A"));
+                    let lifetime = runner.session_lifetime(Some("A")).unwrap();
                     let mut destroyed = lifetime.retirement();
                     phase.set("detaching A");
                     runner

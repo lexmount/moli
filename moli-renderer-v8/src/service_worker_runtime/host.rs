@@ -136,6 +136,20 @@ impl RendererServiceWorkerHost {
         )
     }
 
+    pub(super) fn attach_worker_runtime_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        let state = self.state.lock();
+        let RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        } = &*state
+        else {
+            return false;
+        };
+        handle.attach_runtime_inspector_session(inspector_session_id)
+    }
+
     pub(super) async fn dispatch_worker_runtime_protocol_message(
         &self,
         inspector_session_id: Option<String>,
