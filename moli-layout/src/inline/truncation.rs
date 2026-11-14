@@ -135,6 +135,7 @@ where
 {
     let mut paragraphs = Vec::new();
     let mut propagating_oof = None;
+    let mut children = Vec::new();
     for (index, layout_box) in world.boxes.iter().enumerate() {
         let Some(context) = layout_box.inline_layout.as_ref() else {
             continue;
@@ -199,7 +200,7 @@ where
                 continue;
             }
             let (start, end) = line_bounds(&line, width);
-            let children = visual_children(context, &line);
+            collect_visual_children(context, &line, &mut children);
             let ordered = (0..children.len()).map(|index| {
                 if rtl {
                     children.len() - index - 1
@@ -258,16 +259,14 @@ where
                 }
             }
             visible_text.sort_unstable_by_key(|range| range.start);
-            let mut merged: Vec<Range<usize>> = Vec::new();
-            for range in visible_text {
-                if let Some(last) = merged.last_mut()
-                    && range.start <= last.end
-                {
-                    last.end = last.end.max(range.end);
+            visible_text.dedup_by(|range, previous| {
+                if range.start <= previous.end {
+                    previous.end = previous.end.max(range.end);
+                    true
                 } else {
-                    merged.push(range);
+                    false
                 }
-            }
+            });
             let (target, source_offset) = match &children[last].kind {
                 ChildKind::Atomic(id) => (*id, 0),
                 ChildKind::Text {
@@ -294,7 +293,7 @@ where
                 target,
                 source_offset,
                 rtl,
-                visible_text: merged,
+                visible_text,
             }));
         }
         if paragraphs.is_empty() {
@@ -390,11 +389,14 @@ fn propagating_positioned_descendants<N: Copy + Debug + Eq + Hash>(
     propagating
 }
 
-fn visual_children(
+fn collect_visual_children(
     context: &InlineFormattingContext,
     line: &parley::Line<'_, TextBrush>,
-) -> Vec<VisualChild> {
-    let mut children: Vec<VisualChild> = Vec::new();
+    children: &mut Vec<VisualChild>,
+) {
+    // Construction-only scratch is shared by overflowing lines and IFCs.
+    // Nothing in a prepared paragraph borrows this buffer.
+    children.clear();
     for item in line.items() {
         match item {
             PositionedLayoutItem::InlineBox(item) => {
@@ -433,7 +435,6 @@ fn visual_children(
             }
         }
     }
-    children
 }
 
 #[cfg(test)]
