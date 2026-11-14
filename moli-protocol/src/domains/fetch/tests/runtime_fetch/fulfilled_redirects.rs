@@ -522,6 +522,158 @@ async fn fulfilled_manual_redirect_does_not_parse_location_but_still_checks_cors
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn ordinary_manual_preflight_redirect_does_not_parse_location() {
+    check_manual_preflight_redirect(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn intercepted_manual_preflight_redirect_does_not_parse_location() {
+    for stage in ["Request", "Response"] {
+        check_manual_preflight_redirect(Some(stage)).await;
+    }
+}
+
+async fn check_manual_preflight_redirect(stage: Option<&str>) {
+    use axum::{
+        http::{HeaderMap, HeaderValue, StatusCode},
+        response::IntoResponse as _,
+    };
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    let (mut ctx, origin, fixture_server) = fixture().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cross_origin = format!("http://{}", listener.local_addr().unwrap());
+    let cases = [
+        ("manual", 302, true, Some("http://[")),
+        ("follow", 302, true, Some("http://[")),
+        ("error", 302, true, Some("http://[")),
+        ("manual", 302, false, Some("http://[")),
+        ("manual", 302, true, None),
+        ("manual", 200, true, Some("http://[")),
+    ];
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let server_observed = observed.clone();
+    let app = Router::new().fallback(axum::routing::any(
+        move |request: axum::extract::Request| {
+            let observed = server_observed.clone();
+            let origin = origin.clone();
+            async move {
+                let index = request
+                    .uri()
+                    .path()
+                    .trim_start_matches('/')
+                    .parse::<usize>()
+                    .unwrap();
+                let (_, status, cors_allowed, location) = cases[index];
+                let method = request.method().as_str();
+                observed.lock().push((index, method.to_owned()));
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    "access-control-allow-origin",
+                    HeaderValue::from_str(if method == "OPTIONS" || cors_allowed {
+                        &origin
+                    } else {
+                        "http://wrong.test"
+                    })
+                    .unwrap(),
+                );
+                if method == "OPTIONS" {
+                    assert_eq!(request.headers()["access-control-request-method"], "PUT");
+                    assert_eq!(
+                        request.headers()["access-control-request-headers"],
+                        "x-probe"
+                    );
+                    headers.insert(
+                        "access-control-allow-methods",
+                        HeaderValue::from_static("PUT"),
+                    );
+                    headers.insert(
+                        "access-control-allow-headers",
+                        HeaderValue::from_static("x-probe"),
+                    );
+                    headers.insert("access-control-max-age", HeaderValue::from_static("0"));
+                    (StatusCode::NO_CONTENT, headers, "").into_response()
+                } else {
+                    assert_eq!(method, "PUT");
+                    assert_eq!(request.headers()["x-probe"], "yes");
+                    if let Some(location) = location {
+                        headers.insert("location", HeaderValue::from_static(location));
+                    }
+                    (StatusCode::from_u16(status).unwrap(), headers, "response").into_response()
+                }
+            }
+        },
+    ));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    if let Some(stage) = stage {
+        command(&mut ctx, 60_000, "Fetch.enable", json!({
+            "patterns":[{"urlPattern":format!("{cross_origin}/*"),"resourceType":"Fetch","requestStage":stage}]
+        })).await;
+    } else {
+        command(&mut ctx, 60_000, "Fetch.disable", json!({})).await;
+    }
+    let mut expected_requests = Vec::new();
+    for (index, (mode, status, cors_allowed, _)) in cases.into_iter().enumerate() {
+        let id = 60_010 + index as u64 * 10;
+        let source = format!("{cross_origin}/{index}");
+        command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
+            "globalThis.manualPreflightResult=fetch({source:?},{{method:'PUT',headers:{{'X-Probe':'yes'}},redirect:{mode:?}}}).then(async r=>({{status:r.status,type:r.type,url:r.url,headers:[...r.headers],body:await r.text(),redirected:r.redirected}})).catch(e=>({{error:e.name}}));'started'"
+        )})).await;
+        if let Some(stage) = stage {
+            let pause =
+                wait_for_request_paused(&mut ctx, &source, "preflight redirect pause").await;
+            assert_eq!(
+                pause["params"]["responseStatusCode"].is_number(),
+                stage == "Response"
+            );
+            command(
+                &mut ctx,
+                id + 1,
+                if stage == "Response" {
+                    "Fetch.continueResponse"
+                } else {
+                    "Fetch.continueRequest"
+                },
+                json!({"requestId":pause["params"]["requestId"]}),
+            )
+            .await;
+        }
+        let result = command(
+            &mut ctx,
+            id + 2,
+            "Runtime.evaluate",
+            json!({
+                "expression":"manualPreflightResult","awaitPromise":true,"returnByValue":true
+            }),
+        )
+        .await;
+        expected_requests.extend([(index, "OPTIONS".to_owned()), (index, "PUT".to_owned())]);
+        assert_eq!(*observed.lock(), expected_requests, "{stage:?}/{index}");
+        let value = &result["result"]["result"]["value"];
+        if !cors_allowed || mode != "manual" {
+            assert_eq!(value, &json!({"error":"TypeError"}), "{stage:?}/{index}");
+        } else if status == 302 {
+            assert_eq!(
+                value,
+                &json!({
+                    "status":0,"type":"opaqueredirect","url":source,"headers":[],"body":"","redirected":false
+                }),
+                "{stage:?}/{index}"
+            );
+        } else {
+            assert_eq!(value["status"], 200);
+            assert_eq!(value["type"], "cors");
+            assert_eq!(value["body"], "response");
+            assert_eq!(value["url"], source);
+            assert_eq!(value["redirected"], false);
+        }
+    }
+    server.abort();
+    fixture_server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fulfilled_window_fetch_redirect_limit_is_shared_across_pauses() {
     let (mut ctx, origin, server) = fixture().await;
     let url = format!("{origin}/loop");
