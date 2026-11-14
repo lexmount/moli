@@ -11,10 +11,10 @@ use std::{fmt::Debug, hash::Hash};
 use super::{
     filters::{expanded_filter_clip, project_filters},
     geometry::BoxAreas,
-    text::{caret_rect, range_selection_rects},
+    text::caret_rect,
 };
 use crate::{
-    LayoutBoxId, LayoutPoint, LayoutRect, LayoutTransform2D, PaintFilter, PaintFragment,
+    LayoutBoxId, LayoutRect, LayoutTransform2D, PaintFilter, PaintFragment,
     inline::InlinePaintBounds, projection::OutputProjection, stacking::PaintOrderEvent,
 };
 
@@ -186,42 +186,23 @@ where
         PaintOrderEvent::BoxContents(id)
         | PaintOrderEvent::InlineContents(id)
         | PaintOrderEvent::BoxText(id) => box_contents_bounds(projection, id),
-        PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id.index()])
+        PaintOrderEvent::BoxCaret(id) => projection
+            .inline_display
+            .context(id)
+            .and_then(|display| caret_rect(display))
             .map_or(PaintCullBounds::Empty, |rect| {
                 map_box_rect(projection, id, rect)
             }),
-        PaintOrderEvent::InlineSelection {
-            owner, start, end, ..
-        } => {
-            let mut bounds = PaintCullBounds::Empty;
-            range_selection_rects(
-                &projection.world.boxes[owner.index()],
-                Some(&(start..end)),
-                |rect| {
-                    bounds.include(map_box_rect(projection, owner, rect));
-                },
-            );
-            bounds
-        }
         PaintOrderEvent::InlineBox { owner, fragment } => {
             let id = projection.owner_paint_fragments[owner.index()][fragment];
             map_box_rect(projection, owner, projection.fragments[id.index()].rect)
         }
-        PaintOrderEvent::InlineText { owner, line, .. }
-        | PaintOrderEvent::InlineEllipsis { owner, line } => {
-            let layout_box = &projection.world.boxes[owner.index()];
-            let context = layout_box.inline_layout.as_ref().unwrap();
-            match context.fragments.lines[line].paint_bounds {
+        PaintOrderEvent::InlineItem { owner, item } => {
+            let display = projection.inline_display.context(owner).unwrap();
+            match display.items[item].paint_bounds {
                 InlinePaintBounds::Empty => PaintCullBounds::Empty,
                 InlinePaintBounds::Unbounded => PaintCullBounds::Unbounded,
-                InlinePaintBounds::Bounded(bounds) => {
-                    let layout = layout_box.final_layout;
-                    let origin = LayoutPoint::new(
-                        layout.border.left + layout.padding.left,
-                        layout.border.top + layout.padding.top,
-                    );
-                    map_box_rect(projection, owner, offset_rect(bounds, origin))
-                }
+                InlinePaintBounds::Bounded(bounds) => map_box_rect(projection, owner, bounds),
             }
         }
         PaintOrderEvent::BoxOutline(id) => box_outline_bounds(projection, id),
@@ -262,17 +243,15 @@ where
         return PaintCullBounds::Empty;
     }
     let mut local = projection.boxes[id.index()].border_box;
-    if let Some(context) = layout_box.inline_layout.as_ref() {
-        let layout = layout_box.final_layout;
-        let origin = LayoutPoint::new(
-            layout.border.left + layout.padding.left,
-            layout.border.top + layout.padding.top,
-        );
-        for line in &context.fragments.lines {
+    if let Some(context) = projection.inline_display.context(id) {
+        if let Some((caret, _)) = context.caret {
+            local = local.union(caret);
+        }
+        for line in &context.lines {
             match line.paint_bounds {
                 InlinePaintBounds::Empty => {}
                 InlinePaintBounds::Bounded(bounds) => {
-                    local = local.union(offset_rect(bounds, origin));
+                    local = local.union(bounds);
                 }
                 InlinePaintBounds::Unbounded => return PaintCullBounds::Unbounded,
             }
@@ -493,15 +472,6 @@ fn rect_is_finite(rect: LayoutRect) -> bool {
     [rect.x, rect.y, rect.width, rect.height]
         .into_iter()
         .all(f32::is_finite)
-}
-
-fn offset_rect(rect: LayoutRect, offset: LayoutPoint) -> LayoutRect {
-    LayoutRect::new(
-        rect.x + offset.x,
-        rect.y + offset.y,
-        rect.width,
-        rect.height,
-    )
 }
 
 use crate::overflow::outset_rect;

@@ -7,6 +7,9 @@
 // Relative positioning of atomic inline boxes additionally follows Blitz
 // commit 4a9be930accc971675d5730e4fde3cfa13c3b57e.
 
+pub(crate) mod display;
+mod truncation;
+
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Debug,
@@ -210,8 +213,6 @@ pub(crate) struct InlineFormattingContext {
     pub(crate) structural_boxes: Vec<InlineStructuralBox>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
-    /// Visual truncation is separate from the accepted layout and source map.
-    pub(crate) text_overflow: Option<Box<crate::text_overflow::TextOverflow>>,
 }
 
 #[derive(Debug, Default)]
@@ -392,12 +393,14 @@ pub(crate) enum InlineSelection {
 /// Advances styled segments through their shared shaped run's source map.
 /// Create one cursor per line and consume every segment, including hidden or
 /// masked segments, before deciding which glyphs to paint.
+#[cfg(test)]
 #[derive(Default)]
 pub(crate) struct GlyphSourceCursor {
     run_index: Option<usize>,
     ranges: std::vec::IntoIter<Range<usize>>,
 }
 
+#[cfg(test)]
 impl GlyphSourceCursor {
     pub(crate) fn segment<'a>(
         &'a mut self,
@@ -411,6 +414,7 @@ impl GlyphSourceCursor {
     }
 }
 
+#[cfg(test)]
 fn glyph_cluster_ranges(run: &parley::Run<'_, TextBrush>) -> Vec<Range<usize>> {
     // Join ligature continuations in logical order first: in RTL their
     // visual order puts the continuation before the glyph-bearing cluster.
@@ -557,9 +561,6 @@ pub(crate) struct InlineLineFragment {
     pub(crate) rect: PaintRect,
     /// Included in `rect` for CSSOM and painting; excluded from scrolling on demand.
     pub(crate) hanging_advance: f32,
-    /// Conservative glyph/decoration/shadow ink used only by capture culling.
-    /// CSSOM line geometry continues to use `rect`.
-    pub(crate) paint_bounds: InlinePaintBounds,
     pub(crate) baseline: f32,
 }
 
@@ -638,11 +639,6 @@ pub(crate) fn build_inline_fragments(
     let mut fragments = InlineFragments::default();
     let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
     let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
-    let style_paint_outsets = layout
-        .styles()
-        .iter()
-        .map(text_style_paint_outsets)
-        .collect::<Vec<_>>();
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
@@ -664,12 +660,6 @@ pub(crate) fn build_inline_fragments(
             line_index,
             rect: line_rect,
             hanging_advance: metrics.hanging_advance,
-            paint_bounds: context
-                .selection
-                .as_ref()
-                .map_or(InlinePaintBounds::Empty, |_| {
-                    InlinePaintBounds::Bounded(line_rect)
-                }),
             baseline: placement.map_or(metrics.baseline, |placement| placement.baseline),
         });
         if let Some(placement) = placement {
@@ -707,22 +697,6 @@ pub(crate) fn build_inline_fragments(
                 cluster.advance().max(0.0),
                 (ascent + descent).max(0.0),
             );
-            if let Some(style) = layout.styles().get(style_index)
-                && style.brush.paint
-            {
-                // Parley exposes typographic cluster boxes rather than
-                // exact outline bounds. A two-em guard is deliberately
-                // conservative for italic/color-glyph overhang, while the
-                // style sidecar adds CSS stroke, shadow, and decoration
-                // ink. This work happens once, alongside final
-                // fragment materialization, not during every paint.
-                let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
-                let line = &mut fragments.lines[line_index];
-                match style_paint_outsets.get(style_index).copied().flatten() {
-                    Some(outsets) => line.paint_bounds.include(outsets.outset(rect, glyph_guard)),
-                    None => line.paint_bounds = InlinePaintBounds::Unbounded,
-                }
-            }
             for unit in overlapping_output_ranges(&context.text_units, &range) {
                 for ancestor in &unit.ancestors {
                     box_fragments
@@ -2409,7 +2383,6 @@ impl InlineBuildInput {
             structural_boxes,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
-            text_overflow: None,
         }
     }
 }
@@ -3709,7 +3682,6 @@ mod tests {
             structural_boxes: Vec::new(),
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
-            text_overflow: None,
         };
         let summary = measure_inline_lines(&context, &layout, &[], &[], &[]);
         let (placements, materialized_summary) =
@@ -3827,7 +3799,6 @@ mod tests {
                     structural_boxes: Vec::new(),
                     line_placements: Vec::new(),
                     fragments: InlineFragments::default(),
-                    text_overflow: None,
                 };
                 let fragments = build_inline_fragments(&context, &layout, &[]);
                 assert!(!fragments.text.is_empty());

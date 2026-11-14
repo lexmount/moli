@@ -84,7 +84,8 @@ impl LinkProjection {
             | LayoutFragmentKind::Text { box_id, .. } => box_id,
             LayoutFragmentKind::Line { .. } => return,
         };
-        if !projection.world.boxes[box_id.index()].style.is_visible()
+        if !fragment.role.has_display_geometry()
+            || !projection.world.boxes[box_id.index()].style.is_visible()
             || fragment.rect.width <= 0.0
             || fragment.rect.height <= 0.0
         {

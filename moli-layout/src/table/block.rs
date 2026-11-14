@@ -632,9 +632,6 @@ where
         for line in &mut context.fragments.lines {
             line.rect.y += offset;
             line.baseline += offset;
-            if let crate::inline::InlinePaintBounds::Bounded(rect) = &mut line.paint_bounds {
-                rect.y += offset;
-            }
         }
         for text in &mut context.fragments.text {
             text.rect.y += offset;

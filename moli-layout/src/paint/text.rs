@@ -1,19 +1,19 @@
-use parley::{
-    Affinity, PositionedLayoutItem,
-    editing::{Cursor, Selection},
-};
+use std::{collections::HashSet, sync::Arc};
 
 use super::{PaintProjectionMetrics, cull::rects_intersect};
 use crate::{
     LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
-    inline::{GlyphSourceCursor, InlineFormattingContext, InlinePaintBounds, InlineSelection},
+    inline::{
+        InlinePaintBounds,
+        display::{InlineDisplayContext, InlineDisplayItem, InlineItemContent, TextOrigin},
+    },
 };
 
 const SELECTION_COLOR: PaintColor = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
 // These expansion ratios and the 0.3 px cap follow Blitz's AnyRender text
-// painter at d788124a. Moli combines the matched face's synthesis metadata with
-// the computed CSS weight threshold and font-synthesis-weight permission.
+// painter at d788124a. Matched-face synthesis metadata is combined with the
+// computed CSS weight and font-synthesis-weight permission below.
 const SYNTHETIC_EMBOLDEN_X_EM: f32 = 0.015_125;
 const SYNTHETIC_EMBOLDEN_Y_EM: f32 = 0.012_1;
 const MAX_SYNTHETIC_EMBOLDEN_PX: f32 = 0.3;
@@ -24,165 +24,133 @@ enum TextPaintPhase {
     ClipMask,
 }
 
-/// Selects which pass-owned glyphs participate in a text-clip paint phase.
-///
-/// A normal CSS box replays all IFCs in its subtree. A flattened inline box
-/// shares its ancestor's Parley layout, so its mask selects only glyph runs
-/// encountered while that exact structural inline is active.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TextClipMaskScope {
     AllGlyphs,
     InlineBox(LayoutBoxId),
 }
 
-/// Projects Parley text, selection, and caret geometry into owned paint commands.
-///
-/// The selection geometry and 1.5 CSS px caret width are direct ports of
-/// `blitz-paint/src/text.rs::draw_text_selection` and
-/// `render.rs::draw_text_input_text` at Blitz d788124a. Moli's only
-/// adaptation is applying its pass-local vertical-alignment sidecar before the
-/// resulting rectangles cross the owned snapshot boundary.
 pub(super) fn project_text<N>(
     layout_box: &LayoutBox<N>,
+    display: &InlineDisplayContext<'_>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
 ) {
-    project_text_phase(
+    let text = snapshot
+        .retain_text_semantics
+        .then(|| Arc::from(layout_box.inline_layout.as_ref().unwrap().text.as_str()));
+    for line in &display.lines {
+        paint_selection(&line.selection, transform, local_cull, snapshot);
+    }
+    project_caret(display, transform, local_cull, snapshot);
+    project_lines(
         layout_box,
+        display,
         transform,
         local_cull,
         metrics,
         snapshot,
         TextPaintPhase::Foreground,
-        None,
+        TextClipMaskScope::AllGlyphs,
+        text,
     );
 }
 
-/// Projects the box's shaped text as an opaque alpha mask.
-///
-/// Chromium uses a dedicated `PaintPhase::kTextClip` for
-/// `background-clip:text`: glyph and decoration colors become opaque black,
-/// while shadows, selection, and caret paint are omitted. The resulting ink
-/// is consumed by a `DestIn` layer, so only alpha is observable.
 pub(super) fn project_text_clip_mask<N>(
     layout_box: &LayoutBox<N>,
+    display: &InlineDisplayContext<'_>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
     scope: TextClipMaskScope,
 ) {
-    project_text_phase(
+    project_lines(
         layout_box,
+        display,
         transform,
         local_cull,
         metrics,
         snapshot,
         TextPaintPhase::ClipMask,
-        Some(scope),
+        scope,
+        None,
     );
 }
 
-fn project_text_phase<N>(
+#[allow(clippy::too_many_arguments)]
+fn project_lines<N>(
     layout_box: &LayoutBox<N>,
+    display: &InlineDisplayContext<'_>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
     phase: TextPaintPhase,
-    mask_scope: Option<TextClipMaskScope>,
+    scope: TextClipMaskScope,
+    text: Option<Arc<str>>,
 ) {
-    let Some(context) = layout_box.inline_layout.as_ref() else {
-        return;
-    };
-    let Some(text_layout) = context.laid_out.as_ref() else {
-        return;
-    };
-    let layout = layout_box.final_layout;
-    let origin_x = layout.border.left + layout.padding.left;
-    let origin_y = layout.border.top + layout.padding.top;
-
-    if phase == TextPaintPhase::Foreground {
-        project_selection(layout_box, transform, local_cull, snapshot, None);
-    }
-
-    let text: Option<std::sync::Arc<str>> = (snapshot.retain_text_semantics
-        && phase == TextPaintPhase::Foreground)
-        .then(|| std::sync::Arc::from(context.text.as_str()));
-    let paint = TextRunPaint {
-        origin_x,
-        origin_y,
-        transform,
-        phase,
-        text,
-    };
-    for (line_index, line) in text_layout.lines().enumerate() {
-        let overflow = context
-            .text_overflow
-            .as_ref()
-            .and_then(|overflow| overflow.lines.get(line_index))
-            .and_then(Option::as_ref);
-        let mut sources = GlyphSourceCursor::default();
+    for (line_index, line) in display.lines.iter().enumerate() {
         metrics.text_line_count = metrics.text_line_count.saturating_add(1);
-        let line_is_culled =
-            local_cull.is_some_and(|cull| {
-                context.fragments.lines.get(line_index).is_some_and(|line| {
-                    match line.paint_bounds {
-                        InlinePaintBounds::Empty => true,
-                        InlinePaintBounds::Unbounded => false,
-                        InlinePaintBounds::Bounded(bounds) => {
-                            let bounds = LayoutRect::new(
-                                origin_x + bounds.x,
-                                origin_y + bounds.y,
-                                bounds.width,
-                                bounds.height,
-                            );
-                            !rects_intersect(bounds, cull)
-                        }
-                    }
-                })
-            });
-        if line_is_culled {
+        if line_is_culled(display, line_index, local_cull) {
             metrics.culled_text_line_count = metrics.culled_text_line_count.saturating_add(1);
             continue;
         }
-        let line_placement = context.line_placements.get(line_index);
-        for (item_index, item) in line.items().enumerate() {
-            let glyph_run = match item {
-                PositionedLayoutItem::InlineBox(_) => continue,
-                PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run,
+        for item in &display.items[line.items.clone()] {
+            let InlineItemContent::Text(view) = &item.content else {
+                continue;
             };
-            // Advance even for masked/hidden style runs, so styled portions of
-            // the same Parley run keep their original cluster associations.
-            let clusters = if paint.text.is_some() || overflow.is_some() {
-                sources
-                    .segment(&glyph_run)
-                    .map(|(_, range)| range)
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            if let Some(TextClipMaskScope::InlineBox(target)) = mask_scope
-                && !context.style_is_within_box(usize::from(glyph_run.style_index()), target)
+            if let TextClipMaskScope::InlineBox(target) = scope
+                && (matches!(view.origin, TextOrigin::Generated { .. })
+                    || !layout_box
+                        .inline_layout
+                        .as_ref()
+                        .unwrap()
+                        .style_is_within_box(usize::from(view.glyphs.style_index()), target))
             {
                 continue;
             }
-            if !glyph_run.style().brush.paint {
-                continue;
-            }
-            let vertical_offset = line_placement
-                .map(|placement| placement.item_offset(item_index))
-                .unwrap_or_default();
-            paint.project_run(&glyph_run, vertical_offset, clusters, overflow, snapshot);
-        }
-        if mask_scope.is_none_or(|scope| matches!(scope, TextClipMaskScope::AllGlyphs)) {
-            project_ellipsis_phase(
-                layout_box, line_index, transform, local_cull, snapshot, phase,
-            );
+            paint_text_item(item, transform, phase, text.clone(), snapshot);
         }
     }
+}
+
+fn paint_text_item(
+    item: &InlineDisplayItem<'_>,
+    transform: LayoutTransform2D,
+    phase: TextPaintPhase,
+    source_text: Option<Arc<str>>,
+    snapshot: &mut PaintSnapshot,
+) {
+    let InlineItemContent::Text(view) = &item.content else {
+        return;
+    };
+    let text = if phase == TextPaintPhase::Foreground && snapshot.retain_text_semantics {
+        match &view.origin {
+            TextOrigin::Source => source_text,
+            TextOrigin::Generated { text, .. } => Some((*text).clone()),
+        }
+    } else {
+        None
+    };
+    let clusters = if text.is_some() {
+        view.glyphs
+            .glyphs_with_text_ranges()
+            .map(|(_, range)| range)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    TextRunPaint {
+        origin_x: view.offset.x,
+        origin_y: view.offset.y,
+        transform,
+        phase,
+        text,
+    }
+    .project_run(&view.glyphs, clusters, snapshot);
 }
 
 struct TextRunPaint {
@@ -197,37 +165,17 @@ impl TextRunPaint {
     fn project_run(
         &self,
         glyph_run: &parley::GlyphRun<'_, crate::stylo_to_parley::TextBrush>,
-        vertical_offset: f32,
         clusters: Vec<std::ops::Range<usize>>,
-        overflow: Option<&crate::text_overflow::EllipsisLine>,
         snapshot: &mut PaintSnapshot,
     ) {
-        let mut glyphs = Vec::new();
-        let mut visible_clusters = Vec::new();
-        let mut advance = glyph_run.offset();
-        let mut visible_advance: Option<(f32, f32)> = None;
-        for (index, glyph) in glyph_run.positioned_glyphs().enumerate() {
-            let end = advance + glyph.advance;
-            if overflow.is_none_or(|overflow| {
-                clusters
-                    .get(index)
-                    .is_some_and(|range| overflow.text_is_visible(range))
-            }) {
-                glyphs.push(PaintGlyph {
-                    id: glyph.id,
-                    x: self.origin_x + glyph.x,
-                    y: self.origin_y + glyph.y + vertical_offset,
-                });
-                if self.text.is_some()
-                    && let Some(cluster) = clusters.get(index)
-                {
-                    visible_clusters.push(cluster.clone());
-                }
-                visible_advance =
-                    Some(visible_advance.map_or((advance, end), |(start, _)| (start, end)));
-            }
-            advance = end;
-        }
+        let glyphs = glyph_run
+            .positioned_glyphs()
+            .map(|glyph| PaintGlyph {
+                id: glyph.id,
+                x: self.origin_x + glyph.x,
+                y: self.origin_y + glyph.y,
+            })
+            .collect::<Vec<_>>();
         if glyphs.is_empty() {
             return;
         }
@@ -262,7 +210,7 @@ impl TextRunPaint {
             glyphs,
             text: self.text.as_ref().map(|text| crate::PaintTextSemantics {
                 text: text.clone(),
-                clusters: visible_clusters,
+                clusters,
             }),
             transform: self.transform,
             // Text clipping uses both fill and stroke as opaque ink,
@@ -287,14 +235,9 @@ impl TextRunPaint {
         }
 
         let metrics = run.font_metrics();
-        let baseline = self.origin_y + glyph_run.baseline() + vertical_offset;
-        let (start, end) = if overflow.is_some() {
-            visible_advance.unwrap()
-        } else {
-            (glyph_run.offset(), glyph_run.offset() + glyph_run.advance())
-        };
-        let x = self.origin_x + start;
-        let width = (end - start).max(0.0);
+        let baseline = self.origin_y + glyph_run.baseline();
+        let x = self.origin_x + glyph_run.offset();
+        let width = glyph_run.advance().max(0.0);
         let decoration = brush.decoration;
         let decoration_color = if self.phase == TextPaintPhase::ClipMask {
             PaintColor::BLACK
@@ -344,372 +287,107 @@ impl TextRunPaint {
     }
 }
 
-/// Borrow the shaped runs once per line; fragment-level events must not replay
-/// shaping iteration or copy the complete semantic text for every run.
+/// Fragment events reuse finalized views directly. Only semantic text and line
+/// accounting are cached; no shape or source mapping is reconstructed here.
 pub(super) struct InlineTextPaint<'a> {
-    context: &'a InlineFormattingContext,
-    text: Option<std::sync::Arc<str>>,
-    lines: std::collections::HashMap<usize, InlineTextLine<'a>>,
-}
-
-struct InlineTextLine<'a> {
-    items: Vec<PositionedLayoutItem<'a, crate::stylo_to_parley::TextBrush>>,
-    clusters: Vec<Vec<std::ops::Range<usize>>>,
+    display: &'a InlineDisplayContext<'a>,
+    text: Option<Arc<str>>,
+    lines: HashSet<usize>,
 }
 
 impl<'a> InlineTextPaint<'a> {
-    pub(super) fn new(context: &'a InlineFormattingContext, retain_text: bool) -> Self {
+    pub(super) fn new(
+        display: &'a InlineDisplayContext<'a>,
+        source_text: &str,
+        retain_text: bool,
+    ) -> Self {
         Self {
-            context,
-            text: retain_text.then(|| std::sync::Arc::from(context.text.as_str())),
-            lines: std::collections::HashMap::new(),
+            display,
+            text: retain_text.then(|| Arc::from(source_text)),
+            lines: HashSet::new(),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn project_run<N>(
+    pub(super) fn project_run(
         &mut self,
-        layout_box: &LayoutBox<N>,
-        line_index: usize,
-        item_index: usize,
+        item: usize,
         transform: LayoutTransform2D,
         local_cull: Option<LayoutRect>,
         metrics: &mut PaintProjectionMetrics,
         snapshot: &mut PaintSnapshot,
     ) {
-        let context = self.context;
-        let text_layout = context.laid_out.as_ref().unwrap();
-        let origin_x = layout_box.final_layout.border.left + layout_box.final_layout.padding.left;
-        let origin_y = layout_box.final_layout.border.top + layout_box.final_layout.padding.top;
-        let culled =
-            local_cull.is_some_and(|cull| {
-                context.fragments.lines.get(line_index).is_some_and(|line| {
-                    match line.paint_bounds {
-                        InlinePaintBounds::Empty => true,
-                        InlinePaintBounds::Unbounded => false,
-                        InlinePaintBounds::Bounded(bounds) => !rects_intersect(
-                            LayoutRect::new(
-                                origin_x + bounds.x,
-                                origin_y + bounds.y,
-                                bounds.width,
-                                bounds.height,
-                            ),
-                            cull,
-                        ),
-                    }
-                })
-            });
-        let line = self.lines.entry(line_index).or_insert_with(|| {
+        let item = &self.display.items[item];
+        let culled = line_is_culled(self.display, item.line, local_cull);
+        if self.lines.insert(item.line) {
             metrics.text_line_count = metrics.text_line_count.saturating_add(1);
             if culled {
                 metrics.culled_text_line_count = metrics.culled_text_line_count.saturating_add(1);
             }
-            let items = text_layout
-                .get(line_index)
-                .unwrap()
-                .items()
-                .collect::<Vec<_>>();
-            let mut sources = GlyphSourceCursor::default();
-            let clusters = items
-                .iter()
-                .map(|item| {
-                    let PositionedLayoutItem::GlyphRun(glyphs) = item else {
-                        return Vec::new();
-                    };
-                    if self.text.is_none()
-                        && context.text_overflow.is_none()
-                        && !matches!(context.selection, Some(InlineSelection::Range(_)))
-                    {
-                        return Vec::new();
-                    }
-                    sources.segment(glyphs).map(|(_, range)| range).collect()
-                })
-                .collect();
-            InlineTextLine { items, clusters }
-        });
+        }
         if culled {
             return;
         }
-        let PositionedLayoutItem::GlyphRun(glyphs) = &line.items[item_index] else {
-            return;
-        };
-        if !glyphs.style().brush.paint {
-            return;
-        }
-        let clusters = std::mem::take(&mut line.clusters[item_index]);
-        if matches!(context.selection, Some(InlineSelection::Range(_)))
-            && let Some(range) = clusters
-                .iter()
-                .cloned()
-                .reduce(|range, cluster| range.start.min(cluster.start)..range.end.max(cluster.end))
-        {
-            project_selection(layout_box, transform, local_cull, snapshot, Some(&range));
-        }
-        let paint = TextRunPaint {
-            origin_x,
-            origin_y,
+        paint_selection(&item.selection, transform, local_cull, snapshot);
+        paint_text_item(
+            item,
             transform,
-            phase: TextPaintPhase::Foreground,
-            text: self.text.clone(),
-        };
-        let vertical_offset = context
-            .line_placements
-            .get(line_index)
-            .map_or(0.0, |line| line.item_offset(item_index));
-        let overflow = context
-            .text_overflow
-            .as_ref()
-            .and_then(|overflow| overflow.lines.get(line_index))
-            .and_then(Option::as_ref);
-        paint.project_run(
-            glyphs,
-            vertical_offset,
-            if paint.text.is_some() || overflow.is_some() {
-                clusters
-            } else {
-                Vec::new()
-            },
-            overflow,
+            TextPaintPhase::Foreground,
+            self.text.clone(),
             snapshot,
         );
     }
 }
 
-pub(super) fn project_ellipsis<N>(
-    layout_box: &LayoutBox<N>,
+fn line_is_culled(
+    display: &InlineDisplayContext<'_>,
     line: usize,
+    cull: Option<LayoutRect>,
+) -> bool {
+    cull.is_some_and(|cull| match display.lines[line].paint_bounds {
+        InlinePaintBounds::Empty => true,
+        InlinePaintBounds::Unbounded => false,
+        InlinePaintBounds::Bounded(bounds) => !rects_intersect(bounds, cull),
+    })
+}
+
+fn paint_selection(
+    rects: &[LayoutRect],
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     snapshot: &mut PaintSnapshot,
 ) {
-    project_ellipsis_phase(
-        layout_box,
-        line,
-        transform,
-        local_cull,
-        snapshot,
-        TextPaintPhase::Foreground,
-    );
-}
-
-fn project_ellipsis_phase<N>(
-    layout_box: &LayoutBox<N>,
-    line: usize,
-    transform: LayoutTransform2D,
-    _local_cull: Option<LayoutRect>,
-    snapshot: &mut PaintSnapshot,
-    phase: TextPaintPhase,
-) {
-    if !layout_box.style.is_visible() {
-        return;
-    }
-    let Some(context) = layout_box.inline_layout.as_ref() else {
-        return;
-    };
-    let Some(overflow) = &context.text_overflow else {
-        return;
-    };
-    let Some(Some(ellipsis)) = overflow.lines.get(line) else {
-        return;
-    };
-    let Some(placement) = context.line_placements.get(line) else {
-        return;
-    };
-    let layout = layout_box.final_layout;
-    for marker_line in overflow.marker.lines() {
-        let mut sources = GlyphSourceCursor::default();
-        for item in marker_line.items() {
-            let PositionedLayoutItem::GlyphRun(glyphs) = item else {
-                continue;
-            };
-            let clusters = sources.segment(&glyphs).map(|(_, range)| range).collect();
-            let paint = TextRunPaint {
-                origin_x: layout.border.left
-                    + layout.padding.left
-                    + ellipsis.marker_offset(overflow.marker_width),
-                origin_y: layout.border.top + layout.padding.top + placement.baseline
-                    - marker_line.metrics().baseline,
+    for rect in rects {
+        let rect = *rect;
+        if local_cull.is_none_or(|cull| rects_intersect(rect, cull)) {
+            snapshot.push_fragment(PaintFragment::Fill {
+                fill_rule: crate::PaintFillRule::NonZero,
+                shape: PaintShape::Rect(rect),
+                brush: PaintBrush::Solid(SELECTION_COLOR),
                 transform,
-                phase,
-                text: (snapshot.retain_text_semantics && phase == TextPaintPhase::Foreground)
-                    .then(|| overflow.marker_text.clone()),
-            };
-            paint.project_run(&glyphs, 0.0, clusters, None, snapshot);
-        }
-    }
-}
-
-pub(super) fn project_selection<N>(
-    layout_box: &LayoutBox<N>,
-    transform: LayoutTransform2D,
-    local_cull: Option<LayoutRect>,
-    snapshot: &mut PaintSnapshot,
-    text_range: Option<&std::ops::Range<usize>>,
-) {
-    let Some(selection) = layout_box
-        .inline_layout
-        .as_ref()
-        .and_then(|context| context.selection.as_ref())
-    else {
-        return;
-    };
-    match selection {
-        InlineSelection::Range(_) => {
-            range_selection_rects(layout_box, text_range, |rect| {
-                if local_cull.is_none_or(|cull| rects_intersect(rect, cull)) {
-                    snapshot.push_fragment(PaintFragment::Fill {
-                        fill_rule: crate::PaintFillRule::NonZero,
-                        shape: PaintShape::Rect(rect),
-                        brush: PaintBrush::Solid(SELECTION_COLOR),
-                        transform,
-                    });
-                }
             });
         }
-        InlineSelection::Caret { color, .. } => {
-            let Some(rect) = caret_rect(layout_box) else {
-                return;
-            };
-            if local_cull.is_none_or(|cull| rects_intersect(rect, cull)) {
-                snapshot.push_fragment(PaintFragment::Fill {
-                    fill_rule: crate::PaintFillRule::NonZero,
-                    shape: PaintShape::Rect(rect),
-                    brush: PaintBrush::Solid(*color),
-                    transform,
-                });
-            }
-        }
     }
 }
 
-/// One range geometry path for normal text, glyphless fragments, and culling.
-pub(super) fn range_selection_rects<N>(
-    layout_box: &LayoutBox<N>,
-    text_range: Option<&std::ops::Range<usize>>,
-    mut emit: impl FnMut(LayoutRect),
+pub(super) fn project_caret(
+    display: &InlineDisplayContext<'_>,
+    transform: LayoutTransform2D,
+    local_cull: Option<LayoutRect>,
+    snapshot: &mut PaintSnapshot,
 ) {
-    if !layout_box.style.is_visible() {
-        return;
-    }
-    let Some(context) = layout_box.inline_layout.as_ref() else {
-        return;
-    };
-    let Some(text_layout) = context.laid_out.as_ref() else {
-        return;
-    };
-    let Some(InlineSelection::Range(selected)) = context.selection.as_ref() else {
-        return;
-    };
-    let range = text_range.map_or_else(
-        || selected.clone(),
-        |text| selected.start.max(text.start)..selected.end.min(text.end),
-    );
-    if range.is_empty() {
-        return;
-    }
-    let mut project_range = |range: std::ops::Range<usize>, only_line: Option<usize>| {
-        let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
-        let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
-        Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
-            if only_line.is_some_and(|line| line != line_index) {
-                return;
-            }
-            let rect = selection_rect(
-                context,
-                line_index,
-                layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
-                layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
-                rect.x0 as f32,
-                rect.y0 as f32,
-                (rect.x1 - rect.x0).max(0.0) as f32,
-                (rect.y1 - rect.y0).max(0.0) as f32,
-            );
-            if rect.width > 0.0 && rect.height > 0.0 {
-                emit(rect);
-            }
+    if let Some((rect, color)) = display.caret
+        && local_cull.is_none_or(|cull| rects_intersect(rect, cull))
+    {
+        snapshot.push_fragment(PaintFragment::Fill {
+            fill_rule: crate::PaintFillRule::NonZero,
+            shape: PaintShape::Rect(rect),
+            brush: PaintBrush::Solid(color),
+            transform,
         });
-    };
-    let Some(overflow) = &context.text_overflow else {
-        project_range(range, None);
-        return;
-    };
-    // Start at the selected cluster's line rather than rescanning every line
-    // for each fragment-level paint event in a mixed IFC.
-    let first_line = parley::layout::Cluster::from_byte_index(text_layout, range.start)
-        .map_or(text_layout.len(), |cluster| cluster.path().line_index());
-    for line_index in first_line..text_layout.len() {
-        let line_range = text_layout.get(line_index).unwrap().text_range();
-        if line_range.start >= range.end {
-            break;
-        }
-        let selected = range.start.max(line_range.start)..range.end.min(line_range.end);
-        if selected.is_empty() {
-            continue;
-        }
-        if let Some(ellipsis) = overflow.lines.get(line_index).and_then(Option::as_ref) {
-            // Bidi truncation may retain several disjoint logical ranges.
-            // Clip only the paint selection; DOM selection and CSSOM stay intact.
-            for visible in ellipsis.visible_ranges(selected) {
-                project_range(visible, Some(line_index));
-            }
-        } else {
-            // Keep Parley's explicit-newline and empty-line selection geometry
-            // even if this line has no drawable glyphs.
-            project_range(selected, Some(line_index));
-        }
     }
 }
 
-/// Use the same caret ink for event culling and painting, independently of
-/// glyph runs and the containing box's border bounds.
-pub(super) fn caret_rect<N>(layout_box: &LayoutBox<N>) -> Option<LayoutRect> {
-    if !layout_box.style.is_visible() {
-        return None;
-    }
-    let context = layout_box.inline_layout.as_ref()?;
-    let text_layout = context.laid_out.as_ref()?;
-    let InlineSelection::Caret { offset, color } = context.selection.as_ref()? else {
-        return None;
-    };
-    if color.alpha <= 0.0 {
-        return None;
-    }
-    let cursor = Cursor::from_byte_index(text_layout, *offset, Affinity::Downstream);
-    let rect = cursor.geometry(text_layout, 1.5);
-    let line_index = text_layout
-        .lines()
-        .enumerate()
-        .find(|(_, line)| line.text_range().contains(offset))
-        .map(|(index, _)| index)
-        .unwrap_or_else(|| text_layout.lines().count().saturating_sub(1));
-    let rect = selection_rect(
-        context,
-        line_index,
-        layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
-        layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
-        rect.x0 as f32,
-        rect.y0 as f32,
-        (rect.x1 - rect.x0).max(1.5) as f32,
-        (rect.y1 - rect.y0).max(0.0) as f32,
-    );
-    (rect.height > 0.0).then_some(rect)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn selection_rect(
-    context: &InlineFormattingContext,
-    line_index: usize,
-    origin_x: f32,
-    origin_y: f32,
-    x: f32,
-    fallback_y: f32,
-    width: f32,
-    fallback_height: f32,
-) -> LayoutRect {
-    let (y, height) = context
-        .line_placements
-        .get(line_index)
-        .map(|placement| (placement.rect.y, placement.rect.height))
-        .unwrap_or((fallback_y, fallback_height));
-    LayoutRect::new(origin_x + x, origin_y + y, width, height)
+pub(super) fn caret_rect(display: &InlineDisplayContext<'_>) -> Option<LayoutRect> {
+    display.caret.map(|(rect, _)| rect)
 }

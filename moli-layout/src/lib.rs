@@ -41,7 +41,6 @@ mod table_role;
 mod taffy_tree;
 mod text;
 mod text_normalization;
-mod text_overflow;
 mod world;
 
 pub use anonymous_style::LayoutAnonymousStyleContext;

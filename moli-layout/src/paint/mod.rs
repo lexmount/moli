@@ -27,8 +27,7 @@ use scrollbar::project_scrollbars;
 use style::values::generics::image::GenericImage;
 use table::project_collapsed_table_borders;
 use text::{
-    InlineTextPaint, TextClipMaskScope, project_ellipsis, project_selection, project_text,
-    project_text_clip_mask,
+    InlineTextPaint, TextClipMaskScope, project_caret, project_text, project_text_clip_mask,
 };
 
 use crate::{
@@ -446,43 +445,23 @@ where
                 );
                 project_box_text(projection, id, current_cull, &mut metrics, &mut snapshot);
             }
-            PaintOrderEvent::InlineEllipsis { owner: id, line } => {
+            PaintOrderEvent::BoxCaret(id) => {
                 active_clips.transition_to(
                     projection,
                     projection.content_clips[id.index()],
                     &mut snapshot,
                 );
                 let space = &projection.coordinate_spaces[id.index() + 1];
-                project_ellipsis(
-                    &projection.world.boxes[id.index()],
-                    line,
-                    space
-                        .paint_space(snapshot.viewport_to_surface)
-                        .local_transform(),
-                    current_cull.local_rect(space.paint.local_transform()),
-                    &mut snapshot,
-                );
-            }
-            PaintOrderEvent::BoxCaret(id) | PaintOrderEvent::InlineSelection { owner: id, .. } => {
-                active_clips.transition_to(
-                    projection,
-                    projection.content_clips[id.index()],
-                    &mut snapshot,
-                );
-                let space = &projection.coordinate_spaces[id.index() + 1];
-                let range = match event {
-                    PaintOrderEvent::InlineSelection { start, end, .. } => Some(start..end),
-                    _ => None,
-                };
-                project_selection(
-                    &projection.world.boxes[id.index()],
-                    space
-                        .paint_space(snapshot.viewport_to_surface)
-                        .local_transform(),
-                    current_cull.local_rect(space.paint.local_transform()),
-                    &mut snapshot,
-                    range.as_ref(),
-                );
+                if let Some(display) = projection.inline_display.context(id) {
+                    project_caret(
+                        display,
+                        space
+                            .paint_space(snapshot.viewport_to_surface)
+                            .local_transform(),
+                        current_cull.local_rect(space.paint.local_transform()),
+                        &mut snapshot,
+                    );
+                }
             }
             PaintOrderEvent::InlineBox { owner, fragment } => {
                 active_clips.transition_to(
@@ -507,14 +486,8 @@ where
                     &mut snapshot,
                 );
             }
-            PaintOrderEvent::InlineText {
-                owner, line, item, ..
-            } => {
+            PaintOrderEvent::InlineItem { owner, item } => {
                 let layout_box = &projection.world.boxes[owner.index()];
-                if !layout_box.style.is_visible() {
-                    event_index += 1;
-                    continue;
-                }
                 active_clips.transition_to(
                     projection,
                     projection.content_clips[owner.index()],
@@ -527,13 +500,12 @@ where
                     .local_transform();
                 let text = inline_text.entry(owner).or_insert_with(|| {
                     InlineTextPaint::new(
-                        layout_box.inline_layout.as_ref().unwrap(),
+                        projection.inline_display.context(owner).unwrap(),
+                        &layout_box.inline_layout.as_ref().unwrap().text,
                         snapshot.retain_text_semantics,
                     )
                 });
                 text.project_run(
-                    layout_box,
-                    line,
                     item,
                     space.local_transform(),
                     current_cull.local_rect(viewport_transform),
@@ -910,7 +882,7 @@ fn project_background_text_clip_mask<N>(
         TextClipMaskScope::AllGlyphs => root,
         TextClipMaskScope::InlineBox(target) => target,
     };
-    if projection.text_overflow_visibility.is_hidden(mask_root) {
+    if !projection.inline_display.paints_self(mask_root) {
         return;
     }
     project_box_text_clip_mask(projection, root, scope, cull, metrics, snapshot);
@@ -928,7 +900,7 @@ fn project_background_text_clip_mask<N>(
         // Blink's text-clip cursor skips the entire truncated box item.
         // Independent descendants may paint separately, but cannot rejoin
         // this ancestor's mask through their foreground visibility exception.
-        if projection.text_overflow_visibility.is_hidden(id) {
+        if !projection.inline_display.paints_self(id) {
             continue;
         }
         let layout_box = &projection.world.boxes[id.index()];
@@ -971,7 +943,11 @@ fn project_box_text_clip_mask<N>(
     let local_cull = cull.local_rect(viewport_transform);
     let transform = snapshot.viewport_to_surface.concatenate(viewport_transform);
     let clip_count = push_clip_chain(projection, projection.content_clips[id.index()], snapshot);
-    project_text_clip_mask(layout_box, transform, local_cull, metrics, snapshot, scope);
+    if let Some(display) = projection.inline_display.context(id) {
+        project_text_clip_mask(
+            layout_box, display, transform, local_cull, metrics, snapshot, scope,
+        );
+    }
     pop_clips(clip_count, snapshot);
 }
 
@@ -1126,8 +1102,12 @@ fn project_box_text<N>(
     let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface)
         .local_transform();
+    let Some(display) = projection.inline_display.context(id) else {
+        return;
+    };
     project_text(
         layout_box,
+        display,
         transform,
         cull.local_rect(viewport_transform),
         metrics,

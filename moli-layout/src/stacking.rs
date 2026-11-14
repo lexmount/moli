@@ -1,11 +1,11 @@
-use std::{fmt::Debug, hash::Hash, ops::Range};
-
-use parley::PositionedLayoutItem;
+use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     LayoutBoxId, LayoutPosition, LayoutWorld,
-    inline::{InlineFormattingContext, InlineObjectRole, InlineSelection},
-    text_overflow::TextOverflowVisibility,
+    inline::{
+        InlineObjectRole,
+        display::{InlineDisplayItems, InlineItemContent, TextOrigin},
+    },
 };
 
 /// One order shared by pixels and hit geometry. Inline events select individual
@@ -19,32 +19,17 @@ pub(crate) enum PaintOrderEvent {
     BoxContents(LayoutBoxId),
     InlineContents(LayoutBoxId),
     /// Bulk text for an IFC without atomic items. Mixed IFCs instead emit
-    /// individual InlineText events at their place in each line.
+    /// individual InlineItem events at their place in each line.
     BoxText(LayoutBoxId),
     /// A mixed IFC's caret paints after its contents, including glyphless lines.
     BoxCaret(LayoutBoxId),
-    /// Generated line-end text; original source offsets are unchanged.
-    InlineEllipsis {
-        owner: LayoutBoxId,
-        line: usize,
-    },
-    /// Selected text not covered by a drawable glyph run, placed in source order.
-    InlineSelection {
-        owner: LayoutBoxId,
-        line: usize,
-        start: usize,
-        end: usize,
-    },
     InlineBox {
         owner: LayoutBoxId,
         fragment: usize,
     },
-    InlineText {
+    InlineItem {
         owner: LayoutBoxId,
-        line: usize,
         item: usize,
-        start: usize,
-        end: usize,
     },
     BoxOutline(LayoutBoxId),
     PopStackingContext(LayoutBoxId),
@@ -104,198 +89,58 @@ struct StackingDescendants {
 /// retain their share of a hidden host IFC. Other paragraphs use bulk text.
 struct InlineOrder<'a> {
     split: Vec<bool>,
-    visibility: &'a TextOverflowVisibility,
+    display: &'a InlineDisplayItems<'a>,
     entries: Vec<Vec<PaintOrderEvent>>,
     atomic_lines: Vec<Option<(LayoutBoxId, usize)>>,
 }
 
 impl<'a> InlineOrder<'a> {
-    fn new<N>(world: &LayoutWorld<N>, visibility: &'a TextOverflowVisibility) -> Self
+    fn new<N>(world: &LayoutWorld<N>, display: &'a InlineDisplayItems<'a>) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
         let mut result = Self {
             split: vec![false; world.boxes.len()],
-            visibility,
+            display,
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
-        for (owner_index, layout_box) in world.boxes.iter().enumerate() {
+        for (index, layout_box) in world.boxes.iter().enumerate() {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };
-            let owner = LayoutBoxId::from_index(owner_index);
+            let owner = LayoutBoxId::from_index(index);
+            let Some(items) = display.context(owner) else {
+                continue;
+            };
             let has_atomic = context
                 .objects
                 .iter()
                 .any(|object| object.role == InlineObjectRole::Atomic);
-            let has_independent_inline = visibility.is_hidden(owner)
+            let has_independent_inline = !display.paints_self(owner)
                 && context
                     .structural_boxes
                     .iter()
-                    .any(|inline| !visibility.is_hidden(inline.box_id));
+                    .any(|inline| display.paints_self(inline.box_id));
             if !has_atomic && !has_independent_inline {
                 continue;
             }
-            result.split[owner_index] = true;
-            for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
-                result.entries[inline.box_id.index()]
-                    .push(PaintOrderEvent::InlineBox { owner, fragment });
-            }
-            let Some(layout) = &context.laid_out else {
-                continue;
-            };
-            for (line_index, line) in layout.lines().enumerate() {
-                let selected = match &context.selection {
-                    Some(InlineSelection::Range(range)) => {
-                        let line_range = line.text_range();
-                        let selected =
-                            range.start.max(line_range.start)..range.end.min(line_range.end);
-                        (!selected.is_empty()).then_some(selected)
+            result.split[index] = true;
+            for (item, entry) in items.items.iter().enumerate() {
+                let event = match entry.content {
+                    InlineItemContent::Atomic(id) => {
+                        result.atomic_lines[id.index()] = Some((owner, entry.line));
+                        continue;
                     }
-                    _ => None,
+                    InlineItemContent::InlineBox { fragment } => {
+                        PaintOrderEvent::InlineBox { owner, fragment }
+                    }
+                    _ => PaintOrderEvent::InlineItem { owner, item },
                 };
-                let mut covered = Vec::new();
-                for (_, inline) in line.inline_box_indices() {
-                    if let Some(object) = context.object(inline.id)
-                        && object.role == InlineObjectRole::Atomic
-                    {
-                        result.atomic_lines[object.box_id.index()] = Some((owner, line_index));
-                    }
-                }
-                for (item, positioned) in line.items().enumerate() {
-                    let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
-                        continue;
-                    };
-                    // Styled glyph segments can share one shaped run. Route
-                    // each segment by its own source range, so hidden siblings
-                    // cannot capture the independent inline's paint or hits.
-                    let range = glyphs.text_range();
-                    if selected.is_some() {
-                        covered.push(range.clone());
-                    }
-                    let source_index = context
-                        .source_map
-                        .partition_point(|source| source.output_range.end <= range.start);
-                    let target = context
-                        .source_map
-                        .get(source_index)
-                        .filter(|source| source.output_range.start < range.end)
-                        .map_or(owner, |source| source.box_id);
-                    if !world.boxes[target.index()].style.is_visible() {
-                        continue;
-                    }
-                    result.entries[target.index()].push(PaintOrderEvent::InlineText {
-                        owner,
-                        line: line_index,
-                        item,
-                        start: range.start,
-                        end: range.end,
-                    });
-                }
-                if let Some(selected) = selected {
-                    covered.sort_unstable_by_key(|range| (range.start, range.end));
-                    let mut offset = selected.start;
-                    for range in covered {
-                        let end = range.start.min(selected.end);
-                        if offset < end {
-                            result.add_selection_gap(
-                                world,
-                                context,
-                                owner,
-                                line_index,
-                                offset..end,
-                            );
-                        }
-                        offset = offset.max(range.end).min(selected.end);
-                        if offset == selected.end {
-                            break;
-                        }
-                    }
-                    if offset < selected.end {
-                        result.add_selection_gap(
-                            world,
-                            context,
-                            owner,
-                            line_index,
-                            offset..selected.end,
-                        );
-                    }
-                }
+                result.entries[entry.paint_owner.index()].push(event);
             }
         }
         result
-    }
-
-    fn add_selection_gap<N>(
-        &mut self,
-        world: &LayoutWorld<N>,
-        context: &InlineFormattingContext,
-        owner: LayoutBoxId,
-        line: usize,
-        range: Range<usize>,
-    ) where
-        N: Copy + Debug + Eq + Hash,
-    {
-        // Split at source boundaries so a later inline or atomic sibling can
-        // cover the highlight, just as it covers the source text's glyphs.
-        let first = context
-            .source_map
-            .partition_point(|source| source.output_range.end <= range.start);
-        let mut offset = range.start;
-        for source in context.source_map[first..]
-            .iter()
-            .take_while(|source| source.output_range.start < range.end)
-        {
-            let start = source.output_range.start.min(range.end);
-            if offset < start {
-                self.push_selection_range(world, owner, owner, line, offset..start);
-                offset = start;
-            }
-            let end = source.output_range.end.min(range.end);
-            if offset < end {
-                self.push_selection_range(world, owner, source.box_id, line, offset..end);
-                offset = end;
-            }
-        }
-        if offset < range.end {
-            self.push_selection_range(world, owner, owner, line, offset..range.end);
-        }
-    }
-
-    fn push_selection_range<N>(
-        &mut self,
-        world: &LayoutWorld<N>,
-        owner: LayoutBoxId,
-        target: LayoutBoxId,
-        line: usize,
-        range: Range<usize>,
-    ) where
-        N: Copy + Debug + Eq + Hash,
-    {
-        if !world.boxes[target.index()].style.is_visible() {
-            return;
-        }
-        let entries = &mut self.entries[target.index()];
-        if let Some(PaintOrderEvent::InlineSelection {
-            owner: previous_owner,
-            line: previous_line,
-            end,
-            ..
-        }) = entries.last_mut()
-            && *previous_owner == owner
-            && *previous_line == line
-            && *end == range.start
-        {
-            *end = range.end;
-            return;
-        }
-        entries.push(PaintOrderEvent::InlineSelection {
-            owner,
-            line,
-            start: range.start,
-            end: range.end,
-        });
     }
 
     fn order(&self, id: LayoutBoxId, sequence: &[usize]) -> (usize, usize, usize, usize) {
@@ -311,7 +156,7 @@ impl<'a> InlineOrder<'a> {
 /// real stacking context. They must not inherit one flattened paint level.
 pub(crate) fn build_paint_order<N>(
     world: &LayoutWorld<N>,
-    visibility: &TextOverflowVisibility,
+    display: &InlineDisplayItems<'_>,
 ) -> Vec<PaintOrderEvent>
 where
     N: Copy + Debug + Eq + Hash,
@@ -319,7 +164,7 @@ where
     let mut sequence = vec![0; world.boxes.len()];
     let mut next = 0;
     assign_tree_order(world, world.root, &mut sequence, &mut next);
-    let inline = InlineOrder::new(world, visibility);
+    let inline = InlineOrder::new(world, display);
     let mut events = Vec::with_capacity(world.boxes.len() * 4);
     emit_context(world, world.root, &sequence, &inline, &mut events);
     events
@@ -350,7 +195,7 @@ fn emit_context<N>(
     N: Copy + Debug + Eq + Hash,
 {
     events.push(PaintOrderEvent::PushStackingContext(root));
-    let hidden = inline.visibility.is_hidden(root);
+    let hidden = !inline.display.paints_self(root);
     if !hidden {
         push_background(root, events);
     }
@@ -397,7 +242,7 @@ fn collect_subtree<N>(
     let layout_box = &world.boxes[id.index()];
     let flex_or_grid_item = is_flex_or_grid_item(world, id);
     let creates_context = layout_box.creates_stacking_context(false, flex_or_grid_item);
-    if inline.visibility.is_hidden(id) && !creates_context {
+    if !inline.display.paints_self(id) && !creates_context {
         // Do not emit this box's normal-flow paint/hit events, but still find
         // independent descendants collected by the enclosing real context.
         for child in ordered_children(world, id) {
@@ -499,35 +344,15 @@ fn collect_contents<N>(
         flow.inline_contents.push(text);
     }
     if inline.split[id.index()]
-        && layout_box
-            .inline_layout
-            .as_ref()
-            .is_some_and(|context| matches!(context.selection, Some(InlineSelection::Caret { .. })))
+        && inline
+            .display
+            .context(id)
+            .is_some_and(|context| context.caret.is_some())
     {
-        // Like Blink's bar caret foreground pass, paint once after the IFC's
-        // in-flow contents. A caret does not require a drawable glyph run.
         flow.inline_contents.push(PaintEntry {
             order: (tree_order, usize::MAX, usize::MAX, 0),
             kind: PaintEntryKind::Event(PaintOrderEvent::BoxCaret(id)),
         });
-    }
-    if inline.split[id.index()]
-        && let Some(overflow) = layout_box
-            .inline_layout
-            .as_ref()
-            .and_then(|context| context.text_overflow.as_ref())
-    {
-        for (line, ellipsis) in overflow.lines.iter().enumerate() {
-            if ellipsis.is_some() {
-                flow.inline_contents.push(PaintEntry {
-                    order: (tree_order, line, usize::MAX, usize::MAX),
-                    kind: PaintEntryKind::Event(PaintOrderEvent::InlineEllipsis {
-                        owner: id,
-                        line,
-                    }),
-                });
-            }
-        }
     }
     for event in &inline.entries[id.index()] {
         let (owner, line, item) = match *event {
@@ -542,16 +367,26 @@ fn collect_contents<N>(
                     .line_index,
                 0,
             ),
-            PaintOrderEvent::InlineText {
-                owner, line, item, ..
-            } => (owner, line, item + 1),
-            // Backgrounds precede the source's glyphs; sibling tree order is
-            // still shared with inline fragments and atomic groups.
-            PaintOrderEvent::InlineSelection { owner, line, .. } => (owner, line, 0),
+            PaintOrderEvent::InlineItem { owner, item } => {
+                let entry = &inline.display.context(owner).unwrap().items[item];
+                (owner, entry.line, entry.order)
+            }
             _ => unreachable!(),
         };
+        let source_order = match *event {
+            PaintOrderEvent::InlineItem { owner, item } => {
+                let entry = &inline.display.context(owner).unwrap().items[item];
+                if matches!(&entry.content, InlineItemContent::Text(view) if matches!(view.origin, TextOrigin::Generated { .. }))
+                {
+                    usize::MAX
+                } else {
+                    tree_order
+                }
+            }
+            _ => tree_order,
+        };
         flow.inline_contents.push(PaintEntry {
-            order: (sequence[owner.index()], line, tree_order, item),
+            order: (sequence[owner.index()], line, source_order, item),
             kind: PaintEntryKind::Event(*event),
         });
     }

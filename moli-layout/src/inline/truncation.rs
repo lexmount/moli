@@ -1,5 +1,5 @@
-//! Pass-local visual truncation, following Blink's LineTruncator. Original
-//! shaped text, source offsets, intrinsic widths and CSSOM fragments stay intact.
+//! Construction-only line truncation. Its plans are consumed by the inline
+//! display builder; paint, selection and hit projection never receive them.
 
 use std::{fmt::Debug, hash::Hash, ops::Range, sync::Arc};
 
@@ -7,21 +7,21 @@ use parley::{Layout, PositionedLayoutItem};
 
 use crate::{
     DocumentLayoutServices, LayoutBoxId, LayoutBoxKind, LayoutWorld,
-    inline::{GlyphSourceCursor, InlineFormattingContext, InlineObjectRole, InlineSourceMapEntry},
+    inline::{InlineFormattingContext, InlineObjectRole, InlineSourceMapEntry},
     style::LayoutOverflowMode,
     stylo_to_parley::TextBrush,
 };
 
 #[derive(Debug)]
-pub(crate) struct TextOverflow {
-    pub(crate) marker: Layout<TextBrush>,
-    pub(crate) marker_text: Arc<str>,
-    pub(crate) marker_width: f32,
-    pub(crate) lines: Vec<Option<EllipsisLine>>,
-    pub(crate) hidden_boxes: Vec<LayoutBoxId>,
+pub(super) struct PreparedParagraph {
+    pub(super) marker: Layout<TextBrush>,
+    pub(super) marker_text: Arc<str>,
+    pub(super) marker_width: f32,
+    pub(super) lines: Vec<Option<PreparedLine>>,
+    pub(super) hidden_boxes: Vec<LayoutBoxId>,
 }
 
-impl TextOverflow {
+impl PreparedParagraph {
     fn with_marker(
         style: &crate::ResolvedLayoutStyle,
         parley: &mut crate::text::ParleyDocumentServices,
@@ -82,16 +82,16 @@ impl TextOverflow {
 }
 
 #[derive(Debug)]
-pub(crate) struct EllipsisLine {
+pub(super) struct PreparedLine {
     cut_inline: f32,
-    pub(crate) target: LayoutBoxId,
-    pub(crate) source_offset: usize,
-    pub(crate) rtl: bool,
+    pub(super) target: LayoutBoxId,
+    pub(super) source_offset: usize,
+    pub(super) rtl: bool,
     visible_text: Vec<Range<usize>>,
 }
 
-impl EllipsisLine {
-    pub(crate) fn marker_offset(&self, marker_width: f32) -> f32 {
+impl PreparedLine {
+    pub(super) fn marker_offset(&self, marker_width: f32) -> f32 {
         if self.rtl {
             self.cut_inline - marker_width
         } else {
@@ -99,15 +99,7 @@ impl EllipsisLine {
         }
     }
 
-    pub(crate) fn visible_bounds(&self) -> (f32, f32) {
-        if self.rtl {
-            (self.cut_inline, f32::INFINITY)
-        } else {
-            (f32::NEG_INFINITY, self.cut_inline)
-        }
-    }
-
-    pub(crate) fn visible_ranges(
+    pub(super) fn visible_ranges(
         &self,
         range: Range<usize>,
     ) -> impl Iterator<Item = Range<usize>> + '_ {
@@ -118,15 +110,6 @@ impl EllipsisLine {
             .iter()
             .take_while(move |visible| visible.start < range.end)
             .map(move |visible| visible.start.max(range.start)..visible.end.min(range.end))
-    }
-
-    pub(crate) fn text_is_visible(&self, range: &Range<usize>) -> bool {
-        let index = self
-            .visible_text
-            .partition_point(|visible| visible.end <= range.start);
-        self.visible_text
-            .get(index)
-            .is_some_and(|visible| visible.start <= range.start && range.end <= visible.end)
     }
 }
 
@@ -143,66 +126,16 @@ struct VisualChild {
     kind: ChildKind,
 }
 
-/// Pass-local visibility shared by stacking, paint and its auxiliary phases.
-/// Truncation hides normal-flow contents, while independently painted
-/// positioned/stacking descendants can still participate in the outer context.
-pub(crate) struct TextOverflowVisibility {
-    hidden: Vec<bool>,
-}
-
-impl TextOverflowVisibility {
-    pub(crate) fn new<N: Copy + Debug + Eq + Hash>(world: &LayoutWorld<N>) -> Self {
-        let mut hidden = vec![false; world.boxes.len()];
-        let mut has_hidden = false;
-        for layout_box in &world.boxes {
-            if let Some(overflow) = layout_box
-                .inline_layout
-                .as_ref()
-                .and_then(|context| context.text_overflow.as_ref())
-            {
-                for id in &overflow.hidden_boxes {
-                    hidden[id.index()] = true;
-                    has_hidden = true;
-                }
-            }
-        }
-        if !has_hidden {
-            return Self { hidden };
-        }
-        let mut stack = vec![(world.root, false)];
-        while let Some((id, parent_hidden)) = stack.pop() {
-            let layout_box = &world.boxes[id.index()];
-            let flex_or_grid_item = layout_box.parent.is_some_and(|parent| {
-                let display = world.boxes[parent.index()].style.display();
-                display.is_flex_container() || display.is_grid_container()
-            });
-            let independent = layout_box.style.position() != crate::LayoutPosition::Static
-                || layout_box.creates_stacking_context(false, flex_or_grid_item);
-            hidden[id.index()] |= parent_hidden && !independent;
-            stack.extend(
-                layout_box
-                    .children
-                    .iter()
-                    .map(|child| (*child, hidden[id.index()])),
-            );
-        }
-        Self { hidden }
-    }
-
-    pub(crate) fn is_hidden(&self, id: LayoutBoxId) -> bool {
-        self.hidden[id.index()]
-    }
-}
-
-pub(crate) fn prepare_text_overflow<N>(
-    world: &mut LayoutWorld<N>,
+pub(super) fn prepare<N>(
+    world: &LayoutWorld<N>,
     services: &mut DocumentLayoutServices,
-) where
+) -> Vec<Option<Box<PreparedParagraph>>>
+where
     N: Copy + Debug + Eq + Hash,
 {
+    let mut paragraphs = Vec::new();
     let mut propagating_oof = None;
-    for index in 0..world.boxes.len() {
-        let layout_box = &world.boxes[index];
+    for (index, layout_box) in world.boxes.iter().enumerate() {
         let Some(context) = layout_box.inline_layout.as_ref() else {
             continue;
         };
@@ -255,7 +188,8 @@ pub(crate) fn prepare_text_overflow<N>(
         if !text.lines().any(|line| line_overflows(&line, width, rtl)) {
             continue;
         }
-        let Some(mut overflow) = TextOverflow::with_marker(style, services.parley_mut()) else {
+        let Some(mut overflow) = PreparedParagraph::with_marker(style, services.parley_mut())
+        else {
             continue;
         };
         let marker_width = overflow.marker_width;
@@ -355,7 +289,7 @@ pub(crate) fn prepare_text_overflow<N>(
                     })
                 }
             };
-            overflow.lines.push(Some(EllipsisLine {
+            overflow.lines.push(Some(PreparedLine {
                 cut_inline: edge,
                 target,
                 source_offset,
@@ -363,30 +297,12 @@ pub(crate) fn prepare_text_overflow<N>(
                 visible_text: merged,
             }));
         }
-        let context = world.boxes[index].inline_layout.as_mut().unwrap();
-        for (index, ellipsis) in overflow.lines.iter().enumerate() {
-            let Some(ellipsis) = ellipsis else {
-                continue;
-            };
-            for line in overflow.marker.lines() {
-                for run in line.runs() {
-                    let metrics = run.font_metrics();
-                    let rect = crate::LayoutRect::new(
-                        ellipsis.marker_offset(overflow.marker_width),
-                        context.line_placements[index].baseline - metrics.ascent,
-                        overflow.marker_width,
-                        metrics.ascent + metrics.descent,
-                    );
-                    for style in overflow.marker.styles() {
-                        context.fragments.lines[index]
-                            .paint_bounds
-                            .include_text_ink(rect, style, run.font_size());
-                    }
-                }
-            }
+        if paragraphs.is_empty() {
+            paragraphs.resize_with(world.boxes.len(), || None);
         }
-        context.text_overflow = Some(Box::new(overflow));
+        paragraphs[index] = Some(Box::new(overflow));
     }
+    paragraphs
 }
 
 fn source_at_edge(
@@ -479,7 +395,6 @@ fn visual_children(
     line: &parley::Line<'_, TextBrush>,
 ) -> Vec<VisualChild> {
     let mut children: Vec<VisualChild> = Vec::new();
-    let mut sources = GlyphSourceCursor::default();
     for item in line.items() {
         match item {
             PositionedLayoutItem::InlineBox(item) => {
@@ -495,7 +410,7 @@ fn visual_children(
             }
             PositionedLayoutItem::GlyphRun(glyphs) => {
                 let mut offset = glyphs.offset();
-                for (glyph, range) in sources.segment(&glyphs) {
+                for (glyph, range) in glyphs.glyphs_with_text_ranges() {
                     let end = offset + glyph.advance;
                     if glyphs.style().brush.paint {
                         if let Some(last) = children.last_mut()

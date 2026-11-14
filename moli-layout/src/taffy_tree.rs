@@ -3159,7 +3159,6 @@ fn empty_inline_context() -> InlineFormattingContext {
         structural_boxes: Vec::new(),
         line_placements: Vec::new(),
         fragments: InlineFragments::default(),
-        text_overflow: None,
     }
 }
 
