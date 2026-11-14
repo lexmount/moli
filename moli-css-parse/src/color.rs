@@ -41,6 +41,18 @@ pub fn parse_css_color_to_srgb_bytes(value: &str) -> Option<[u8; 4]> {
     Some(absolute_srgb_bytes(absolute))
 }
 
+/// Parse a context-independent color into clipped, unpremultiplied sRGB bytes.
+///
+/// Values that need an owner color or theme are rejected rather than resolved
+/// against an arbitrary black foreground. Absolute color mixes are supported.
+pub fn parse_absolute_css_color_to_srgb_bytes(value: &str) -> Option<[u8; 4]> {
+    let color = parse_specified_color(value)?.to_computed_color(None).ok()?;
+    let style::values::computed::color::Color::Absolute(absolute) = color else {
+        return None;
+    };
+    Some(absolute_srgb_bytes(absolute))
+}
+
 /// Resolve a CSS system-color keyword through the headless Servo light
 /// palette.
 pub fn css_system_color_srgb(value: &str) -> Option<(u8, u8, u8)> {
@@ -150,6 +162,30 @@ fn absolute_srgb_bytes(color: AbsoluteColor) -> [u8; 4] {
 mod tests {
     use super::*;
     use style_traits::ToCss;
+
+    #[test]
+    fn absolute_colors_preserve_alpha_and_reject_owner_dependent_values() {
+        assert_eq!(
+            parse_absolute_css_color_to_srgb_bytes("color(srgb 1 0 0 / 0.5)"),
+            Some([255, 0, 0, 128])
+        );
+        assert_eq!(
+            parse_absolute_css_color_to_srgb_bytes("color-mix(in srgb, red 50%, blue 50%)"),
+            Some([128, 0, 128, 255])
+        );
+        for value in [
+            "currentcolor",
+            "\\63 urrentcolor",
+            "color-mix(in srgb, currentcolor 50%, red 50%)",
+            "oklch(invalid)",
+        ] {
+            assert_eq!(
+                parse_absolute_css_color_to_srgb_bytes(value),
+                None,
+                "{value}"
+            );
+        }
+    }
 
     #[test]
     fn color_mix_preserves_zero_weights_and_serializes_omitted_percentages() {
