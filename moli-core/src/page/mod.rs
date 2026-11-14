@@ -42,6 +42,7 @@ pub use command_dispatch::{
     CompletedDevToolsIoCommandDispatch, CompletedPageCommand,
     CompletedRuntimeInspectorCommandDispatch, PageDocumentCommandTarget,
     PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
+    PreparedNativeCall,
 };
 pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 

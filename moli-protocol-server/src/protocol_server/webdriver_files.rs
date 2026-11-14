@@ -15,60 +15,14 @@ const MAX_UPLOAD_ZIP_ARCHIVE_BYTES: usize = MAX_UPLOAD_BYTES + 1024 * 1024;
 const MAX_UPLOAD_BASE64_CHARS: usize = MAX_UPLOAD_ZIP_ARCHIVE_BYTES.div_ceil(3) * 4;
 const MAX_DOWNLOAD_BYTES: usize = 50 * 1024 * 1024;
 
-pub(super) fn selected_files_from_paths(
+pub(super) async fn selected_files_from_paths(
     paths: &[String],
-    label: &str,
 ) -> Result<Vec<SelectedFile>, DevToolsError> {
-    paths
-        .iter()
-        .map(|path| selected_file_from_path(path, label))
-        .collect()
-}
-
-fn selected_file_from_path(path: &str, label: &str) -> Result<SelectedFile, DevToolsError> {
-    let file_path = Path::new(path);
-    let metadata = fs::metadata(file_path).map_err(|_| {
-        DevToolsError::new(
-            DevToolsErrorKind::UnableToSetFileInput,
-            format!("File not found : {path}"),
-        )
-    })?;
-    if !metadata.is_file() {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::UnableToSetFileInput,
-            format!("File not found : {path}"),
-        ));
-    }
-    let bytes = fs::read(file_path).map_err(|error| {
-        DevToolsError::new(
-            DevToolsErrorKind::UnableToSetFileInput,
-            format!("could not read file for {label}: {error}"),
-        )
-    })?;
-    let name = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or(path)
-        .to_owned();
-    let last_modified = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as f64)
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_millis() as f64)
-                .unwrap_or(0.0)
-        });
-    Ok(SelectedFile {
-        relative_path: String::new(),
-        data: bytes.into(),
-        mime_type: String::new(),
-        name,
-        last_modified,
-    })
+    moli_protocol::file_upload::selected_files_from_paths_async(paths.to_vec())
+        .await
+        .map_err(|error| {
+            DevToolsError::new(DevToolsErrorKind::UnableToSetFileInput, error.to_string())
+        })
 }
 
 pub(super) fn uploaded_file_from_base64_zip(

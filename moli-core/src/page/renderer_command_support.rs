@@ -2050,19 +2050,8 @@ impl Page {
         PendingPageCommand,
         crate::RendererNativeCommandResponseGuard,
     )> {
-        let attachment = self.renderer_agent_attachment_id.ok_or_else(|| {
-            anyhow::anyhow!("native frontend command requires a renderer attachment")
-        })?;
-        let (command, guard) = crate::RendererCdpCall::new(
-            moli_page_types::FrontendCommandId::new(command_id),
-            moli_page_types::DevToolsSessionKey::from_wire_session_id(frontend_session_id),
-            attachment,
-            operation,
-        );
-        Ok((
-            self.start_page_command(RendererPageCommand::Native(command))?,
-            guard,
-        ))
+        let (admission, guard) = self.prepare_cdp_call(command_id, frontend_session_id)?;
+        Ok((admission.start(operation)?, guard))
     }
 
     pub fn finish_child_frame_tree_snapshot(

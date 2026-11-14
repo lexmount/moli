@@ -315,7 +315,7 @@ pub use self::owner_local::RendererPageReplacementCommit;
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
     RendererDocumentCommandTarget, RendererPageAccessError, RendererPageCommandPending,
-    RendererPageHandle, RendererPageRequestPolicyUpdate,
+    RendererPageHandle, RendererPageProtocolCommandTarget, RendererPageRequestPolicyUpdate,
     RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
@@ -445,9 +445,10 @@ pub(in crate::runtime) use self::phase_one::{
 };
 pub(crate) use self::protocol_output::{PendingRendererOutputRecord, RendererTurnOutputJournal};
 pub use self::protocol_output::{
-    RendererCdpCall, RendererDocumentTitleChanged, RendererNativeCommandReadyResponse,
-    RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
-    RendererNativeOperationStep, RendererNativeProtocolError, RendererNativeProtocolNotification,
+    RendererCdpCall, RendererDocumentTitleChanged, RendererNativeCommandAdmission,
+    RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
+    RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
+    RendererNativeProtocolError, RendererNativeProtocolNotification,
     RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererOutputCursor,
     RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,

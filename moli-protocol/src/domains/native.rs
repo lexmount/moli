@@ -152,6 +152,40 @@ impl PendingNativeCommand {
         }
     }
 
+    fn new_prepared(
+        command_id: u64,
+        session_id: Option<String>,
+        residence: TargetPageResidenceIdentity,
+        admission: moli_core::page::PreparedNativeCall,
+        guard: RendererNativeCommandResponseGuard,
+        prepare: impl std::future::Future<Output = Result<moli_core::RendererNativeOperation>> + 'static,
+    ) -> Self {
+        let scope = NativeCommandFailureCleanup::new(command_id, session_id, guard);
+        let wait = scope.clone();
+        let cancellation = scope.wait_cancellation();
+        Self {
+            scope,
+            pending: async move {
+                let operation = match prepare.await {
+                    Ok(operation) => operation,
+                    Err(error) => {
+                        drop(admission);
+                        return wait.settle(Err(error), residence).await;
+                    }
+                };
+                let completed = match admission.start(operation) {
+                    Ok(pending) => pending.wait().await,
+                    Err(error) => Err(error),
+                };
+                wait.settle(completed, residence).await
+            }
+            .boxed_local(),
+            unpublished_failure: None,
+            recovering: false,
+            _cancellation: cancellation,
+        }
+    }
+
     /// Browser policy may outlive a rejected old attachment. This projection
     /// only runs after publication lost; it cannot replace a committed reply.
     pub(crate) fn on_unpublished_failure(
@@ -250,17 +284,13 @@ pub(crate) fn start_operation(
     cmd: &Cmd<'_>,
     operation: moli_core::RendererNativeOperation,
 ) -> NativeCommandStep {
-    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(residence) = conn.target_page_residence_identity_for_owner(&owner) else {
-        return NativeCommandStep::Complete(CommandOutputPlan::error(-32000, "NoDocumentLoaded"));
-    };
-    let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner) {
-        Ok(page) => page,
-        Err(error) => return NativeCommandStep::Complete(CommandOutputPlan::error(-32000, error)),
+    let (residence, admission, guard) = match reserve_call(conn, cmd) {
+        Ok(admission) => admission,
+        Err(plan) => return NativeCommandStep::Complete(plan),
     };
     let command_id = cmd.id.expect("a native frontend command has a call id");
-    match page.start_cdp_call(command_id, cmd.session_id, operation) {
-        Ok((pending, guard)) => NativeCommandStep::Pending(PendingNativeCommand::new(
+    match admission.start(operation) {
+        Ok(pending) => NativeCommandStep::Pending(PendingNativeCommand::new(
             command_id,
             cmd.session_id.map(str::to_owned),
             residence,
@@ -271,6 +301,52 @@ pub(crate) fn start_operation(
             NativeCommandStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
         }
     }
+}
+
+pub(crate) fn start_prepared_operation(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    prepare: impl std::future::Future<Output = Result<moli_core::RendererNativeOperation>> + 'static,
+) -> NativeCommandStep {
+    let (residence, admission, guard) = match reserve_call(conn, cmd) {
+        Ok(admission) => admission,
+        Err(plan) => return NativeCommandStep::Complete(plan),
+    };
+    NativeCommandStep::Pending(PendingNativeCommand::new_prepared(
+        cmd.id.expect("a native frontend command has a call id"),
+        cmd.session_id.map(str::to_owned),
+        residence,
+        admission,
+        guard,
+        prepare,
+    ))
+}
+
+fn reserve_call(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> Result<
+    (
+        TargetPageResidenceIdentity,
+        moli_core::page::PreparedNativeCall,
+        RendererNativeCommandResponseGuard,
+    ),
+    CommandOutputPlan,
+> {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let residence = conn
+        .target_page_residence_identity_for_owner(&owner)
+        .ok_or_else(|| CommandOutputPlan::error(-32000, "NoDocumentLoaded"))?;
+    let page = conn
+        .loaded_page_mut_for_protocol_access_for_owner(&owner)
+        .map_err(|error| CommandOutputPlan::error(-32000, error))?;
+    let (admission, guard) = page
+        .prepare_cdp_call(
+            cmd.id.expect("a native frontend command has a call id"),
+            cmd.session_id,
+        )
+        .map_err(|error| CommandOutputPlan::error(-32000, error.to_string()))?;
+    Ok((residence, admission, guard))
 }
 
 /// Admit only frontend calls with an accessible document and renderer.
@@ -747,5 +823,149 @@ mod tests {
         assert_eq!(terminal["sessionId"], "SID-native");
         assert_eq!(terminal["result"]["nodeId"], 7);
         assert!(events.next().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_browser_preparation_yields_and_does_not_retarget_a_replacement_page() {
+        use crate::conn::BrowserContext;
+        use crate::testing::TestContext;
+        use futures_util::poll;
+        for retire in [false, true] {
+            let mut context = TestContext::new();
+            let mut browser = BrowserContext::new("BID-native-preparation".into());
+            browser.set_active_target_id("TID-native-preparation");
+            context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+            context
+                .install_navigation_fixture_for_session_owner("about:blank", None)
+                .await;
+            let (residence, admission, guard) = context.with_fixture(|conn| {
+                let owner = CommandOwnerScope::capture(conn, None);
+                let residence = conn
+                    .target_page_residence_identity_for_owner(&owner)
+                    .unwrap();
+                let (admission, guard) = conn
+                    .loaded_page_mut_for_protocol_access(None)
+                    .unwrap()
+                    .prepare_cdp_call(871, None)
+                    .unwrap();
+                (residence, admission, guard)
+            });
+            let (release, held) = tokio::sync::oneshot::channel();
+            let pending = PendingNativeCommand::new_prepared(
+                871,
+                None,
+                residence,
+                admission,
+                guard,
+                async move {
+                    held.await?;
+                    Ok(moli_core::RendererNativeOperation::new(
+                        RendererPageCommand::ChildFrameTreeSnapshot,
+                        |_| RendererNativeProtocolResponse::success(json!({"prepared":true})),
+                    ))
+                },
+            );
+            let mut pending = Box::pin(pending.wait());
+            assert!(poll!(pending.as_mut()).is_pending());
+            context.process_async(json!({"id":872,"method":"Runtime.evaluate","params":{"expression":"6 * 7","returnByValue":true}})).await;
+            assert!(
+                context
+                    .sent
+                    .iter()
+                    .any(|message| message["id"] == 872
+                        && message["result"]["result"]["value"] == 42),
+                "Browser preparation must not hold protocol or renderer execution"
+            );
+            if retire {
+                context
+                    .install_navigation_fixture_for_session_owner(
+                        "data:text/html,retained replacement",
+                        None,
+                    )
+                    .await;
+            }
+            release.send(()).unwrap();
+            let completed = tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+                .await
+                .unwrap();
+            if retire {
+                assert!(
+                    matches!(completed.result, NativeCommandCompletion::Unpublished(_)),
+                    "old admission must not publish from the replacement Page"
+                );
+            } else {
+                let NativeCommandCompletion::Page { completed, .. } = completed.result else {
+                    panic!("prepared Native command must settle normally")
+                };
+                assert!(
+                    completed
+                        .into_output()
+                        .completion()
+                        .native_response_was_published()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_native_browser_preparation_cancels_before_enqueue() {
+        use crate::conn::BrowserContext;
+        use crate::testing::TestContext;
+        use futures_util::poll;
+        let mut context = TestContext::new();
+        let mut browser = BrowserContext::new("BID-native-preparation-drop".into());
+        browser.set_active_target_id("TID-native-preparation-drop");
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        context
+            .install_navigation_fixture_for_session_owner("about:blank", None)
+            .await;
+        let (residence, admission, guard) = context.with_fixture(|conn| {
+            let owner = CommandOwnerScope::capture(conn, None);
+            let residence = conn
+                .target_page_residence_identity_for_owner(&owner)
+                .unwrap();
+            let (admission, guard) = conn
+                .loaded_page_mut_for_protocol_access(None)
+                .unwrap()
+                .prepare_cdp_call(873, None)
+                .unwrap();
+            (residence, admission, guard)
+        });
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
+        let pending = PendingNativeCommand::new_prepared(
+            873,
+            None,
+            residence,
+            admission,
+            guard,
+            async move {
+                held.await?;
+                Ok(moli_core::RendererNativeOperation::new(
+                    RendererPageCommand::ChildFrameTreeSnapshot,
+                    |_| RendererNativeProtocolResponse::success(json!({})),
+                ))
+            },
+        );
+        let cleanup = pending.scope.clone();
+        let mut waiting = Box::pin(pending.wait());
+        assert!(poll!(waiting.as_mut()).is_pending());
+        drop(waiting);
+        assert!(
+            release.send(()).is_err(),
+            "cancelled Browser work must not resume and enqueue"
+        );
+        let completed = cleanup
+            .recover(CommandOutputPlan::error(-32000, "cancelled preparation"))
+            .wait()
+            .await;
+        let mut dispatch = CommandDispatchContext::default();
+        let plan = context.with_fixture(|conn| completed.complete(conn, &mut dispatch));
+        assert!(dispatch.take_renderer_output_predecessor().is_none());
+        let mut messages = Vec::new();
+        plan.emit_into(&mut messages, Some(873), None);
+        assert_eq!(
+            messages,
+            vec![json!({"id":873,"error":{"code":-32000,"message":"cancelled preparation"}})]
+        );
     }
 }

@@ -10,8 +10,14 @@ pub type BlobReadCompletion = Box<dyn FnOnce(io::Result<Vec<u8>>) + Send>;
 
 /// An immutable byte source. Implementations perform I/O on their owning
 /// backend, then complete the read without entering a JavaScript context.
-pub trait BlobSource: fmt::Debug + Send + Sync + 'static {
+pub trait BlobSource: fmt::Debug + Send + Sync + std::any::Any {
     fn read(&self, range: Range<usize>, complete: BlobReadCompletion);
+
+    /// Compare backend snapshot identities without reading bytes. Unknown
+    /// sources retain allocation identity; implementations must be symmetric.
+    fn same_snapshot(&self, _other: &dyn BlobSource) -> bool {
+        false
+    }
 }
 
 /// Blob data is immutable. Slices and concatenation retain their source rather
@@ -43,9 +49,12 @@ impl PartialEq for BlobData {
         match (self.as_bytes(), other.as_bytes()) {
             (Some(left), Some(right)) => left == right,
             _ => {
-                Arc::ptr_eq(&self.backing, &other.backing)
-                    && self.offset == other.offset
+                self.offset == other.offset
                     && self.length == other.length
+                    && (Arc::ptr_eq(&self.backing, &other.backing)
+                        || matches!((self.backing.as_ref(), other.backing.as_ref()),
+                            (Backing::Source(left), Backing::Source(right))
+                                if Arc::ptr_eq(left, right) || left.same_snapshot(right.as_ref())))
             }
         }
     }

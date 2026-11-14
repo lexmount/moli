@@ -32,6 +32,27 @@ impl PageDocumentCommandTarget {
     }
 }
 
+/// The original Page/DevToolsSession admission, held without a Page borrow
+/// while Browser work runs. Dispatch never resolves a replacement active Page.
+pub struct PreparedNativeCall {
+    target: moli_renderer_v8::RendererPageProtocolCommandTarget,
+    attachment: RendererAgentAttachmentId,
+    session: Option<String>,
+    response: moli_renderer_v8::RendererNativeCommandAdmission,
+}
+
+impl PreparedNativeCall {
+    pub fn start(self, operation: crate::RendererNativeOperation) -> Result<PendingPageCommand> {
+        let mut command = RendererPageCommand::Native(self.response.bind(operation));
+        command.bind_inspector_attachment(self.attachment);
+        let pending = self.target.enqueue(command, self.session)?;
+        Ok(PendingPageCommand {
+            pending,
+            renderer_agent_attachment_id: Some(self.attachment),
+        })
+    }
+}
+
 pub struct PendingPageCommand {
     pending: RendererPageCommandPending,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
@@ -210,6 +231,33 @@ impl CompletedPageCommand {
 }
 
 impl Page {
+    pub fn prepare_cdp_call(
+        &self,
+        command_id: u64,
+        frontend_session_id: Option<&str>,
+    ) -> Result<(
+        PreparedNativeCall,
+        crate::RendererNativeCommandResponseGuard,
+    )> {
+        let attachment = self.renderer_agent_attachment_id.ok_or_else(|| {
+            anyhow::anyhow!("native frontend command requires a renderer attachment")
+        })?;
+        let (response, guard) = crate::RendererCdpCall::reserve(
+            moli_page_types::FrontendCommandId::new(command_id),
+            moli_page_types::DevToolsSessionKey::from_wire_session_id(frontend_session_id),
+            attachment,
+        );
+        Ok((
+            PreparedNativeCall {
+                target: self.handle.protocol_command_target(),
+                attachment,
+                session: self.renderer_devtools_command_session_id.clone(),
+                response,
+            },
+            guard,
+        ))
+    }
+
     pub fn document_command_target(
         &self,
         document: crate::RendererDocumentLifecycleIdentity,

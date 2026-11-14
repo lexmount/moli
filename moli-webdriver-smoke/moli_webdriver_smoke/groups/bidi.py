@@ -819,6 +819,43 @@ async def _run_bidi_input_smoke(
             "input:2,change:2",
             "BiDi input.setFiles event order",
         )
+        chosen = Path(directory) / "chosen"
+        (chosen / "nested").mkdir(parents=True)
+        (chosen / "a.txt").write_text("alpha", encoding="utf-8")
+        (chosen / "nested" / "b.txt").write_text("beta", encoding="utf-8")
+        await _send(
+            websocket, 191, "script.evaluate",
+            {
+                "expression": "const input = document.getElementById('bidi-upload'); input.multiple = false; input.webkitdirectory = true;",
+                "target": {"context": context}, "awaitPromise": False,
+            },
+        )
+        directory_setup = (await _recv_until_id(websocket, 191))[-1]
+        assert_equal(directory_setup["type"], "success", "BiDi directory setup")
+        await _send(
+            websocket, 192, "input.setFiles",
+            {"context": context, "element": {"sharedId": file_shared_id}, "files": [str(chosen)]},
+        )
+        directory_set = (await _recv_until_id(websocket, 192))[-1]
+        assert_equal(directory_set["type"], "success", "BiDi directory upload")
+        await _send(
+            websocket, 193, "script.evaluate",
+            {
+                "expression": (
+                    "Promise.all(Array.from(document.getElementById('bidi-upload').files, "
+                    "async file => file.webkitRelativePath + ':' + await structuredClone(file).text()))"
+                    ".then(values => values.sort().join('|'))"
+                ),
+                "target": {"context": context}, "awaitPromise": True,
+            },
+        )
+        directory_summary = (await _recv_until_id(websocket, 193))[-1]
+        assert_equal(directory_summary["type"], "success", "BiDi directory summary")
+        assert_equal(
+            directory_summary["result"]["result"]["value"],
+            "chosen/a.txt:alpha|chosen/nested/b.txt:beta",
+            "BiDi directory relative paths and lazy clone bytes",
+        )
         record(results, "bidi_input_set_files", {"context": context})
 
     input_navigation_url = f"{fixture}/webdriver/input-navigation"

@@ -140,6 +140,38 @@ pub struct RendererPageHandle {
     _not_send: PhantomData<Rc<()>>,
 }
 
+/// Revocable DevTools command destination for the exact admitted agent. It
+/// carries no Page close authority and cannot follow a replacement Document.
+pub struct RendererPageProtocolCommandTarget {
+    token: RendererPageToken,
+    agent: RendererDevToolsAgentToken,
+    target: crate::devtools::target::RendererDevToolsTargetHandle,
+    dialogs: RendererJavaScriptDialogBroker,
+}
+
+impl RendererPageProtocolCommandTarget {
+    pub fn enqueue(
+        self,
+        command: RendererPageCommand,
+        session: Option<String>,
+    ) -> Result<RendererPageCommandPending> {
+        let javascript_dialog_watch = command
+            .interruptible_by_javascript_dialog()
+            .then(|| self.dialogs.watch());
+        let route = self.target.main_ref().enqueue_protocol_page_command(
+            self.token,
+            self.agent,
+            command,
+            session,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        Ok(RendererPageCommandPending {
+            dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+            javascript_dialog_watch,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum RendererPageAccessError {
     #[error("Renderer Document is no longer current")]
@@ -287,6 +319,15 @@ impl RendererPageHandle {
     fn token(&self) -> RendererPageToken {
         self.token
             .expect("renderer page handle should remain open while in use")
+    }
+
+    pub fn protocol_command_target(&self) -> RendererPageProtocolCommandTarget {
+        RendererPageProtocolCommandTarget {
+            token: self.token(),
+            agent: self.devtools_agent_token,
+            target: self.devtools_target.clone(),
+            dialogs: self.javascript_dialog_broker.clone(),
+        }
     }
 
     pub fn document_command_target(
