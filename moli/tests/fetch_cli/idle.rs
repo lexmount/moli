@@ -7,7 +7,7 @@ use axum::{
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use std::{process::Command, time::Duration};
+use std::time::Duration;
 
 fn document(script: &str) -> String {
     format!(
@@ -423,30 +423,29 @@ fn idle_has_a_strict_timeout_for_live_workers_and_websockets() -> Result<()> {
 }
 
 #[test]
-fn idle_waits_for_work_started_by_eval_before_exporting() -> Result<()> {
-    let script =
-        "setTimeout(() => document.querySelector('main').textContent = 'done', 100); 'value'";
+fn idle_does_not_repeat_after_eval() -> Result<()> {
+    let script = "setInterval(() => {}, 60000); document.querySelector('main').textContent = 'done'; 'value'";
     assert_done(run(
         &document(""),
-        "3000",
+        "1000",
         &["--dump", "html", "--eval", script],
     )?);
-    let output = run(&document(""), "3000", &["--eval", script])?;
+    let output = run(&document(""), "1000", &["--eval", script])?;
     assert!(output.status.success(), "{}", clean_output(&output.stderr));
     assert_eq!(clean_output(&output.stdout), "value\n");
     Ok(())
 }
 
 #[test]
-fn idle_waits_for_work_started_by_eval_file() -> Result<()> {
+fn idle_does_not_repeat_after_eval_file() -> Result<()> {
     let path = unique_temp_file_path("wait-idle", "eval.js")?;
     std::fs::write(
         &path,
-        "setTimeout(() => document.querySelector('main').textContent = 'done', 100)",
+        "setInterval(() => {}, 60000); document.querySelector('main').textContent = 'done'",
     )?;
     let output = run(
         &document(""),
-        "3000",
+        "1000",
         &["--dump", "html", "--eval-file", path.to_str().unwrap()],
     );
     std::fs::remove_file(path)?;
@@ -455,15 +454,15 @@ fn idle_waits_for_work_started_by_eval_file() -> Result<()> {
 }
 
 #[test]
-fn idle_also_drains_work_created_by_the_readiness_script() -> Result<()> {
+fn idle_does_not_repeat_after_readiness_script() -> Result<()> {
     assert_done(run(
         &document(""),
-        "3000",
+        "1000",
         &[
             "--dump",
             "html",
             "--wait-script",
-            "(setTimeout(() => document.querySelector('main').textContent='done', 100), true)",
+            "(setInterval(() => {}, 60000), document.querySelector('main').textContent='done', true)",
         ],
     )?);
     Ok(())
@@ -488,102 +487,59 @@ fn idle_waits_for_child_window_timers_and_releases_removed_windows() -> Result<(
 }
 
 #[test]
-fn idle_keeps_one_deadline_for_work_started_after_initial_readiness() -> Result<()> {
-    let output = run(
-        &document("setTimeout(() => {}, 300)"),
-        "1000",
-        &["--dump", "html", "--eval", "setTimeout(() => {}, 800)"],
-    )?;
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(
-        clean_output(&output.stderr).contains("timed out after 1000 ms while waiting for idle"),
-        "{}",
-        clean_output(&output.stderr)
-    );
-    Ok(())
-}
-
-fn assert_idle_execution_times_out(extra: &[&str], phase: &str) -> Result<()> {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
-    command
-        .args([
-            "fetch",
-            "--wait",
-            "idle",
-            "--timeout-ms",
-            "1000",
-            "--http-no-proxy",
-            "*",
-            "--log-level",
-            "error",
-        ])
-        .args(extra)
-        .arg(document(""));
-    // Also bound teardown: dropping only the caller future would leave an
-    // awaited Promise in the renderer and hang browser shutdown.
-    let output =
-        super::subprocess::run_command_with_process_timeout(command, Duration::from_secs(5))?;
-    let stderr = clean_output(&output.stderr);
-    assert!(
-        !output.status.success(),
-        "stdout={}",
-        clean_output(&output.stdout)
-    );
-    assert!(output.stdout.is_empty());
-    assert!(
-        stderr.contains(&format!("timed out after 1000 ms while {phase}")),
-        "{stderr}"
-    );
-    Ok(())
-}
-
-#[test]
-fn idle_deadline_interrupts_async_eval_and_acknowledges_page_cleanup() -> Result<()> {
-    for expression in [
-        "new Promise(resolve => setTimeout(() => resolve('late'), 10000))",
-        "new Promise(() => {})",
-    ] {
-        assert_idle_execution_times_out(&["--eval", expression], "evaluating JavaScript")?;
-        assert_idle_execution_times_out(
-            &["--dump", "html", "--eval", expression],
-            "evaluating JavaScript",
-        )?;
-    }
-    Ok(())
-}
-
-#[test]
-fn idle_deadline_interrupts_eval_file() -> Result<()> {
-    let path = unique_temp_file_path("idle-eval-timeout", "eval.js")?;
-    std::fs::write(&path, "new Promise(resolve => setTimeout(resolve, 10000))")?;
-    let result = assert_idle_execution_times_out(
-        &["--dump", "html", "--eval-file", path.to_str().unwrap()],
-        "evaluating JavaScript",
-    );
-    std::fs::remove_file(path)?;
-    result
-}
-
-#[test]
-fn idle_deadline_interrupts_page_delay() -> Result<()> {
-    assert_idle_execution_times_out(
-        &["--dump", "html", "--delay-ms", "10000"],
-        "waiting for page delay",
-    )
-}
-
-#[test]
-fn idle_waits_for_async_eval_and_followup_work_that_fit_the_deadline() -> Result<()> {
+fn idle_does_not_repeat_after_page_delay() -> Result<()> {
     assert_done(run(
         &document(""),
-        "3000",
+        "1000",
         &[
             "--dump",
             "html",
-            "--eval",
-            "new Promise(resolve => setTimeout(() => { setTimeout(() => document.querySelector('main').textContent = 'done', 100); resolve('value'); }, 100))",
+            "--wait-script",
+            "(setTimeout(() => { setInterval(() => {}, 60000); document.querySelector('main').textContent='done'; }, 25), true)",
+            "--delay-ms",
+            "100",
         ],
+    )?);
+    Ok(())
+}
+
+#[test]
+fn idle_keeps_async_eval_outside_readiness_deadline() -> Result<()> {
+    let expression = "new Promise(resolve => setTimeout(() => { setInterval(() => {}, 60000); document.querySelector('main').textContent='done'; resolve('value'); }, 1200))";
+    assert_done(run(
+        &document(""),
+        "1000",
+        &["--dump", "html", "--eval", expression],
+    )?);
+    let output = run(&document(""), "1000", &["--eval", expression])?;
+    assert!(output.status.success(), "{}", clean_output(&output.stderr));
+    assert_eq!(clean_output(&output.stdout), "value\n");
+    Ok(())
+}
+
+#[test]
+fn idle_keeps_async_eval_file_outside_readiness_deadline() -> Result<()> {
+    let path = unique_temp_file_path("idle-async-eval", "eval.js")?;
+    std::fs::write(
+        &path,
+        "new Promise(resolve => setTimeout(() => { setInterval(() => {}, 60000); document.querySelector('main').textContent='done'; resolve(); }, 1200))",
+    )?;
+    let output = run(
+        &document(""),
+        "1000",
+        &["--dump", "html", "--eval-file", path.to_str().unwrap()],
+    );
+    std::fs::remove_file(path)?;
+    assert_done(output?);
+    Ok(())
+}
+
+#[test]
+fn idle_keeps_page_delay_outside_readiness_deadline() -> Result<()> {
+    assert_done(run(
+        &document("document.querySelector('main').textContent='done'"),
+        "1000",
+        &["--dump", "html", "--delay-ms", "1200"],
     )?);
     Ok(())
 }
