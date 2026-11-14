@@ -1138,6 +1138,28 @@ fn layout_only_ellipsis_keeps_source_geometry_and_generated_hits_after_working_d
             .collect::<Vec<_>>();
         assert_eq!(generated.len(), 1);
         assert!(!source.fragments.contains(&generated[0].id));
+        for id in &source.fragments {
+            let fragment = tree.fragment(*id).unwrap();
+            let LayoutFragmentKind::Text {
+                source_utf16_range, ..
+            } = &fragment.kind
+            else {
+                continue;
+            };
+            let suppressed = match direction {
+                Direction::Ltr => source_utf16_range.start >= anchor,
+                Direction::Rtl => source_utf16_range.end <= anchor,
+            };
+            if suppressed {
+                assert_eq!(fragment.role, LayoutFragmentRole::SourceOnly);
+                assert_eq!(
+                    fragment.paint_order, None,
+                    "hidden source geometry cannot be interactive"
+                );
+            } else {
+                assert_eq!(fragment.role, LayoutFragmentRole::SourceAndDisplay);
+            }
+        }
         assert_eq!(tree.content_quads_for_source(1).len(), 12);
         assert!((tree.text_range_rects(1, 0..12)[0].bounding_rect().width - 115.2).abs() < 0.01);
         let point = LayoutPoint::new(marker_x, 8.0);
@@ -1152,6 +1174,284 @@ fn layout_only_ellipsis_keeps_source_geometry_and_generated_hits_after_working_d
             tree.retention_metrics().fragment_count,
             tree.fragments.len()
         );
+    }
+}
+
+#[test]
+fn finalized_views_preserve_complex_source_geometry_and_original_glyph_positions() {
+    use style::values::computed::font::{
+        FamilyName, FontFamily, FontFamilyList, FontFamilyNameSyntax, SingleFontFamily,
+    };
+    for text in [
+        "office fi ffi a\u{301} office",
+        "abc אבג ffi a\u{301} xyz",
+        "😀a\u{301}😀 office xyz",
+    ] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::text("text", text),
+        ]);
+        let mut outputs = Vec::new();
+        for ellipsis in [false, true] {
+            let (style, mut services) = ellipsis_style(95.0, |computed| {
+                if !ellipsis {
+                    computed.mutate_text().set_text_overflow(
+                        style::values::specified::text::TextOverflow::get_initial_value(),
+                    );
+                }
+                computed.mutate_font().set_font_family(FontFamily {
+                    families: FontFamilyList {
+                        list: style::ArcSlice::from_iter(
+                            ["PDFViews", "SymbolViews"].into_iter().map(|name| {
+                                SingleFontFamily::FamilyName(FamilyName {
+                                    name: Atom::from(name),
+                                    syntax: FontFamilyNameSyntax::Quoted,
+                                })
+                            }),
+                        ),
+                    },
+                    is_system_font: false,
+                    is_initial: false,
+                });
+            });
+            for (family, data) in [
+                (
+                    "PDFViews",
+                    include_bytes!("../../moli-paint/tests/fixtures/moli-pdf.ttf").as_slice(),
+                ),
+                (
+                    "SymbolViews",
+                    include_bytes!("fixtures/moli-hebrew-emoji.ttf").as_slice(),
+                ),
+            ] {
+                services
+                    .register_web_font(moli_layout::WebFontRegistration::new(
+                        family,
+                        moli_layout::WebFontFace::new(family),
+                        data.to_vec(),
+                    ))
+                    .unwrap();
+            }
+            outputs.push(
+                build_layout_pass(
+                    &source,
+                    &mut Styles(HashMap::from([(0, style)])),
+                    &mut services,
+                    LayoutPassRequest::with_paint(
+                        LayoutViewport::new(320, 240, 1.0),
+                        LayoutFlushReason::Print,
+                    ),
+                )
+                .unwrap(),
+            );
+        }
+        let utf16_len = text.encode_utf16().count();
+        assert_eq!(
+            outputs[0].text_range_rects(1, 0..utf16_len),
+            outputs[1].text_range_rects(1, 0..utf16_len)
+        );
+        assert_eq!(
+            outputs[0].content_quads_for_source(1),
+            outputs[1].content_quads_for_source(1)
+        );
+        let source_glyphs = |output: &LayoutPassResult<usize>| {
+            output
+                .paint_snapshot()
+                .unwrap()
+                .fragments
+                .iter()
+                .filter_map(|fragment| {
+                    let PaintFragment::GlyphRun(run) = fragment else {
+                        return None;
+                    };
+                    let semantics = run.text.as_ref()?;
+                    (semantics.text.as_ref() == text).then_some(run)
+                })
+                .flat_map(|run| {
+                    run.glyphs.iter().map(move |glyph| {
+                        (
+                            glyph.id,
+                            glyph.x.to_bits(),
+                            glyph.y.to_bits(),
+                            run.font_size.to_bits(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let original = source_glyphs(&outputs[0]);
+        let displayed = source_glyphs(&outputs[1]);
+        assert!(!displayed.is_empty());
+        assert!(
+            displayed.len() < original.len(),
+            "fixture must truncate: {text}"
+        );
+        assert!(
+            displayed.iter().all(|glyph| original.contains(glyph)),
+            "slicing must retain original glyph positions: {text}"
+        );
+    }
+}
+
+#[test]
+fn glyphless_control_keeps_frozen_caret_geometry_without_a_paint_request() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 2]),
+        Node::element("atomic", vec![]),
+        Node::text("text", "\n\nX"),
+    ]);
+    let (root, mut services) = ellipsis_style(120.0, |computed| {
+        computed.mutate_inherited_text().set_white_space_collapse(
+            style::properties::longhands::white_space_collapse::computed_value::T::Preserve,
+        );
+    });
+    let atomic = fixed_size(LayoutDisplay::InlineBlock, 24.0, 24.0);
+    let tree = build_layout_pass(
+        &source,
+        &mut Styles(HashMap::from([(0, root), (1, atomic)])),
+        &mut services,
+        LayoutPassRequest::new(
+            LayoutViewport::new(320, 240, 1.0),
+            LayoutFlushReason::SynchronousGeometry,
+        ),
+    )
+    .unwrap()
+    .into_tree();
+    drop(services);
+    let caret = tree.caret_position(LayoutPoint::new(0.0, 30.0)).unwrap();
+    assert_eq!(caret.source, 2);
+    assert_eq!(caret.utf16_offset, Some(1));
+    assert!(
+        caret.rect.bounding_rect().y >= 20.0,
+        "caret must remain on the empty line"
+    );
+}
+
+#[test]
+fn finalized_text_and_caret_share_the_published_content_origin_with_scrollbar_gutters() {
+    use style::properties::longhands::direction::computed_value::T as Direction;
+    use style::values::{
+        computed::{CSSPixelLength, LengthPercentage, length::Size as CssSize},
+        generics::NonNegative,
+    };
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let mut source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("scroller", vec![2]),
+            Node::text("text", "A\nA\nA"),
+        ]);
+        source.0[2].selection = Some(moli_layout::LayoutTextSelection::new(0, 0));
+        let (scroller, mut services) = ellipsis_style(120.0, |computed| {
+            computed
+                .mutate_box()
+                .set_overflow_y(style::values::computed::Overflow::Scroll);
+            computed
+                .mutate_position()
+                .set_height(CssSize::LengthPercentage(NonNegative(
+                    LengthPercentage::new_length(CSSPixelLength::new(40.0)),
+                )));
+            computed.mutate_inherited_box().set_direction(direction);
+            computed.mutate_inherited_text().set_white_space_collapse(
+                style::properties::longhands::white_space_collapse::computed_value::T::Preserve,
+            );
+        });
+        let output = build_layout_pass(
+            &source,
+            &mut Styles(HashMap::from([
+                (0, fixed_size(LayoutDisplay::Block, 300.0, 200.0)),
+                (1, scroller),
+            ])),
+            &mut services,
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Print,
+            ),
+        )
+        .unwrap();
+        let model = output.source_output(1).unwrap().principal_box.unwrap();
+        if direction == Direction::Rtl {
+            assert!(
+                output.box_geometry(model).unwrap().content_box.x > 0.0,
+                "fixture must reserve the left scrollbar gutter"
+            );
+        }
+        let text = output.text_range_rects(2, 0..1)[0].bounding_rect();
+        let snapshot = output.paint_snapshot().unwrap();
+        let glyph = snapshot
+            .fragments
+            .iter()
+            .find_map(|fragment| {
+                let PaintFragment::GlyphRun(run) = fragment else {
+                    return None;
+                };
+                let glyph = run.glyphs.first()?;
+                Some(run.transform.map_point(LayoutPoint::new(glyph.x, glyph.y)))
+            })
+            .unwrap();
+        assert!(
+            (glyph.x - text.x).abs() < 0.01,
+            "direction={direction:?}, glyph={glyph:?}, text={text:?}"
+        );
+        let caret = snapshot
+            .fragments
+            .iter()
+            .find_map(|fragment| match fragment {
+                PaintFragment::Fill {
+                    shape: PaintShape::Rect(rect),
+                    transform,
+                    ..
+                } if (rect.width - 1.5).abs() < 0.01 => {
+                    Some(transform.map_rect(*rect).bounding_rect())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            (caret.x - text.x).abs() < 0.01,
+            "direction={direction:?}, caret={caret:?}, text={text:?}"
+        );
+    }
+}
+
+#[test]
+fn finalized_caret_respects_visibility_in_bulk_and_mixed_text() {
+    use style::properties::longhands::visibility::computed_value::T as Visibility;
+    for mixed in [false, true] {
+        for visible in [false, true] {
+            let mut source = Source(vec![
+                Node::element("root", if mixed { vec![2, 1] } else { vec![1] }),
+                Node::text("text", "A"),
+                Node::element("atomic", vec![]),
+            ]);
+            source.0[1].selection = Some(moli_layout::LayoutTextSelection::new(0, 0));
+            let (root, mut services) = ellipsis_style(120.0, |computed| {
+                computed.mutate_inherited_box().set_visibility(if visible {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                });
+            });
+            let output = build_layout_pass(
+                &source,
+                &mut Styles(HashMap::from([
+                    (0, root),
+                    (2, fixed_size(LayoutDisplay::InlineBlock, 0.0, 0.0)),
+                ])),
+                &mut services,
+                LayoutPassRequest::with_paint(
+                    LayoutViewport::new(320, 240, 1.0),
+                    LayoutFlushReason::Print,
+                ),
+            )
+            .unwrap();
+            let carets = output.paint_snapshot().unwrap().fragments.iter().filter(|fragment| matches!(fragment,
+                PaintFragment::Fill { brush: PaintBrush::Solid(color), .. } if *color == PaintColor::BLACK)).count();
+            assert_eq!(
+                carets,
+                usize::from(visible),
+                "mixed={mixed}, visible={visible}"
+            );
+        }
     }
 }
 
