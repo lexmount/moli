@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn editing_focus_initializes_selection_before_events_and_preserves_existing_ranges() {
+    let mut vm = new_storage_html_test_vm("https://example.com/");
+    let result = vm.eval(r#"(() => {
+        document.body.innerHTML='<div id=a contenteditable><span>abcd</span></div><div id=b contenteditable>wxyz</div>';
+        const a=document.getElementById('a'),b=document.getElementById('b'),s=getSelection();
+        const log=[];
+        for(const node of [a,b])node.addEventListener('focus',()=>{
+            log.push([node.id,s.anchorNode===node.querySelector('span')?.firstChild || s.anchorNode===node.firstChild,s.anchorOffset,s.focusOffset,s.toString()]);
+        });
+        a.focus();s.collapse(a.firstChild.firstChild,2);b.focus();a.focus();
+        s.setBaseAndExtent(b.firstChild,1,b.firstChild,3);b.focus();
+        a.addEventListener('focus',()=>s.collapse(a.firstChild.firstChild,3),{once:true});
+        a.focus();
+        const selectedByAuthor=s.anchorNode===a.firstChild.firstChild && s.anchorOffset===3;
+        return JSON.stringify({log,selectedByAuthor});
+    })()"#).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "log":[["a",true,0,0,""],["b",true,0,0,""],["a",true,0,0,""],
+                ["b",true,1,3,"xy"],["a",true,0,0,""]],"selectedByAuthor":true,
+        })
+    );
+}
+
+#[test]
+fn editing_focus_uses_native_selection_boundaries_without_author_accessors() {
+    let mut vm = new_storage_html_test_vm("https://example.com/");
+    assert_eq!(vm.eval(r#"(() => {
+        document.body.innerHTML='<div id=editor contenteditable>text</div>';
+        const e=document.getElementById('editor'),text=e.firstChild,s=getSelection();
+        const anchor=Object.getOwnPropertyDescriptor(Selection.prototype,'anchorNode').get;
+        let calls=0;const fail=()=>{calls++;throw new Error('author getter');};
+        for(const [node,key] of [[e,'ownerDocument'],[text,'ownerDocument'],[text,'nodeType'],[s,'anchorNode'],[s,'focusNode']])
+            Object.defineProperty(node,key,{configurable:true,get:fail});
+        window.getSelection=fail;window.Range=fail;s.collapse=fail;e.focus();
+        return String(calls===0 && anchor.call(s)===text);
+    })()"#).unwrap(),"true");
+}
+
+#[test]
+fn editing_focus_skips_hidden_text_and_empty_markup_but_stops_before_noneditable_content() {
+    for (prefix, at_host) in [
+        ("<span style='display:none'>hidden</span>", false),
+        ("<span style='visibility:hidden'>hidden</span>", false),
+        (
+            "<span style='display:block;content-visibility:hidden'>hidden</span>",
+            false,
+        ),
+        ("<span inert>hidden</span>", true),
+        ("<span></span>", false),
+        ("<!--comment-->", false),
+        ("<span contenteditable=false>skip</span>", true),
+        ("<br>", true),
+    ] {
+        let mut vm = new_rendered_test_vm(
+            "https://example.com/",
+            &format!("<!doctype html><div id=editor contenteditable>{prefix}visible</div>"),
+        );
+        assert_eq!(vm.eval(&format!(r#"(() => {{
+            const e=document.getElementById('editor');e.focus();const s=getSelection();
+            return String(s.anchorNode===({at_host}?e:e.lastChild) && s.anchorOffset===0 && s.isCollapsed);
+        }})()"#)).unwrap(), "true", "{prefix}");
+    }
+}
+
+#[test]
 fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
     let mut vm = new_storage_test_vm("https://focus-prevent-scroll.test/");
 

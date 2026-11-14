@@ -405,3 +405,169 @@ async fn ime_retains_caret_captured_before_beforeinput() {
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn iframe_contenteditable_ime_revalidates_selection_focus_and_owner_after_callbacks() {
+    for phase in ["beforeinput", "textInput"] {
+        for effect in ["selection", "focus", "remove", "adopt"] {
+            let mut ctx = TestContext::new();
+            with_loaded_document(&mut ctx, "<html><body></body></html>").await;
+            assert_eq!(evaluate_string(&mut ctx,&format!(r#"(() => {{
+                const frame=document.createElement('iframe');document.body.append(frame);
+                const owner=frame.contentDocument;
+                owner.body.innerHTML='<div id=first contenteditable>abcd</div><div id=second contenteditable>wxyz</div>';
+                const first=owner.getElementById('first'),second=owner.getElementById('second');
+                const s=owner.defaultView.getSelection();first.focus();
+                s.setBaseAndExtent(first.firstChild,1,first.firstChild,2);
+                globalThis.editProbe={{owner,first,second,events:[]}};
+                for(const node of [first,second])for(const type of ['beforeinput','textInput','input'])
+                    node.addEventListener(type,e=>editProbe.events.push([type,e.target.id,e.data]));
+                first.addEventListener({phase:?},()=>{{
+                    if({effect:?}==='selection')s.setBaseAndExtent(first.firstChild,3,first.firstChild,4);
+                    if({effect:?}==='focus')second.focus();
+                    if({effect:?}==='remove')first.remove();
+                    if({effect:?}==='adopt')document.body.append(document.adoptNode(first));
+                }},{{once:true}});return 'ready';
+            }})()"#)).await,"ready");
+            type_text(&mut ctx, "insertText", "X").await;
+            let actual: serde_json::Value=serde_json::from_str(&evaluate_string(&mut ctx,r#"JSON.stringify({first:editProbe.first.textContent,second:editProbe.second.textContent,events:editProbe.events,childOwner:editProbe.first.ownerDocument===editProbe.owner})"#).await).unwrap();
+            let mut events = vec![json!(["beforeinput", "first", "X"])];
+            if phase == "textInput" || !matches!(effect, "remove" | "adopt") {
+                events.push(json!([
+                    "textInput",
+                    if effect == "focus" && phase == "beforeinput" {
+                        "second"
+                    } else {
+                        "first"
+                    },
+                    "X"
+                ]));
+            }
+            if !matches!(effect, "remove" | "adopt") {
+                events.push(json!([
+                    "input",
+                    if effect == "focus" { "second" } else { "first" },
+                    "X"
+                ]));
+            }
+            assert_eq!(
+                actual,
+                json!({
+                    "first":if effect=="selection" {"abcX"} else {"abcd"},
+                    "second":if effect=="focus" {"Xwxyz"} else {"wxyz"},
+                    "events":events,"childOwner":effect!="adopt",
+                }),
+                "{phase}/{effect}"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn editing_focus_never_descends_into_hidden_noneditable_boundaries() {
+    for boundary in ["contenteditable=false", "inert"] {
+        for visibility in ["hidden", "visible"] {
+            let mut ctx = TestContext::new();
+            with_loaded_document(&mut ctx, &format!(
+                "<div id=editor contenteditable><span id=locked {boundary} style=visibility:{visibility}><span style=visibility:visible>LOCKED</span></span>EDIT</div>"
+            )).await;
+            assert_eq!(evaluate_string(&mut ctx, r#"(() => {
+                const e=document.getElementById('editor'),locked=document.getElementById('locked');
+                globalThis.lockedMarkup=locked.outerHTML;
+                e.focus({preventScroll:true});const s=getSelection();
+                return String(e.contains(s.anchorNode)&&!locked.contains(s.anchorNode)&&s.isCollapsed);
+            })()"#).await, "true", "{boundary}/{visibility}");
+            command(&mut ctx, "Input.insertText", json!({"text":"X"})).await;
+            let result: serde_json::Value = serde_json::from_str(&evaluate_string(&mut ctx, r#"JSON.stringify((()=>{
+                const e=document.getElementById('editor'),locked=document.getElementById('locked');
+                return [locked.textContent,locked.outerHTML===lockedMarkup,e.textContent.replace('X',''),e.textContent.split('X').length-1];
+            })())"#).await).unwrap();
+            assert_eq!(
+                result,
+                json!(["LOCKED", true, "LOCKEDEDIT", 1]),
+                "{boundary}/{visibility}"
+            );
+        }
+    }
+
+    // An editable hidden wrapper may have a visible descendant. Only editing
+    // boundaries prevent descent; inherited visibility alone must not do so.
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, "<div id=editor contenteditable><span style=visibility:hidden><span id=visible style=visibility:visible>EDIT</span></span></div>").await;
+    assert_eq!(evaluate_string(&mut ctx, "document.getElementById('editor').focus({preventScroll:true});String(getSelection().anchorNode===document.getElementById('visible').firstChild)").await, "true");
+    command(&mut ctx, "Input.insertText", json!({"text":"X"})).await;
+    assert_eq!(
+        evaluate_string(&mut ctx, "document.getElementById('visible').textContent").await,
+        "XEDIT"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn editing_focus_chooses_text_offsets_using_white_space_collapse() {
+    for (markup, white_space, anchor_text, offset, edited_html) in [
+        (
+            "\n  <p id=p>Hello</p>\n",
+            "normal",
+            "Hello",
+            0,
+            "\n  <p id=\"p\">XHello</p>\n",
+        ),
+        ("   Hello", "normal", "   Hello", 3, "   XHello"),
+        ("   Hello", "nowrap", "   Hello", 3, "   XHello"),
+        ("   Hello", "pre", "   Hello", 0, "X   Hello"),
+        ("   Hello", "pre-wrap", "   Hello", 0, "X   Hello"),
+        ("   Hello", "break-spaces", "   Hello", 0, "X   Hello"),
+        ("  \n Hello", "pre-line", "  \n Hello", 2, "  X\n Hello"),
+        ("&nbsp;Hello", "normal", "\u{00a0}Hello", 0, "X&nbsp;Hello"),
+        (" \t😀Hello", "normal", " \t😀Hello", 2, " \tX😀Hello"),
+        (
+            "\n  <p id=p>Hello</p>\n",
+            "pre",
+            "\n  ",
+            0,
+            "X\n  <p id=\"p\">Hello</p>\n",
+        ),
+    ] {
+        let mut ctx = TestContext::new();
+        with_loaded_document(
+            &mut ctx,
+            &format!("<div id=editor contenteditable style=white-space:{white_space}></div>"),
+        )
+        .await;
+        // A literal data URL would strip tabs and newlines during URL parsing.
+        // Install the exact DOM text before testing whitespace-sensitive focus.
+        assert_eq!(
+            evaluate_string(
+                &mut ctx,
+                &format!(
+                    "document.getElementById('editor').innerHTML={};'ready'",
+                    serde_json::to_string(markup).unwrap(),
+                )
+            )
+            .await,
+            "ready"
+        );
+        let before: serde_json::Value = serde_json::from_str(
+            &evaluate_string(
+                &mut ctx,
+                r#"(() => {
+            document.getElementById('editor').focus({preventScroll:true});const s=getSelection();
+            return JSON.stringify([s.anchorNode.nodeValue,s.anchorOffset,s.isCollapsed]);
+        })()"#,
+            )
+            .await,
+        )
+        .unwrap();
+        assert_eq!(
+            before,
+            json!([anchor_text, offset, true]),
+            "{white_space}/{markup:?}"
+        );
+        command(&mut ctx, "Input.insertText", json!({"text":"X"})).await;
+        assert_eq!(
+            evaluate_string(&mut ctx, "document.getElementById('editor').innerHTML").await,
+            edited_html,
+            "{white_space}/{markup:?}"
+        );
+    }
+}
