@@ -16,8 +16,6 @@ pub enum FetchTimeoutPhase {
     WaitingForSubresourceResponse,
     WaitingForSelector,
     WaitingForScript,
-    WaitingForPageDelay,
-    EvaluatingScript,
     WaitingForIdle,
 }
 
@@ -57,8 +55,6 @@ impl fmt::Display for FetchTimeoutPhase {
             Self::WaitingForSubresourceResponse => "waiting for a subresource response",
             Self::WaitingForSelector => "waiting for a selector",
             Self::WaitingForScript => "waiting for a script to become truthy",
-            Self::WaitingForPageDelay => "waiting for page delay",
-            Self::EvaluatingScript => "evaluating JavaScript",
             Self::WaitingForIdle => "waiting for idle",
         })
     }
@@ -139,10 +135,7 @@ impl FetchDeadline {
         self.at
     }
 
-    /// Enforces this absolute deadline while the supplied operation runs.
-    /// Callers must still close or cancel work retained by another owner when
-    /// the timed-out future is dropped.
-    pub async fn wait<T, F>(self, phase: FetchTimeoutPhase, future: F) -> Result<T>
+    pub(super) async fn wait<T, F>(self, phase: FetchTimeoutPhase, future: F) -> Result<T>
     where
         F: Future<Output = Result<T>>,
     {
