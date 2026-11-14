@@ -373,10 +373,20 @@ impl ControlledXhrLoad {
                     }
                     D::Fail(error) => return Err(error),
                     D::Fulfill {
+                        request_overrides,
                         status,
                         headers,
                         body,
                     } => {
+                        if let Some(overrides) = request_overrides {
+                            let headers_changed = overrides.headers.is_some();
+                            overrides.apply(&mut self.request);
+                            if headers_changed {
+                                self.preflight_headers =
+                                    self.request.request_headers.to_byte_strings();
+                            }
+                            self.sync_info();
+                        }
                         synthetic = Some(self.synthetic_response(status, headers, body));
                         intercept_response = false;
                         handle_auth_requests = false;
@@ -499,6 +509,7 @@ impl ControlledXhrLoad {
                         }
                     }
                     D::Fulfill {
+                        request_overrides: _,
                         status,
                         headers,
                         body,

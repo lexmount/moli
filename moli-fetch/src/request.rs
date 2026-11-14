@@ -147,6 +147,56 @@ impl From<crate::RequestHeaders> for RequestHeaderOverride {
     }
 }
 
+/// Accumulated request-stage interception edits, independent of the eventual
+/// decision to continue on the network or fulfill a redirect response.
+#[derive(Clone, Debug, Default)]
+pub struct RequestOverrides {
+    pub url: Option<Url>,
+    pub method: Option<String>,
+    /// None leaves the upload intact; Some(None) explicitly removes it.
+    pub body: Option<Option<bytes::Bytes>>,
+    pub headers: Option<RequestHeaderOverride>,
+}
+
+impl RequestOverrides {
+    pub fn apply(self, request: &mut Request) {
+        if let Some(url) = self.url {
+            request.url = url;
+        }
+        if let Some(method) = self.method {
+            request.method = method;
+            request.cookie_context.set_request_method(&request.method);
+        }
+        request.cookie_context = request
+            .cookie_context
+            .clone()
+            .recompute_site_context_for_request(&request.url);
+        if let Some(body) = self.body {
+            let text = body
+                .as_ref()
+                .map(|bytes| std::sync::Arc::from(String::from_utf8_lossy(bytes).as_ref()));
+            request.set_body(body, text);
+        }
+        if let Some(headers) = self.headers {
+            match headers {
+                RequestHeaderOverride::CurrentRequest {
+                    headers,
+                    redirect_headers,
+                } => {
+                    request.set_redirect_headers(Some(
+                        redirect_headers.unwrap_or_else(|| request.request_headers.clone()),
+                    ));
+                    request.request_headers = headers;
+                }
+                RequestHeaderOverride::RedirectChain(headers) => {
+                    request.set_redirect_headers(None);
+                    request.request_headers = headers;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserRequestMetadata {
     Audio,
@@ -1117,6 +1167,10 @@ impl Request {
     pub fn with_redirect_headers(mut self, headers: Option<crate::RequestHeaders>) -> Self {
         self.set_redirect_headers(headers);
         self
+    }
+
+    pub fn redirect_headers(&self) -> Option<&crate::RequestHeaders> {
+        self.redirect_headers.as_ref()
     }
 
     pub fn set_redirect_headers(&mut self, headers: Option<crate::RequestHeaders>) {

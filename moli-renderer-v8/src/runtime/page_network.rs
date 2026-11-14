@@ -293,12 +293,14 @@ impl PageVm {
         response_code: u16,
         response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
+        request_overrides: Option<moli_fetch::RequestOverrides>,
     ) -> Result<()> {
         let execution = self.vm_mut().fulfill_pending_subresource_fetch_body(
             internal_id,
             response_code,
             response_headers,
             response_body,
+            request_overrides,
         )?;
         self.finish_async_subresource_command(execution)
     }

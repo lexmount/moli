@@ -14,6 +14,104 @@ async fn command(ctx: &mut TestContext, id: u64, method: &str, params: Value) ->
     response
 }
 
+async fn session_command(
+    ctx: &mut TestContext,
+    session: &str,
+    id: u64,
+    method: &str,
+    params: Value,
+) {
+    ctx.process_async(json!({"id":id,"sessionId":session,"method":method,"params":params}))
+        .await;
+    wait_until_messages(ctx, Some(session), method, |messages| {
+        messages.iter().any(|message| message["id"] == id)
+    })
+    .await;
+    let response = take_response_by_id(ctx, id);
+    assert!(response.get("error").is_none(), "{method}: {response}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chained_interceptors_fulfill_redirect_using_effective_request() {
+    let (mut ctx, origin, server) = fixture().await;
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-2".into())
+        )
+    });
+    session_command(&mut ctx, "SID-2", 49_000, "Fetch.enable", json!({})).await;
+    for (index, status) in [307, 308].into_iter().enumerate() {
+        let id = 49_010 + index as u64 * 10;
+        let source = format!("{origin}/source");
+        let rewritten = format!("{origin}/rewritten/base/source");
+        let destination = format!("{origin}/rewritten/base/destination");
+        command(&mut ctx,id,"Runtime.evaluate",json!({"expression":format!(
+            "globalThis.chainResult=fetch({source:?},{{method:'POST',body:'old'}}).then(r=>r.text());'started'"
+        )})).await;
+        let first = wait_for_request_paused(&mut ctx, &source, "first chain interceptor").await;
+        command(
+            &mut ctx,
+            id + 1,
+            "Fetch.continueRequest",
+            json!({"requestId":first["params"]["requestId"],
+            "url":rewritten,"method":"PUT","postData":"bmV3"}),
+        )
+        .await;
+        let second = wait_for_request_paused_on_session(
+            &mut ctx,
+            "SID-2",
+            &rewritten,
+            None,
+            "second chain interceptor",
+        )
+        .await;
+        assert_eq!(second["params"]["request"]["postData"], "new");
+        session_command(
+            &mut ctx,
+            "SID-2",
+            id + 2,
+            "Fetch.fulfillRequest",
+            json!({
+                "requestId":second["params"]["requestId"],"responseCode":status,
+                "responseHeaders":[{"name":"Location","value":"destination"}]
+            }),
+        )
+        .await;
+        for (offset, session) in ["SID-1", "SID-2"].into_iter().enumerate() {
+            let next = wait_for_request_paused_on_session(
+                &mut ctx,
+                session,
+                &destination,
+                None,
+                "redirected effective request",
+            )
+            .await;
+            assert_eq!(next["params"]["request"]["method"], "PUT");
+            assert_eq!(next["params"]["request"]["postData"], "new");
+            session_command(
+                &mut ctx,
+                session,
+                id + 3 + offset as u64,
+                "Fetch.continueRequest",
+                json!({"requestId":next["params"]["requestId"]}),
+            )
+            .await;
+        }
+        let result = command(
+            &mut ctx,
+            id + 5,
+            "Runtime.evaluate",
+            json!({"expression":"chainResult","awaitPromise":true,"returnByValue":true}),
+        )
+        .await;
+        assert_eq!(result["result"]["result"]["value"], "PUT:new");
+    }
+    server.abort();
+}
+
 async fn fixture() -> (TestContext, String, tokio::task::JoinHandle<()>) {
     fixture_with_path("/page").await
 }
@@ -54,6 +152,16 @@ async fn fixture_with_userinfo(
                     }),
                 )
                 .route("/network-final", get(|| async { "network-body" }))
+                .route(
+                    "/rewritten/base/destination",
+                    axum::routing::any(|request: axum::extract::Request| async move {
+                        let method = request.method().to_string();
+                        let body = axum::body::to_bytes(request.into_body(), 4096)
+                            .await
+                            .unwrap();
+                        format!("{method}:{}", String::from_utf8_lossy(&body))
+                    }),
+                )
                 .route(
                     "/network-start",
                     get(|| async { axum::response::Redirect::temporary("/network-final") }),
