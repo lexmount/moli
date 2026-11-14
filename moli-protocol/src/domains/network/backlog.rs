@@ -271,6 +271,12 @@ fn emit_complete_subresource_network_delivery_record(
     let initial_output_len = out.len();
     let request_id = delivery_output.request_id();
     let output = delivery_output.metadata();
+    // The same native handshake record also feeds the dedicated WebSocket
+    // delivery below. Publishing it as an ordinary HTTP request would give
+    // clients an extra inflight request for a long-lived socket.
+    if output.resource_type() == moli_core::page::SubresourceResourceType::WebSocket {
+        return false;
+    }
     let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return false;
     };
@@ -289,16 +295,14 @@ fn emit_complete_subresource_network_delivery_record(
     if !runtime_slot.claim_completed_subresource_request_id(request_id) {
         return false;
     }
-    if output.resource_type() != moli_core::page::SubresourceResourceType::WebSocket {
-        record_subresource_pending_response_body(conn, owner, request_id, event_session_ids);
-        record_subresource_request_body(
-            conn,
-            owner,
-            request_id,
-            output.request_body_bytes(),
-            event_session_ids,
-        );
-    }
+    record_subresource_pending_response_body(conn, owner, request_id, event_session_ids);
+    record_subresource_request_body(
+        conn,
+        owner,
+        request_id,
+        output.request_body_bytes(),
+        event_session_ids,
+    );
     if !request_was_announced_by_fetch_pause {
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
@@ -407,15 +411,13 @@ fn emit_complete_subresource_network_delivery_record(
             }
         }
         TargetSubresourceMetadataOutcome::Failure { error_text } => {
-            if output.resource_type() != moli_core::page::SubresourceResourceType::WebSocket {
-                record_subresource_failed_response_body(
-                    conn,
-                    owner,
-                    error_text.clone(),
-                    request_id,
-                    event_session_ids,
-                );
-            }
+            record_subresource_failed_response_body(
+                conn,
+                owner,
+                error_text.clone(),
+                request_id,
+                event_session_ids,
+            );
             for event_session_id in event_session_ids {
                 emit_loading_failed(
                     out,

@@ -993,7 +993,7 @@ async fn enable_with_csp_violation_report_resource_type_filter_sets_csp_report_f
 }
 
 #[tokio::test]
-async fn enable_with_websocket_resource_type_filter_sets_websocket_filter() {
+async fn enable_with_websocket_resource_type_filter_is_rejected() {
     let mut ctx = TestContext::new();
     {
         let fixture_value = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
@@ -1010,18 +1010,10 @@ async fn enable_with_websocket_resource_type_filter_sets_websocket_filter() {
         }
     }))
     .await;
-    ctx.expect_result(20, json!({}), None);
-
+    ctx.expect_error(20, -32602, "InvalidParams");
     ctx.with_fixture(|conn| {
         let bc = conn.browser_context.as_ref().unwrap();
-        assert!(bc.active_page_target().fetch_owner.is_enabled());
-        assert_eq!(
-            bc.active_page_target()
-                .fetch_owner
-                .config_snapshot()
-                .resource_type_filter(),
-            Some(FetchResourceTypeFilter::WebSocket)
-        );
+        assert!(!bc.active_page_target().fetch_owner.is_enabled());
     });
 }
 

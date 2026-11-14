@@ -60,30 +60,6 @@ async fn with_loaded_http_document(
     });
 }
 
-async fn with_loaded_http_background_document(
-    ctx: &mut TestContext,
-    url: &str,
-    active_session_id: &str,
-    active_target_id: &str,
-    background_session_id: &str,
-    background_target_id: &str,
-) {
-    let background = PageTargetHost::with_url(
-        background_target_id.to_owned(),
-        Some(background_session_id.to_owned()),
-        url.to_owned(),
-    );
-
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id(active_target_id.to_owned());
-    bc.attach_active_session(active_session_id.to_owned());
-    bc.insert_page_target_host(background);
-    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
-    ctx.enable_page_events_for_test(Some(background_session_id));
-    ctx.install_navigation_fixture_for_session_owner(url, Some(background_session_id))
-        .await;
-}
-
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
     ctx.serialize_fixture_document(None)
         .await

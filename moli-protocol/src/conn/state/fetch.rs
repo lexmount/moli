@@ -1134,9 +1134,11 @@ impl TargetFetchConfig {
         {
             // Auth challenges are matched by URL alone, regardless of the
             // resource classes named by Fetch.enable patterns. The renderer
-            // must route every class through the protocol so no class scope
-            // can silently disable Fetch.authRequired pauses.
-            return moli_core::page::SubresourceInterceptionClasses::ALL;
+            // must route HTTP classes through the protocol so no class scope
+            // can silently disable Fetch.authRequired pauses. WebSocket
+            // handshakes are outside Fetch interception.
+            return moli_core::page::SubresourceInterceptionClasses::ALL
+                .difference(moli_core::page::SubresourceInterceptionClasses::WEBSOCKET);
         }
         fetch_subresource_interception_config_for_patterns(self.enabled, &self.patterns)
     }

@@ -9,6 +9,65 @@ async fn enable_network_domain(ctx: &mut TestContext, id: u64, session_id: Optio
     ctx.expect_result(id, json!({}), session_id);
 }
 
+async fn assert_blocked_websocket_events(ctx: &mut TestContext, url: &str) -> serde_json::Value {
+    wait_until_messages(
+        ctx,
+        Some("SID-1"),
+        "blocked WebSocket terminal",
+        |messages| {
+            let Some(created) = messages.iter().find(|message| {
+                message["method"] == "Network.webSocketCreated" && message["params"]["url"] == url
+            }) else {
+                return false;
+            };
+            messages.iter().any(|message| {
+                message["method"] == "Network.webSocketClosed"
+                    && message["params"]["requestId"] == created["params"]["requestId"]
+            })
+        },
+    )
+    .await;
+    let created = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.webSocketCreated" && message["params"]["url"] == url
+        })
+        .unwrap();
+    let request_id = &created["params"]["requestId"];
+    let events = ctx
+        .sent
+        .iter()
+        .filter(|message| &message["params"]["requestId"] == request_id)
+        .collect::<Vec<_>>();
+    let methods = events
+        .iter()
+        .map(|message| message["method"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        [
+            "Network.webSocketCreated",
+            "Network.webSocketWillSendHandshakeRequest",
+            "Network.webSocketFrameError",
+            "Network.webSocketClosed"
+        ]
+    );
+    assert!(events.iter().all(|message| message["sessionId"] == "SID-1"));
+    assert_eq!(
+        events[2]["params"]["errorMessage"],
+        "net::ERR_BLOCKED_BY_CLIENT"
+    );
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != "Network.requestWillBeSent"
+                || (message["params"]["request"]["url"] != url
+                    && message["params"]["type"] != "WebSocket"))
+    );
+    events[1]["params"]["request"].clone()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_requires_browser_context() {
     let mut ctx = TestContext::new();
@@ -713,7 +772,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     assert_eq!(result["result"]["result"]["value"], "failed:0");
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
+async fn set_blocked_urls_worker_websocket_emits_dedicated_failure_events() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
@@ -800,50 +859,9 @@ async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
         .find(|message| message["id"] == json!(2826))
         .cloned()
         .expect("runtime evaluate result");
-    flush_until_subresource_failed(&mut ctx, "WebSocket", "blocked worker websocket failure").await;
-    let failed = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.loadingFailed"))
-        .cloned()
-        .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["type"], "WebSocket");
-    assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
-    let request_id = failed["params"]["requestId"]
-        .as_str()
-        .expect("failed request id");
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| {
-            message["method"] == json!("Network.requestWillBeSent")
-                && message["params"]["requestId"] == json!(request_id)
-        })
-        .expect("matching requestWillBeSent");
-    assert_eq!(
-        request["params"]["request"]["url"],
-        "ws://example.test/blocked/worker-ws"
-    );
-    assert_eq!(
-        request["params"]["request"]["headers"]["x-cdp-test"],
-        "works-worker-ws"
-    );
-    ctx.complete_one_ready_scheduler_input_for_test().await;
-    let worker_ws_failures = ctx
-        .sent
-        .iter()
-        .filter(|message| {
-            message["method"] == json!("Network.loadingFailed")
-                && message["params"]["type"] == json!("WebSocket")
-                && message["params"]["errorText"] == json!("net::ERR_BLOCKED_BY_CLIENT")
-        })
-        .count();
-    assert_eq!(worker_ws_failures, 1);
-    assert!(ctx.sent.iter().any(|message| {
-        message["method"] == json!("Network.webSocketCreated")
-            && message["params"]["url"] == json!("ws://example.test/blocked/worker-ws")
-    }));
+    let request =
+        assert_blocked_websocket_events(&mut ctx, "ws://example.test/blocked/worker-ws").await;
+    assert_eq!(request["headers"]["x-cdp-test"], "works-worker-ws");
 
     ctx.process_and_wait_for_response_async(json!({
         "id": 2827,
@@ -1191,7 +1209,7 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
     assert_eq!(result["result"]["result"]["value"], "failed:0");
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
+async fn set_blocked_urls_runtime_websocket_emits_dedicated_failure_events() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
@@ -1257,28 +1275,7 @@ async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
         .find(|message| message["id"] == json!(2819))
         .cloned()
         .expect("runtime evaluate result");
-    flush_until_subresource_failed(&mut ctx, "WebSocket", "blocked websocket failure").await;
-    let failed = ctx
-        .sent
-        .iter()
-        .find(|message| {
-            message["method"] == json!("Network.loadingFailed")
-                && message["params"]["type"] == json!("WebSocket")
-        })
-        .cloned()
-        .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
-    let websocket_created = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.webSocketCreated"))
-        .cloned()
-        .expect("webSocketCreated event");
-    assert_eq!(
-        websocket_created["params"]["url"],
-        "ws://example.test/blocked/socket"
-    );
+    assert_blocked_websocket_events(&mut ctx, "ws://example.test/blocked/socket").await;
 
     ctx.process_async(json!({
         "id": 2820,
