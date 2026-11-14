@@ -1,6 +1,7 @@
 mod open_url_encoding;
 use super::*;
 
+mod blob_downloads;
 mod blob_mime;
 mod computed_style;
 mod cors_preflight;

@@ -2114,11 +2114,34 @@ fn anchor_download_activation(
                 Some(download_request),
             )
         });
-    proceed.then_some(RendererPendingDownloadActivation {
+    if !proceed {
+        return None;
+    }
+    // A blob URL belongs to the renderer's object URL store, not the network
+    // transport. Capture it before returning to script, which may immediately
+    // revoke the URL or retire its creating Document after this activation.
+    let response = if url::Url::parse(&resolved).ok()?.scheme() == "blob" {
+        let (bytes, mime_type) = crate::blob::object_url_bytes_and_type(&resolved)?;
+        Some(crate::runtime::RendererPendingDownloadResponse {
+            final_url: resolved.clone(),
+            status: 200,
+            headers: vec![
+                ("Content-Type".to_owned(), mime_type.into_bytes()),
+                (
+                    "Content-Length".to_owned(),
+                    bytes.len().to_string().into_bytes(),
+                ),
+            ],
+            body: bytes.into(),
+        })
+    } else {
+        None
+    };
+    Some(RendererPendingDownloadActivation {
         frame_id,
         url: resolved,
         suggested_filename,
-        response: None,
+        response,
     })
 }
 

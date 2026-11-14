@@ -1531,6 +1531,30 @@ async function runSmoke({ chromium, endpoint, fixture }) {
     assertEqual(readFileSync(downloadPath, 'utf8'), 'download contents', 'download artifact contents');
     record(results, 'download_event_and_artifact');
 
+    // saveAs starts directly in the download event handler. The object URL
+    // is revoked before the protocol command delivering that event returns.
+    const blobSaved = page.waitForEvent('download', { timeout: 10_000 }).then(async blobDownload => {
+      const savedPath = join(tempDir, 'blob-payload.bin');
+      await blobDownload.saveAs(savedPath);
+      assertEqual(blobDownload.suggestedFilename(), 'blob-payload.bin', 'Blob suggested filename');
+      assertEqual(await blobDownload.failure(), null, 'Blob download completion');
+      assertEqual(readFileSync(savedPath).toString('hex'), '00ff80410a', 'Blob download binary contents');
+    });
+    await page.evaluate(() => {
+      const url = URL.createObjectURL(new Blob([new Uint8Array([0, 255, 128, 65, 10])], {
+        type: 'application/octet-stream',
+      }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'blob-payload.bin';
+      document.body.append(link);
+      link.click();
+      URL.revokeObjectURL(url);
+      link.remove();
+    });
+    await blobSaved;
+    record(results, 'blob_download_save_as_after_url_revocation');
+
     await page.goto(`${fixture}/download-page`, { waitUntil: 'load', timeout: 10_000 });
     const [slowDownload] = await Promise.all([
       page.waitForEvent('download', { timeout: 10_000 }),
