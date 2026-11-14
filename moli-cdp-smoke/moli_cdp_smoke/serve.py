@@ -22,7 +22,11 @@ from .config import (
     clear_proxy_env,
     moli_binary,
 )
-from .process import subprocess_starts_new_session, terminate_process_tree
+from .process import (
+    process_exit_diagnostics,
+    subprocess_starts_new_session,
+    terminate_process_tree,
+)
 
 
 @dataclass
@@ -164,6 +168,7 @@ async def start_browser(port: int = 0, *, extra_args: tuple[str, ...] = ()) -> B
     profile = tempfile.mkdtemp(prefix="moli-cdp-smoke-chromium-")
     command = [
         str(binary), "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+        "--enable-logging=stderr",
         "--disable-back-forward-cache",
         # Keep profile services from adding unrelated network descriptors during
         # local-fixture resource accounting (also used by Playwright's launcher).
@@ -245,25 +250,52 @@ async def wait_for_cdp_server(
     raise RuntimeError(f"timed out waiting for CDP server at {endpoint}{tail}")
 
 
+async def _wait_for_chromium_port_file(data_dir: str) -> str:
+    path = Path(data_dir) / "DevToolsActivePort"
+    while True:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+        # Chromium can publish the two lines in separate writes. The profile
+        # belongs to this launch, so a complete file identifies its bound port.
+        if len(lines) >= 2:
+            if (not re.fullmatch(r"[0-9]{1,5}", lines[0])
+                    or not 0 < int(lines[0]) <= 65535
+                    or not re.fullmatch(r"/devtools/browser/[A-Za-z0-9-]+", lines[1])):
+                raise RuntimeError(f"invalid Chromium DevToolsActivePort: {lines!r}")
+            return f"http://127.0.0.1:{int(lines[0])}"
+        # smoke-timing: poll Chromium's explicit port publication; the caller
+        # bounds discovery and still verifies /json/version before connecting.
+        await asyncio.sleep(0.05)
+
+
 async def wait_for_browser_endpoint(
     serve: BrowserProcess,
     *,
     timeout_seconds: float = 10,
 ) -> str:
     process_exit = asyncio.create_task(serve.process.wait())
+    port_file = (asyncio.create_task(_wait_for_chromium_port_file(serve.data_dir))
+                 if serve.engine == "chromium" else None)
+    endpoint_sources = [serve.endpoint_ready, *([port_file] if port_file is not None else [])]
     try:
         done, _ = await asyncio.wait(
-            (serve.endpoint_ready, process_exit),
+            (*endpoint_sources, process_exit),
             timeout=timeout_seconds,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if serve.endpoint_ready in done:
-            endpoint = serve.endpoint_ready.result()
+        ready = next((source for source in endpoint_sources if source in done), None)
+        if ready is not None:
+            endpoint = ready.result()
             await wait_for_cdp_server(endpoint, serve)
             identity = await browser_identity(endpoint, serve.engine)
             for launch in BROWSER_LAUNCHES:
                 if launch["pid"] == serve.process.pid:
                     launch["browser"] = identity
+                    launch["endpointDiscovery"] = (
+                        "log" if ready is serve.endpoint_ready else "DevToolsActivePort"
+                    )
             return endpoint
         if process_exit in done:
             tail = "\n".join(serve.logs[-80:])
@@ -275,7 +307,21 @@ async def wait_for_browser_endpoint(
         raise RuntimeError(
             f"timed out waiting for {serve.engine} to report its bound endpoint" + tail
         )
+    except Exception:
+        snapshot = process_exit_diagnostics(serve.process)
+        if serve.engine == "chromium":
+            path = Path(serve.data_dir) / "DevToolsActivePort"
+            try:
+                with path.open(encoding="utf-8", errors="replace") as stream:
+                    snapshot["devToolsActivePort"] = stream.read(1024)
+            except OSError as error:
+                snapshot["devToolsActivePortError"] = f"{type(error).__name__}: {error}"
+        for launch in BROWSER_LAUNCHES:
+            if launch["pid"] == serve.process.pid:
+                launch["startupFailure"] = snapshot
+        raise
     finally:
-        if not process_exit.done():
-            process_exit.cancel()
-            await asyncio.gather(process_exit, return_exceptions=True)
+        tasks = [process_exit, *([port_file] if port_file is not None else [])]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

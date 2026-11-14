@@ -54,6 +54,21 @@ def _sequence(route: str, target: str) -> list[str]:
     return [f"{kind}:{target}" for kind in kinds]
 
 
+def _assert_invalidated_target(
+    observed: dict[str, Any], text: str, phase: str, label: str,
+) -> None:
+    expected = [_text_event("field", "field", text)] if phase == "textInput" else []
+    assert_equal(observed["textEvents"], expected, label + " legacy event")
+    assert_equal(observed["value"], "", label + " invalidated value")
+    if any(event.startswith("input:") for event in observed["events"]):
+        raise SmokeError(label + ": invalidated target received input")
+    if phase == "beforeinput":
+        assert_equal(observed["events"], ["beforeinput:field"], label + " event order")
+        assert_equal(observed["editEvents"], [
+            {"type": "beforeinput", "inputType": "insertText", "data": text},
+        ], label + " beforeinput")
+
+
 async def run_text_input_group(browser: Any, fixture: str, results: list[dict[str, Any]]) -> None:
     script = (REPO_ROOT / "moli-renderer-v8/tests/fixtures/text-input-events.js").read_text()
     cases: list[dict[str, Any]] = []
@@ -69,11 +84,24 @@ async def run_text_input_group(browser: Any, fixture: str, results: list[dict[st
                 cases.append({"control": control, "route": route, "options": {"cancel": cancel}})
     for control, effects in [("input", ["remove", "readonly", "adopt", "selection"]),
                              ("textarea", ["remove", "readonly", "adopt", "selection"]),
-                             ("editor", ["remove", "disable", "adopt"]), ("frame", ["remove-frame"])]:
+                             ("editor", ["remove", "disable", "adopt"])]:
         for route in ["keyDown", "insertText"]:
             for effect in effects:
                 cases.append({"control": control, "route": route, "text": "X",
                               "options": {"phase": "textInput", "effect": effect}})
+    # Chromium 145.0.7632.6 and 156.0.8078.73 crash when Input.insertText
+    # removes the entire frame during textInput, even if it is canceled. That
+    # path cannot establish a shared native contract. Keep keyboard frame
+    # removal at textInput, and verify IME frame removal at beforeinput plus
+    # node removal at textInput. Moli's uncanceled IME/textInput frame-removal
+    # protection remains covered by cdp_text_input_revalidates_targets_after_legacy_listeners.
+    for route, phase, effect in [
+        ("keyDown", "textInput", "remove-frame"),
+        ("insertText", "beforeinput", "remove-frame"),
+        ("insertText", "textInput", "remove"),
+    ]:
+        cases.append({"control": "frame", "route": route, "text": "X",
+                      "options": {"phase": phase, "effect": effect}})
     for control in ["input", "textarea", "editor"]:
         for route in ["keyDown", "insertText"]:
             for phase in ["beforeinput", "textInput"]:
@@ -136,15 +164,13 @@ async def run_text_input_group(browser: Any, fixture: str, results: list[dict[st
                     active = await page.evaluate("textInputProbe.field.ownerDocument.activeElement.id")
                     assert_equal(active, "other" if other else "field", label + " final focus")
                 elif effect:
-                    assert_equal(len(observed["textEvents"]), 1, label)
                     if effect == "selection":
+                        assert_equal(observed["textEvents"], [_text_event("field", "field", text)], label)
                         assert_equal(observed["value"], "aXc", label)
                         caret = 1 if route == "insertText" else 2
                         assert_equal(observed["selection"], [caret, caret], label)
                     else:
-                        assert_equal(observed["value"], "", label)
-                        if any(event.startswith("input:") for event in observed["events"]):
-                            raise SmokeError(label + ": invalidated target received input")
+                        _assert_invalidated_target(observed, text, options["phase"], label)
                 elif cancel:
                     sequence = _sequence(route, target)
                     index = sequence.index(f"{cancel}:{target}")
@@ -176,7 +202,7 @@ async def run_text_input_group(browser: Any, fixture: str, results: list[dict[st
                     assert_equal(observed["events"], sequence, label)
                 record_contract(results, "text-input/" + label, observed=observed,
                                 contract="Native text insertion dispatches a trusted, cancelable TextEvent after beforeinput and before its editing default.",
-                                source="Chromium 145.0.7632.116 executable comparison (2026-11-13)",
+                                source="Chromium 145.0.7632.6 and 156.0.8078.73 executable comparisons (2026-11-14)",
                                 commands=["Input.dispatchKeyEvent", "Input.insertText", "Runtime.evaluate"])
             except Exception as error:
                 crashed = isinstance(error, TextInputPageCrashed)

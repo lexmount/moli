@@ -4,7 +4,41 @@ import asyncio
 import unittest
 from typing import Any
 
-from moli_cdp_smoke.groups.text_input import TextInputPageCrashed, _input_command
+from moli_cdp_smoke.assertions import SmokeError
+from moli_cdp_smoke.groups.text_input import (
+    TextInputPageCrashed,
+    _assert_invalidated_target,
+    _input_command,
+    _text_event,
+)
+
+
+class InvalidatedInputTests(unittest.TestCase):
+    def beforeinput(self) -> dict[str, Any]:
+        return {"value": "", "events": ["beforeinput:field"], "textEvents": [],
+                "editEvents": [{"type": "beforeinput", "inputType": "insertText", "data": "X"}]}
+
+    def test_frame_removal_at_beforeinput_requires_the_native_event_and_no_edit(self) -> None:
+        observed = self.beforeinput()
+        _assert_invalidated_target(observed, "X", "beforeinput", "frame")
+        for field, value in [
+            ("value", "X"),
+            ("events", []),
+            ("events", ["beforeinput:field", "input:field"]),
+            ("editEvents", []),
+            ("textEvents", [_text_event("field", "field", "X")]),
+        ]:
+            with self.subTest(field=field, value=value), self.assertRaises(SmokeError):
+                _assert_invalidated_target({**observed, field: value}, "X", "beforeinput", "frame")
+
+    def test_removal_at_textinput_requires_exactly_one_trusted_native_event(self) -> None:
+        observed = {**self.beforeinput(), "events": ["beforeinput:field", "textInput:field"],
+                    "textEvents": [_text_event("field", "field", "X")]}
+        _assert_invalidated_target(observed, "X", "textInput", "frame")
+        for events in [[], observed["textEvents"] * 2,
+                       [{**observed["textEvents"][0], "trusted": False}]]:
+            with self.subTest(events=events), self.assertRaises(SmokeError):
+                _assert_invalidated_target({**observed, "textEvents": events}, "X", "textInput", "frame")
 
 
 class Page:
