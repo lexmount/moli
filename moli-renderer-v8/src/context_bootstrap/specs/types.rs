@@ -27,6 +27,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     CapturedMouseEvent,
     DragEvent,
     ClipboardEvent,
+    ClipboardChangeEvent,
     ClipboardItem,
     KeyboardEvent,
     InputEvent,
