@@ -69,35 +69,12 @@ fn apply_xhr_response_body_source_with_mode(
     status_text: Option<&str>,
     mode: XhrResponseDeliveryMode,
 ) {
-    // XHR's Web-visible surface is still fully materialized. Branch by the
-    // requested responseType so byte consumers do not pay for an inaccessible
-    // lossy text view.
-    match xhr_response_type(scope, xhr) {
-        XmlHttpRequestResponseType::Json
-        | XmlHttpRequestResponseType::ArrayBuffer
-        | XmlHttpRequestResponseType::Blob => {
-            let body_bytes = body
-                .try_into_materialized_bytes()
-                .expect("XHR response body should remain materialized at the V8 boundary");
-            apply_xhr_response_bytes(scope, xhr, head, body_bytes, status_text, mode);
-        }
-        XmlHttpRequestResponseType::Document
-        | XmlHttpRequestResponseType::Default
-        | XmlHttpRequestResponseType::Text => {
-            let (body_text, body_bytes) = body
-                .try_into_lossy_materialized_text()
-                .expect("XHR response body should remain materialized at the V8 boundary");
-            apply_xhr_response_body(
-                scope,
-                xhr,
-                head,
-                Some(body_text),
-                body_bytes,
-                status_text,
-                mode,
-            );
-        }
-    }
+    // Choose the response decoder only after HEADERS_RECEIVED handlers have
+    // had a chance to override the MIME type or change responseType.
+    let bytes = body
+        .try_into_materialized_bytes()
+        .expect("XHR response body should remain materialized at the V8 boundary");
+    apply_xhr_response_body(scope, xhr, head, bytes, status_text, mode);
 }
 
 #[derive(Clone, Copy)]
@@ -118,50 +95,8 @@ pub(in crate::network_host::xhr) fn apply_xhr_response_pending_body<'s>(
     xhr: v8::Local<'s, v8::Object>,
     head: moli_fetch::ResponseHead,
     body_value: Option<v8::Local<'s, v8::Value>>,
-    fallback_body_text: String,
-    fallback_body_len: Option<usize>,
 ) {
-    let response_type = xhr_response_type(scope, xhr);
-    if response_type == XmlHttpRequestResponseType::ArrayBuffer
-        && let Some(body_value) = body_value
-        && let Some(loaded) = buffer_value_byte_length(body_value)
-    {
-        apply_xhr_response_prebuilt_value(
-            scope,
-            xhr,
-            head,
-            response_type,
-            body_value,
-            loaded,
-            None,
-            XhrResponseDeliveryMode::Buffered,
-        );
-        return;
-    }
-
-    if body_value.is_none()
-        && matches!(
-            response_type,
-            XmlHttpRequestResponseType::Json
-                | XmlHttpRequestResponseType::Document
-                | XmlHttpRequestResponseType::Default
-                | XmlHttpRequestResponseType::Text
-        )
-    {
-        let loaded = fallback_body_len.unwrap_or(fallback_body_text.len());
-        apply_xhr_response_text(
-            scope,
-            xhr,
-            head,
-            fallback_body_text,
-            loaded,
-            None,
-            XhrResponseDeliveryMode::Buffered,
-        );
-        return;
-    }
-
-    let body_bytes = body_value
+    let bytes = body_value
         .and_then(|value| {
             v8::Local::<v8::Object>::try_from(value)
                 .ok()
@@ -170,33 +105,21 @@ pub(in crate::network_host::xhr) fn apply_xhr_response_pending_body<'s>(
                 })
                 .or_else(|| blob::buffer_source_bytes_from_value(scope, value))
         })
-        .unwrap_or_else(|| fallback_body_text.into_bytes());
-    apply_xhr_response_bytes(
+        .unwrap_or_default();
+    apply_xhr_response_body(
         scope,
         xhr,
         head,
-        body_bytes,
+        bytes,
         None,
         XhrResponseDeliveryMode::Buffered,
     );
-}
-
-fn apply_xhr_response_bytes(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-    head: moli_fetch::ResponseHead,
-    body_bytes: Vec<u8>,
-    status_text: Option<&str>,
-    mode: XhrResponseDeliveryMode,
-) {
-    apply_xhr_response_body(scope, xhr, head, None, body_bytes, status_text, mode);
 }
 
 fn apply_xhr_response_body(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
     head: moli_fetch::ResponseHead,
-    body_text: Option<String>,
     body_bytes: Vec<u8>,
     status_text: Option<&str>,
     mode: XhrResponseDeliveryMode,
@@ -204,15 +127,18 @@ fn apply_xhr_response_body(
     let Some(response_type) = prepare_xhr_response(scope, xhr, &head, status_text, mode) else {
         return;
     };
-    let body_text = match response_type {
+    let (body_text, character_set) = match response_type {
         XmlHttpRequestResponseType::Document
         | XmlHttpRequestResponseType::Default
         | XmlHttpRequestResponseType::Text => {
-            Some(body_text.unwrap_or_else(|| String::from_utf8_lossy(&body_bytes).into_owned()))
+            let mut decoder = xhr_response_text_decoder(scope, xhr, &head.headers);
+            let mut text = decoder.push(&body_bytes);
+            text.push_str(&decoder.finish());
+            (Some(text), decoder.encoding_name())
         }
         XmlHttpRequestResponseType::Json
         | XmlHttpRequestResponseType::ArrayBuffer
-        | XmlHttpRequestResponseType::Blob => None,
+        | XmlHttpRequestResponseType::Blob => (None, "UTF-8"),
     };
     let loaded = body_bytes.len() as f64;
     let progress = xhr_response_progress(&head, loaded);
@@ -225,6 +151,7 @@ fn apply_xhr_response_body(
                 &head,
                 body_text.as_deref().unwrap_or(""),
                 response_type,
+                character_set,
             );
             set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             document
@@ -246,6 +173,7 @@ fn apply_xhr_response_body(
                     &head,
                     body_text.as_deref().unwrap_or(""),
                     response_type,
+                    character_set,
                 );
                 set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             }
@@ -265,52 +193,6 @@ fn apply_xhr_response_body(
     );
 }
 
-fn apply_xhr_response_text(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-    head: moli_fetch::ResponseHead,
-    body_text: String,
-    loaded: usize,
-    status_text: Option<&str>,
-    mode: XhrResponseDeliveryMode,
-) {
-    let Some(response_type) = prepare_xhr_response(scope, xhr, &head, status_text, mode) else {
-        return;
-    };
-    let progress = xhr_response_progress(&head, loaded as f64);
-    let response_val: v8::Local<'_, v8::Value> = match response_type {
-        XmlHttpRequestResponseType::Json => parse_xhr_json_response(scope, body_text.as_bytes()),
-        XmlHttpRequestResponseType::Document => {
-            let document =
-                parse_xhr_response_document(scope, xhr, &head, &body_text, response_type);
-            set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
-            document
-        }
-        XmlHttpRequestResponseType::Default | XmlHttpRequestResponseType::Text => {
-            if response_type == XmlHttpRequestResponseType::Default {
-                let document =
-                    parse_xhr_response_document(scope, xhr, &head, &body_text, response_type);
-                set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
-            }
-            v8_string(scope, &body_text)
-                .map(|s| s.into())
-                .unwrap_or_else(|| v8::undefined(scope).into())
-        }
-        XmlHttpRequestResponseType::ArrayBuffer | XmlHttpRequestResponseType::Blob => {
-            v8::undefined(scope).into()
-        }
-    };
-    finish_xhr_response(
-        scope,
-        xhr,
-        response_type,
-        response_val,
-        &body_text,
-        progress,
-        mode,
-    );
-}
-
 fn parse_xhr_json_response<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bytes: &[u8],
@@ -322,23 +204,6 @@ fn parse_xhr_json_response<'s>(
     v8_string(scope, &text)
         .and_then(|text| v8::json::parse(scope, text))
         .unwrap_or_else(|| v8::null(scope).into())
-}
-
-fn apply_xhr_response_prebuilt_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-    head: moli_fetch::ResponseHead,
-    response_type: XmlHttpRequestResponseType,
-    response_val: v8::Local<'_, v8::Value>,
-    loaded: usize,
-    status_text: Option<&str>,
-    mode: XhrResponseDeliveryMode,
-) {
-    let Some(_) = prepare_xhr_response(scope, xhr, &head, status_text, mode) else {
-        return;
-    };
-    let progress = xhr_response_progress(&head, loaded as f64);
-    finish_xhr_response(scope, xhr, response_type, response_val, "", progress, mode);
 }
 
 pub(crate) fn apply_xhr_streaming_response_head(
@@ -410,6 +275,20 @@ fn prepare_xhr_response(
     }
     if matches!(mode, XhrResponseDeliveryMode::Buffered) {
         set_xhr_response_head(scope, xhr, head, status_text);
+        if xhr_is_async(scope, xhr) {
+            let generation = xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT);
+            super::super::events::xhr_fire_readystatechange(
+                scope,
+                xhr,
+                XhrReadyState::HeadersReceived,
+            );
+            if scope.is_execution_terminating()
+                || xhr_is_aborted(scope, xhr)
+                || xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT) != generation
+            {
+                return None;
+            }
+        }
     }
     Some(xhr_response_type(scope, xhr))
 }
@@ -456,15 +335,6 @@ fn finish_xhr_response(
 
     let dispatch_intermediate_events =
         matches!(mode, XhrResponseDeliveryMode::Buffered) && xhr_is_async(scope, xhr);
-    if dispatch_intermediate_events {
-        super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::HeadersReceived);
-        if scope.is_execution_terminating() {
-            return;
-        }
-        if xhr_is_aborted(scope, xhr) {
-            return;
-        }
-    }
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_TEXT_SLOT, response_text);
     set_xhr_state_value(scope, xhr, XHR_RESPONSE_SLOT, response_val);
     if dispatch_intermediate_events {
@@ -560,26 +430,6 @@ fn identity_encoded_content_length(headers: &[(String, Vec<u8>)]) -> Option<u64>
         .then_some(first)
 }
 
-fn xhr_response_type(
-    scope: &mut v8::PinScope<'_, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-) -> XmlHttpRequestResponseType {
-    xhr_state_string_property(scope, xhr, XHR_RESPONSE_TYPE_SLOT)
-        .as_deref()
-        .and_then(XmlHttpRequestResponseType::parse)
-        .unwrap_or(XmlHttpRequestResponseType::Default)
-}
-
-fn buffer_value_byte_length(value: v8::Local<'_, v8::Value>) -> Option<usize> {
-    if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
-        return Some(buffer.byte_length());
-    }
-    if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
-        return Some(view.byte_length());
-    }
-    None
-}
-
 fn xhr_response_mime_essence(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
@@ -602,6 +452,7 @@ fn parse_xhr_response_document<'s>(
     head: &moli_fetch::ResponseHead,
     body_text: &str,
     response_type: XmlHttpRequestResponseType,
+    character_set: &str,
 ) -> v8::Local<'s, v8::Value> {
     let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
         .unwrap_or_else(|| "text/xml".to_owned());
@@ -620,6 +471,9 @@ fn parse_xhr_response_document<'s>(
     else {
         return v8::null(scope).into();
     };
+    unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_document_character_set_for_handle(document_handle, character_set);
     // Response metadata belongs to this Document, independently of the
     // requesting Document and any later reuse of the XHR object.
     unsafe { &mut *runtime_ptr }
