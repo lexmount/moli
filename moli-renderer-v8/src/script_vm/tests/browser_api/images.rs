@@ -1595,3 +1595,68 @@ async fn available_image_reuse_does_not_start_another_fetch_or_timing_entry() {
         );
     }
 }
+
+#[tokio::test]
+async fn decoded_scanned_image_publishes_its_original_resource_timing_before_load() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://scanned-image-timing.test/page.html",
+        &loader,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    let image_url = Url::parse("https://scanned-image-timing.test/preloaded.gif").unwrap();
+    let request = crate::types::ImageRequestKey::with_density(
+        image_url.as_str().to_owned(),
+        crate::types::ImageRequestCorsMode::NoCors,
+        1.0,
+    );
+    let crate::native_bridge::ScannedImagePreloadAdmission::Fetch(load) = vm
+        ._context_host
+        .borrow_mut()
+        .admit_scanned_image_preload(request)
+    else {
+        panic!("a scanner preload must be admitted for the current Document");
+    };
+    let response = crate::protocol_types::NavigationResponse::from_text_body(
+        image_url,
+        200,
+        vec![("Content-Type".into(), b"image/gif".to_vec())],
+        String::new(),
+    );
+    let encoded = moli_parkable_image::ParkableImageManager::default()
+        .from_frozen_bytes(ONE_BY_ONE_GIF.to_vec());
+    load.finish_network_result(
+        crate::network::RendererResourceTaskRunner::for_test(),
+        std::sync::Arc::new(Ok(response)),
+        Some(encoded),
+        true,
+    );
+    let _outcome = tokio::time::timeout(std::time::Duration::from_secs(2), load.wait_outcome())
+        .await
+        .expect("the scanner must finish decoding before the element is created");
+    vm.eval(
+        r#"
+        globalThis.__scannedTimingAtLoad = 'pending';
+        const image = document.createElement('img');
+        image.onload = () => {
+          __scannedTimingAtLoad = performance.getEntriesByType('resource')
+            .filter(entry => entry.name.endsWith('/preloaded.gif'))
+            .map(entry => [entry.initiatorType, entry.responseStatus].join(':')).join('|');
+        };
+        image.onerror = () => __scannedTimingAtLoad = 'error';
+        image.src = '/preloaded.gif';
+        document.body.appendChild(image);
+        "#,
+    )
+    .unwrap();
+    if vm
+        ._context_host
+        .borrow()
+        .has_pending_image_network_requests()
+    {
+        wait_for_and_apply_image_completions(&mut vm).await;
+    }
+    run_next_image_event_task(&mut vm, &loader, "decoded scanner image load").await;
+    assert_eq!(vm.eval("__scannedTimingAtLoad").unwrap(), "img:200");
+}
