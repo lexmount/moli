@@ -18,7 +18,7 @@ wpt-extensions = []
 
 [dependencies]
 moli-inspector-json = { path = "../moli-inspector-json" }
-moli-fetch-types = { path = "../moli-fetch-types" }
+moli-fetch-types = { path = "../moli-types/moli-fetch-types" }
 anyhow = "1.0.100"
 thiserror = "2.0.17"
 app_units = "0.7.8"
@@ -50,7 +50,7 @@ moli-css-parse = { path = "../moli-css-parse" }
 moli-dom = { path = "../moli-dom" }
 moli-disk-pool = { path = "../moli-disk-pool" }
 moli-parser = { path = "../moli-parser" }
-moli-page-types = { path = "../moli-page-types" }
+moli-page-types = { path = "../moli-types/moli-page-types" }
 moli-parkable-image = { path = "../moli-parkable-image" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
 moli-protocol-cdp-defs = { path = "../moli-protocol-cdp-defs" }
@@ -152,7 +152,7 @@ lopdf = { version = "0.45.0", default-features = false }
 fastrand = "2.3.0"
 moli-fetch = { path = "../moli-fetch", features = ["test-support"] }
 moli-parser = { path = "../moli-parser", features = ["test-support"] }
-moli-page-types = { path = "../moli-page-types", features = ["test-support"] }
+moli-page-types = { path = "../moli-types/moli-page-types", features = ["test-support"] }
 moli-v8-test-util = { path = "../moli-v8-test-util" }
 moli-websocket = { path = "../moli-websocket", features = ["test-support"] }
 png = "0.18"

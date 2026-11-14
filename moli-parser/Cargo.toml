@@ -15,7 +15,7 @@ anyhow = "1.0.100"
 html5ever = "0.40"
 moli-dom = { path = "../moli-dom" }
 moli-fetch = { path = "../moli-fetch" }
-moli-page-types = { path = "../moli-page-types" }
+moli-page-types = { path = "../moli-types/moli-page-types" }
 moli-script = { path = "../moli-script" }
 moli-stylesheet-blocking = { path = "../moli-stylesheet-blocking" }
 markup5ever = "0.40"
