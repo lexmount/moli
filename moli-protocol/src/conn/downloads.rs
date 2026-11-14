@@ -471,23 +471,13 @@ impl CdpConnection {
         let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
-        let Some(settings) =
-            self.effective_download_behavior_for_browser_context(Some(&owner.browser_context_id))
-        else {
-            return Ok(None);
-        };
-
         let Some(response) = activation.response else {
-            return Ok(None);
-        };
-        let Some(download_root) = settings.download_path.clone() else {
             return Ok(None);
         };
 
         let response_url = Url::parse(&response.final_url)
             .or_else(|_| Url::parse(&activation.url))
-            .context("invalid download url")?;
-        let response_headers = response.headers;
+            .context("invalid download url");
         let response_body = match response.body {
             moli_core::page::RendererDownloadBody::Buffered(body) => {
                 CompletedDownloadBody::Buffered(body)
@@ -497,18 +487,13 @@ impl CdpConnection {
             }
         };
 
-        Ok(Some(PreparedNavigationDownload {
-            frame_id: activation.frame_id.unwrap_or(owner.frame_id),
+        self.prepare_download_from_response(
+            command_owner,
+            Some(&owner.browser_context_id),
+            activation.frame_id.unwrap_or(owner.frame_id),
             response_url,
-            response_headers,
-            response_body,
-            download_root,
-            guid: generate_download_guid()?,
-            behavior: settings.behavior,
-            event_route: self
-                .download_event_route(command_owner, settings.automation_events_enabled),
-            registry: self.download_registry.clone(),
-        }))
+            CompletedDownloadBodyArtifact::from_body(response_body, response.headers),
+        )
     }
 
     fn prepare_navigation_download(
@@ -521,30 +506,48 @@ impl CdpConnection {
             .target_owner_identity_for_owner(&state.owner)
             .map(|(browser_context_id, _)| browser_context_id)
             .or_else(|| self.browser_context.as_ref().map(|bc| bc.id.clone()));
+        self.prepare_download_from_response(
+            &state.owner,
+            owner_context_id.as_deref(),
+            // Foreground selection can change while navigation is in flight.
+            // Keep the initiating frame captured by the dispatch snapshot.
+            state.frame_id.clone(),
+            Ok(final_url),
+            body_artifact,
+        )
+    }
+
+    fn prepare_download_from_response(
+        &self,
+        owner: &CommandOwnerScope,
+        browser_context_id: Option<&str>,
+        frame_id: String,
+        response_url: Result<Url>,
+        body_artifact: CompletedDownloadBodyArtifact,
+    ) -> Result<Option<PreparedNavigationDownload>> {
         let Some(settings) =
-            self.effective_download_behavior_for_browser_context(owner_context_id.as_deref())
+            self.effective_download_behavior_for_browser_context(browser_context_id)
         else {
             return Ok(None);
         };
 
-        let Some(download_root) = settings.download_path.clone() else {
+        let Some(download_root) = settings.download_path else {
             return Ok(None);
         };
 
+        // Disabled downloads and missing paths must still short-circuit URL errors.
+        let response_url = response_url?;
         let (response_body, response_headers) = body_artifact.into_parts();
 
         Ok(Some(PreparedNavigationDownload {
-            // Navigation may complete after another frontend has changed the active target.
-            // The dispatch snapshot is the authority for the frame that initiated this download.
-            frame_id: state.frame_id.clone(),
-            response_url: final_url,
+            frame_id,
+            response_url,
             response_headers,
             response_body,
             download_root,
             guid: generate_download_guid()?,
             behavior: settings.behavior,
-            event_route: self
-                .download_event_route(&state.owner, settings.automation_events_enabled),
+            event_route: self.download_event_route(owner, settings.automation_events_enabled),
             registry: self.download_registry.clone(),
         }))
     }
@@ -1468,7 +1471,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use moli_core::page::RendererPendingDownloadActivation;
+    use moli_core::page::{RendererPendingDownloadActivation, RendererPendingDownloadResponse};
     use moli_fetch::FetchCancelHandle;
 
     use crate::{
@@ -1851,29 +1854,39 @@ mod tests {
         let mut context = BrowserContext::new("download-error-context".to_owned());
         context.set_active_target_id("download-error-target");
         conn.install_browser_context_fixture_for_test(context);
-        conn.download_behavior.set_global(
-            "allow".to_owned(),
-            Some("/tmp/downloads".to_owned()),
-            false,
-        );
         let owner = CommandOwnerScope::capture(&conn, None);
 
-        let error = conn
-            .prepare_pending_download_activation(
-                &owner,
-                RendererPendingDownloadActivation {
-                    frame_id: None,
-                    url: "relative-download-url".to_owned(),
-                    suggested_filename: None,
-                    response: None,
-                },
-            )
-            .err()
-            .expect("invalid download URL should fail");
-        assert_eq!(
-            error.downcast_ref::<url::ParseError>(),
-            Some(&url::ParseError::RelativeUrlWithoutBase)
-        );
+        for prefetched in [false, true] {
+            for download_path in [None, Some("/tmp/downloads".to_owned())] {
+                let has_download_path = download_path.is_some();
+                conn.download_behavior
+                    .set_global("allow".to_owned(), download_path, false);
+                let result = conn.prepare_pending_download_activation_delivery(
+                    &owner,
+                    RendererPendingDownloadActivation {
+                        frame_id: None,
+                        url: "relative-download-url".to_owned(),
+                        suggested_filename: None,
+                        response: prefetched.then(|| RendererPendingDownloadResponse {
+                            final_url: "relative-response-url".to_owned(),
+                            status: 200,
+                            headers: Vec::new(),
+                            body: Vec::new().into(),
+                        }),
+                    },
+                    false,
+                );
+                if has_download_path {
+                    let error = result.err().expect("invalid download URL should fail");
+                    assert_eq!(
+                        error.downcast_ref::<url::ParseError>(),
+                        Some(&url::ParseError::RelativeUrlWithoutBase)
+                    );
+                } else {
+                    assert!(result.is_ok(), "no path means no download or URL error");
+                }
+            }
+        }
     }
 
     #[test]
