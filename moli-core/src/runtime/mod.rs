@@ -316,6 +316,16 @@ impl Browser {
         })
     }
 
+    /// Routes renderer output, including console events, to the supplied transport.
+    ///
+    /// Install the transport before fetching pages to capture their initial output.
+    pub fn set_renderer_output_transport_sender(
+        &self,
+        sender: crate::RendererOutputTransportSender,
+    ) {
+        self.js_runtime.set_renderer_output_transport_sender(sender);
+    }
+
     pub fn session(&self) -> Session {
         Session {
             id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
