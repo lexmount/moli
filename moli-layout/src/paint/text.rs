@@ -6,7 +6,7 @@ use crate::{
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
     inline::{
         InlinePaintBounds,
-        display::{InlineDisplayContext, InlineDisplayItem, InlineItemContent, TextOrigin},
+        display::{InlineDisplayContext, InlineItemContent, TextOrigin, TextView},
     },
 };
 
@@ -92,16 +92,13 @@ fn project_lines<N>(
     scope: TextClipMaskScope,
     text: Option<Arc<str>>,
 ) {
-    for (line_index, line) in display.lines.iter().enumerate() {
+    for line_index in 0..display.lines.len() {
         metrics.text_line_count = metrics.text_line_count.saturating_add(1);
         if line_is_culled(display, line_index, local_cull) {
             metrics.culled_text_line_count = metrics.culled_text_line_count.saturating_add(1);
             continue;
         }
-        for item in &display.items[line.items.clone()] {
-            let InlineItemContent::Text(view) = &item.content else {
-                continue;
-            };
+        display.for_each_text_view(line_index, |view| {
             if let TextClipMaskScope::InlineBox(target) = scope
                 && (matches!(view.origin, TextOrigin::Generated { .. })
                     || !layout_box
@@ -110,23 +107,20 @@ fn project_lines<N>(
                         .unwrap()
                         .style_is_within_box(usize::from(view.glyphs.style_index()), target))
             {
-                continue;
+                return;
             }
-            paint_text_item(item, transform, phase, text.clone(), snapshot);
-        }
+            paint_text_view(view, transform, phase, text.clone(), snapshot);
+        });
     }
 }
 
-fn paint_text_item(
-    item: &InlineDisplayItem<'_>,
+fn paint_text_view(
+    view: &TextView<'_>,
     transform: LayoutTransform2D,
     phase: TextPaintPhase,
     source_text: Option<Arc<str>>,
     snapshot: &mut PaintSnapshot,
 ) {
-    let InlineItemContent::Text(view) = &item.content else {
-        return;
-    };
     let text = if phase == TextPaintPhase::Foreground && snapshot.retain_text_semantics {
         match &view.origin {
             TextOrigin::Source => source_text,
@@ -329,13 +323,15 @@ impl<'a> InlineTextPaint<'a> {
             return;
         }
         paint_selection(&item.selection, transform, local_cull, snapshot);
-        paint_text_item(
-            item,
-            transform,
-            TextPaintPhase::Foreground,
-            self.text.clone(),
-            snapshot,
-        );
+        if let InlineItemContent::Text(view) = &item.content {
+            paint_text_view(
+                view,
+                transform,
+                TextPaintPhase::Foreground,
+                self.text.clone(),
+                snapshot,
+            );
+        }
     }
 }
 

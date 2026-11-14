@@ -23,7 +23,9 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 
 use taffy::ResolveOrZero;
 
-use crate::inline::display::{self, InlineDisplayItems, InlineItemContent, TextOrigin};
+use crate::inline::display::{
+    self, DisplayLineItems, InlineDisplayItems, InlineItemContent, TextOrigin,
+};
 use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
 
 type TextFragmentIndex = HashMap<LayoutBoxId, Vec<Vec<(std::ops::Range<usize>, LayoutFragmentId)>>>;
@@ -806,8 +808,35 @@ where
                             // compact batch. No glyph index or geometry copy.
                             self.assign_owner_paint_metadata(id, true);
                         } else {
-                            for item in 0..context.items.len() {
-                                self.assign_inline_item_metadata(id, item, &mut text_owners);
+                            for line in 0..context.lines.len() {
+                                match self.inline_display.context(id).unwrap().lines[line]
+                                    .items
+                                    .clone()
+                                {
+                                    DisplayLineItems::Natural => {
+                                        let range = self
+                                            .inline_display
+                                            .context(id)
+                                            .unwrap()
+                                            .natural_source_range(line)
+                                            .unwrap();
+                                        self.assign_source_range_metadata(
+                                            id,
+                                            line,
+                                            range,
+                                            &mut text_owners,
+                                        );
+                                    }
+                                    DisplayLineItems::Materialized(items) => {
+                                        for item in items {
+                                            self.assign_inline_item_metadata(
+                                                id,
+                                                item,
+                                                &mut text_owners,
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -858,35 +887,7 @@ where
             _ => None,
         };
         if let Some(range) = source_range {
-            // Source fragments already have cluster/caret granularity.
-            // Reuse only those represented by this finalized shape view;
-            // suppressed originals keep source geometry without paint order.
-            let lines = text_owners.entry(owner).or_insert_with(|| {
-                let context = self.world.boxes[owner.index()]
-                    .inline_layout
-                    .as_ref()
-                    .unwrap();
-                let mut lines = vec![Vec::new(); context.fragments.lines.len()];
-                for (index, text) in context.fragments.text.iter().enumerate() {
-                    lines[text.line_index].push((
-                        text.output_range.clone(),
-                        self.owner_paint_fragments[owner.index()]
-                            [context.fragments.boxes.len() + index],
-                    ));
-                }
-                for fragments in &mut lines {
-                    fragments.sort_by_key(|(range, _)| (range.start, range.end));
-                }
-                lines
-            });
-            let fragments = &lines[item.line];
-            let start = fragments.partition_point(|(fragment, _)| fragment.end <= range.start);
-            for (_, fragment) in fragments[start..]
-                .iter()
-                .take_while(|(fragment, _)| fragment.start < range.end)
-            {
-                self.assign_fragment_paint_metadata(*fragment, self.content_clips[owner.index()]);
-            }
+            self.assign_source_range_metadata(owner, item.line, range, text_owners);
             return;
         }
         let InlineItemContent::Text(view) = &item.content else {
@@ -916,6 +917,44 @@ where
                 paint_order: None,
             });
             self.assign_fragment_paint_metadata(fragment, self.content_clips[owner.index()]);
+        }
+    }
+
+    fn assign_source_range_metadata(
+        &mut self,
+        owner: LayoutBoxId,
+        line: usize,
+        range: std::ops::Range<usize>,
+        text_owners: &mut TextFragmentIndex,
+    ) {
+        // A natural line uses its full source range, including glyphless
+        // controls. Materialized views select their finalized source spans.
+        // Both retain the original cluster/caret geometry without copies.
+        let lines = text_owners.entry(owner).or_insert_with(|| {
+            let context = self.world.boxes[owner.index()]
+                .inline_layout
+                .as_ref()
+                .unwrap();
+            let mut lines = vec![Vec::new(); context.fragments.lines.len()];
+            for (index, text) in context.fragments.text.iter().enumerate() {
+                lines[text.line_index].push((
+                    text.output_range.clone(),
+                    self.owner_paint_fragments[owner.index()]
+                        [context.fragments.boxes.len() + index],
+                ));
+            }
+            for fragments in &mut lines {
+                fragments.sort_by_key(|(range, _)| (range.start, range.end));
+            }
+            lines
+        });
+        let fragments = &lines[line];
+        let start = fragments.partition_point(|(fragment, _)| fragment.end <= range.start);
+        for (_, fragment) in fragments[start..]
+            .iter()
+            .take_while(|(fragment, _)| fragment.start < range.end)
+        {
+            self.assign_fragment_paint_metadata(*fragment, self.content_clips[owner.index()]);
         }
     }
 

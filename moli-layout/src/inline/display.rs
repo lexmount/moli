@@ -141,8 +141,14 @@ pub(crate) struct InlineDisplayItem<'a> {
     pub(crate) paint_bounds: InlinePaintBounds,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DisplayLineItems {
+    Natural,
+    Materialized(Range<usize>),
+}
+
 pub(crate) struct DisplayLine {
-    pub(crate) items: Range<usize>,
+    pub(crate) items: DisplayLineItems,
     pub(crate) paint_bounds: InlinePaintBounds,
     pub(crate) selection: Vec<LayoutRect>,
 }
@@ -154,6 +160,54 @@ pub(crate) struct InlineDisplayContext<'a> {
     /// The final source hit geometry can reuse its original batch unchanged.
     /// Partial views instead project membership from the item stream.
     pub(crate) complete_source_geometry: bool,
+    /// Mixed IFCs need stable item IDs for interleaved or independent paint.
+    pub(crate) split_paint: bool,
+    source: &'a InlineFormattingContext,
+    origin: LayoutPoint,
+}
+
+impl<'a> InlineDisplayContext<'a> {
+    /// Both representations yield finalized text views through the same entry.
+    /// Natural lines borrow positioned runs directly; they allocate no items.
+    pub(crate) fn for_each_text_view(&self, line: usize, mut visit: impl FnMut(&TextView<'a>)) {
+        match &self.lines[line].items {
+            DisplayLineItems::Natural => {
+                let source = self.source;
+                for (item, positioned) in source
+                    .laid_out
+                    .as_ref()
+                    .unwrap()
+                    .get(line)
+                    .unwrap()
+                    .items()
+                    .enumerate()
+                {
+                    if let PositionedLayoutItem::GlyphRun(glyphs) = positioned {
+                        visit(&source_view(source, line, item, glyphs, self.origin));
+                    }
+                }
+            }
+            DisplayLineItems::Materialized(items) => {
+                for item in &self.items[items.clone()] {
+                    if let InlineItemContent::Text(view) = &item.content {
+                        visit(view);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn natural_source_range(&self, line: usize) -> Option<Range<usize>> {
+        matches!(self.lines[line].items, DisplayLineItems::Natural).then(|| {
+            self.source
+                .laid_out
+                .as_ref()
+                .unwrap()
+                .get(line)
+                .unwrap()
+                .text_range()
+        })
+    }
 }
 
 #[derive(Default)]
@@ -197,34 +251,84 @@ impl DisplayBuilder {
                 let owner = LayoutBoxId::from_index(index);
                 let origin = content_origin(owner);
                 let plans = self.paragraphs.get(index).and_then(Option::as_deref);
+                let owner_participates = paints_self(&self.paints_self, owner);
+                let split_paint = context
+                    .objects
+                    .iter()
+                    .any(|object| object.role == InlineObjectRole::Atomic)
+                    || (!owner_participates
+                        && context
+                            .structural_boxes
+                            .iter()
+                            .any(|inline| paints_self(&self.paints_self, inline.box_id)));
+                let source_participates = owner_participates
+                    && context.source_map.iter().all(|source| {
+                        paints_self(&self.paints_self, source.box_id)
+                            && world.boxes[source.box_id.index()].style.is_visible()
+                    });
+                let natural_allowed = !split_paint && source_participates;
                 let mut result = InlineDisplayContext {
-                    items: Vec::with_capacity(
-                        layout.len() + context.fragments.boxes.len() + context.objects.len(),
-                    ),
-                    lines: Vec::with_capacity(layout.len()),
-                    caret: caret(context).filter(|_| {
-                        paints_self(&self.paints_self, owner) && layout_box.style.is_visible()
+                    items: Vec::with_capacity(if natural_allowed {
+                        plans.map_or(0, |lines| {
+                            lines.iter().filter(|line| line.is_some()).count() * 2
+                        })
+                    } else {
+                        layout.len() + context.fragments.boxes.len() + context.objects.len()
                     }),
-                    complete_source_geometry: plans.is_none()
-                        && paints_self(&self.paints_self, owner)
-                        && context.source_map.iter().all(|source| {
-                            paints_self(&self.paints_self, source.box_id)
-                                && world.boxes[source.box_id.index()].style.is_visible()
-                        }),
+                    lines: Vec::with_capacity(layout.len()),
+                    caret: caret(context)
+                        .filter(|_| owner_participates && layout_box.style.is_visible()),
+                    complete_source_geometry: plans.is_none() && source_participates,
+                    split_paint,
+                    source: context,
+                    origin,
                 };
-                let mut boxes = if context.fragments.boxes.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![Vec::new(); layout.len()]
-                };
-                for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
-                    boxes[inline.line_index].push((fragment, inline.box_id));
-                }
+                let mut boxes = None;
                 let mut covered = Vec::new();
                 let has_selection = matches!(context.selection, Some(InlineSelection::Range(_)));
                 for (line_index, line) in layout.lines().enumerate() {
-                    let start = result.items.len();
                     let plan = plans.and_then(|lines| lines[line_index].as_ref());
+                    if natural_allowed && plan.is_none() {
+                        let mut bounds = InlinePaintBounds::Empty;
+                        let natural = line.items().enumerate().all(|(item, positioned)| {
+                            let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
+                                return true;
+                            };
+                            if !glyphs.style().brush.paint {
+                                return false;
+                            }
+                            include_bounds(
+                                &mut bounds,
+                                text_view_bounds(&source_view(
+                                    context, line_index, item, glyphs, origin,
+                                )),
+                            );
+                            true
+                        });
+                        if natural {
+                            let selection = selected_rects(context, line_index, line.text_range())
+                                .into_iter()
+                                .map(|rect| crate::overflow::offset_rect(rect, origin))
+                                .collect::<Vec<_>>();
+                            for rect in &selection {
+                                bounds.include(*rect);
+                            }
+                            result.lines.push(DisplayLine {
+                                items: DisplayLineItems::Natural,
+                                paint_bounds: bounds,
+                                selection,
+                            });
+                            continue;
+                        }
+                    }
+                    let start = result.items.len();
+                    let boxes = boxes.get_or_insert_with(|| {
+                        let mut boxes = vec![Vec::new(); layout.len()];
+                        for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
+                            boxes[inline.line_index].push((fragment, inline.box_id));
+                        }
+                        boxes
+                    });
                     for &(fragment, target) in boxes.get(line_index).into_iter().flatten() {
                         if paints_self(&self.paints_self, target) {
                             result.items.push(InlineDisplayItem {
@@ -383,17 +487,7 @@ impl DisplayBuilder {
                         let mut item_bounds = InlinePaintBounds::Empty;
                         match &item.content {
                             InlineItemContent::Text(view) => {
-                                let metrics = view.glyphs.run().font_metrics();
-                                item_bounds.include_text_ink(
-                                    LayoutRect::new(
-                                        view.offset.x + view.glyphs.offset(),
-                                        view.offset.y + view.glyphs.baseline() - metrics.ascent,
-                                        view.glyphs.advance().max(0.0),
-                                        metrics.ascent + metrics.descent,
-                                    ),
-                                    view.glyphs.style(),
-                                    view.glyphs.run().font_size(),
-                                );
+                                item_bounds = text_view_bounds(view);
                                 if has_selection && matches!(view.origin, TextOrigin::Source) {
                                     selected.push(view.glyphs.text_range());
                                 }
@@ -407,11 +501,7 @@ impl DisplayBuilder {
                             item_bounds.include(*rect);
                         }
                         item.paint_bounds = item_bounds;
-                        match item_bounds {
-                            InlinePaintBounds::Empty => {}
-                            InlinePaintBounds::Bounded(rect) => bounds.include(rect),
-                            InlinePaintBounds::Unbounded => bounds = InlinePaintBounds::Unbounded,
-                        }
+                        include_bounds(&mut bounds, item_bounds);
                     }
                     // Bulk selection retains merged geometry, while fragment events
                     // use each item's geometry at its own place in paint order.
@@ -425,7 +515,7 @@ impl DisplayBuilder {
                         bounds.include(*rect);
                     }
                     result.lines.push(DisplayLine {
-                        items: start..end,
+                        items: DisplayLineItems::Materialized(start..end),
                         paint_bounds: bounds,
                         selection,
                     });
@@ -440,6 +530,48 @@ impl DisplayBuilder {
             contexts,
             paints_self: self.paints_self,
         }
+    }
+}
+
+fn source_view<'a>(
+    context: &InlineFormattingContext,
+    line: usize,
+    item: usize,
+    glyphs: GlyphRun<'a, TextBrush>,
+    origin: LayoutPoint,
+) -> TextView<'a> {
+    let offset = context
+        .line_placements
+        .get(line)
+        .map_or(0.0, |line| line.item_offset(item));
+    TextView {
+        glyphs,
+        offset: LayoutPoint::new(origin.x, origin.y + offset),
+        origin: TextOrigin::Source,
+    }
+}
+
+fn text_view_bounds(view: &TextView<'_>) -> InlinePaintBounds {
+    let metrics = view.glyphs.run().font_metrics();
+    let mut bounds = InlinePaintBounds::Empty;
+    bounds.include_text_ink(
+        LayoutRect::new(
+            view.offset.x + view.glyphs.offset(),
+            view.offset.y + view.glyphs.baseline() - metrics.ascent,
+            view.glyphs.advance().max(0.0),
+            metrics.ascent + metrics.descent,
+        ),
+        view.glyphs.style(),
+        view.glyphs.run().font_size(),
+    );
+    bounds
+}
+
+fn include_bounds(bounds: &mut InlinePaintBounds, item: InlinePaintBounds) {
+    match item {
+        InlinePaintBounds::Empty => {}
+        InlinePaintBounds::Bounded(rect) => bounds.include(rect),
+        InlinePaintBounds::Unbounded => *bounds = InlinePaintBounds::Unbounded,
     }
 }
 
@@ -600,4 +732,151 @@ fn selection_rect(
             (line.rect.y, line.rect.height)
         });
     LayoutRect::new(x, y, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        LayoutBoxKind, LayoutDisplay, ResolvedLayoutStyle, SystemFontPolicy, WebFontFace,
+        WebFontRegistration,
+        inline::{InlineContentWidthsMemo, InlineFragments, build_inline_fragments},
+    };
+    use parley::style::TextStyle;
+
+    #[test]
+    fn natural_lines_borrow_styled_runs_without_allocating_items() {
+        for (text, font, direction) in [
+            (
+                "ABCD EFGHIJKLMNOPQRST ABCDEFGH",
+                include_bytes!("../../tests/fixtures/moli-ahem.ttf").as_slice(),
+                parley::BaseDirection::Ltr,
+            ),
+            (
+                "אבבאבאבאבא באאבבאאבבא",
+                include_bytes!("../../tests/fixtures/moli-hebrew-emoji.ttf").as_slice(),
+                parley::BaseDirection::Rtl,
+            ),
+        ] {
+            let mut services =
+                DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+            services
+                .register_web_font(WebFontRegistration::new(
+                    "natural",
+                    WebFontFace::new("NaturalTest"),
+                    font.to_vec(),
+                ))
+                .unwrap();
+            let parley = services.parley_mut();
+            let mut style = TextStyle {
+                font_family: "NaturalTest".into(),
+                ..TextStyle::default()
+            };
+            parley.resolve_font_families(&mut style, None);
+            let mut larger = style.clone();
+            larger.font_size = style.font_size * 1.25;
+            let mut builder =
+                parley
+                    .layout_context
+                    .style_run_builder(&mut parley.font_context, text, 1.0, true);
+            builder.set_base_direction(direction);
+            let first = builder.push_style(style);
+            let second = builder.push_style(larger);
+            let split = text.char_indices().nth(4).unwrap().0;
+            builder.push_style_run(first, 0..split);
+            builder.push_style_run(second, split..text.len());
+            let mut layout = builder.build(text);
+            layout.break_all_lines(Some(80.0));
+            assert!(layout.len() > 1);
+            let root = LayoutBoxId::from_index(0);
+            let mut context = InlineFormattingContext {
+                text: text.into(),
+                root_style: root,
+                measurement_layout: None,
+                laid_out: Some(layout),
+                content_widths: InlineContentWidthsMemo::default(),
+                no_soft_wrap: false,
+                text_units: Vec::new(),
+                source_map: Vec::new(),
+                selection: None,
+                objects: Vec::new(),
+                font_metrics: vec![None; 2],
+                parent_strut: None,
+                uses_quirks_line_height: false,
+                root_includes_used_font_metrics: false,
+                style_parents: vec![root; 2],
+                structural_boxes: Vec::new(),
+                line_placements: Vec::new(),
+                fragments: InlineFragments::default(),
+            };
+            context.fragments =
+                build_inline_fragments(&context, context.laid_out.as_ref().unwrap(), &[]);
+            let mut root_box = LayoutWorld::<usize>::new_box(
+                Some(0),
+                None,
+                None,
+                "root".into(),
+                None,
+                None,
+                None,
+                LayoutBoxKind::PrincipalBlock,
+                ResolvedLayoutStyle::synthetic(
+                    LayoutDisplay::Block,
+                    taffy::Style::default(),
+                    PaintColor::TRANSPARENT,
+                ),
+                None,
+            );
+            root_box.inline_layout = Some(context);
+            let world = LayoutWorld::new(root_box, false);
+            let pool = GeneratedTextPool(Vec::new());
+            let origin = LayoutPoint::new(7.0, 11.0);
+            let display = DisplayBuilder {
+                paragraphs: Vec::new(),
+                paints_self: Vec::new(),
+            }
+            .finish(&world, &pool, |_| origin);
+            let display = display.context(root).unwrap();
+            assert!(display.items.is_empty());
+            assert_eq!(display.items.capacity(), 0);
+            assert!(
+                display
+                    .lines
+                    .iter()
+                    .all(|line| line.items == DisplayLineItems::Natural)
+            );
+            let layout = world.boxes[0]
+                .inline_layout
+                .as_ref()
+                .unwrap()
+                .laid_out
+                .as_ref()
+                .unwrap();
+            for (index, line) in layout.lines().enumerate() {
+                let mut expected = Vec::new();
+                for item in line.items() {
+                    if let PositionedLayoutItem::GlyphRun(glyphs) = item {
+                        expected.extend(glyphs.positioned_glyphs().map(|glyph| {
+                            (
+                                glyph.id,
+                                (glyph.x + origin.x).to_bits(),
+                                (glyph.y + origin.y).to_bits(),
+                            )
+                        }));
+                    }
+                }
+                let mut actual = Vec::new();
+                display.for_each_text_view(index, |view| {
+                    actual.extend(view.glyphs.positioned_glyphs().map(|glyph| {
+                        (
+                            glyph.id,
+                            (glyph.x + view.offset.x).to_bits(),
+                            (glyph.y + view.offset.y).to_bits(),
+                        )
+                    }));
+                });
+                assert_eq!(actual, expected, "{text}: line {index}");
+            }
+        }
+    }
 }

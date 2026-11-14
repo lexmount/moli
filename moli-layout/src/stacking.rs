@@ -2,10 +2,7 @@ use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     LayoutBoxId, LayoutPosition, LayoutWorld,
-    inline::{
-        InlineObjectRole,
-        display::{InlineDisplayItems, InlineItemContent, TextOrigin},
-    },
+    inline::display::{InlineDisplayItems, InlineItemContent, TextOrigin},
 };
 
 /// One order shared by pixels and hit geometry. Inline events select individual
@@ -105,24 +102,12 @@ impl<'a> InlineOrder<'a> {
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
-        for (index, layout_box) in world.boxes.iter().enumerate() {
-            let Some(context) = &layout_box.inline_layout else {
-                continue;
-            };
+        for index in 0..world.boxes.len() {
             let owner = LayoutBoxId::from_index(index);
             let Some(items) = display.context(owner) else {
                 continue;
             };
-            let has_atomic = context
-                .objects
-                .iter()
-                .any(|object| object.role == InlineObjectRole::Atomic);
-            let has_independent_inline = !display.paints_self(owner)
-                && context
-                    .structural_boxes
-                    .iter()
-                    .any(|inline| display.paints_self(inline.box_id));
-            if !has_atomic && !has_independent_inline {
+            if !items.split_paint {
                 continue;
             }
             result.split[index] = true;

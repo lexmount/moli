@@ -1983,18 +1983,27 @@ fn text_overflow_selection_keeps_glyphless_lines_that_are_not_truncated() {
             painted_text(&output).contains("..."),
             "fixture includes a truncated line"
         );
-        assert!(
-            output
-                .paint_snapshot()
-                .unwrap()
-                .fragments
-                .iter()
-                .filter_map(PaintFragment::solid_fill)
-                .any(|(rect, color, _)| color == selected_color
-                    && rect.width > 0.0
-                    && rect.height > 0.0),
-            "the selected empty line still paints: mixed={mixed}"
-        );
+        let selection = output
+            .paint_snapshot()
+            .unwrap()
+            .fragments
+            .iter()
+            .filter_map(PaintFragment::solid_fill)
+            .find(|(rect, color, _)| {
+                *color == selected_color && rect.width > 0.0 && rect.height > 0.0
+            })
+            .unwrap_or_else(|| panic!("the selected empty line still paints: mixed={mixed}"))
+            .0;
+        let tree = output.into_tree();
+        drop(services);
+        let caret = tree
+            .caret_position(LayoutPoint::new(
+                selection.x,
+                selection.y + selection.height * 0.5,
+            ))
+            .unwrap();
+        assert_eq!(caret.source, 1, "mixed={mixed}");
+        assert_eq!(caret.utf16_offset, Some(13), "mixed={mixed}");
     }
 }
 
