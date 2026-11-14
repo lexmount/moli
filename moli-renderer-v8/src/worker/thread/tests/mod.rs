@@ -1610,6 +1610,7 @@ mod network;
 mod postmessage;
 mod stream_clone_failures;
 
+mod canvas_transfer_to_image_bitmap;
 mod canvas_transform_snapshots;
 mod geometry_point_transform;
 

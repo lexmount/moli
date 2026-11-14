@@ -121,7 +121,7 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
     rv.set(promise.into());
 }
 
-fn build_image_bitmap_object<'s>(
+pub(super) fn build_image_bitmap_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     width: u32,
     height: u32,
