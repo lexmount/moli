@@ -971,6 +971,7 @@ impl ScriptVm {
                     &pending.request_origin,
                     &observable_head,
                     pending.credentials_mode,
+                    pending.policy_context.cors_disabled,
                 );
             }
 
@@ -1922,6 +1923,7 @@ impl ScriptVm {
                                         &streaming.pending.request_origin,
                                         &observable_head,
                                         streaming.pending.credentials_mode,
+                                        streaming.pending.policy_context.cors_disabled,
                                     );
                             }
                             // XHR still exposes a complete response at DONE. Keep the

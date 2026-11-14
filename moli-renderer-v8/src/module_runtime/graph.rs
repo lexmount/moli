@@ -460,6 +460,7 @@ impl NativeModuleGraphFetchRequest {
         let request_mode = request.request_mode;
         let credentials_mode = request.credentials_mode;
         let csp_context = self.csp_context.clone();
+        let cors_disabled = loader.cors_disabled();
         let completion = move |response: anyhow::Result<moli_fetch::Response>| {
             let mut network_result: Option<SharedNavigationResponseResult> = None;
             let result = response
@@ -522,6 +523,7 @@ impl NativeModuleGraphFetchRequest {
                         &request_origin,
                         &head,
                         credentials_mode,
+                        cors_disabled,
                     ).map_err(|error| ModuleLoadError::new(ModuleLoadStage::Fetch, error).message().to_owned())?;
                     let response_is_eligible = crate::network_host::network_response_filter(
                         &request_origin,

@@ -1665,6 +1665,7 @@ async fn worker_main(
         resource_owner_id,
         message_agent_cluster,
     );
+    let policy_context = policy_context.with_cors_disabled(loader.request_client().cors_disabled());
     let state = Rc::new(RefCell::new(WorkerGlobalState {
         interception_context,
         network_cancel,

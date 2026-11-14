@@ -249,6 +249,7 @@ impl RendererPreparedAppManifestLoad {
             load,
             cancel_handle,
         } = observation;
+        let cors_disabled = load.request_client().cors_disabled();
         let outcome = resource.execute_with_cancel(cancel_handle).await;
         drop(load);
         let (result, network_record, cacheable) = match outcome {
@@ -274,6 +275,7 @@ impl RendererPreparedAppManifestLoad {
                         &request_origin,
                         &response.head(),
                         credentials_mode,
+                        cors_disabled,
                     )
                     .err()
                 });

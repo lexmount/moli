@@ -263,7 +263,14 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
                 return StylesheetFetchTerminal::network_error(error.to_string());
             }
         }
-        stylesheet_terminal_from_response(&request_origin, &url, &options, response, provenance)
+        stylesheet_terminal_from_response(
+            &request_origin,
+            &url,
+            &options,
+            response,
+            provenance,
+            loader.cors_disabled(),
+        )
     };
     if let Some(context) = service_worker_context {
         match context
@@ -472,6 +479,7 @@ fn stylesheet_terminal_from_response(
     options: &StylesheetFetchOptions,
     response: crate::protocol_types::NavigationResponse,
     response_provenance: StylesheetResponseProvenance,
+    cors_disabled: bool,
 ) -> StylesheetFetchTerminal {
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
     let head = response.head();
@@ -488,6 +496,7 @@ fn stylesheet_terminal_from_response(
                     request_origin,
                     &head,
                     credentials_mode,
+                    cors_disabled,
                 )
                 .map_err(|error| format!("failed to fetch stylesheet `{request_url}`: {error}"))
             }
@@ -652,6 +661,7 @@ mod tests {
                 &integrity_options(None, &integrity),
                 response.clone(),
                 StylesheetResponseProvenance::Network,
+                false,
             );
             assert_eq!(terminal.is_ready(), expected, "{integrity}");
             assert_eq!(terminal.failed_integrity(), !expected, "{integrity}");
@@ -694,6 +704,7 @@ mod tests {
                 &integrity_options(cross_origin, &integrity),
                 response,
                 StylesheetResponseProvenance::Network,
+                false,
             );
             assert_eq!(
                 terminal.is_ready(),
@@ -727,6 +738,7 @@ mod tests {
                 &integrity_options(cross_origin, &integrity),
                 response,
                 StylesheetResponseProvenance::Network,
+                false,
             );
             assert_eq!(
                 terminal.is_ready(),
@@ -764,6 +776,7 @@ mod tests {
                 StylesheetResponseProvenance::ServiceWorker {
                     filter: filter.clone(),
                 },
+                false,
             );
             assert_eq!(terminal.is_ready(), expected, "{filter:?}");
             assert_eq!(terminal.ready_response().is_some(), expected);
@@ -790,6 +803,7 @@ mod tests {
                     &integrity_options(cross_origin, integrity),
                     stylesheet_response(&stylesheet_url, Some("text/css"), body),
                     StylesheetResponseProvenance::Network,
+                    false,
                 );
                 assert_eq!(
                     terminal.is_ready(),
@@ -834,6 +848,7 @@ mod tests {
                 &integrity_options(None, &integrity),
                 response,
                 StylesheetResponseProvenance::Network,
+                false,
             );
             assert_eq!(terminal.is_ready(), expected, "{request_url}");
         }
@@ -906,6 +921,7 @@ mod tests {
             &options,
             same_origin_response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(same_origin_terminal.is_ready());
@@ -922,6 +938,7 @@ mod tests {
             &options,
             cross_origin_response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(!cross_origin_terminal.is_ready());
@@ -945,6 +962,7 @@ mod tests {
                 &options,
                 response,
                 StylesheetResponseProvenance::Network,
+                false,
             );
 
             assert_eq!(terminal.is_ready(), expected_ready);
@@ -971,6 +989,7 @@ mod tests {
             &options,
             cross_to_same_response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(!cross_to_same_terminal.is_ready());
@@ -990,6 +1009,7 @@ mod tests {
             &options,
             through_cross_response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(!through_cross_terminal.is_ready());
@@ -1017,6 +1037,7 @@ mod tests {
             &options,
             response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(!terminal.is_ready());
@@ -1127,6 +1148,7 @@ mod tests {
             &options,
             response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(terminal.is_ready());
@@ -1159,6 +1181,7 @@ mod tests {
             &options,
             response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(!terminal.is_ready());
@@ -1188,6 +1211,7 @@ mod tests {
             &StylesheetFetchOptions::default(),
             response,
             StylesheetResponseProvenance::Network,
+            false,
         );
 
         assert!(!terminal.is_ready());
@@ -1220,6 +1244,7 @@ mod tests {
             &StylesheetFetchOptions::default(),
             response,
             StylesheetResponseProvenance::ServiceWorker { filter: None },
+            false,
         );
 
         assert!(terminal.is_ready());
@@ -1251,6 +1276,7 @@ mod tests {
             &options,
             response,
             StylesheetResponseProvenance::ServiceWorker { filter: None },
+            false,
         );
 
         assert!(terminal.is_ready());

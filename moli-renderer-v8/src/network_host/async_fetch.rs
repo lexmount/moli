@@ -256,9 +256,14 @@ impl ManualCorsRedirectState {
         &mut self,
         head: ResponseHead,
         network_extra_info_available: bool,
+        cors_disabled: bool,
     ) -> Result<SubresourceResponseTransition, String> {
-        let transition =
-            advance_subresource_response(&mut self.request, head, network_extra_info_available)?;
+        let transition = advance_subresource_response(
+            &mut self.request,
+            head,
+            network_extra_info_available,
+            cors_disabled,
+        )?;
         if transition == SubresourceResponseTransition::FollowedRedirect {
             self.preflight_request_headers = self.request.request_headers.to_byte_strings();
         }
@@ -326,7 +331,11 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
         )
         .await?;
         let network_extra_info_available = observed.request_observation().is_some();
-        match redirects.advance(observed.response().head(), network_extra_info_available)? {
+        match redirects.advance(
+            observed.response().head(),
+            network_extra_info_available,
+            loader.cors_disabled(),
+        )? {
             SubresourceResponseTransition::FinalResponse => {
                 cancel_handle.adopt_response_progress(&response_cancel);
                 let redirect_chain = redirects.into_redirect_chain();
@@ -370,7 +379,7 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
             .map_err(format_network_error)?;
         let network_extra_info_available = observed.request_observation().is_some();
         let head = observed.response().head();
-        match redirects.advance(head, network_extra_info_available)? {
+        match redirects.advance(head, network_extra_info_available, loader.cors_disabled())? {
             SubresourceResponseTransition::FinalResponse => {
                 cancel_handle.adopt_response_progress(&observed.response().cancellation_handle());
                 let redirect_chain = redirects.into_redirect_chain();
@@ -476,6 +485,9 @@ async fn run_cors_preflight_if_needed(
     preflight_request_headers: &[(String, String)],
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<(), String> {
+    if loader.cors_disabled() {
+        return Ok(());
+    }
     let request_origin = request
         .browser_origin()
         .map_err(|error| error.to_string())?;
@@ -1040,6 +1052,7 @@ mod tests {
                     negotiated_http_version: None,
                 },
                 true,
+                false,
             )
             .map_err(anyhow::Error::msg)?;
 
@@ -1084,6 +1097,7 @@ mod tests {
                     cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
+                false,
                 false,
             )
             .unwrap_err();
@@ -1139,6 +1153,7 @@ mod tests {
                     cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
+                false,
                 false,
             );
             match mode {

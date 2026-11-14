@@ -46,7 +46,11 @@ pub(crate) fn validate_cors_response_chain(
     request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
+    cors_disabled: bool,
 ) -> Result<(), String> {
+    if cors_disabled {
+        return Ok(());
+    }
     let request_origin = request_origin.into();
     for (index, redirect) in head.redirect_chain.iter().enumerate() {
         // This response precedes the redirect: only earlier hops contribute to
@@ -101,7 +105,12 @@ pub(crate) fn validate_fetch_response_security_policy(
         )?;
         validate_opaque_response_blocking(&request_origin, &head.final_url, &head.headers)
     } else {
-        validate_cors_response_chain(&request_origin, head, credentials_mode)
+        validate_cors_response_chain(
+            &request_origin,
+            head,
+            credentials_mode,
+            policy_context.cors_disabled,
+        )
     }
 }
 
@@ -161,8 +170,13 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
         )
         .map_err(FetchResponseSecurityViolation::OpaqueResponseBlocked)
     } else {
-        validate_cors_response_chain(&request_origin, head, credentials_mode)
-            .map_err(FetchResponseSecurityViolation::Rejected)
+        validate_cors_response_chain(
+            &request_origin,
+            head,
+            credentials_mode,
+            policy_context.cors_disabled,
+        )
+        .map_err(FetchResponseSecurityViolation::Rejected)
     }
 }
 
@@ -438,10 +452,11 @@ pub(crate) fn filter_cors_exposed_response_headers(
     request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
+    cors_disabled: bool,
 ) -> Vec<(String, Vec<u8>)> {
     let request_origin = request_origin.into();
     let response_headers = &head.headers;
-    if !head.url_list().has_cross_origin_url(&request_origin) {
+    if cors_disabled || !head.url_list().has_cross_origin_url(&request_origin) {
         return response_headers.to_vec();
     }
     if !matches!(head.final_url.scheme(), "http" | "https") {
@@ -586,16 +601,68 @@ mod tests {
                 negotiated_http_version: None,
             };
             let document_url = url("https://document.test/page.html");
-            validate_cors_response_chain(&document_url, &head, RequestCredentialsMode::SameOrigin)
-                .expect_err("HTTP redirects require ACAO even without network ExtraInfo");
+            validate_cors_response_chain(
+                &document_url,
+                &head,
+                RequestCredentialsMode::SameOrigin,
+                false,
+            )
+            .expect_err("HTTP redirects require ACAO even without network ExtraInfo");
+            validate_cors_response_chain(
+                &document_url,
+                &head,
+                RequestCredentialsMode::SameOrigin,
+                true,
+            )
+            .expect("disabling CORS also applies to cached network redirects");
 
             head.redirect_chain[0].headers.push((
                 "Access-Control-Allow-Origin".to_owned(),
                 b"https://document.test".to_vec(),
             ));
-            validate_cors_response_chain(&document_url, &head, RequestCredentialsMode::SameOrigin)
-                .expect("authorized HTTP redirect should pass");
+            validate_cors_response_chain(
+                &document_url,
+                &head,
+                RequestCredentialsMode::SameOrigin,
+                false,
+            )
+            .expect("authorized HTTP redirect should pass");
         }
+    }
+
+    #[test]
+    fn disabling_cors_preserves_request_mode_and_no_cors_resource_policy() {
+        let origin = url("https://document.test/");
+        let head = header_response(
+            url("https://cross-origin.test/data"),
+            vec![(
+                "Cross-Origin-Resource-Policy".to_owned(),
+                b"same-origin".to_vec(),
+            )],
+        );
+        let policy = crate::types::SubresourcePolicyContext::default().with_cors_disabled(true);
+        for mode in [RequestMode::SameOrigin, RequestMode::NoCors] {
+            assert!(
+                validate_fetch_response_security_policy(
+                    &origin,
+                    &head,
+                    mode,
+                    RequestCredentialsMode::Omit,
+                    policy,
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_fetch_response_security_policy(
+                &origin,
+                &head,
+                RequestMode::Cors,
+                RequestCredentialsMode::Omit,
+                policy,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -664,6 +731,7 @@ mod tests {
                 &WebOrigin::Opaque,
                 &response,
                 RequestCredentialsMode::SameOrigin,
+                false,
             )
             .is_err()
         );
@@ -677,6 +745,7 @@ mod tests {
                 &WebOrigin::Opaque,
                 &allowed_response,
                 RequestCredentialsMode::SameOrigin,
+                false,
             )
             .is_ok()
         );
@@ -965,6 +1034,7 @@ mod tests {
             &url("http://example.test/page"),
             &header_response(url("http://other.test/data"), headers.clone()),
             RequestCredentialsMode::SameOrigin,
+            false,
         );
 
         assert_eq!(
@@ -989,6 +1059,7 @@ mod tests {
             &url("http://example.test/page"),
             &header_response(url("http://other.test/data"), headers.clone()),
             RequestCredentialsMode::SameOrigin,
+            false,
         );
         assert_eq!(non_credentialed, headers);
 
@@ -996,6 +1067,7 @@ mod tests {
             &url("http://example.test/page"),
             &header_response(url("http://other.test/data"), headers.clone()),
             RequestCredentialsMode::Include,
+            false,
         );
         assert_eq!(
             credentialed,
@@ -1044,6 +1116,7 @@ mod tests {
                         &url("http://example.test/page"),
                         &response,
                         credentials,
+                        false,
                     ),
                     expected,
                     "credentials={credentials:?}, expose_values={expose_values:?}"
@@ -1066,6 +1139,7 @@ mod tests {
             &url("http://example.test/page"),
             &header_response(url("http://example.test/data"), headers.clone()),
             RequestCredentialsMode::Include,
+            false,
         );
 
         assert_eq!(filtered, headers);
@@ -1118,7 +1192,8 @@ mod tests {
                         validate_cors_response_chain(
                             &origin,
                             &header_response(response_url.clone(), headers.clone()),
-                            mode
+                            mode,
+                            false,
                         )
                         .is_ok(),
                         allowed,
@@ -1170,7 +1245,8 @@ mod tests {
                     validate_cors_response_chain(
                         WebOrigin::from_url(&document_url),
                         &header_response(response_url.clone(), headers.clone()),
-                        mode
+                        mode,
+                        false,
                     )
                     .is_ok(),
                     mode != RequestCredentialsMode::Include || values == ["true"],
@@ -1180,7 +1256,8 @@ mod tests {
                     validate_cors_response_chain(
                         WebOrigin::from_url(&document_url),
                         &header_response(document_url.clone(), headers.clone()),
-                        mode
+                        mode,
+                        false,
                     )
                     .is_ok(),
                     "same-origin responses do not require CORS permission"

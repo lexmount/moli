@@ -331,6 +331,7 @@ impl ServiceWorkerRuntimeService {
                             &request_origin,
                             &head,
                             credentials_mode,
+                            request_client.cors_disabled(),
                         )
                     {
                         let _ =

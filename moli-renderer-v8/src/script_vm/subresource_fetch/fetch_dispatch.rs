@@ -481,6 +481,7 @@ impl ScriptVm {
                 &response.head(),
                 &pending.info.document_url,
                 response.network_request_headers(),
+                pending.policy_context.cors_disabled,
             ) {
                 Ok(Some((request, redirect))) => {
                     return self.continue_intercepted_window_redirect(pending, request, redirect);
@@ -767,6 +768,7 @@ impl ScriptVm {
                                 &pending.request_origin,
                                 &observable_response.head(),
                                 pending.credentials_mode,
+                                pending.policy_context.cors_disabled,
                             );
                     }
                     let continuation_started =

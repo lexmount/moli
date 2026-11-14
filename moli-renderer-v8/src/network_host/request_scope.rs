@@ -46,11 +46,12 @@ pub(crate) fn effective_subresource_policy_context(
     host: &PageScriptHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> crate::types::SubresourcePolicyContext {
-    match owner {
+    let policy = match owner {
         crate::native_bridge::OwnerDispatchScope::Top => crate::types::SubresourcePolicyContext {
             cross_origin_embedder_policy: host.cross_origin_embedder_policy(),
             document_isolation_policy: host.document_isolation_policy(),
             cross_origin_isolated: host.cross_origin_isolated(),
+            ..Default::default()
         },
         crate::native_bridge::OwnerDispatchScope::Child(handle) => host
             .frame_owner_current_child_snapshot(handle)
@@ -64,9 +65,14 @@ pub(crate) fn effective_subresource_policy_context(
                 document_isolation_policy: host
                     .lightweight_popup_document_isolation_policy(popup_id),
                 cross_origin_isolated: host.lightweight_popup_cross_origin_isolated(popup_id),
+                ..Default::default()
             }
         }
-    }
+    };
+    policy.with_cors_disabled(
+        host.document_resource_loader_for_dispatch_scope(owner)
+            .is_some_and(|loader| loader.request_client().cors_disabled()),
+    )
 }
 
 /// Select request attribution without using a document's mutable base URL.

@@ -16,10 +16,13 @@ pub(super) fn advance_subresource_response(
     request: &mut Request,
     head: ResponseHead,
     network_extra_info_available: bool,
+    cors_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
     // Preserve transport-refined snapshots, including cached/internal hops.
     request.observe_redirect_requests(&head.redirect_chain);
-    request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+    if !cors_disabled {
+        request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+    }
     advance_validated_subresource_response(request, head, network_extra_info_available)
 }
 

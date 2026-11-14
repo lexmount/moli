@@ -205,6 +205,10 @@ impl FetchClientHandle {
     pub fn matches_config(&self, config: &FetchConfig) -> bool {
         &self.config == config
     }
+
+    pub fn cors_disabled(&self) -> bool {
+        self.config.cors_disabled()
+    }
     pub fn http_proxy(&self) -> Option<&str> {
         self.config.http_proxy()
     }
