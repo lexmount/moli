@@ -34,11 +34,12 @@ impl ControlledXhrContext {
     pub(crate) fn load(
         self,
         request: moli_fetch::Request,
-        info: PendingSubresourceFetchInfo,
+        mut info: PendingSubresourceFetchInfo,
         load: ResourceLoadLease,
         cancel: moli_fetch::FetchCancelHandle,
         preflight_headers: Vec<(String, String)>,
     ) -> super::ControlledResourceLoad {
+        info.request_headers = request.interception_request_headers();
         super::ControlledResourceLoad {
             request,
             info,

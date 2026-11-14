@@ -29,14 +29,7 @@ pub(crate) async fn fetch_intercepted_window_hop(
     cancel_handle: Option<FetchCancelHandle>,
 ) -> Result<NetworkFetchResult<Response>, String> {
     let mode = request.redirect_mode();
-    // DevTools can echo generated fields (Origin, Host, Content-Length,
-    // Sec-*). Those are not author CORS headers requiring preflight permission.
-    let preflight_headers = request
-        .request_headers
-        .to_byte_strings()
-        .into_iter()
-        .filter(|(name, _)| !moli_fetch::is_forbidden_request_header_name(name))
-        .collect();
+    let preflight_headers = request.request_headers.to_byte_strings();
     let cancel = cancel_handle.unwrap_or_default();
     let response_cancel = cancel.child_for_subrequest();
     let observed = fetch_subresource_hop(
@@ -157,6 +150,12 @@ pub(super) async fn fetch_subresource_hop(
     preflight_headers: Vec<(String, String)>,
     observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<super::loaded_response::LoadedResponse>, String> {
+    // Both intercepted fetch and native XHR can echo browser-generated fields.
+    // Origin, Host, Content-Length and Sec-* are not author CORS permissions.
+    let preflight_headers: Vec<_> = preflight_headers
+        .into_iter()
+        .filter(|(name, _)| !moli_fetch::is_forbidden_request_header_name(name))
+        .collect();
     run_cors_preflight_if_needed(
         loader,
         &request,

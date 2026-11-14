@@ -1,4 +1,5 @@
 use super::*;
+mod intercepted_headers;
 mod native_xhr;
 mod navigation_disable;
 use crate::automation::{

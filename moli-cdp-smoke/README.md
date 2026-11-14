@@ -50,6 +50,12 @@ XHR retains its original raw-byte capture for Network consumers while the
 Window/Worker JS boundary materializes a response. Memory-allocation identity,
 disk extent lifetime, non-UTF-8 bytes and release are checked by Rust regressions.
 
+The default `fetch-headers` group compares fetch, asynchronous XHR and synchronous
+XHR using real redirect and echo endpoints. It checks replayed upload headers,
+no-op method/body edits, fresh Content-Type values, generated Origin visibility,
+and Authorization scoped to one redirect origin. Each request must retain its
+Network identity and emit exactly one terminal event.
+
 The default `fetch-media` group drives real audio, video and text-track element
 loads. Eleven scenarios cover single Media filters, mixed Image/Media/Font
 patterns, continue/fulfill/fail/disable and response-stage body reading. Valid

@@ -216,13 +216,22 @@ impl ControlledResourceLoad {
     fn sync_info(&mut self) {
         self.info.url = self.request.url.clone();
         self.info.method = self.request.method.clone();
-        self.info.request_headers = self.request.request_headers.clone();
+        self.info.request_headers = self.request.interception_request_headers();
         self.info.request_body_bytes = self.request.body.clone();
         self.info.request_body = self
             .request
             .body
             .as_ref()
             .map(|body| String::from_utf8_lossy(body).into_owned());
+    }
+
+    fn apply_request_overrides(&mut self, overrides: moli_fetch::RequestOverrides) {
+        let headers_changed = overrides.headers.is_some();
+        overrides.apply(&mut self.request);
+        if headers_changed {
+            self.preflight_headers = self.request.request_headers.to_byte_strings();
+        }
+        self.sync_info();
     }
 
     fn check_request(&self) -> Result<(), String> {
@@ -327,20 +336,14 @@ impl ControlledResourceLoad {
                         intercept_response: response,
                         handle_auth_requests: auth,
                     } => {
-                        let headers_changed = headers.is_some();
-                        moli_fetch::RequestOverrides {
+                        self.apply_request_overrides(moli_fetch::RequestOverrides {
                             url,
                             method,
                             body,
                             headers,
-                        }
-                        .apply(&mut self.request);
-                        if headers_changed {
-                            self.preflight_headers = self.request.request_headers.to_byte_strings();
-                        }
+                        });
                         intercept_response = response;
                         handle_auth_requests = auth;
-                        self.sync_info();
                     }
                     D::Fail(error) => return Err(error),
                     D::Fulfill {
@@ -350,13 +353,7 @@ impl ControlledResourceLoad {
                         body,
                     } => {
                         if let Some(overrides) = request_overrides {
-                            let headers_changed = overrides.headers.is_some();
-                            overrides.apply(&mut self.request);
-                            if headers_changed {
-                                self.preflight_headers =
-                                    self.request.request_headers.to_byte_strings();
-                            }
-                            self.sync_info();
+                            self.apply_request_overrides(*overrides);
                         }
                         synthetic = Some(self.synthetic_response(status, headers, body));
                         intercept_response = false;

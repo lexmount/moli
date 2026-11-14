@@ -585,7 +585,13 @@ class FixtureServer:
                 self._dispatch()
 
             def do_OPTIONS(self) -> None:
-                if urllib.parse.urlparse(self.path).path.startswith("/fetch-dispatch/network/"):
+                if urllib.parse.urlparse(self.path).path.startswith("/fetch-headers/"):
+                    self._send_common(HTTPStatus.NO_CONTENT, "text/plain", b"", {
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "GET, POST",
+                        "Access-Control-Allow-Headers": "authorization, content-type, x-author, user-agent",
+                    })
+                elif urllib.parse.urlparse(self.path).path.startswith("/fetch-dispatch/network/"):
                     self._send_common(HTTPStatus.NO_CONTENT, "text/plain", b"", {
                         "Access-Control-Allow-Origin": "*",
                         "Access-Control-Allow-Methods": "GET, POST",
@@ -599,6 +605,19 @@ class FixtureServer:
                 route = parsed.path
                 query = urllib.parse.parse_qs(parsed.query)
                 _body = self._read_body()
+
+                if route.startswith("/fetch-headers/"):
+                    outer._record_resource_request(self.path, self.headers)
+                    if route == "/fetch-headers/redirect":
+                        self._send_common(HTTPStatus(int(query.get("status", ["302"])[0])),
+                                          "text/plain", b"", {"Location": query["to"][0],
+                                          "Access-Control-Allow-Origin": "*"})
+                    else:
+                        self._send_json({"method": self.command,
+                                         "headers": {name.lower(): value for name, value in self.headers.items()},
+                                         "body": _body.decode("utf-8")},
+                                        headers={"Access-Control-Allow-Origin": "*"})
+                    return
 
                 if route == "/ws-echo" and self.headers.get("Upgrade", "").lower() == "websocket":
                     self._handle_websocket()
