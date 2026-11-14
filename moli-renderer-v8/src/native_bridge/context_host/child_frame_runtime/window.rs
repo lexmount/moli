@@ -344,16 +344,6 @@ impl ChildWindowProxyRecords {
             .insert(handle, v8::Weak::new(scope, document));
     }
 
-    pub(in crate::native_bridge::context_host) fn detached_content_window<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        handle: DomHandle,
-    ) -> Option<v8::Local<'s, v8::Object>> {
-        self.detached_content_window_wrappers
-            .get(&handle)
-            .and_then(|wrapper| wrapper.to_local(scope))
-    }
-
     pub(in crate::native_bridge::context_host) fn set_detached_content_window(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
