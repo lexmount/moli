@@ -2528,7 +2528,8 @@ impl ScriptVm {
             if !element.is_html_input() || element.input_type() != InputType::File {
                 return Ok(false);
             }
-            let multiple = element.attribute("multiple").is_some();
+            let multiple =
+                element.has_attribute("multiple") || element.has_attribute("webkitdirectory");
             if (append || files.len() > 1) && !multiple {
                 return Ok(false);
             }

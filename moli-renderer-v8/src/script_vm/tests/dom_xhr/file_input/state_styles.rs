@@ -128,6 +128,7 @@ fn input_files_native_commit_refreshes_style_before_input_and_change_callbacks()
         let mut vm = file_input_validity_style_vm(policy);
         let upload = vm.document_runtime.get_element_by_id("upload").unwrap();
         let chosen = crate::dom::native::SelectedFile {
+            relative_path: String::new(),
             bytes: b"abc".to_vec(),
             mime_type: "text/plain".to_owned(),
             name: "chosen.txt".to_owned(),

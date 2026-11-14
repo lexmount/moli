@@ -44,10 +44,10 @@ pub(super) use file::bind_file_world_wrapper;
 pub(super) use file::file_constructor_callback;
 pub(crate) use file::{
     build_file_object, build_file_object_unpublished, file_clone_metadata,
-    selected_file_from_object,
+    selected_file_from_object, set_file_relative_path,
 };
 pub(in crate::context_bootstrap) use file::{
-    file_last_modified_from_object, file_name_from_object,
+    file_last_modified_from_object, file_name_from_object, file_relative_path_from_object,
 };
 pub(crate) use file_entry_file::{
     FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,

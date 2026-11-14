@@ -346,6 +346,7 @@ pub(crate) enum BlobClonePayload {
         bytes: moli_file_api::BlobData,
         mime_type: String,
         name: String,
+        relative_path: String,
         last_modified: f64,
         opfs_snapshot: Option<FileSystemFileSnapshotClonePayload>,
     },
@@ -971,13 +972,14 @@ pub(crate) fn blob_clone_payload_from_object<'s>(
 ) -> Option<BlobClonePayload> {
     let bytes = crate::blob::blob_data_from_object(scope, object)?;
     let mime_type = crate::blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
-    if let Some((name, last_modified)) =
+    if let Some((name, last_modified, relative_path)) =
         crate::context_bootstrap::file_clone_metadata(scope, object)
     {
         return Some(BlobClonePayload::File {
             bytes,
             mime_type,
             name,
+            relative_path,
             last_modified,
             opfs_snapshot: file_system_file_snapshot_clone_payload_from_object(scope, object),
         });
@@ -997,6 +999,7 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
             bytes,
             mime_type,
             name,
+            relative_path,
             last_modified,
             opfs_snapshot,
         } => {
@@ -1007,6 +1010,7 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
                 name,
                 *last_modified,
             )?;
+            crate::context_bootstrap::set_file_relative_path(scope, object, relative_path);
             if let Some(snapshot) = opfs_snapshot {
                 attach_file_system_file_snapshot_clone_payload(scope, object, snapshot)?;
             }

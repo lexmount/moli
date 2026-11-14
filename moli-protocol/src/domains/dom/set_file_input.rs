@@ -551,14 +551,59 @@ fn start_set_file_input_files_for_runtime_object(
 pub(super) fn selected_files_from_paths(
     paths: &[String],
 ) -> Result<Vec<SelectedFile>, PendingDomCommandStartError> {
+    if paths.len() == 1 && Path::new(&paths[0]).is_dir() {
+        let root = Path::new(&paths[0]);
+        let parent = root.parent().unwrap_or_else(|| Path::new(""));
+        let mut directories = vec![root.to_path_buf()];
+        let mut paths = Vec::new();
+        while let Some(directory) = directories.pop() {
+            for entry in fs::read_dir(&directory).map_err(|error| PendingDomCommandStartError {
+                code: -32000,
+                message: format!("Could not enumerate upload directory: {error}"),
+            })? {
+                let entry = entry.map_err(|error| PendingDomCommandStartError {
+                    code: -32000,
+                    message: format!("Could not enumerate upload directory: {error}"),
+                })?;
+                let kind = entry
+                    .file_type()
+                    .map_err(|error| PendingDomCommandStartError {
+                        code: -32000,
+                        message: format!("Could not inspect upload directory entry: {error}"),
+                    })?;
+                if kind.is_dir() {
+                    directories.push(entry.path());
+                } else if kind.is_file() {
+                    paths.push(entry.path());
+                }
+            }
+        }
+        paths.sort();
+        return paths
+            .into_iter()
+            .map(|path| {
+                let mut file = selected_file_from_file_path(&path)?;
+                file.relative_path = path
+                    .strip_prefix(parent)
+                    .expect("enumerated files stay below the chosen directory")
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                Ok(file)
+            })
+            .collect();
+    }
     paths
         .iter()
-        .map(|path| selected_file_from_path(path))
+        .map(|path| selected_file_from_file_path(Path::new(path)))
         .collect()
 }
 
-fn selected_file_from_path(path: &str) -> Result<SelectedFile, PendingDomCommandStartError> {
-    let file_path = Path::new(path);
+fn selected_file_from_file_path(
+    file_path: &Path,
+) -> Result<SelectedFile, PendingDomCommandStartError> {
+    let path = file_path.to_string_lossy();
     let metadata = fs::metadata(file_path).map_err(|_| PendingDomCommandStartError {
         code: -32000,
         message: format!("File not found : {path}"),
@@ -577,7 +622,7 @@ fn selected_file_from_path(path: &str) -> Result<SelectedFile, PendingDomCommand
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
-        .unwrap_or(path)
+        .unwrap_or(path.as_ref())
         .to_owned();
     let last_modified = metadata
         .modified()
@@ -592,9 +637,55 @@ fn selected_file_from_path(path: &str) -> Result<SelectedFile, PendingDomCommand
         });
     let mime_type = moli_web_mime::selected_file_mime_type(&name).to_owned();
     Ok(SelectedFile {
+        relative_path: String::new(),
         bytes,
         mime_type,
         name,
         last_modified,
     })
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+    fn selected_files_from_paths(paths: &[String]) -> Result<Vec<SelectedFile>, String> {
+        super::selected_files_from_paths(paths).map_err(|error| error.message)
+    }
+
+    #[test]
+    fn selected_directory_preserves_relative_paths_contents_and_empty_directories() {
+        let scratch = std::env::temp_dir().join(format!(
+            "moli-directory-upload-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = scratch.join("chosen");
+        fs::create_dir_all(root.join("nested/empty")).unwrap();
+        fs::write(root.join("a.txt"), b"first\0\xff").unwrap();
+        fs::write(root.join("nested/b.txt"), b"second").unwrap();
+        let selected = selected_files_from_paths(&[root.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].relative_path, "chosen/a.txt");
+        assert_eq!(selected[0].name, "a.txt");
+        assert_eq!(selected[0].bytes, b"first\0\xff");
+        assert_eq!(selected[1].relative_path, "chosen/nested/b.txt");
+        assert_eq!(selected[1].bytes, b"second");
+        let ordinary =
+            selected_files_from_paths(&[root.join("a.txt").to_string_lossy().into_owned()])
+                .unwrap();
+        assert!(ordinary[0].relative_path.is_empty());
+        assert!(
+            selected_files_from_paths(&[root.join("nested/empty").to_string_lossy().into_owned()])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            selected_files_from_paths(&[root.join("missing").to_string_lossy().into_owned()])
+                .is_err()
+        );
+        fs::remove_dir_all(scratch).unwrap();
+    }
 }

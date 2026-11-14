@@ -16,6 +16,7 @@ pub(crate) fn form_data_object_from_multipart_bytes<'s>(
     for entry in parsed {
         let value: v8::Local<'s, v8::Value> = if let Some(filename) = entry.filename {
             let file = SelectedFile {
+                relative_path: String::new(),
                 bytes: entry.body,
                 mime_type: entry.content_type,
                 name: filename,

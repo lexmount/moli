@@ -63,6 +63,7 @@ fn selected_file_from_path(path: &str, label: &str) -> Result<SelectedFile, DevT
                 .unwrap_or(0.0)
         });
     Ok(SelectedFile {
+        relative_path: String::new(),
         bytes,
         mime_type: String::new(),
         name,

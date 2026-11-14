@@ -18,9 +18,11 @@ fn selected_files_cache_signature(selected_files: &[SelectedFile]) -> String {
         }
         let _ = write!(
             signature,
-            "{}:{}:{}:{}:{}:{};",
+            "{}:{}:{}:{}:{}:{}:{}:{};",
             file.name.len(),
             file.name,
+            file.relative_path.len(),
+            file.relative_path,
             file.mime_type.len(),
             file.mime_type,
             file.last_modified.to_bits(),

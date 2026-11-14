@@ -13,6 +13,8 @@ pub struct SelectedFile {
     pub bytes: Vec<u8>,
     pub mime_type: String,
     pub name: String,
+    /// Path relative to the selected directory's parent; empty for ordinary files.
+    pub relative_path: String,
     pub last_modified: f64,
 }
 
