@@ -891,7 +891,6 @@ impl WorkerHandle {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn attach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,

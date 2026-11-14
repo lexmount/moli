@@ -379,6 +379,20 @@ impl RendererBrowserContextRuntime {
             .map_or(0, |runtime| runtime.drain_service_lane())
     }
 
+    pub fn attach_service_worker_runtime_inspector_session(
+        &self,
+        version_id: u64,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.service_worker_runtime_for_existing_registration()
+            .is_some_and(|runtime| {
+                runtime.attach_runtime_inspector_session(
+                    ServiceWorkerVersionId::from_u64_for_binding(version_id),
+                    inspector_session_id,
+                )
+            })
+    }
+
     pub async fn dispatch_service_worker_runtime_protocol_message(
         &self,
         version_id: u64,
