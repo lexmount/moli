@@ -679,6 +679,10 @@ pub(super) struct AsyncSubresourceFetchCompletion {
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchResult {
     Response(NavigationResponse),
+    ChildDocumentResponse {
+        response: NavigationResponse,
+        body: crate::network::ResourceInterceptionBody,
+    },
     Image {
         response: NavigationResponse,
         encoded: moli_parkable_image::ParkableImage,
@@ -687,6 +691,18 @@ pub(super) enum AsyncSubresourceFetchResult {
 }
 
 impl AsyncSubresourceFetchResult {
+    pub(super) fn bind_child_body(self, continuation: &mut PendingSubresourceContinuation) -> Self {
+        if let Self::ChildDocumentResponse { response, body } = self {
+            let PendingSubresourceContinuation::ChildDocument(fetch) = continuation else {
+                unreachable!("child response must retain its navigation owner")
+            };
+            fetch.set_response_body(body);
+            Self::Response(response)
+        } else {
+            self
+        }
+    }
+
     pub(super) fn from_image_result(
         result: std::result::Result<
             (NavigationResponse, moli_parkable_image::ParkableImage),
@@ -713,7 +729,9 @@ impl AsyncSubresourceFetchResult {
     #[cfg(test)]
     pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
         match self {
-            Self::Response(response) | Self::Image { response, .. } => Ok(response),
+            Self::Response(response)
+            | Self::Image { response, .. }
+            | Self::ChildDocumentResponse { response, .. } => Ok(response),
             Self::Failure(error) => Err(error),
         }
     }
@@ -721,7 +739,9 @@ impl AsyncSubresourceFetchResult {
     #[cfg(test)]
     pub(super) fn as_ref(&self) -> std::result::Result<&NavigationResponse, &String> {
         match self {
-            Self::Response(response) | Self::Image { response, .. } => Ok(response),
+            Self::Response(response)
+            | Self::Image { response, .. }
+            | Self::ChildDocumentResponse { response, .. } => Ok(response),
             Self::Failure(error) => Err(error),
         }
     }
@@ -730,7 +750,7 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn encoded(&self) -> Option<&moli_parkable_image::ParkableImage> {
         match self {
             Self::Image { encoded, .. } => Some(encoded),
-            Self::Response(_) | Self::Failure(_) => None,
+            Self::Response(_) | Self::ChildDocumentResponse { .. } | Self::Failure(_) => None,
         }
     }
 
@@ -743,14 +763,16 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn err(self) -> Option<String> {
         match self {
             Self::Failure(error) => Some(error),
-            Self::Response(_) | Self::Image { .. } => None,
+            Self::Response(_) | Self::Image { .. } | Self::ChildDocumentResponse { .. } => None,
         }
     }
 
     #[cfg(test)]
     pub(super) fn expect(self, message: &str) -> NavigationResponse {
         match self {
-            Self::Response(response) | Self::Image { response, .. } => response,
+            Self::Response(response)
+            | Self::Image { response, .. }
+            | Self::ChildDocumentResponse { response, .. } => response,
             Self::Failure(error) => panic!("{message}: {error:?}"),
         }
     }
@@ -759,7 +781,9 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn expect_err(self, message: &str) -> String {
         match self {
             Self::Failure(error) => error,
-            Self::Response(response) | Self::Image { response, .. } => {
+            Self::Response(response)
+            | Self::Image { response, .. }
+            | Self::ChildDocumentResponse { response, .. } => {
                 panic!("{message}: {response:?}")
             }
         }
@@ -1694,9 +1718,16 @@ pub(super) struct LoadedChildDocument {
 }
 
 #[derive(Debug)]
+pub(super) struct ChildDocumentDownload {
+    pub(super) network: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+    pub(super) response: crate::runtime::RendererPendingDownloadResponse,
+}
+
+#[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
     IgnoredNavigation(Box<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>),
+    Download(Box<ChildDocumentDownload>),
     Redirect(Box<crate::native_bridge::ChildDocumentFetch>),
 }
 
@@ -1796,6 +1827,7 @@ impl ChildDocumentLoadCompletion {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
             Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
+            Ok(ChildDocumentLoadOutcome::Download(download)) => Some(&download.network),
             Ok(ChildDocumentLoadOutcome::Redirect(_)) | Err(_) => None,
         }
     }

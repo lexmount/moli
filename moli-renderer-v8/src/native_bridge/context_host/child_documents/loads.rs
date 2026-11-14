@@ -20,9 +20,9 @@ use crate::{
         FrameDocumentInteractiveLifecycleAction, FrameRequestKind,
     },
     types::{
-        ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution, ChildDocumentLoadOutcome,
-        LoadedChildDocument, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-        SubresourceResourceType, SubresourceResponseBody,
+        ChildDocumentDownload, ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution,
+        ChildDocumentLoadOutcome, LoadedChildDocument, PendingSubresourceContinueEvent,
+        PendingSubresourceFetchInfo, SubresourceResourceType, SubresourceResponseBody,
     },
 };
 
@@ -206,7 +206,26 @@ impl PageScriptHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.mark_pending_document_load(load_id);
         }
+        let download_policy = match initiator {
+            ChildDocumentNavigationInitiator::BrowsingContext(Some(policy)) => policy,
+            _ => ChildNavigationDownloadPolicy {
+                source_allows: match initiator {
+                    ChildDocumentNavigationInitiator::FrameOwnerElement => {
+                        self.document_allows_downloads_for_handle(handle)
+                    }
+                    ChildDocumentNavigationInitiator::BrowsingContext(_) => {
+                        self.owner_allows_downloads(OwnerDispatchScope::Child(handle))
+                    }
+                },
+                target_allows: self
+                    .child_browsing_context_sandbox_policy_from_owner(handle)
+                    .allows_downloads,
+                bypass_response_csp: self.bypass_content_security_policy(),
+            },
+        };
         let fetch = ChildDocumentFetch {
+            response_body: None,
+            download_policy,
             target,
             network_attribution,
             network_info: None,
@@ -529,8 +548,29 @@ impl PageScriptHost {
             Ok(ChildDocumentLoadOutcome::Redirect(_)) => {
                 unreachable!("redirects retain the pending navigation")
             }
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => {
-                self.record_child_document_load_network(&network_attribution, *network);
+            Ok(
+                outcome @ (ChildDocumentLoadOutcome::IgnoredNavigation(_)
+                | ChildDocumentLoadOutcome::Download(_)),
+            ) => {
+                let (network, download) = match outcome {
+                    ChildDocumentLoadOutcome::IgnoredNavigation(network) => (*network, None),
+                    ChildDocumentLoadOutcome::Download(download) => {
+                        let ChildDocumentDownload { network, response } = *download;
+                        (network, Some(response))
+                    }
+                    _ => unreachable!("only non-committing outcomes enter this branch"),
+                };
+                self.record_child_document_load_network(&network_attribution, network);
+                if let Some(response) = download {
+                    self.record_pending_download_activation(
+                        crate::runtime::RendererPendingDownloadActivation {
+                            frame_id: Some(network_attribution.frame_id().to_owned()),
+                            url: response.final_url.clone(),
+                            suggested_filename: None,
+                            response: Some(response),
+                        },
+                    );
+                }
                 self.clear_child_browsing_context_pending_navigation(handle);
                 if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
                     entry.restore_navigation_entry_seed_from_committed();
@@ -894,6 +934,7 @@ impl PageScriptHost {
         head: moli_fetch::ResponseHead,
         body: Vec<u8>,
     ) {
+        fetch.discard_response_body();
         let result = match fetch.request.take() {
             Some(request) => fetch
                 .resource_loader
@@ -921,7 +962,67 @@ const UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP: &str =
 /// A child navigation request, prepared before it leaves the renderer so CDP
 /// Fetch can hold it. Every outcome reaches the navigation as a load
 /// completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::native_bridge::context_host) struct ChildNavigationDownloadPolicy {
+    pub(super) source_allows: bool,
+    pub(super) target_allows: bool,
+    pub(super) bypass_response_csp: bool,
+}
+
+impl ChildNavigationDownloadPolicy {
+    fn allows_response(self, policy: &DocumentPolicyContainer) -> bool {
+        self.source_allows
+            && self.target_allows
+            && (self.bypass_response_csp || policy.sandbox.allows_downloads)
+    }
+}
+
+impl PageScriptHost {
+    pub(in crate::native_bridge::context_host) fn capture_child_navigation_download_policy(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) -> ChildNavigationDownloadPolicy {
+        ChildNavigationDownloadPolicy {
+            source_allows: self.current_document_allows_downloads(scope),
+            target_allows: self
+                .child_browsing_context_sandbox_policy_from_owner(handle)
+                .allows_downloads,
+            bypass_response_csp: self.bypass_content_security_policy(),
+        }
+    }
+
+    /// Hyperlink/form activation uses the element's Document, which can differ
+    /// from the script realm invoking click() or submit().
+    pub(crate) fn set_pending_child_navigation_download_source(
+        &mut self,
+        handle: DomHandle,
+        source: DomHandle,
+    ) {
+        let allows = self.document_allows_downloads_for_handle(source);
+        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle)
+            && let Some(policy) = &mut entry.pending_download_policy
+        {
+            policy.source_allows = allows;
+        }
+    }
+
+    pub(in crate::native_bridge::context_host) fn remember_child_navigation_download_policy(
+        &mut self,
+        handle: DomHandle,
+        policy: ChildNavigationDownloadPolicy,
+        queued: bool,
+    ) -> bool {
+        if queued && let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+            entry.pending_download_policy = Some(policy);
+        }
+        queued
+    }
+}
+
 pub(crate) struct ChildDocumentFetch {
+    response_body: Option<crate::network::ResourceInterceptionBody>,
+    download_policy: ChildNavigationDownloadPolicy,
     target: ChildDocumentNavigationFetchTarget,
     network_attribution: ChildDocumentLoadNetworkAttribution,
     request: Option<crate::network::navigation::NavigationInterception>,
@@ -1006,12 +1107,17 @@ impl ChildDocumentFetch {
     /// The navigation retains its executor; only an owned transfer future leaves the Page.
     pub(crate) fn response_future(
         &self,
-    ) -> impl std::future::Future<Output = Result<crate::protocol_types::NavigationResponse, String>>
-    + Send
-    + 'static {
+    ) -> impl std::future::Future<Output = crate::types::AsyncSubresourceFetchResult> + Send + 'static
+    {
         let response = self
             .request
             .as_ref()
+            .filter(|request| !request.request().auth_requires_buffered_transport())
+            .map(|request| request.fetch_streaming());
+        let buffered = self
+            .request
+            .as_ref()
+            .filter(|request| request.request().auth_requires_buffered_transport())
             .map(|request| request.fetch_buffered());
         let service_worker_request = self.service_worker_client_id.and_then(|client_id| {
             self.request
@@ -1021,46 +1127,176 @@ impl ChildDocumentFetch {
         let runtime = self.browser_context_runtime.clone();
         let loader = self.resource_loader.clone();
         let completion_tx = self.completion_tx.clone();
-        // A child load can be scheduled inside a deep V8 callback. Box before
-        // handing the response future to Tokio so its transport state is not
-        // copied through every scheduler stack frame.
         Box::pin(async move {
-            let response =
-                response.ok_or_else(|| UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned())?;
-            if let Some((client_id, request)) = service_worker_request
-                && let Some(response) = runtime
-                    .fetch_service_worker_child_main_resource_for_reserved_client(
-                        client_id,
-                        &request,
-                        loader.request_client(),
-                        loader.task_runner(),
-                        completion_tx,
-                    )
+            use crate::types::AsyncSubresourceFetchResult;
+            let result = async move {
+                if response.is_none() && buffered.is_none() {
+                    return Err(UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned());
+                }
+                if let Some((client_id, request)) = service_worker_request
+                    && let Some(response) = runtime
+                        .fetch_service_worker_child_main_resource_for_reserved_client(
+                            client_id,
+                            &request,
+                            loader.request_client(),
+                            loader.task_runner(),
+                            completion_tx,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?
+                {
+                    loader
+                        .note_service_worker_response_ready()
+                        .map_err(|error| error.to_string())?;
+                    return Ok(AsyncSubresourceFetchResult::Response(response));
+                }
+                // Curl-managed multi-round authentication requires its buffered
+                // transport, just as in controlled XHR. Preserve that contract.
+                if let Some(buffered) = buffered {
+                    let (response, observation) = buffered
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .into_parts();
+                    let (head, body) = response.into_body();
+                    return Ok(AsyncSubresourceFetchResult::Response(
+                        crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
+                            head, body,
+                        )
+                        .with_network_request_headers(
+                            observation.map(|observation| observation.into_headers()),
+                        ),
+                    ));
+                }
+                let response = response.expect("a supported transfer was prepared above");
+                let (response, observation) = response
                     .await
                     .map_err(|error| error.to_string())?
-            {
-                loader
-                    .note_service_worker_response_ready()
+                    .into_parts();
+                let network_headers = observation.map(|observation| observation.into_headers());
+                let head = response.head();
+                // A caller-owned redirect advances on headers, not after an
+                // intermediate response body (which may never finish).
+                if matches!(head.status, 301 | 302 | 303 | 307 | 308)
+                    && head
+                        .headers
+                        .iter()
+                        .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                {
+                    drop(response);
+                    return Ok(AsyncSubresourceFetchResult::Response(
+                        crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
+                            head,
+                            moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
+                        )
+                        .with_network_request_headers(network_headers),
+                    ));
+                }
+                if !matches!(head.status, 204 | 205)
+                    && moli_web_mime::response_headers_indicate_attachment_download(&head.headers)
+                {
+                    let body = crate::network::ResourceInterceptionBody::new(
+                        response,
+                        loader.request_client().disk_pool(),
+                    );
+                    // This descriptor is never a Document body. The dedicated
+                    // result keeps the transfer explicit through Fetch pauses.
+                    let response =
+                        crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
+                            head,
+                            moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
+                        )
+                        .with_network_request_headers(network_headers);
+                    return Ok(AsyncSubresourceFetchResult::ChildDocumentResponse {
+                        response,
+                        body,
+                    });
+                }
+                let response = response
+                    .into_materialized_raw_response()
+                    .await
                     .map_err(|error| error.to_string())?;
-                return Ok(response);
+                let (head, body) = response.into_body();
+                Ok(AsyncSubresourceFetchResult::Response(
+                    crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
+                        head, body,
+                    )
+                    .with_network_request_headers(network_headers),
+                ))
             }
-            let (response, observation) = response
-                .await
-                .map_err(|error| error.to_string())?
-                .into_parts();
-            let (head, body) = response.into_body();
-            Ok(
-                crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
-                    head, body,
-                )
-                .with_network_request_headers(
-                    observation.map(|observation| observation.into_headers()),
-                ),
-            )
+            .await;
+            result.unwrap_or_else(AsyncSubresourceFetchResult::Failure)
         })
     }
 
+    pub(crate) fn set_response_body(&mut self, body: crate::network::ResourceInterceptionBody) {
+        self.response_body = Some(body);
+    }
+
+    pub(crate) fn response_body(&self) -> Option<&crate::network::ResourceInterceptionBody> {
+        self.response_body.as_ref()
+    }
+
+    pub(crate) fn discard_response_body(&mut self) {
+        if let Some(body) = self.response_body.take() {
+            body.cancel();
+        }
+    }
+
+    fn complete_transfer(mut self, result: crate::types::AsyncSubresourceFetchResult) {
+        use crate::types::AsyncSubresourceFetchResult;
+        let result = match result {
+            AsyncSubresourceFetchResult::Response(response) => Ok(response),
+            AsyncSubresourceFetchResult::ChildDocumentResponse { response, body } => {
+                self.set_response_body(body);
+                Ok(response)
+            }
+            AsyncSubresourceFetchResult::Failure(error) => Err(error),
+            AsyncSubresourceFetchResult::Image { .. } => {
+                unreachable!("child navigation cannot receive an image result")
+            }
+        };
+        self.complete_response(result);
+    }
+
     pub(crate) fn complete_response(
+        mut self,
+        response: Result<crate::protocol_types::NavigationResponse, String>,
+    ) {
+        // A response-stage override can turn an attachment back into a
+        // Document. Only that case needs materialization before committing.
+        if response.as_ref().is_ok_and(|response| {
+            !matches!(response.status, 204 | 205)
+                && !moli_web_mime::response_headers_indicate_attachment_download(&response.headers)
+        }) && let Some(body) = self.response_body.take()
+        {
+            let loader = self.resource_loader.clone();
+            loader.spawn_resource_task(async move {
+                let result = async {
+                    let response = response?;
+                    let captured = body
+                        .capture(usize::MAX)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let bytes = captured
+                        .try_bytes()
+                        .map_err(|error| error.to_string())?
+                        .into_owned();
+                    Ok(
+                        crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
+                            response.head(),
+                            moli_fetch::ResponseBody::materialized_bytes(bytes),
+                        ),
+                    )
+                }
+                .await;
+                self.complete_materialized_response(result);
+            });
+            return;
+        }
+        self.complete_materialized_response(response);
+    }
+
+    fn complete_materialized_response(
         mut self,
         response: Result<crate::protocol_types::NavigationResponse, String>,
     ) {
@@ -1079,7 +1315,7 @@ impl ChildDocumentFetch {
         let resource_loader = self.resource_loader.clone();
         let response = self.response_future();
         resource_loader.spawn_resource_task(async move {
-            self.complete_response(response.await);
+            self.complete_transfer(response.await);
         });
     }
 
@@ -1093,6 +1329,7 @@ impl ChildDocumentFetch {
             .follow_redirect(&head)
             .map_err(|error| error.to_string())?
         {
+            self.discard_response_body();
             self.redirect = Some(redirect.into());
             self.request = Some(request);
             return Ok(None);
@@ -1107,6 +1344,8 @@ impl ChildDocumentFetch {
             body,
             navigation_url,
             &self.parent_character_set,
+            self.download_policy,
+            self.response_body.take(),
         )
         .map(Some)
     }
@@ -1170,24 +1409,62 @@ fn child_document_load_outcome_from_response(
     body: moli_fetch::ResponseBody,
     navigation_url: url::Url,
     parent_character_set: &str,
+    download_policy: ChildNavigationDownloadPolicy,
+    download_body: Option<crate::network::ResourceInterceptionBody>,
 ) -> Result<ChildDocumentLoadOutcome, String> {
-    let response_body = SubresourceResponseBody::from_bytes(
-        body.try_into_materialized_bytes()
-            .map_err(|_| "child document response body should remain materialized".to_owned())?,
-    );
-    let encoded_data_length = response_body.len();
-    let network = crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+    let bytes = body
+        .try_into_materialized_bytes()
+        .map_err(|_| "child document response body should remain materialized".to_owned())?;
+    let mut network = crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
         request_url,
         request_method,
         request_headers,
         final_url: head.final_url.as_str().to_owned(),
         status: head.status,
         response_headers: head.headers.clone(),
-        encoded_data_length,
-        response_body: Some(response_body.clone()),
+        encoded_data_length: bytes.len(),
+        response_body: None,
         from_cache: head.from_cache,
         cache_state: head.cache_state,
     };
+    let policy_container =
+        DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &navigation_url);
+    if matches!(head.status, 204 | 205) {
+        if let Some(body) = download_body {
+            body.cancel();
+        }
+        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
+            network,
+        )));
+    }
+    if moli_web_mime::response_headers_indicate_attachment_download(&head.headers) {
+        if !download_policy.allows_response(&policy_container) {
+            if let Some(body) = download_body {
+                body.cancel();
+            }
+            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
+                network,
+            )));
+        }
+        let body = download_body
+            .map(crate::runtime::RendererDownloadBody::Network)
+            .unwrap_or_else(|| bytes.into());
+        // Attachment bodies belong only to the download, not the aborted
+        // Document's Network snapshot (which is never a getResponseBody source).
+        return Ok(ChildDocumentLoadOutcome::Download(Box::new(
+            ChildDocumentDownload {
+                network,
+                response: crate::runtime::RendererPendingDownloadResponse {
+                    final_url: head.final_url.as_str().to_owned(),
+                    status: head.status,
+                    headers: head.headers,
+                    body,
+                },
+            },
+        )));
+    }
+    let response_body = SubresourceResponseBody::from_bytes(bytes);
+    network.response_body = Some(response_body.clone());
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
         return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
             network,
@@ -1208,8 +1485,6 @@ fn child_document_load_outcome_from_response(
         );
         (markup, character_set.to_owned())
     };
-    let policy_container =
-        DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &navigation_url);
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
             final_url: navigation_url,
@@ -1232,7 +1507,6 @@ fn child_document_response_should_ignore_navigation(
     headers: &[(String, Vec<u8>)],
 ) -> bool {
     matches!(status, 204 | 205)
-        || moli_web_mime::response_headers_indicate_attachment_download(headers)
         || child_document_content_type_from_headers(headers)
             .is_some_and(|mime| !moli_web_mime::is_supported_document_mime_type(&mime))
 }
@@ -1321,6 +1595,12 @@ mod tests {
                     initiating_loader.task_runner(),
                 );
             let fetch = ChildDocumentFetch {
+                response_body: None,
+                download_policy: ChildNavigationDownloadPolicy {
+                    source_allows: true,
+                    target_allows: true,
+                    bypass_response_csp: false,
+                },
                 target,
                 network_attribution: ChildDocumentLoadNetworkAttribution::new(
                     "retired-child".to_owned(),
@@ -1387,6 +1667,12 @@ mod tests {
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
             url::Url::parse("https://example.test/child").unwrap(),
             "UTF-8",
+            ChildNavigationDownloadPolicy {
+                source_allows: true,
+                target_allows: true,
+                bypass_response_csp: false,
+            },
+            None,
         )
         .expect("child document response should load");
         let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
@@ -1455,6 +1741,125 @@ mod tests {
             response_referrer_policy(&headers),
             Some("no-referrer".to_owned())
         );
+    }
+
+    #[test]
+    fn child_attachment_requires_source_target_and_response_download_permission() {
+        for (source_allows, target_allows, response_sandbox, bypass_response_csp, allowed) in [
+            (true, true, "", false, true),
+            (false, true, "", false, false),
+            (true, false, "", false, false),
+            (true, true, "sandbox allow-scripts", false, false),
+            (true, true, "sandbox allow-downloads", false, true),
+            (true, true, "sandbox", true, true),
+            (false, true, "sandbox", true, false),
+            (true, false, "sandbox", true, false),
+        ] {
+            let url = url::Url::parse("https://download.test/attachment").unwrap();
+            let mut headers = vec![("Content-Disposition".into(), b"attachment".to_vec())];
+            if !response_sandbox.is_empty() {
+                headers.push((
+                    "Content-Security-Policy".into(),
+                    response_sandbox.as_bytes().to_vec(),
+                ));
+            }
+            let head = moli_fetch::ResponseHead {
+                final_url: url.clone(),
+                status: 200,
+                status_text: None,
+                headers,
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                cache_state: Default::default(),
+                negotiated_http_version: None,
+            };
+            let body = moli_fetch::ResponseBody::materialized_bytes(Vec::new());
+            let outcome = child_document_load_outcome_from_response(
+                url.to_string(),
+                "GET".into(),
+                Vec::new(),
+                head,
+                body,
+                url,
+                "UTF-8",
+                ChildNavigationDownloadPolicy {
+                    source_allows,
+                    target_allows,
+                    bypass_response_csp,
+                },
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                matches!(outcome, ChildDocumentLoadOutcome::Download(_)),
+                allowed,
+                "source={source_allows} target={target_allows} response={response_sandbox} bypass={bypass_response_csp}"
+            );
+        }
+    }
+
+    #[test]
+    fn child_document_attachment_preserves_download_bytes_without_committing() {
+        let body = b"attachment\0\xff".to_vec();
+        for status in [200, 204, 205] {
+            let url = url::Url::parse("https://example.test/download").unwrap();
+            let headers = vec![(
+                "Content-Disposition".to_owned(),
+                b"attachment; filename=saved.bin".to_vec(),
+            )];
+            let outcome = child_document_load_outcome_from_response(
+                url.as_str().to_owned(),
+                "GET".to_owned(),
+                Vec::new(),
+                moli_fetch::ResponseHead {
+                    status_text: None,
+                    final_url: url.clone(),
+                    status,
+                    headers: headers.clone(),
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    cache_state: Default::default(),
+                    negotiated_http_version: None,
+                },
+                moli_fetch::ResponseBody::materialized_bytes(body.clone()),
+                url.clone(),
+                "UTF-8",
+                ChildNavigationDownloadPolicy {
+                    source_allows: true,
+                    target_allows: true,
+                    bypass_response_csp: false,
+                },
+                None,
+            )
+            .unwrap();
+            if status == 200 {
+                let ChildDocumentLoadOutcome::Download(download) = outcome else {
+                    panic!("an attachment must hand off a download instead of a Document");
+                };
+                let ChildDocumentDownload { network, response } = *download;
+                assert_eq!(response.final_url, url.as_str());
+                assert_eq!(response.headers, headers);
+                assert_eq!(
+                    response.body,
+                    crate::runtime::RendererDownloadBody::Buffered(body.clone())
+                );
+                assert!(
+                    network.response_body.is_none(),
+                    "attachment body belongs only to the download"
+                );
+            } else {
+                assert!(
+                    matches!(outcome, ChildDocumentLoadOutcome::IgnoredNavigation(_)),
+                    "204/205 must not create a download"
+                );
+            }
+        }
     }
 
     #[test]

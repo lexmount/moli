@@ -3110,9 +3110,22 @@ impl PageScriptHost {
         &mut self,
         event: PendingSubresourceContinueEvent,
     ) {
+        let response_body = match &event {
+            PendingSubresourceContinueEvent::ResponsePaused(info) => self
+                .pending_subresource_responses
+                .get(&info.internal_id)
+                .and_then(|pending| match &pending.pending.continuation {
+                    PendingSubresourceContinuation::ChildDocument(fetch) => {
+                        fetch.response_body().cloned()
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        };
         if let Some(source_document) = self.root_document_lifecycle_identity()
             && self.append_live_turn_owner_action(
                 crate::runtime::RendererOwnerAction::SubresourceContinue {
+                    response_body,
                     network_pause: None,
                     source_document,
                     event: Box::new(event.clone()),

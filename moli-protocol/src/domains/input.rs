@@ -2059,6 +2059,7 @@ mod producer_tests {
         );
         let mut slot = super::InputPreparedOutputSlot::from_outputs(super::InputPreparedOutputs {
             download_activations: vec![RendererPendingDownloadActivation {
+                frame_id: None,
                 url: "https://example.test/download".to_owned(),
                 suggested_filename: Some("download.txt".to_owned()),
                 response: None,
@@ -2435,6 +2436,7 @@ mod producer_tests {
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
                 super::InputPreparedOutputs::from_download_activations_for_test(vec![
                     RendererPendingDownloadActivation {
+                        frame_id: None,
                         url: "https://example.test/report.txt".to_owned(),
                         suggested_filename: Some("report.txt".to_owned()),
                         response: None,

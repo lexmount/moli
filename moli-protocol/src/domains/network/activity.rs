@@ -158,6 +158,7 @@ impl NetworkPreparedOutputs {
         source_document: moli_core::RendererDocumentLifecycleIdentity,
         event: moli_core::page::PendingSubresourceContinueEvent,
         network_pause: Option<moli_core::network::ResourceInterceptionPause>,
+        response_body: Option<moli_core::network::ResourceInterceptionBody>,
     ) -> Self {
         Self {
             automatic_subresource_continuations: Vec::new(),
@@ -168,6 +169,7 @@ impl NetworkPreparedOutputs {
                     source_document,
                     event,
                     network_pause,
+                    response_body,
                 )
                 .into_iter()
                 .collect(),

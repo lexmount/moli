@@ -226,6 +226,31 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn owner_allows_downloads(&self, owner: OwnerDispatchScope) -> bool {
+        match owner {
+            OwnerDispatchScope::Top => self.document_policy_container().sandbox.allows_downloads,
+            OwnerDispatchScope::Child(handle) => self
+                .child_browsing_contexts
+                .get(&handle)
+                .is_some_and(|entry| entry.document_sandbox_policy().allows_downloads),
+            OwnerDispatchScope::LightweightPopup(id) => self
+                .lightweight_popup_policy_container(id)
+                .is_some_and(|policy| policy.sandbox.allows_downloads),
+        }
+    }
+
+    pub(crate) fn current_document_allows_downloads(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> bool {
+        self.owner_allows_downloads(self.entered_owner_dispatch_scope(scope))
+    }
+
+    pub(crate) fn document_allows_downloads_for_handle(&self, handle: DomHandle) -> bool {
+        self.owner_dispatch_scope_for_node(handle)
+            .is_some_and(|owner| self.owner_allows_downloads(owner))
+    }
+
     pub(crate) fn document_permissions_policy_for_document_handle(
         &self,
         document: DomHandle,

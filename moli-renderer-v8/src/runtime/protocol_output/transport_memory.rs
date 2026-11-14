@@ -205,18 +205,20 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
             event.source_frame_id().map(string_charge).unwrap_or(0)
         }
         RendererOwnerAction::Download(event) => {
-            let mut total = string_charge(&event.url).saturating_add(
-                event
-                    .suggested_filename
-                    .as_deref()
-                    .map(string_charge)
-                    .unwrap_or(0),
-            );
+            let mut total = string_charge(&event.url)
+                .saturating_add(event.frame_id.as_deref().map_or(0, string_charge))
+                .saturating_add(
+                    event
+                        .suggested_filename
+                        .as_deref()
+                        .map(string_charge)
+                        .unwrap_or(0),
+                );
             if let Some(response) = &event.response {
                 total = total
                     .saturating_add(string_charge(&response.final_url))
                     .saturating_add(headers_charge(&response.headers))
-                    .saturating_add(response.body.capacity());
+                    .saturating_add(response.body.transport_charge_bytes());
             }
             total
         }

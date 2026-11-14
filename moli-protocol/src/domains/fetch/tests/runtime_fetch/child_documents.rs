@@ -522,7 +522,7 @@ async fn ending_fetch_session_resumes_child_navigation_through_remaining_handler
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn child_frame_document_ignored_response_finishes_network_without_commit() {
+async fn child_frame_document_noncommitting_response_finishes_network_once() {
     for (status, attachment) in [(204, false), (205, false), (200, true)] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -552,6 +552,10 @@ async fn child_frame_document_ignored_response_finishes_network_without_commit()
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let mut ctx = TestContext::new();
         with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+        ctx.with_fixture(|conn| {
+            conn.download_behavior
+                .set_global("deny".to_owned(), None, false)
+        });
         let frame_id = child_frame_id_for_single_iframe_async(&mut ctx, 37_500).await;
         ctx.sent.clear();
         enable_fetch_patterns(&mut ctx, 37_501, json!([{"resourceType": "Document"}])).await;
@@ -569,13 +573,47 @@ async fn child_frame_document_ignored_response_finishes_network_without_commit()
         )
         .await;
         continue_child_document(&mut ctx, 37_504, &paused).await;
-        wait_for_network_loading_finished(
+        let expected_terminal = if attachment {
+            "Network.loadingFailed"
+        } else {
+            "Network.loadingFinished"
+        };
+        wait_until_message(
             &mut ctx,
             "SID-1",
-            &network_id,
-            "ignored response terminal",
+            "non-committing response terminal",
+            |message| {
+                message["method"] == expected_terminal
+                    && message["params"]["requestId"] == network_id
+            },
         )
         .await;
+        if attachment {
+            let terminal = terminal_events(&ctx, &network_id)[0].clone();
+            assert_eq!(terminal["params"]["errorText"], "net::ERR_ABORTED");
+            assert_eq!(terminal["params"]["canceled"], true);
+            wait_until_messages(&mut ctx, "SID-1", "denied child download", |messages| {
+                let Some(begin) = messages.iter().find(|message| {
+                    message["method"] == "Page.downloadWillBegin"
+                        && message["params"]["frameId"] == frame_id
+                        && message["params"]["url"] == format!("http://{addr}/child")
+                }) else {
+                    return false;
+                };
+                messages.iter().any(|message| {
+                    message["method"] == "Page.downloadProgress"
+                        && message["params"]["guid"] == begin["params"]["guid"]
+                        && message["params"]["state"] == "canceled"
+                })
+            })
+            .await;
+        } else {
+            assert!(
+                !ctx.sent
+                    .iter()
+                    .any(|message| message["method"] == "Page.downloadWillBegin")
+            );
+        }
         assert_eq!(
             terminal_events(&ctx, &network_id).len(),
             1,

@@ -865,9 +865,14 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> crate::document_runtime::DocumentSandboxPolicy {
-        document_sandbox_policy_from_attribute(
+        let mut policy = document_sandbox_policy_from_attribute(
             self.dom_host().get_attribute(handle, "sandbox").as_deref(),
-        )
+        );
+        let parent = self
+            .owner_dispatch_scope_for_node(handle)
+            .unwrap_or(OwnerDispatchScope::Top);
+        policy.allows_downloads &= self.owner_allows_downloads(parent);
+        policy
     }
 
     pub(crate) fn child_browsing_context_document_credentialless(&self, handle: DomHandle) -> bool {
@@ -971,6 +976,9 @@ pub(in crate::native_bridge::context_host) fn document_sandbox_policy_from_attri
         forces_opaque_origin: sandbox_attribute_forces_opaque_origin(value),
         allows_scripts: sandbox_attribute_allows_scripts(value),
         allows_modals: sandbox_attribute_allows_modals(value),
+        allows_downloads: value
+            .split_ascii_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("allow-downloads")),
         allows_top_navigation: sandbox_attribute_allows_top_navigation(value),
         allows_popups_to_escape: sandbox_attribute_allows_popups_to_escape(value),
         sandboxes_document_domain: sandbox_attribute_sets_document_domain_flag(value),

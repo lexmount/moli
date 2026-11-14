@@ -576,48 +576,92 @@ async fn spawn_delayed_download_fixture_server(
     (addr, server)
 }
 
-async fn spawn_delayed_plain_attachment_fixture_server(
+async fn spawn_plain_attachment_fixture_server(
     body: &'static str,
     delay: Duration,
-) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    frame_depth: usize,
+    body_gate: Option<Arc<tokio::sync::Notify>>,
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<()>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind delayed plain attachment fixture server");
     let addr = listener
         .local_addr()
         .expect("delayed plain attachment fixture server addr");
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let request_counter = requests.clone();
     let server = tokio::spawn(async move {
         let app = Router::new()
             .route(
                 "/page",
-                get(|| async move {
+                get(move || async move {
                     (
                         [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
-                        "<!doctype html><html><body><a id=\"dl\" href=\"/download\" style=\"display:inline-block;width:200px;height:200px\">download</a></body></html>",
+                        if frame_depth == 0 {
+                            "<!doctype html><a id=dl href=/download>download</a>"
+                        } else {
+                            "<!doctype html><iframe src=/frame></iframe>"
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/frame",
+                get(move || async move {
+                    (
+                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                        if frame_depth == 1 {
+                            "<!doctype html><a id=dl href=/download>download</a>"
+                        } else {
+                            "<!doctype html><iframe src=/leaf></iframe>"
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/leaf",
+                get(|| async {
+                    (
+                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                        "<!doctype html><a id=dl href=/download>download</a>",
                     )
                 }),
             )
             .route(
                 "/download",
-                get(move || async move {
-                    sleep(delay).await;
-                    (
-                        [
-                            (axum::http::header::CONTENT_TYPE.as_str(), "text/plain"),
-                            (
-                                axum::http::header::CONTENT_DISPOSITION.as_str(),
-                                "attachment; filename=\"saved.txt\"",
-                            ),
-                        ],
-                        body,
-                    )
+                get(move || {
+                    let counter = request_counter.clone();
+                    let gate = body_gate.clone();
+                    async move {
+                        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        sleep(delay).await;
+                        (
+                            [
+                                (axum::http::header::CONTENT_TYPE.as_str(), "text/plain"),
+                                (
+                                    axum::http::header::CONTENT_DISPOSITION.as_str(),
+                                    "attachment; filename=\"saved.txt\"",
+                                ),
+                            ],
+                            axum::body::Body::from_stream(futures_util::stream::once(async move {
+                                if let Some(gate) = gate {
+                                    gate.notified().await;
+                                }
+                                Ok::<_, std::io::Error>(body)
+                            })),
+                        )
+                    }
                 }),
             );
         axum::serve(listener, app)
             .await
             .expect("delayed plain attachment fixture server should serve");
     });
-    (addr, server)
+    (addr, server, requests)
 }
 
 async fn spawn_post_parse_location_download_fixture_server(

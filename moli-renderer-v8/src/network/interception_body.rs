@@ -89,6 +89,26 @@ impl ResourceInterceptionBody {
 
     /// Retire this transfer, including a read currently waiting for body data.
     /// This does not consume or resume the interception decision port.
+    pub fn cancellation_handle(&self) -> FetchCancelHandle {
+        self.cancel.clone()
+    }
+
+    /// Move an unread transport directly to its terminal consumer. If a Fetch
+    /// client already started reading, continue through the shared capture.
+    pub async fn take_unread_response(&self) -> Option<StreamingRawResponse> {
+        let mut state = self.state.lock().await;
+        if self.captured.lock().len() != 0 || !matches!(*state, BodyState::Receiving(_)) {
+            return None;
+        }
+        let BodyState::Receiving(response) = std::mem::replace(
+            &mut *state,
+            BodyState::Failed("response body transferred to download".into()),
+        ) else {
+            unreachable!()
+        };
+        Some(*response)
+    }
+
     pub fn cancel(&self) {
         self.cancel.cancel();
         if let Ok(mut state) = self.state.try_lock()
@@ -219,6 +239,50 @@ impl ResourceInterceptionBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn download_takes_only_unread_transports_and_keeps_shared_cancellation() {
+        for read_prefix in [false, true] {
+            let (chunks, body_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (complete, completion_rx) = tokio::sync::oneshot::channel();
+            let cancel = FetchCancelHandle::new();
+            let response = StreamingRawResponse::new(
+                "https://capture.test/download".parse().unwrap(),
+                200,
+                Vec::new(),
+                None,
+                Vec::new(),
+                false,
+                Vec::new(),
+                body_rx,
+                cancel.clone(),
+                completion_rx,
+            );
+            let body = ResourceInterceptionBody::new(response, None);
+            chunks.send(b"first".to_vec()).unwrap();
+            if read_prefix {
+                assert_eq!(body.read_chunk(0, 5).await.unwrap().0, b"first");
+                assert!(body.take_unread_response().await.is_none());
+                chunks.send(b"second".to_vec()).unwrap();
+                drop(chunks);
+                complete.send(Ok(())).unwrap();
+                assert_eq!(
+                    body.capture(usize::MAX)
+                        .await
+                        .unwrap()
+                        .materialize_bytes()
+                        .unwrap(),
+                    b"firstsecond"
+                );
+            } else {
+                let mut response = body.take_unread_response().await.unwrap();
+                assert!(body.take_unread_response().await.is_none());
+                assert_eq!(response.next_chunk().await.unwrap(), b"first");
+                body.cancellation_handle().cancel();
+                assert!(cancel.is_cancelled());
+            }
+        }
+    }
 
     #[tokio::test]
     async fn cancelling_page_capture_does_not_wait_for_a_protocol_reader() {

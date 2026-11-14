@@ -174,6 +174,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
             && !is_same_document_traversal
         {
             unsafe { &mut *host_ptr }.queue_child_browsing_context_navigation_without_seed_update(
+                scope,
                 child_handle,
                 &applied.url,
             );

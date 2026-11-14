@@ -434,12 +434,16 @@ impl ScriptVm {
         completion_result: AsyncSubresourceFetchResult,
         mut supplied_network_record: Option<crate::types::SubresourceNetworkRecord>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let completion_result = completion_result.bind_child_body(&mut pending.continuation);
         let (supplied_parkable_image, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
             AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
+                unreachable!("body bound above")
+            }
         };
         let response_filter = response_filter.or_else(|| {
             (!skip_fetch_security_validation

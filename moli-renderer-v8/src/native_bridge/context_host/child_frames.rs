@@ -41,6 +41,8 @@ pub(in crate::native_bridge::context_host) use request_scope::{
 #[derive(Debug, Clone)]
 pub(super) struct ChildBrowsingContextEntry {
     frame_id: String,
+    pub(super) pending_download_policy:
+        Option<super::child_documents::ChildNavigationDownloadPolicy>,
     retiring: bool,
     current_document_loader_id: Option<String>,
     name: Option<String>,
@@ -976,6 +978,7 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn clear_pending_navigation(&mut self) {
+        self.pending_download_policy = None;
         self.pending_attribute_bootstrap_commit = false;
         self.pending_live_navigation = None;
         self.pending_live_navigation_reflects_window_state = false;

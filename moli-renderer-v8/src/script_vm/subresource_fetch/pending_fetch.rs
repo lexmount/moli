@@ -560,8 +560,10 @@ impl ScriptVm {
         };
         let response = fetch.response_future();
         self.spawn_running_subresource_response(state, async move {
-            prepared?;
-            response.await
+            match prepared {
+                Ok(()) => response.await,
+                Err(error) => AsyncSubresourceFetchResult::Failure(error),
+            }
         });
     }
 
@@ -2047,11 +2049,17 @@ impl ScriptVm {
                 .map_err(|error| anyhow!(error))?;
             return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
         }
-        let pending = self
+        let mut pending = self
             ._context_host
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
+
+        if let PendingSubresourceContinuation::ChildDocument(fetch) =
+            &mut pending.pending.continuation
+        {
+            fetch.discard_response_body();
+        }
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {

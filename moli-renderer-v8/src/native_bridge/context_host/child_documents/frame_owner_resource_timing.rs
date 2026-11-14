@@ -11,7 +11,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::native_bridge::context_host) enum ChildDocumentNavigationInitiator {
     FrameOwnerElement,
-    BrowsingContext,
+    BrowsingContext(Option<super::ChildNavigationDownloadPolicy>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

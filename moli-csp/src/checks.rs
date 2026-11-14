@@ -75,6 +75,18 @@ pub fn content_security_policy_sandbox_allows_scripts(policies: &[ContentSecurit
         .all(|policy| policy_sandbox_allows_scripts(policy).unwrap_or(true))
 }
 
+pub fn content_security_policy_sandbox_allows_downloads(
+    policies: &[ContentSecurityPolicy],
+) -> bool {
+    policies.iter().all(|policy| {
+        directive_source_list(policy, SANDBOX).is_none_or(|sources| {
+            sources
+                .iter()
+                .any(|token| token.eq_ignore_ascii_case("allow-downloads"))
+        })
+    })
+}
+
 pub fn content_security_policy_sandbox_allows_modals(policies: &[ContentSecurityPolicy]) -> bool {
     policies
         .iter()

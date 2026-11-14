@@ -1185,6 +1185,7 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
         InputPreparedOutputSlot::from_outputs(
             InputPreparedOutputs::from_download_activations_for_test(vec![
                 RendererPendingDownloadActivation {
+                    frame_id: None,
                     url: "https://example.test/report.txt".to_owned(),
                     suggested_filename: Some("report.txt".to_owned()),
                     response: None,

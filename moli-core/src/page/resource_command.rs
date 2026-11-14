@@ -75,7 +75,9 @@ impl CompletedResourceCommand {
 
 impl super::PageDocumentCommandTarget {
     pub fn native_response_body(&self) -> Option<&crate::network::ResourceInterceptionBody> {
-        self.network_pause.as_ref()?.response_body()
+        self.response_body
+            .as_ref()
+            .or_else(|| self.network_pause.as_ref()?.response_body())
     }
     pub fn update_native_interception_policy(
         &self,
@@ -91,6 +93,12 @@ impl super::PageDocumentCommandTarget {
 
     pub fn has_native_network_pause(&self) -> bool {
         self.network_pause.is_some()
+    }
+
+    /// Supplies a readable body without transferring the renderer's decision port.
+    pub fn with_response_body(mut self, body: crate::network::ResourceInterceptionBody) -> Self {
+        self.response_body = Some(body);
+        self
     }
 
     pub fn with_network_pause(mut self, pause: ResourceInterceptionPause) -> Self {

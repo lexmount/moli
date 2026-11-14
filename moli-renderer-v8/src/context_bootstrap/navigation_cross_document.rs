@@ -113,6 +113,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
     dispatch_beforeunload_for_runtime_owner(scope, owner);
     let host = unsafe { &mut *host_ptr };
     host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+        scope,
         child_handle,
         next_url.as_str(),
         entry_seed,

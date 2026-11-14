@@ -43,6 +43,7 @@ impl PreparedSubresourceContinueAction {
         owner: TargetPageResidenceIdentity,
         event: PendingSubresourceContinueEvent,
         network_pause: Option<moli_core::network::ResourceInterceptionPause>,
+        response_body: Option<moli_core::network::ResourceInterceptionBody>,
     ) -> Self {
         let internal_id = Self::internal_id(&event);
         let mut request = conn.claim_subresource_continue_request_for_owner(
@@ -51,7 +52,7 @@ impl PreparedSubresourceContinueAction {
             internal_id,
             matches!(&event, PendingSubresourceContinueEvent::Completed { .. }),
         );
-        if let Some(pause) = network_pause {
+        if network_pause.is_some() || response_body.is_some() {
             let pending = match request.as_mut() {
                 Some(ClaimedSubresourceContinueRequest::InFlight(in_flight)) => {
                     Some(&mut in_flight.pending)
@@ -62,7 +63,12 @@ impl PreparedSubresourceContinueAction {
                 None => None,
             };
             if let Some(pending) = pending {
-                pending.bind_native_network_pause(pause);
+                if let Some(pause) = network_pause {
+                    pending.bind_native_network_pause(pause);
+                }
+                if let Some(body) = response_body {
+                    pending.bind_response_body(body);
+                }
             }
         }
         Self {
@@ -80,7 +86,14 @@ impl PreparedSubresourceContinueAction {
     ) -> Option<Self> {
         let command_owner = CommandOwnerScope::capture(conn, session_id);
         let owner = conn.target_page_residence_identity_for_owner(&command_owner)?;
-        Some(Self::capture(conn, &command_owner, owner, event, None))
+        Some(Self::capture(
+            conn,
+            &command_owner,
+            owner,
+            event,
+            None,
+            None,
+        ))
     }
 }
 
@@ -90,6 +103,7 @@ pub(in crate::domains) fn prepare_subresource_continue_action_for_renderer_recor
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     event: PendingSubresourceContinueEvent,
     network_pause: Option<moli_core::network::ResourceInterceptionPause>,
+    response_body: Option<moli_core::network::ResourceInterceptionBody>,
 ) -> Option<PreparedSubresourceContinueAction> {
     let binding =
         conn.target_root_document_output_identity_for_owner(command_owner, source_document)?;
@@ -100,6 +114,7 @@ pub(in crate::domains) fn prepare_subresource_continue_action_for_renderer_recor
         owner,
         event,
         network_pause,
+        response_body,
     ))
 }
 

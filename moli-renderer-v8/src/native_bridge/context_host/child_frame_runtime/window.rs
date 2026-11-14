@@ -2510,6 +2510,7 @@ fn cross_origin_location_replace_callback<'s>(
     let host = unsafe { &mut *host_ptr };
     let target = host.resolve_child_browsing_context_url(handle, &parsed.url);
     let _ = host.queue_child_browsing_context_navigation_from_existing_seed(
+        scope,
         handle,
         target.as_str(),
         true,

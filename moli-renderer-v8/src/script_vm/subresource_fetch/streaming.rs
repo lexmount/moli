@@ -74,13 +74,12 @@ impl ScriptVm {
         self.spawn_running_subresource_response(state, response);
     }
 
-    pub(super) fn spawn_running_subresource_response(
+    pub(super) fn spawn_running_subresource_response<
+        R: Into<AsyncSubresourceFetchResult> + Send + 'static,
+    >(
         &mut self,
         state: RunningSubresourceFetchState,
-        response: impl std::future::Future<
-            Output = std::result::Result<crate::protocol_types::NavigationResponse, String>,
-        > + Send
-        + 'static,
+        response: impl std::future::Future<Output = R> + Send + 'static,
     ) {
         let task_runner = state.pending.load.task_runner();
         let internal_id = state.pending.info.internal_id;
@@ -112,19 +111,24 @@ impl ScriptVm {
     }
     pub(super) fn complete_running_subresource_fetch_body(
         &mut self,
-        running: RunningSubresourceFetchState,
+        mut running: RunningSubresourceFetchState,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let completion_result =
+            completion_result.bind_child_body(&mut running.pending.continuation);
         let (encoded, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
             AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
+                unreachable!("body bound above")
+            }
         };
         let RunningSubresourceFetchState {
             pending,

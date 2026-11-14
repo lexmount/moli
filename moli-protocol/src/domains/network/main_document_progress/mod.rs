@@ -1477,6 +1477,15 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
         negotiated_http_version: None,
         has_extra_info: false,
     });
+    if !matches!(network.status, 204 | 205)
+        && moli_web_mime::response_headers_indicate_attachment_download(&network.response_headers)
+    {
+        output.emit_event(MainDocumentNavigationProgressEvent::LoadingFailed {
+            target,
+            error_text: moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+        });
+        return;
+    }
     record_child_document_response_body(
         conn,
         owner,
