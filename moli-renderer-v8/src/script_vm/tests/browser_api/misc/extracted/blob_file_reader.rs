@@ -1110,3 +1110,63 @@ async fn run_file_reader_read_tasks(
             .expect("FileReading source should be drained")
     );
 }
+
+#[test]
+fn blob_members_enforce_webidl_receiver_contracts() {
+    let mut vm = new_storage_test_vm("https://blob-receiver-brand.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const rejectionName = callback => {
+    try {
+      return Promise.resolve(callback()).then(
+        () => "resolved",
+        error => error && error.name,
+      );
+    } catch (error) {
+      return Promise.resolve("threw:" + (error && error.name));
+    }
+  };
+  const sizeGetter = Object.getOwnPropertyDescriptor(Blob.prototype, "size").get;
+  const typeGetter = Object.getOwnPropertyDescriptor(Blob.prototype, "type").get;
+  globalThis.__blobReceiverProbe = {
+    syncThrows: [
+      throwsTypeError(() => sizeGetter.call({})),
+      throwsTypeError(() => typeGetter.call({})),
+      throwsTypeError(() => Blob.prototype.slice.call(null)),
+      throwsTypeError(() => Blob.prototype.stream.call(null)),
+    ],
+  };
+  Promise.all([
+    rejectionName(() => Blob.prototype.text.call(null)),
+    rejectionName(() => Blob.prototype.arrayBuffer.call(null)),
+    rejectionName(() => Blob.prototype.bytes.call(null)),
+  ]).then(names => {
+    __blobReceiverProbe.promiseRejections = names;
+  });
+  return "scheduled";
+})()
+"#,
+        )
+        .expect("Blob receiver contract probe should evaluate");
+
+    assert_eq!(result, "scheduled");
+    vm.eval("0")
+        .expect("Blob receiver rejection microtasks should drain");
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__blobReceiverProbe)")
+            .expect("Blob receiver contract result should evaluate"),
+        r#"{"syncThrows":[true,true,true,true],"promiseRejections":["TypeError","TypeError","TypeError"]}"#
+    );
+}
