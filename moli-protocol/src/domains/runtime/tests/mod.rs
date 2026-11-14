@@ -221,3 +221,4 @@ mod service_worker;
 mod shared_worker;
 
 mod worker_emulation;
+mod worker_loading_attachment;
