@@ -36,6 +36,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("navigation-outcomes", DEFAULT_GROUP_NAMES)
         self.assertIn("font-face", DEFAULT_GROUP_NAMES)
         self.assertIn("fetch-font", DEFAULT_GROUP_NAMES)
+        self.assertIn("fetch-headers", DEFAULT_GROUP_NAMES)
         self.assertIn("fetch-media", DEFAULT_GROUP_NAMES)
         self.assertIn("fetch-resource-dispatch", DEFAULT_GROUP_NAMES)
         self.assertIn("media-error", DEFAULT_GROUP_NAMES)

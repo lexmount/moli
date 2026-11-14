@@ -43,6 +43,7 @@ from .groups.emulation_storage import run_emulation_storage_group
 from .groups.error_document import run_error_document_group
 from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
 from .groups.fetch_font import run_fetch_font_group
+from .groups.fetch_headers import run_fetch_headers_group
 from .groups.fetch_media import run_fetch_media_group
 from .groups.fetch_resource_dispatch import run_fetch_resource_dispatch_group
 from .groups.history_worlds import run_history_worlds_group
@@ -405,6 +406,12 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "fetch-headers",
+        "Fetch and native XHR header overrides, redirect uploads, CORS and scoped Authorization.",
+        "browser",
+        run_fetch_headers_group,
+    ),
     SmokeGroup(
         "text-input",
         "Native legacy TextEvent order, cancellation, payload, focus and target lifetime.",
