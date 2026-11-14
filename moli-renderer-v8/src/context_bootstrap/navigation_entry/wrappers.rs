@@ -73,6 +73,11 @@ pub(in crate::context_bootstrap) fn value_in_realm<'s>(
     context: v8::Local<'s, v8::Context>,
 ) -> v8::Local<'s, v8::Value> {
     match v8::Local::<v8::Object>::try_from(value) {
+        // A different same-world Window is still the entry's owning realm.
+        // Synthetic event dictionaries must preserve that wrapper's identity.
+        Ok(object) if super::super::world_wrappers::belongs_to_world(scope, object, context) => {
+            value
+        }
         Ok(object) => in_realm(scope, object, context).into(),
         Err(_) => value,
     }
