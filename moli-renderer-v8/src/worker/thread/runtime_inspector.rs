@@ -539,6 +539,7 @@ impl WorkerRuntimeInspector {
         let isolate_handle =
             std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle())));
         let task_runner = WorkerInspectorTaskRunner::new(wake_tx, isolate_handle);
+        task_runner.start();
         Self::new(isolate, task_runner, parent_tx, false, debugger_enabled)
     }
 
@@ -1101,6 +1102,7 @@ mod tests {
             wake_tx,
             std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle()))),
         );
+        task_runner.start();
         let inspector =
             WorkerRuntimeInspector::new(&mut isolate, task_runner.clone(), parent_tx, false, false);
         let registration = moli_v8_platform::V8PlatformIsolateRegistration::register(

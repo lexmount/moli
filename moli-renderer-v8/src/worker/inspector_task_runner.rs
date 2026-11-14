@@ -188,6 +188,23 @@ pub(crate) enum WorkerInspectorTask {
 }
 
 impl WorkerInspectorTask {
+    fn can_start(&self) -> bool {
+        match self {
+            Self::DispatchProtocolMessage { lifetime, .. }
+            | Self::AttachSession { lifetime, .. } => lifetime.is_active(),
+            _ => true,
+        }
+    }
+
+    fn belongs_to_session(&self, owner: &WorkerInspectorSessionLifetime) -> bool {
+        match self {
+            Self::DispatchProtocolMessage { lifetime, .. }
+            | Self::AttachSession { lifetime, .. }
+            | Self::DetachSession { lifetime, .. } => lifetime.matches(owner),
+            Self::EnvironmentInvalidation(_) | Self::RunIfWaitingForDebugger => false,
+        }
+    }
+
     fn fail(self, error: WorkerInspectorError) {
         if let Self::DetachSession { lifetime, .. } = &self {
             lifetime.complete_detachment(Err(error));
@@ -223,12 +240,19 @@ impl WorkerInspectorTask {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerInspectorOwnerState {
+    Unstarted,
+    Starting,
+    Ready,
+    Disposed,
+}
+
 struct WorkerInspectorTaskRunnerState {
     interrupting_tasks: VecDeque<WorkerInspectorTask>,
     dont_interrupting_tasks: VecDeque<WorkerInspectorTask>,
     sessions: HashMap<String, WorkerInspectorSessionLifetime>,
-    disposed: bool,
-    isolate_ready: bool,
+    owner: WorkerInspectorOwnerState,
     pause_loop_active: bool,
     quit_pause_loop: bool,
 }
@@ -272,8 +296,7 @@ impl WorkerInspectorTaskRunner {
                     interrupting_tasks: VecDeque::new(),
                     dont_interrupting_tasks: VecDeque::new(),
                     sessions: HashMap::new(),
-                    disposed: false,
-                    isolate_ready: false,
+                    owner: WorkerInspectorOwnerState::Unstarted,
                     pause_loop_active: false,
                     quit_pause_loop: false,
                 }),
@@ -289,6 +312,35 @@ impl WorkerInspectorTaskRunner {
 
     pub(crate) fn route_id(&self) -> u64 {
         self.shared.interrupt_target.route_id
+    }
+
+    /// Connect the already admitted sessions and commands to the Worker thread.
+    /// Before this point, detach can retire them without waiting for an isolate.
+    pub(crate) fn start(&self) {
+        let mut state = self.shared.state.lock();
+        if state.owner != WorkerInspectorOwnerState::Unstarted {
+            return;
+        }
+        state.owner = WorkerInspectorOwnerState::Starting;
+        let interrupting = state.interrupting_tasks.len();
+        let dont_interrupting = state.dont_interrupting_tasks.len();
+        drop(state);
+        for (mode, count) in [
+            (WorkerInspectorTaskMode::Interrupt, interrupting),
+            (WorkerInspectorTaskMode::DontInterrupt, dont_interrupting),
+        ] {
+            for _ in 0..count {
+                if self
+                    .shared
+                    .wake_tx
+                    .send(WorkerMessage::RunInspectorTask(mode))
+                    .is_err()
+                {
+                    self.dispose(WorkerInspectorError::OwnerUnavailable);
+                    return;
+                }
+            }
+        }
     }
 
     #[cfg(test)]
@@ -388,7 +440,7 @@ impl WorkerInspectorTaskRunner {
         id: Option<&str>,
     ) -> Result<WorkerInspectorSessionLifetime, WorkerInspectorError> {
         let mut state = self.shared.state.lock();
-        if state.disposed {
+        if state.owner == WorkerInspectorOwnerState::Disposed {
             return Err(WorkerInspectorError::Disposed);
         }
         // Only the implicit primary session may be created by first use.
@@ -412,7 +464,7 @@ impl WorkerInspectorTaskRunner {
         id: Option<&str>,
     ) -> Result<WorkerInspectorSessionLifetime, WorkerInspectorError> {
         let mut state = self.shared.state.lock();
-        if state.disposed {
+        if state.owner == WorkerInspectorOwnerState::Disposed {
             return Err(WorkerInspectorError::Disposed);
         }
         let lifetime = state
@@ -430,7 +482,7 @@ impl WorkerInspectorTaskRunner {
         id: Option<&str>,
     ) -> Result<WorkerInspectorSessionLifetime, WorkerInspectorError> {
         let state = self.shared.state.lock();
-        if state.disposed {
+        if state.owner == WorkerInspectorOwnerState::Disposed {
             return Err(WorkerInspectorError::Disposed);
         }
         let lifetime = state
@@ -479,6 +531,44 @@ impl WorkerInspectorTaskRunner {
         &self,
         inspector_session_id: Option<String>,
     ) -> oneshot::Receiver<Result<()>> {
+        let unstarted = {
+            let mut guard = self.shared.state.lock();
+            let state = &mut *guard;
+            if state.owner == WorkerInspectorOwnerState::Unstarted {
+                state
+                    .sessions
+                    .remove(inspector_session_id.as_deref().unwrap_or_default())
+                    .map(|lifetime| {
+                        lifetime.0.active.store(false, Ordering::Release);
+                        let mut retired_tasks = Vec::new();
+                        for tasks in [
+                            &mut state.interrupting_tasks,
+                            &mut state.dont_interrupting_tasks,
+                        ] {
+                            for task in std::mem::take(tasks) {
+                                if task.belongs_to_session(&lifetime) {
+                                    retired_tasks.push(task);
+                                } else {
+                                    tasks.push_back(task);
+                                }
+                            }
+                        }
+                        (lifetime, retired_tasks)
+                    })
+            } else {
+                None
+            }
+        };
+        if let Some((lifetime, tasks)) = unstarted {
+            // No native session can exist before start. Settle commands now;
+            // their original tokens must never reach a later session incarnation.
+            for task in tasks {
+                task.fail(WorkerInspectorError::Detached);
+            }
+            lifetime.complete_retirement(Ok(()));
+            lifetime.complete_detachment(Ok(()));
+            return lifetime.detachment();
+        }
         let lifetime = match self.retire_lifetime(inspector_session_id.as_deref()) {
             Ok(lifetime) => lifetime,
             Err(error) => {
@@ -514,9 +604,14 @@ impl WorkerInspectorTaskRunner {
 
     fn append(&self, mode: WorkerInspectorTaskMode, task: WorkerInspectorTask) -> bool {
         let mut state = self.shared.state.lock();
-        if state.disposed {
+        if state.owner == WorkerInspectorOwnerState::Disposed {
             drop(state);
             task.fail(WorkerInspectorError::Disposed);
+            return false;
+        }
+        if !task.can_start() {
+            drop(state);
+            task.fail(WorkerInspectorError::Detached);
             return false;
         }
         match mode {
@@ -524,6 +619,9 @@ impl WorkerInspectorTaskRunner {
             WorkerInspectorTaskMode::DontInterrupt => {
                 state.dont_interrupting_tasks.push_back(task);
             }
+        }
+        if state.owner == WorkerInspectorOwnerState::Unstarted {
+            return true;
         }
         drop(state);
 
@@ -545,10 +643,10 @@ impl WorkerInspectorTaskRunner {
 
     pub(crate) fn activate_isolate(&self) {
         let mut state = self.shared.state.lock();
-        if state.disposed {
+        if state.owner == WorkerInspectorOwnerState::Disposed {
             return;
         }
-        state.isolate_ready = true;
+        state.owner = WorkerInspectorOwnerState::Ready;
         drop(state);
         self.request_interrupt_if_needed();
     }
@@ -576,8 +674,7 @@ impl WorkerInspectorTaskRunner {
     pub(crate) fn request_interrupt_if_needed(&self) {
         let should_request = {
             let state = self.shared.state.lock();
-            !state.disposed
-                && state.isolate_ready
+            state.owner == WorkerInspectorOwnerState::Ready
                 && (self.shared.environment_notifications.has_pending()
                     || !state.interrupting_tasks.is_empty())
         };
@@ -611,7 +708,7 @@ impl WorkerInspectorTaskRunner {
 
     pub(crate) fn begin_pause_loop(&self) -> bool {
         let mut state = self.shared.state.lock();
-        if state.disposed || state.pause_loop_active {
+        if state.owner == WorkerInspectorOwnerState::Disposed || state.pause_loop_active {
             return false;
         }
         state.pause_loop_active = true;
@@ -622,7 +719,7 @@ impl WorkerInspectorTaskRunner {
     pub(crate) fn wait_for_pause_task(&self) -> Option<WorkerInspectorTask> {
         let mut state = self.shared.state.lock();
         loop {
-            if state.disposed || state.quit_pause_loop {
+            if state.owner == WorkerInspectorOwnerState::Disposed || state.quit_pause_loop {
                 return None;
             }
             if let Some(task) = self.claim_environment_task() {
@@ -657,15 +754,14 @@ impl WorkerInspectorTaskRunner {
     pub(crate) fn dispose(&self, error: WorkerInspectorError) {
         let (interrupting_tasks, dont_interrupting_tasks) = {
             let mut state = self.shared.state.lock();
-            if state.disposed {
+            if state.owner == WorkerInspectorOwnerState::Disposed {
                 return;
             }
-            state.disposed = true;
+            state.owner = WorkerInspectorOwnerState::Disposed;
             for (_, lifetime) in state.sessions.drain() {
                 lifetime.0.active.store(false, Ordering::Release);
             }
             self.shared.environment_notifications.close();
-            state.isolate_ready = false;
             state.quit_pause_loop = true;
             (
                 state.interrupting_tasks.drain(..).collect::<Vec<_>>(),
@@ -693,8 +789,7 @@ impl std::fmt::Debug for WorkerInspectorTaskRunner {
                 "dont_interrupting_tasks",
                 &state.dont_interrupting_tasks.len(),
             )
-            .field("disposed", &state.disposed)
-            .field("isolate_ready", &state.isolate_ready)
+            .field("owner", &state.owner)
             .finish()
     }
 }
@@ -716,6 +811,7 @@ mod tests {
     ) {
         let (wake_tx, wake_rx) = mpsc::unbounded_channel();
         let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
+        runner.start();
         runner.attach_lifetime(Some("SID-worker-runner")).unwrap();
         (runner, wake_rx)
     }
@@ -1006,6 +1102,7 @@ mod tests {
     fn queued_execution_keeps_its_original_session_incarnation_across_detach_attach() {
         let (wake_tx, _wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
+        runner.start();
         runner.attach_lifetime(Some("reused")).unwrap();
         let (old_tx, _old_rx) = oneshot::channel();
         assert!(runner.append_protocol_message(
@@ -1047,6 +1144,175 @@ mod tests {
         };
         lifetime.complete_detachment(Ok(()));
         retired.try_recv().unwrap().unwrap();
+    }
+
+    #[test]
+    fn unstarted_inspector_work_keeps_its_session_token_when_the_thread_starts() {
+        let (wake_tx, mut wake_rx) = mpsc::unbounded_channel();
+        let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
+        assert!(runner.append_attach(Some("early".into())));
+        let original = runner.session_lifetime(Some("early")).unwrap();
+        let (response_tx, mut response_rx) = oneshot::channel();
+        assert!(runner.append_protocol_message(
+            Some("early".into()),
+            r#"{"id":1,"method":"Runtime.enable"}"#.into(),
+            None,
+            response_tx,
+        ));
+        assert!(matches!(
+            wake_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            response_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        runner.start();
+        for _ in 0..2 {
+            assert!(matches!(
+                wake_rx.try_recv(),
+                Ok(super::WorkerMessage::RunInspectorTask(
+                    WorkerInspectorTaskMode::Interrupt
+                ))
+            ));
+        }
+        let Some(WorkerInspectorTask::AttachSession { lifetime, .. }) =
+            runner.claim_task(WorkerInspectorTaskMode::Interrupt)
+        else {
+            panic!("the explicit attach must precede its command");
+        };
+        assert!(lifetime.matches(&original));
+        let Some(WorkerInspectorTask::DispatchProtocolMessage {
+            lifetime,
+            response_tx,
+            ..
+        }) = runner.claim_task(WorkerInspectorTaskMode::Interrupt)
+        else {
+            panic!("the command must remain queued until the Worker starts");
+        };
+        assert!(lifetime.matches(&original));
+        assert!(
+            runner
+                .session_lifetime(Some("early"))
+                .unwrap()
+                .matches(&original)
+        );
+        response_tx.send(Ok(Vec::new())).unwrap();
+        assert!(response_rx.try_recv().unwrap().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unstarted_session_churn_settles_commands_without_retaining_tasks_or_wakes() {
+        let (wake_tx, mut wake_rx) = mpsc::unbounded_channel();
+        let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
+        for index in 0..4096 {
+            let id = format!("early-{index}");
+            assert!(runner.append_attach(Some(id.clone())));
+            let original = runner.session_lifetime(Some(&id)).unwrap();
+            let (response_tx, mut response_rx) = oneshot::channel();
+            assert!(runner.append_protocol_message(
+                Some(id.clone()),
+                r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"42"}}"#.into(),
+                None,
+                response_tx
+            ));
+            runner.append_detach(Some(id)).try_recv().unwrap().unwrap();
+            assert_eq!(
+                response_rx
+                    .try_recv()
+                    .unwrap()
+                    .unwrap_err()
+                    .downcast::<WorkerInspectorError>()
+                    .unwrap(),
+                WorkerInspectorError::Detached
+            );
+            assert!(!original.is_active());
+            assert!(!original.native_was_created());
+            assert_eq!(runner.session_count(), 0);
+            assert!(
+                runner
+                    .claim_task(WorkerInspectorTaskMode::Interrupt)
+                    .is_none()
+            );
+            assert!(
+                runner
+                    .claim_task(WorkerInspectorTaskMode::DontInterrupt)
+                    .is_none()
+            );
+            assert!(matches!(
+                wake_rx.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty)
+            ));
+        }
+        assert!(runner.append_attach(Some("early-0".into())));
+        runner.start();
+        assert!(
+            matches!(runner.claim_task(WorkerInspectorTaskMode::Interrupt), Some(WorkerInspectorTask::AttachSession { lifetime, .. }) if lifetime.is_active())
+        );
+        assert_eq!(runner.session_count(), 1);
+        assert!(
+            runner
+                .claim_task(WorkerInspectorTaskMode::Interrupt)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn pre_start_detach_rejects_tasks_that_captured_the_retired_token_before_admission() {
+        let (wake_tx, _wake_rx) = mpsc::unbounded_channel();
+        let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
+        let original = runner.attach_lifetime(Some("reused")).unwrap();
+        runner
+            .append_detach(Some("reused".into()))
+            .try_recv()
+            .unwrap()
+            .unwrap();
+        assert!(!runner.append(
+            WorkerInspectorTaskMode::Interrupt,
+            WorkerInspectorTask::AttachSession {
+                lifetime: original.clone(),
+                inspector_session_id: Some("reused".into()),
+            }
+        ));
+        let (response_tx, mut response_rx) = oneshot::channel();
+        assert!(!runner.append(
+            WorkerInspectorTaskMode::DontInterrupt,
+            WorkerInspectorTask::DispatchProtocolMessage {
+                lifetime: original.clone(),
+                inspector_session_id: Some("reused".into()),
+                raw_json: r#"{"id":1,"method":"Runtime.evaluate"}"#.into(),
+                deferred_response: None,
+                response_tx,
+            }
+        ));
+        assert_eq!(
+            response_rx
+                .try_recv()
+                .unwrap()
+                .unwrap_err()
+                .downcast::<WorkerInspectorError>()
+                .unwrap(),
+            WorkerInspectorError::Detached
+        );
+        assert!(runner.append_attach(Some("reused".into())));
+        runner.start();
+        let Some(WorkerInspectorTask::AttachSession { lifetime, .. }) =
+            runner.claim_task(WorkerInspectorTaskMode::Interrupt)
+        else {
+            panic!("replacement attachment")
+        };
+        assert!(lifetime.is_active());
+        assert!(!lifetime.matches(&original));
+        assert!(
+            runner
+                .claim_task(WorkerInspectorTaskMode::DontInterrupt)
+                .is_none()
+        );
+        assert!(
+            runner
+                .claim_task(WorkerInspectorTaskMode::Interrupt)
+                .is_none()
+        );
     }
 
     #[test]

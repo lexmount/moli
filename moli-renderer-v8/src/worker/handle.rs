@@ -714,6 +714,7 @@ impl WorkerHandle {
         termination_requested: Arc<AtomicBool>,
     ) -> Self {
         let devtools = WorkerDevToolsHandle::new(tx.clone(), Arc::clone(&isolate_handle));
+        devtools.inspector_tasks().start();
         Self::new_with_termination_requested_and_devtools(
             tx,
             rx,

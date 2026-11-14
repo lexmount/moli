@@ -20,6 +20,7 @@ fn assert_detach_during_pause(peer_debugger: bool) {
         wake_tx,
         std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle()))),
     );
+    runner.start();
     let inspector =
         WorkerRuntimeInspector::new(&mut isolate, runner.clone(), parent_tx, false, true);
     let context = {

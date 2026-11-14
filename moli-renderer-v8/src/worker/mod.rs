@@ -77,7 +77,7 @@ pub(crate) use script_mime::{
     ensure_worker_script_mime_acceptable, worker_response_has_webassembly_mime,
 };
 pub(crate) use thread::{
-    WorkerGlobalKind, WorkerScriptKind, WorkerScriptSource, WorkerSpawnOptions,
+    WorkerGlobalKind, WorkerScriptKind, WorkerScriptSource, WorkerSpawnOptions, WorkerStartup,
     dispatch_current_worker_callback_exception, spawn_worker_with_options,
 };
 

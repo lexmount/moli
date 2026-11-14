@@ -1109,10 +1109,7 @@ impl BrowserContext {
         // event is published.
         let _ = self
             .renderer_runtime()
-            .attach_dedicated_worker_runtime_inspector_session(
-                renderer_instance_id,
-                Some(session_id),
-            );
+            .attach_dedicated_worker_runtime_inspector_session(renderer_instance_id, session_id);
         true
     }
 
