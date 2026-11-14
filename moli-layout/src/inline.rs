@@ -3128,7 +3128,18 @@ mod tests {
                     shared_run |= previous == Some(glyphs.run().index());
                     previous = Some(glyphs.run().index());
                     // Even the segment excluded from paint must advance the cursor.
-                    ranges.extend(sources.segment(&glyphs).map(|(_, range)| range));
+                    let segment = sources
+                        .segment(&glyphs)
+                        .map(|(_, range)| range)
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        Some(glyphs.text_range()),
+                        segment.iter().cloned().reduce(|range, cluster| {
+                            range.start.min(cluster.start)..range.end.max(cluster.end)
+                        }),
+                        "a positioned view must describe this styled segment, not its full run"
+                    );
+                    ranges.extend(segment);
                 }
             }
             assert!(

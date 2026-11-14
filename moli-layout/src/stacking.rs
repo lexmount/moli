@@ -4,7 +4,7 @@ use parley::PositionedLayoutItem;
 
 use crate::{
     LayoutBoxId, LayoutPosition, LayoutWorld,
-    inline::{GlyphSourceCursor, InlineFormattingContext, InlineObjectRole, InlineSelection},
+    inline::{InlineFormattingContext, InlineObjectRole, InlineSelection},
     text_overflow::TextOverflowVisibility,
 };
 
@@ -156,7 +156,6 @@ impl<'a> InlineOrder<'a> {
                     _ => None,
                 };
                 let mut covered = Vec::new();
-                let mut sources = GlyphSourceCursor::default();
                 for (_, inline) in line.inline_box_indices() {
                     if let Some(object) = context.object(inline.id)
                         && object.role == InlineObjectRole::Atomic
@@ -171,11 +170,7 @@ impl<'a> InlineOrder<'a> {
                     // Styled glyph segments can share one shaped run. Route
                     // each segment by its own source range, so hidden siblings
                     // cannot capture the independent inline's paint or hits.
-                    let Some(range) = sources.segment(&glyphs).map(|(_, range)| range).reduce(
-                        |range, cluster| range.start.min(cluster.start)..range.end.max(cluster.end),
-                    ) else {
-                        continue;
-                    };
+                    let range = glyphs.text_range();
                     if selected.is_some() {
                         covered.push(range.clone());
                     }
