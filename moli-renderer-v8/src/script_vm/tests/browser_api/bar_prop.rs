@@ -123,3 +123,41 @@ fn bar_props_follow_popup_features_and_close() {
 "#).unwrap();
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn bar_props_remain_visible_for_an_active_auxiliary_document_after_close_request() {
+    for is_popup in [false, true] {
+        let mut vm = new_storage_html_test_vm("https://barprop.test/active-auxiliary");
+        let auxiliary = vm
+            ._context_host
+            .borrow()
+            .browser_context_runtime()
+            .new_auxiliary_window();
+        auxiliary.set_is_popup(is_popup);
+        vm._context_host
+            .borrow_mut()
+            .bind_auxiliary_window_for_test(Some(auxiliary.clone()));
+        assert_eq!(vm.eval(&format!(r#"(() => {{
+            const names = ['locationbar','menubar','personalbar','scrollbars','statusbar','toolbar'];
+            const frame = document.body.appendChild(document.createElement('iframe'));
+            const nested = frame.contentDocument.body.appendChild(frame.contentDocument.createElement('iframe'));
+            const owners = [window, frame.contentWindow, nested.contentWindow];
+            const bars = owners.map(owner => names.map(name => owner[name]));
+            const visible = !{is_popup};
+            if (!bars.every(group => group.every(bar => bar.visible === visible))) return 'before close';
+            close();
+            if (!closed) return 'close request';
+            if (!bars.every(group => group.every(bar => bar.visible === visible))) return 'active document';
+            if (!owners.every((owner,index) => names.every((name,i) => owner[name] === bars[index][i]))) return 'identity';
+            return 'ok';
+        }})()"#)).unwrap(), "ok");
+        assert!(auxiliary.is_closed());
+        assert!(
+            vm._context_host
+                .borrow()
+                .current_main_document_task_owner()
+                .is_some(),
+            "the close flag is observable before the active Document is retired"
+        );
+    }
+}
