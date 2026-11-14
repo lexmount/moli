@@ -52,6 +52,12 @@ pub struct Request {
     /// Wire bytes, with the source encoding resolved before header merging.
     pub request_headers: crate::RequestHeaders,
     redirect_headers: Option<crate::RequestHeaders>,
+    /// DevTools may explicitly authorize a redirected hop, without authorizing
+    /// a later destination reached by the transport itself.
+    interception_authorization_url: Option<Url>,
+    /// Redirect method rewriting also removes body headers supplied again by
+    /// an interceptor replaying its original header overrides.
+    redirect_body_headers_removed: bool,
     additional_cookies: Option<String>,
     cookie_header_policy: CookieHeaderPolicy,
     cache_mode: RequestCacheMode,
@@ -164,6 +170,7 @@ impl RequestOverrides {
             request.url = url;
         }
         if let Some(method) = self.method {
+            request.redirect_body_headers_removed = false;
             request.method = method;
             request.cookie_context.set_request_method(&request.method);
         }
@@ -172,6 +179,7 @@ impl RequestOverrides {
             .clone()
             .recompute_site_context_for_request(&request.url);
         if let Some(body) = self.body {
+            request.redirect_body_headers_removed = false;
             let text = body
                 .as_ref()
                 .map(|bytes| std::sync::Arc::from(String::from_utf8_lossy(bytes).as_ref()));
@@ -180,15 +188,23 @@ impl RequestOverrides {
         if let Some(headers) = self.headers {
             match headers {
                 RequestHeaderOverride::CurrentRequest {
-                    headers,
+                    mut headers,
                     redirect_headers,
                 } => {
+                    if request.redirect_body_headers_removed {
+                        headers.retain(|(name, _)| !is_request_body_header_name(name));
+                    }
+                    request.interception_authorization_url = headers
+                        .iter()
+                        .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                        .then(|| request.url.clone());
                     request.set_redirect_headers(Some(
                         redirect_headers.unwrap_or_else(|| request.request_headers.clone()),
                     ));
                     request.request_headers = headers;
                 }
                 RequestHeaderOverride::RedirectChain(headers) => {
+                    request.interception_authorization_url = None;
                     request.set_redirect_headers(None);
                     request.request_headers = headers;
                 }
@@ -648,6 +664,8 @@ impl Request {
             body_text: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
+            interception_authorization_url: None,
+            redirect_body_headers_removed: false,
             additional_cookies: None,
             cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
@@ -685,6 +703,8 @@ impl Request {
             body_text: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
+            interception_authorization_url: None,
+            redirect_body_headers_removed: false,
             additional_cookies: None,
             cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
@@ -755,6 +775,8 @@ impl Request {
             body_text: None,
             request_headers: request_headers.into(),
             redirect_headers: None,
+            interception_authorization_url: None,
+            redirect_body_headers_removed: false,
             additional_cookies: None,
             cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
@@ -1135,6 +1157,41 @@ impl Request {
         self
     }
 
+    /// Generated Origin is visible to interception, but is not promoted into
+    /// the author header list retained across redirects.
+    pub fn interception_request_headers(&self) -> crate::RequestHeaders {
+        let mut headers = self.request_headers.clone();
+        if let Some(origin) = self.origin_header_value(&self.url)
+            && !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("origin"))
+        {
+            headers.push(("Origin".to_owned(), origin.into_bytes()));
+        }
+        headers
+    }
+
+    pub(crate) fn origin_header_value(&self, request_url: &Url) -> Option<String> {
+        self.request_origin()?;
+        if !matches!(request_url.scheme(), "http" | "https") {
+            return None;
+        }
+        let safe_method =
+            self.method.eq_ignore_ascii_case("GET") || self.method.eq_ignore_ascii_case("HEAD");
+        if safe_method
+            && (self.request_mode != RequestMode::Cors || !self.has_cross_origin_url(request_url))
+        {
+            return None;
+        }
+        Some(self.serialized_origin())
+    }
+
+    pub(crate) fn allows_interception_authorization_for_url(&self, url: &Url) -> bool {
+        self.interception_authorization_url
+            .as_ref()
+            .is_some_and(|source| same_origin(source, url))
+    }
+
     pub fn request_origin(&self) -> Option<&WebOrigin> {
         match &self.context {
             RequestContext::Http => None,
@@ -1151,10 +1208,12 @@ impl Request {
 
     /// Restore request-scoped interception headers before applying redirect rules.
     pub fn apply_redirect_status(&mut self, status: u16) {
+        self.interception_authorization_url = None;
         if let Some(headers) = self.redirect_headers.take() {
             self.request_headers = headers;
         }
         if redirect_status_rewrites_to_get(status, &self.method) {
+            self.redirect_body_headers_removed = true;
             self.method = "GET".to_owned();
             self.body = None;
             self.body_text = None;

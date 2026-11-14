@@ -600,3 +600,128 @@ fn accumulated_interception_edits_preserve_upload_and_header_scope() -> Result<(
     }
     Ok(())
 }
+
+#[test]
+fn interception_origin_matches_transport_without_becoming_an_author_header() -> Result<()> {
+    let source = Url::parse("https://source.test/page")?;
+    let request = Request::new_browser(
+        "GET",
+        Url::parse("https://other.test/echo")?,
+        None,
+        Vec::new(),
+        (&source).into(),
+    )
+    .with_request_mode(RequestMode::Cors);
+    let projected = request.interception_request_headers().to_byte_strings();
+    assert_eq!(
+        projected,
+        [("Origin".to_owned(), "https://source.test".to_owned())]
+    );
+    assert!(request.request_headers.is_empty());
+    let wire = crate::blocking::outgoing_request_headers(&FetchConfig::default(), &request, None);
+    assert!(wire.contains(&projected[0]));
+    let same = Request::new_browser("GET", source.clone(), None, Vec::new(), (&source).into())
+        .with_request_mode(RequestMode::Cors);
+    assert!(same.interception_request_headers().is_empty());
+    let opaque = Request::new_browser(
+        "POST",
+        source,
+        None,
+        Vec::new(),
+        moli_url::WebOrigin::Opaque,
+    );
+    assert_eq!(
+        opaque.interception_request_headers().to_byte_strings(),
+        [("Origin".to_owned(), "null".to_owned())]
+    );
+    Ok(())
+}
+
+#[test]
+fn interception_header_replay_does_not_restore_redirected_upload_headers() -> Result<()> {
+    for status in [301, 302, 303, 307, 308] {
+        let original = crate::RequestHeaders::from(vec![
+            ("Content-Type".into(), "text/plain".into()),
+            ("Content-Length".into(), "3".into()),
+            ("X-Custom".into(), "value".into()),
+        ]);
+        let mut request = Request::new(
+            "POST",
+            "https://example.test/start",
+            Some("old".into()),
+            original.clone(),
+        )?;
+        let mut redirect =
+            synthetic_redirect(&request.url, &Url::parse("https://example.test/final")?);
+        redirect.status = status;
+        request.follow_redirect(redirect)?;
+        crate::RequestOverrides {
+            headers: Some(crate::RequestHeaderOverride::current_request(
+                original, None,
+            )),
+            ..Default::default()
+        }
+        .apply(&mut request);
+        let names: Vec<_> = request
+            .request_headers
+            .iter()
+            .map(|(name, _)| name.to_ascii_lowercase())
+            .collect();
+        let retains_upload = matches!(status, 307 | 308);
+        assert_eq!(
+            names.contains(&"content-type".into()),
+            retains_upload,
+            "{status}"
+        );
+        assert_eq!(
+            names.contains(&"content-length".into()),
+            retains_upload,
+            "{status}"
+        );
+        assert!(names.contains(&"x-custom".into()));
+        assert_eq!(request.body.is_some(), retains_upload);
+    }
+    Ok(())
+}
+
+#[test]
+fn interception_authorization_is_scoped_to_the_explicitly_overridden_hop() -> Result<()> {
+    let mut config = FetchConfig::default();
+    config.push_default_request_header("Authorization", "config-secret");
+    let mut request = Request::new(
+        "GET",
+        "https://source.test/start",
+        None,
+        vec![("Authorization".into(), "author-secret".into())],
+    )?;
+    request.follow_redirect(synthetic_redirect(
+        &request.url,
+        &Url::parse("https://target.test/next")?,
+    ))?;
+    let has_auth = |request: &Request, url: &Url| {
+        crate::blocking::outgoing_request_headers_for_url(&config, request, url, None)
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .collect::<Vec<_>>()
+    };
+    assert!(has_auth(&request, &request.url).is_empty());
+    crate::RequestOverrides {
+        headers: Some(crate::RequestHeaderOverride::current_request(
+            vec![("Authorization".into(), "interceptor-secret".into())].into(),
+            None,
+        )),
+        ..Default::default()
+    }
+    .apply(&mut request);
+    assert_eq!(
+        has_auth(&request, &request.url),
+        [("Authorization".to_owned(), "interceptor-secret".to_owned())]
+    );
+    assert!(has_auth(&request, &Url::parse("https://third.test/escaped")?).is_empty());
+    request.follow_redirect(synthetic_redirect(
+        &request.url,
+        &Url::parse("https://third.test/final")?,
+    ))?;
+    assert!(has_auth(&request, &request.url).is_empty());
+    Ok(())
+}
