@@ -227,17 +227,18 @@ pub(crate) fn offscreen_canvas_transfer_to_image_bitmap_callback<'s>(
         }
         _ => None,
     };
-    let Some(bitmap) = bitmap else {
-        // Chromium reports a zero-sized or unallocatable canvas as UnknownError.
-        webidl::throw_dom_exception(
-            scope,
-            "UnknownError",
-            &format!("{PREFIX}: ImageBitmap construction failed"),
-        );
+    if let Some(bitmap) = bitmap
+        && with_canvas_like_pixels_mut(scope, canvas, |bytes, _width, _height| bytes.fill(0))
+    {
+        rv.set(bitmap.into());
         return;
-    };
-    with_canvas_like_pixels_mut(scope, canvas, |bytes, _width, _height| bytes.fill(0));
-    rv.set(bitmap.into());
+    }
+    // Chromium reports a zero-sized or unallocatable canvas as UnknownError.
+    webidl::throw_dom_exception(
+        scope,
+        "UnknownError",
+        &format!("{PREFIX}: ImageBitmap construction failed"),
+    );
 }
 
 const OFFSCREEN_CANVAS_ATTRIBUTE_SLOTS: &[&str] =
