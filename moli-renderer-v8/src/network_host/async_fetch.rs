@@ -946,10 +946,11 @@ fn validate_redirect_mode_parts(
     if redirect_mode == RequestRedirectMode::Manual {
         return Ok(());
     }
-    let target = next_redirect_url(final_url, status, headers, 0)?;
-    if redirect_mode == RequestRedirectMode::Error && target.is_some() {
+    if redirect_mode == RequestRedirectMode::Error && matches!(status, 301 | 302 | 303 | 307 | 308)
+    {
         return Err(redirect_mode_error_message(final_url));
     }
+    next_redirect_url(final_url, status, headers, 0)?;
     Ok(())
 }
 

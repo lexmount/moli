@@ -19,9 +19,9 @@ pub(super) fn advance_subresource_response(
 ) -> Result<SubresourceResponseTransition, String> {
     // Preserve transport-refined snapshots, including cached/internal hops.
     request.observe_redirect_requests(&head.redirect_chain);
-    // Fetch gives redirect:error precedence over CORS validation of a redirect.
+    // Error mode rejects redirect statuses without consulting Location.
     if request.redirect_mode() == RequestRedirectMode::Error {
-        if next_redirect_url(&head.final_url, head.status, &head.headers, 0)?.is_some() {
+        if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
             return Err(redirect_mode_error_message(&head.final_url));
         }
         request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
