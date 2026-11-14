@@ -29,6 +29,7 @@ struct HostEventInitDeclaration {
     cancelable: bool,
 }
 
+#[derive(Clone)]
 struct EventListenerEntry {
     id: u64,
     callback_id: crate::native_bridge::EventCallbackId,
@@ -509,9 +510,11 @@ fn invoke_event_target_handler_property<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
-    if matches!(target, EventTargetHandle::ChildWindow(_)) {
-        // Child Window event-handler properties share the native listener
-        // registry and are invoked in registration order by the listener phase.
+    if matches!(
+        target,
+        EventTargetHandle::Window | EventTargetHandle::ChildWindow(_)
+    ) {
+        // Window handler properties run inside their ordered listener phase.
         return;
     }
     invoke_event_handler_property(
@@ -1179,48 +1182,61 @@ impl HostEventTargetRegistry {
         filter: ListenerFilter,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
-        let snapshot: Vec<(
-            u64,
-            crate::native_bridge::EventCallbackId,
-            String,
-            i32,
-            Option<String>,
-            Option<u32>,
-            Option<u32>,
-            bool,
-            bool,
-            bool,
-        )> = {
-            let Some(target_map) = self.listeners.get(&target) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            let Some(entries) = target_map.get(event_type) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            entries
-                .iter()
-                .filter(|entry| !entry.removed)
-                .filter(|entry| match filter {
-                    ListenerFilter::Capturing => entry.capture,
-                    ListenerFilter::Bubbling => !entry.capture,
-                    ListenerFilter::All => true,
-                })
-                .map(|entry| {
-                    (
-                        entry.id,
-                        entry.callback_id,
-                        entry.function_name.clone(),
-                        entry.script_id,
-                        entry.script_url.clone(),
-                        entry.line_number,
-                        entry.column_number,
-                        entry.capture,
-                        entry.once,
-                        entry.passive,
-                    )
-                })
-                .collect()
+        let handler_registration_id = if target == EventTargetHandle::Window
+            && !matches!(filter, ListenerFilter::Capturing)
+        {
+            match self
+                .handler_properties
+                .get(&target)
+                .and_then(|handlers| handlers.get(event_type))
+                .copied()
+            {
+                Some(EventHandlerPropertyEntry::Callback {
+                    registration_id, ..
+                }) => Some(registration_id),
+                Some(EventHandlerPropertyEntry::Null) => None,
+                None => {
+                    // Keep the existing lazy content-attribute fallback. It
+                    // may install a callback while resolving its native source;
+                    // that callback has already run for this invocation.
+                    let target_object = event_target_object(scope, host_ptr, target)?;
+                    invoke_event_handler_property(
+                        self,
+                        scope,
+                        host_ptr,
+                        target,
+                        invocation_target_in_shadow_tree,
+                        target_object,
+                        event_type,
+                        event,
+                    );
+                    if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
+                        return Ok(DispatchStatus::StopImmediate);
+                    }
+                    None
+                }
+            }
+        } else {
+            None
         };
+        let mut snapshot = self
+            .listeners
+            .get(&target)
+            .and_then(|target_map| target_map.get(event_type))
+            .into_iter()
+            .flatten()
+            .filter(|entry| !entry.removed)
+            .filter(|entry| match filter {
+                ListenerFilter::Capturing => entry.capture,
+                ListenerFilter::Bubbling => !entry.capture,
+                ListenerFilter::All => true,
+            })
+            .map(|entry| (entry.id, Some(entry.clone())))
+            .collect::<Vec<_>>();
+        if let Some(id) = handler_registration_id {
+            snapshot.push((id, None));
+            snapshot.sort_by_key(|(id, _)| *id);
+        }
 
         if snapshot.is_empty() {
             return Ok(DispatchStatus::Continue);
@@ -1238,22 +1254,50 @@ impl HostEventTargetRegistry {
                 listener_count = snapshot.len(),
             );
         }
-        for (
-            listener_index,
-            (
-                listener_id,
+        for (listener_index, (registration_id, listener)) in snapshot.into_iter().enumerate() {
+            let Some(EventListenerEntry {
+                id: listener_id,
                 callback_id,
                 function_name,
                 script_id,
                 script_url,
                 line_number,
                 column_number,
-                capture_flag,
-                is_once,
-                is_passive,
-            ),
-        ) in snapshot.into_iter().enumerate()
-        {
+                capture: capture_flag,
+                once: is_once,
+                passive: is_passive,
+                ..
+            }) = listener
+            else {
+                // Replacement preserves the registration id. Clearing and
+                // reactivating installs a new entry for a later invocation.
+                if self
+                    .handler_properties
+                    .get(&target)
+                    .and_then(|handlers| handlers.get(event_type))
+                    .is_some_and(|entry| {
+                        matches!(entry,
+                        EventHandlerPropertyEntry::Callback { registration_id: id, .. }
+                            if *id == registration_id)
+                    })
+                {
+                    let target_object = event_target_object(scope, host_ptr, target)?;
+                    invoke_event_handler_property(
+                        self,
+                        scope,
+                        host_ptr,
+                        target,
+                        invocation_target_in_shadow_tree,
+                        target_object,
+                        event_type,
+                        event,
+                    );
+                    if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
+                        return Ok(DispatchStatus::StopImmediate);
+                    }
+                }
+                continue;
+            };
             let still_registered = self
                 .listeners
                 .get(&target)
@@ -1924,17 +1968,6 @@ fn run_host_event_dispatch<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<(), String> {
-    invoke_event_handler_property(
-        registry,
-        scope,
-        host_ptr,
-        dispatch_target,
-        invocation_target_in_shadow_tree,
-        target_object,
-        event_type,
-        event,
-    );
-
     if dispatch_target == EventTargetHandle::Window {
         registry.call_listeners_filtered(
             scope,
@@ -1948,6 +1981,17 @@ fn run_host_event_dispatch<'s>(
         )?;
         return Ok(());
     }
+
+    invoke_event_handler_property(
+        registry,
+        scope,
+        host_ptr,
+        dispatch_target,
+        invocation_target_in_shadow_tree,
+        target_object,
+        event_type,
+        event,
+    );
 
     let status = registry.call_listeners_filtered(
         scope,
