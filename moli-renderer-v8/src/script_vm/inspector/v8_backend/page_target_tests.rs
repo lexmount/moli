@@ -352,11 +352,8 @@ fn replacement_cancellation_on_another_thread_restores_idle_v8_sessions() {
     }
     let replacement_target = target.clone();
     std::thread::spawn(move || {
-        assert!(
-            replacement_target
-                .pause_ref()
-                .begin_document_replacement(agent)
-        )
+        assert!(replacement_target.begin_document_replacement(agent));
+        assert!(replacement_target.begin_document_replacement(agent));
     })
     .join()
     .unwrap();
@@ -381,7 +378,18 @@ fn replacement_cancellation_on_another_thread_restores_idle_v8_sessions() {
     for session_id in [None, Some("second")] {
         assert!(native_policy(&mut backend, session_id));
     }
-    std::thread::spawn(move || target.pause_ref().finish_document_replacement(agent))
+    let overlapping_target = target.clone();
+    std::thread::spawn(move || overlapping_target.finish_document_replacement(agent))
+        .join()
+        .unwrap();
+    assert!(
+        wake_rx.try_recv().is_err(),
+        "another preparation still owns the outgoing document's pause policy"
+    );
+    for session_id in [None, Some("second")] {
+        assert!(native_policy(&mut backend, session_id));
+    }
+    std::thread::spawn(move || target.finish_document_replacement(agent))
         .join()
         .unwrap();
     dispatch_inspector_io_owner_wake(

@@ -7,7 +7,7 @@
 use moli_page_types::RendererDevToolsAgentToken;
 use std::sync::Arc;
 
-use crate::devtools::pause::RendererInspectorPauseBridge;
+use crate::devtools::target::RendererDevToolsTargetHandle;
 
 /// Whether a failed commit still permits commands against the old Document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ impl RendererPageReplacementError {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RendererDocumentReplacement {
-    pause: RendererInspectorPauseBridge,
+    target: RendererDevToolsTargetHandle,
     agent_token: RendererDevToolsAgentToken,
     cancellation: moli_fetch::FetchCancelHandle,
     reload_preserves_navigation_referrer: Option<bool>,
@@ -76,12 +76,12 @@ pub(crate) struct RendererDocumentReplacement {
 
 impl RendererDocumentReplacement {
     pub(super) fn new(
-        pause: RendererInspectorPauseBridge,
+        target: RendererDevToolsTargetHandle,
         agent_token: RendererDevToolsAgentToken,
         cancellation: moli_fetch::FetchCancelHandle,
     ) -> Self {
         Self {
-            pause,
+            target,
             agent_token,
             cancellation,
             reload_preserves_navigation_referrer: None,
@@ -92,11 +92,11 @@ impl RendererDocumentReplacement {
     pub(super) fn begin(self) -> anyhow::Result<Arc<RendererDocumentReplacementScope>> {
         anyhow::ensure!(
             !self.cancellation.is_cancelled()
-                && self.pause.begin_document_replacement(self.agent_token),
+                && self.target.begin_document_replacement(self.agent_token),
             moli_fetch::FetchCancelled,
         );
         Ok(Arc::new(RendererDocumentReplacementScope {
-            pause: self.pause,
+            target: self.target,
             agent_token: self.agent_token,
             reload_preserves_navigation_referrer: self.reload_preserves_navigation_referrer,
             initial_document_environment: self.initial_document_environment,
@@ -108,7 +108,7 @@ impl RendererDocumentReplacement {
 /// clones of the inert replacement input. Overlapping prepares for one old
 /// document remain independent; completing either one must not release the other.
 pub(crate) struct RendererDocumentReplacementScope {
-    pause: RendererInspectorPauseBridge,
+    target: RendererDevToolsTargetHandle,
     agent_token: RendererDevToolsAgentToken,
     pub(super) reload_preserves_navigation_referrer: Option<bool>,
     pub(super) initial_document_environment: Option<super::RendererCapturedDocumentEnvironment>,
@@ -116,7 +116,7 @@ pub(crate) struct RendererDocumentReplacementScope {
 
 impl Drop for RendererDocumentReplacementScope {
     fn drop(&mut self) {
-        self.pause.finish_document_replacement(self.agent_token);
+        self.target.finish_document_replacement(self.agent_token);
     }
 }
 
