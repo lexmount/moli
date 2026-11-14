@@ -7,6 +7,53 @@ mod select_state_styles;
 mod wrappers;
 
 #[test]
+fn labels_follow_connected_controls_owner_document_across_child_frames() {
+    for depth in [1, 2] {
+        let mut vm = new_parsed_test_vm(
+            "https://child-labels.test/",
+            "<!doctype html><label for=note>Parent</label><input id=note>",
+        );
+        let result = vm.eval(&format!(r#"
+(() => {{
+  const assert = (condition, message) => {{ if (!condition) throw new Error(message); }};
+  let child = document;
+  for (let i = 0; i < {depth}; ++i) {{
+    const frame = child.createElement('iframe');
+    frame.srcdoc = '<!doctype html><body></body>';
+    child.body.appendChild(frame);
+    child = frame.contentDocument;
+  }}
+  child.body.innerHTML = '<label id=explicit for=note>Note</label><label id=implicit>Implicit<input id=note></label>';
+  const input = child.getElementById('note');
+  const labels = input.labels;
+  assert(Array.from(labels, label => label.id).join(',') === 'explicit,implicit', 'child labels in tree order');
+  assert(child.getElementById('explicit').control === input, 'reverse association');
+  assert(document.getElementById('note').labels[0].textContent === 'Parent', 'parent association stays separate');
+  child.getElementById('explicit').htmlFor = 'other';
+  assert(labels.length === 1 && labels[0].id === 'implicit', 'existing NodeList updates after htmlFor mutation');
+  input.type = 'hidden';
+  assert(input.labels === null && labels.length === 0, 'non-labelable input');
+  input.type = 'text';
+  assert(labels.length === 1, 'restored labelability');
+  const host = child.createElement('div');
+  child.body.appendChild(host);
+  const shadow = host.attachShadow({{mode:'open'}});
+  shadow.innerHTML = '<label for=note>Shadow</label><input id=note>';
+  const shadowInput = shadow.querySelector('input');
+  assert(shadowInput.labels.length === 1 && shadowInput.labels[0].textContent === 'Shadow', 'shadow tree association');
+  assert(input.labels.length === 1, 'shadow labels do not cross tree scopes');
+  child.body.appendChild(input);
+  assert(labels.length === 0, 'moving out of the implicit label updates the existing NodeList');
+  child.getElementById('explicit').htmlFor = 'note';
+  assert(labels.length === 1 && labels[0].id === 'explicit', 'association stays in the child Document after moving');
+  return 'ok';
+}})()
+"#)).expect("child frame label lists must use the control's current Document");
+        assert_eq!(result, "ok");
+    }
+}
+
+#[test]
 fn object_set_custom_validity_updates_validity_state() {
     let mut vm = new_storage_test_vm("https://object-custom-validity.test/");
 
