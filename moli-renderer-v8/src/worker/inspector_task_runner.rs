@@ -271,12 +271,7 @@ impl WorkerInspectorTaskRunner {
                 state: Mutex::new(WorkerInspectorTaskRunnerState {
                     interrupting_tasks: VecDeque::new(),
                     dont_interrupting_tasks: VecDeque::new(),
-                    // Only the implicit primary session exists without attach.
-                    // Named sessions must not be recreated by late dispatch.
-                    sessions: HashMap::from([(
-                        String::new(),
-                        WorkerInspectorSessionLifetime::new(),
-                    )]),
+                    sessions: HashMap::new(),
                     disposed: false,
                     isolate_ready: false,
                     pause_loop_active: false,
@@ -392,9 +387,18 @@ impl WorkerInspectorTaskRunner {
         &self,
         id: Option<&str>,
     ) -> Result<WorkerInspectorSessionLifetime, WorkerInspectorError> {
-        let state = self.shared.state.lock();
+        let mut state = self.shared.state.lock();
         if state.disposed {
             return Err(WorkerInspectorError::Disposed);
+        }
+        // Only the implicit primary session may be created by first use.
+        // A late named command cannot attach itself or revive a retired id.
+        if id.is_none() {
+            return Ok(state
+                .sessions
+                .entry(String::new())
+                .or_insert_with(WorkerInspectorSessionLifetime::new)
+                .clone());
         }
         state
             .sessions
@@ -1043,6 +1047,34 @@ mod tests {
         };
         lifetime.complete_detachment(Ok(()));
         retired.try_recv().unwrap().unwrap();
+    }
+
+    #[test]
+    fn primary_session_is_lazy_and_can_be_recreated_after_retirement() {
+        let (wake_tx, _wake_rx) = mpsc::unbounded_channel();
+        let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
+        assert_eq!(runner.session_count(), 0);
+        assert!(matches!(
+            runner.session_lifetime(Some("unknown")),
+            Err(WorkerInspectorError::Detached)
+        ));
+        assert_eq!(runner.session_count(), 0);
+        let primary = runner.session_lifetime(None).unwrap();
+        assert_eq!(runner.session_count(), 1);
+        assert!(runner.session_lifetime(None).unwrap().matches(&primary));
+        runner.retire_lifetime(None).unwrap();
+        runner.complete_retirement(None, &primary);
+        assert_eq!(runner.session_count(), 0);
+        let replacement = runner.session_lifetime(None).unwrap();
+        assert!(replacement.is_active());
+        assert!(!replacement.matches(&primary));
+        assert!(!primary.is_active());
+        runner.dispose(WorkerInspectorError::Closed);
+        assert!(matches!(
+            runner.session_lifetime(None),
+            Err(WorkerInspectorError::Disposed)
+        ));
+        assert_eq!(runner.session_count(), 0);
     }
 
     #[test]

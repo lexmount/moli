@@ -12,10 +12,18 @@ impl RendererBrowserContextRuntime {
     /// lifetime. The JavaScript-facing worker id is Page-local and therefore
     /// cannot safely key protocol targets after Page replacement.
     pub(crate) fn allocate_dedicated_worker_instance_id(&self) -> u64 {
-        self.inner
+        let instance_id = self
+            .inner
             .next_dedicated_worker_instance_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            .saturating_add(1)
+            .saturating_add(1);
+        self.inner.dedicated_worker_devtools_targets.lock().insert(
+            instance_id,
+            DedicatedWorkerDevToolsTarget::Loading {
+                inspector_sessions: Vec::new(),
+            },
+        );
+        instance_id
     }
 
     pub(crate) fn attach_dedicated_worker_devtools_handle(
@@ -24,13 +32,23 @@ impl RendererBrowserContextRuntime {
         handle: &WorkerHandle,
         output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
     ) {
-        self.inner.dedicated_worker_devtools_targets.lock().insert(
-            instance_id,
-            DedicatedWorkerDevToolsTarget {
-                handle: handle.devtools_handle(),
-                output_journal,
-            },
-        );
+        let mut targets = self.inner.dedicated_worker_devtools_targets.lock();
+        let Some(target) = targets.get_mut(&instance_id) else {
+            return;
+        };
+        let DedicatedWorkerDevToolsTarget::Loading { inspector_sessions } = target else {
+            return;
+        };
+        let handle = handle.devtools_handle();
+        // Keep attachment updates and handle publication under one lock. A
+        // concurrent detach must either remove a pending id or retire its token.
+        for session in inspector_sessions.drain(..) {
+            let _ = handle.attach_runtime_inspector_session(session);
+        }
+        *target = DedicatedWorkerDevToolsTarget::Running {
+            handle,
+            output_journal,
+        };
     }
 
     pub(crate) fn unregister_dedicated_worker_devtools_handle(&self, instance_id: u64) {
@@ -57,7 +75,10 @@ impl RendererBrowserContextRuntime {
             .dedicated_worker_devtools_targets
             .lock()
             .get(&instance_id)
-            .map(|target| target.handle.clone())
+            .and_then(|target| match target {
+                DedicatedWorkerDevToolsTarget::Running { handle, .. } => Some(handle.clone()),
+                DedicatedWorkerDevToolsTarget::Loading { .. } => None,
+            })
     }
 
     fn dedicated_worker_devtools_target(
@@ -109,10 +130,14 @@ impl RendererBrowserContextRuntime {
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
     ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch> {
-        let Some(target) = self.dedicated_worker_devtools_target(instance_id) else {
+        let Some(DedicatedWorkerDevToolsTarget::Running {
+            handle,
+            output_journal,
+        }) = self.dedicated_worker_devtools_target(instance_id)
+        else {
             return Err(WorkerInspectorError::DedicatedUnavailable.into());
         };
-        let Some(output_journal) = target.output_journal else {
+        let Some(output_journal) = output_journal else {
             return Err(WorkerInspectorError::DedicatedUnavailable.into());
         };
         let response = response
@@ -122,7 +147,7 @@ impl RendererBrowserContextRuntime {
             .take_session_response_settlement_receiver()
             .expect("a Worker DevTools response must own one settlement receiver");
         let (response_tx, response_rx) = oneshot::channel();
-        let dispatched = target.handle.dispatch_runtime_protocol_message(
+        let dispatched = handle.dispatch_runtime_protocol_message(
             Some(inspector_session_id),
             raw_json,
             Some(response),
@@ -173,8 +198,19 @@ impl RendererBrowserContextRuntime {
         instance_id: u64,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.dedicated_worker_devtools_handle(instance_id)
-            .is_some_and(|handle| handle.attach_runtime_inspector_session(inspector_session_id))
+        let mut targets = self.inner.dedicated_worker_devtools_targets.lock();
+        match targets.get_mut(&instance_id) {
+            Some(DedicatedWorkerDevToolsTarget::Loading { inspector_sessions }) => {
+                if !inspector_sessions.contains(&inspector_session_id) {
+                    inspector_sessions.push(inspector_session_id);
+                }
+                true
+            }
+            Some(DedicatedWorkerDevToolsTarget::Running { handle, .. }) => {
+                handle.attach_runtime_inspector_session(inspector_session_id)
+            }
+            None => false,
+        }
     }
 
     pub fn detach_dedicated_worker_runtime_inspector_session(
@@ -182,8 +218,18 @@ impl RendererBrowserContextRuntime {
         instance_id: u64,
         inspector_session_id: Option<String>,
     ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
-        self.dedicated_worker_devtools_handle(instance_id)
-            .map(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
+        let mut targets = self.inner.dedicated_worker_devtools_targets.lock();
+        match targets.get_mut(&instance_id)? {
+            DedicatedWorkerDevToolsTarget::Loading { inspector_sessions } => {
+                inspector_sessions.retain(|session| session != &inspector_session_id);
+                let (tx, rx) = oneshot::channel();
+                let _ = tx.send(Ok(()));
+                Some(rx)
+            }
+            DedicatedWorkerDevToolsTarget::Running { handle, .. } => {
+                Some(handle.detach_runtime_inspector_session(inspector_session_id))
+            }
+        }
     }
 
     pub fn run_dedicated_worker_if_waiting_for_debugger_for_devtools(
@@ -197,5 +243,56 @@ impl RendererBrowserContextRuntime {
     pub fn close_dedicated_worker_for_devtools(&self, instance_id: u64) -> bool {
         self.dedicated_worker_devtools_handle(instance_id)
             .is_some_and(|handle| handle.terminate_for_devtools())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn loading_worker_retirement_removes_pending_inspector_attachments() {
+        let runtime = RendererBrowserContextRuntime::new();
+        let instance = runtime.allocate_dedicated_worker_instance_id();
+        assert!(
+            runtime.attach_dedicated_worker_runtime_inspector_session(
+                instance,
+                Some("retired".into())
+            )
+        );
+        assert!(
+            runtime
+                .attach_dedicated_worker_runtime_inspector_session(instance, Some("live".into()))
+        );
+        assert!(
+            runtime
+                .attach_dedicated_worker_runtime_inspector_session(instance, Some("live".into()))
+        );
+        runtime
+            .detach_dedicated_worker_runtime_inspector_session(instance, Some("retired".into()))
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        {
+            let targets = runtime.inner.dedicated_worker_devtools_targets.lock();
+            let DedicatedWorkerDevToolsTarget::Loading { inspector_sessions } = &targets[&instance]
+            else {
+                panic!("worker is still loading");
+            };
+            assert_eq!(inspector_sessions, &[Some("live".into())]);
+        }
+        runtime.unregister_dedicated_worker_devtools_handle(instance);
+        assert!(
+            !runtime
+                .attach_dedicated_worker_runtime_inspector_session(instance, Some("late".into()))
+        );
+        assert!(
+            runtime
+                .inner
+                .dedicated_worker_devtools_targets
+                .lock()
+                .is_empty()
+        );
     }
 }
