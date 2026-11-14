@@ -1215,6 +1215,12 @@ impl DocumentLifecycleRecord {
         self.blockers.acquire(token, reason)
     }
 
+    /// `Page.stopLoading` cleared this Document's load-delay tokens while
+    /// leaving it current; see [`Self::stop_loading_without_load_event`].
+    pub(super) fn load_was_stopped(&self) -> bool {
+        self.load == DocumentLoadEventProgress::Suppressed
+    }
+
     pub(super) fn release_load_delay(
         &mut self,
         token: DocumentLoadDelayTokenId,
