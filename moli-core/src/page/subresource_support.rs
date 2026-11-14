@@ -237,6 +237,7 @@ impl Page {
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::FulfillPendingSubresourceFetch {
             internal_id,
+            request_overrides: None,
             response_code,
             response_headers,
             response_body,

@@ -885,6 +885,17 @@ fn start_devtools_fulfill_intercepted_request_command(
         let websocket_socket_id = pending.websocket_socket_id;
         let register_synthetic_websocket =
             pending.resource_type == SubresourceResourceType::WebSocket && response_code == 101;
+        let (url, method, body, headers) =
+            pending.accumulated_request_stage_continue_modifications();
+        let request_overrides =
+            (url.is_some() || method.is_some() || body.is_some() || headers.is_some()).then(|| {
+                Box::new(moli_fetch::RequestOverrides {
+                    url,
+                    method,
+                    body,
+                    headers,
+                })
+            });
         let pending_page = match conn.start_subresource_document_command(
             owner,
             pending
@@ -893,6 +904,7 @@ fn start_devtools_fulfill_intercepted_request_command(
             pending.document_command_target(),
             RendererPageCommand::FulfillPendingSubresourceFetch {
                 internal_id: pending.internal_id,
+                request_overrides,
                 response_code,
                 response_headers: response_headers.clone(),
                 response_body: decoded_body.unwrap_or_else(RendererSyntheticResponseBody::empty),

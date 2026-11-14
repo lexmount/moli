@@ -968,6 +968,7 @@ impl PageVm {
             }
             RendererPageCommand::FulfillPendingSubresourceFetch {
                 internal_id,
+                request_overrides,
                 response_code,
                 response_headers,
                 response_body,
@@ -977,6 +978,7 @@ impl PageVm {
                     response_code,
                     response_headers,
                     response_body,
+                    request_overrides.map(|overrides|*overrides),
                 )?;
                 Ok(RendererPageReply::Unit)
             }
