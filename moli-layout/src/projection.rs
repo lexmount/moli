@@ -60,7 +60,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
 
 pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
     world: &LayoutWorld<N>,
-    services: &mut crate::DocumentLayoutServices,
+    prepared_display: (display::GeneratedTextPool, display::DisplayBuilder),
     source: &S,
     viewport: LayoutViewport,
     reason: LayoutFlushReason,
@@ -89,7 +89,7 @@ where
             .map(|point| LayoutPoint::new(content.x + point.x * zoom, content.y + point.y * zoom));
     }
     projection.build_fragments();
-    let (generated_text, builder) = display::prepare(world, services);
+    let (generated_text, builder) = prepared_display;
     projection.inline_display = builder.finish(world, &generated_text, |owner| {
         let content = projection.boxes[owner.index()].content_box;
         LayoutPoint::new(content.x, content.y)
