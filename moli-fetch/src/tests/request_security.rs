@@ -1,4 +1,6 @@
 use super::*;
+
+mod intercepted_redirects;
 use crate::{CookieHeaderPolicy, RedirectInfo, RedirectSource};
 
 #[derive(Clone, Copy, Debug)]
