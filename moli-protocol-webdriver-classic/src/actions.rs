@@ -1506,11 +1506,23 @@ fn dispatch_key_event_command_with_modifiers(
         event_type,
         key: key.to_owned(),
         code: code.to_owned(),
+        location: webdriver_key_location(code),
         text: text.to_owned(),
         modifiers,
         auto_repeat,
         should_insert_text,
     })
+}
+
+fn webdriver_key_location(code: &str) -> u32 {
+    if code.starts_with("Numpad") {
+        return 3;
+    }
+    match code {
+        "ShiftLeft" | "ControlLeft" | "AltLeft" | "MetaLeft" => 1,
+        "ShiftRight" | "ControlRight" | "AltRight" | "MetaRight" => 2,
+        _ => 0,
+    }
 }
 
 const CLASSIC_MODIFIER_ALT: u8 = 1;

@@ -3760,3 +3760,28 @@ fn rejects_classic_command_invalid_params() {
     assert_eq!(error.code, ClassicErrorCode::InvalidArgument);
     assert_eq!(error.message, "args must be an array");
 }
+
+#[test]
+fn webdriver_key_locations_survive_shared_command_translation() {
+    let context = ClassicDevToolsCommandContext::with_target_id("key-location", "TID-1");
+    for (key, code, location) in [
+        ("x", "", 0),
+        ("\u{E008}", "ShiftLeft", 1),
+        ("\u{E009}", "ControlLeft", 1),
+        ("\u{E00A}", "AltLeft", 1),
+        ("\u{E03D}", "MetaLeft", 1),
+        ("\u{E01A}", "Numpad0", 3),
+        ("\u{E023}", "Numpad9", 3),
+        ("\u{E024}", "NumpadMultiply", 3),
+    ] {
+        let commands = element_send_keys_input_commands(&context, key);
+        assert_eq!(commands.len(), 2, "{key:?}");
+        for command in commands {
+            let AutomationCommand::DispatchKeyEvent(command) = command else {
+                panic!("expected key command")
+            };
+            assert_eq!(command.code, code, "{key:?}");
+            assert_eq!(command.location, location, "{key:?}");
+        }
+    }
+}

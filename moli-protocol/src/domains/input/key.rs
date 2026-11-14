@@ -16,6 +16,7 @@ pub(super) struct ParsedDispatchKeyEvent {
     pub(super) event_type: DevToolsKeyEventType,
     pub(super) key: String,
     pub(super) code: String,
+    pub(super) location: u32,
     pub(super) text: String,
     pub(super) modifiers: u8,
     pub(super) auto_repeat: bool,
@@ -64,11 +65,28 @@ pub(super) fn parse_dispatch_key_event(
         event_type,
         key: normalize_cdp_dom_key_string(params.key.unwrap_or_default()),
         code: params.code.unwrap_or_default(),
+        location: cdp_key_location(params.location, params.is_keypad),
         text: params.text.unwrap_or_default(),
         modifiers,
         auto_repeat: params.auto_repeat.unwrap_or(false),
         should_insert_text,
     })
+}
+
+// Chromium turns the protocol location's low bits into left/right modifier
+// flags. The keypad flag takes precedence over either side.
+fn cdp_key_location(location: Option<i64>, is_keypad: Option<bool>) -> u32 {
+    if is_keypad.unwrap_or(false) {
+        return 3;
+    }
+    let location = location.unwrap_or(0);
+    if location & 1 != 0 {
+        1
+    } else if location & 2 != 0 {
+        2
+    } else {
+        0
+    }
 }
 
 pub(super) fn parse_insert_text(cmd: &Cmd<'_>) -> Result<String, &'static str> {

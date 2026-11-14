@@ -719,6 +719,7 @@ fn build_cdp_dispatch_key_event_command(
         event_type: parsed.event_type,
         key: parsed.key,
         code: parsed.code,
+        location: parsed.location,
         text: parsed.text,
         modifiers: parsed.modifiers,
         auto_repeat: parsed.auto_repeat,
@@ -1045,6 +1046,7 @@ fn start_devtools_dispatch_key_event_command(
                 key::devtools_key_event_dom_event_name(command.event_type),
                 &command.key,
                 &command.code,
+                command.location,
                 &command.text,
                 command.modifiers,
                 command.auto_repeat,
@@ -1834,6 +1836,7 @@ mod protocol_neutral_tests {
             r#"{"id":43,"method":"Input.dispatchKeyEvent"}"#,
         );
         let parsed = super::key::ParsedDispatchKeyEvent {
+            location: 0,
             event_type: DevToolsKeyEventType::KeyDown,
             key: "A".to_owned(),
             code: "KeyA".to_owned(),
@@ -1873,6 +1876,7 @@ mod protocol_neutral_tests {
             r#"{"id":44,"method":"Input.dispatchKeyEvent"}"#,
         );
         let parsed = super::key::ParsedDispatchKeyEvent {
+            location: 0,
             event_type: DevToolsKeyEventType::KeyUp,
             key: "A".to_owned(),
             code: "KeyA".to_owned(),

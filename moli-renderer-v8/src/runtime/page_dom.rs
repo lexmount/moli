@@ -704,20 +704,22 @@ impl PageVm {
         self.vm_mut().insert_text_into_active_control(text)
     }
 
-    pub(crate) fn dispatch_key_event(
+    pub(crate) fn dispatch_key_event_with_location(
         &mut self,
         event_name: &str,
         key: &str,
         code: &str,
+        location: u32,
         text: &str,
         modifiers: u8,
         auto_repeat: bool,
         should_insert_text: bool,
     ) -> Result<RendererInputDispatchOutcome> {
-        self.vm_mut().dispatch_key_event(
+        self.vm_mut().dispatch_key_event_with_location(
             event_name,
             key,
             code,
+            location,
             text,
             modifiers,
             auto_repeat,

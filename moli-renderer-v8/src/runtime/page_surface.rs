@@ -5071,6 +5071,7 @@ pub enum RendererPageCommand {
         event_name: String,
         key: String,
         code: String,
+        location: u32,
         text: String,
         modifiers: u8,
         auto_repeat: bool,

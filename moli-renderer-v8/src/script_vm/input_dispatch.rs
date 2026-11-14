@@ -2566,11 +2566,35 @@ impl ScriptVm {
         self.finish_input_command_checkpoint(result)
     }
 
+    #[cfg(test)]
     pub(crate) fn dispatch_key_event(
         &mut self,
         event_name: &str,
         key: &str,
         code: &str,
+        text: &str,
+        modifiers: u8,
+        auto_repeat: bool,
+        should_insert_text: bool,
+    ) -> Result<RendererInputDispatchOutcome> {
+        self.dispatch_key_event_with_location(
+            event_name,
+            key,
+            code,
+            0,
+            text,
+            modifiers,
+            auto_repeat,
+            should_insert_text,
+        )
+    }
+
+    pub(crate) fn dispatch_key_event_with_location(
+        &mut self,
+        event_name: &str,
+        key: &str,
+        code: &str,
+        location: u32,
         text: &str,
         modifiers: u8,
         auto_repeat: bool,
@@ -2609,6 +2633,7 @@ impl ScriptVm {
                 event_name,
                 key,
                 code,
+                location,
                 alt,
                 ctrl,
                 meta,
@@ -2643,6 +2668,7 @@ impl ScriptVm {
                     "keypress",
                     key,
                     code,
+                    location,
                     alt,
                     ctrl,
                     meta,

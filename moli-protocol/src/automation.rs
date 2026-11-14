@@ -1279,6 +1279,7 @@ pub struct DevToolsDispatchKeyEventCommand {
     pub event_type: DevToolsKeyEventType,
     pub key: String,
     pub code: String,
+    pub location: u32,
     pub text: String,
     pub modifiers: u8,
     pub auto_repeat: bool,

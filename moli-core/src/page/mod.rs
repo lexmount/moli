@@ -568,6 +568,7 @@ impl Page {
             event_name: event_name.to_owned(),
             key: key.to_owned(),
             code: code.to_owned(),
+            location: 0,
             text: text.to_owned(),
             modifiers,
             auto_repeat,

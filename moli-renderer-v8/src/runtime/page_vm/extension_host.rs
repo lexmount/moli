@@ -208,9 +208,16 @@ impl PageExtensionHost for AcePageTaskHost<'_> {
         insert_text: bool,
     ) -> Result<bool> {
         self.require_input()?;
-        let result =
-            self.page
-                .dispatch_key_event(event, key, code, text, modifiers, repeat, insert_text);
+        let result = self.page.dispatch_key_event_with_location(
+            event,
+            key,
+            code,
+            0,
+            text,
+            modifiers,
+            repeat,
+            insert_text,
+        );
         self.retain_dispatch(result)
     }
     fn activate(&mut self, handle: DomHandle, x: f64, y: f64, modifiers: u8) -> Result<bool> {

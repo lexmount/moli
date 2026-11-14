@@ -2095,6 +2095,7 @@ fn test_trusted_key_dispatch_callback(
         &event_type,
         &key,
         &code,
+        0,
         alt,
         ctrl,
         meta,

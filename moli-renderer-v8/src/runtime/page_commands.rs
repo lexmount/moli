@@ -235,15 +235,17 @@ impl PageVm {
                 event_name,
                 key,
                 code,
+                location,
                 text,
                 modifiers,
                 auto_repeat,
                 should_insert_text,
             } => self
-                .dispatch_key_event(
+                .dispatch_key_event_with_location(
                     &event_name,
                     &key,
                     &code,
+                    location,
                     &text,
                     modifiers,
                     auto_repeat,
