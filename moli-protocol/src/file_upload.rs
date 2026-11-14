@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -15,6 +15,7 @@ use moli_file_api::{BlobData, BlobReadCompletion, BlobSource};
 #[derive(Debug, Clone)]
 struct FileSource {
     path: PathBuf,
+    directory_root: Option<Arc<Path>>,
     size: u64,
     modified: Option<SystemTime>,
     runtime: tokio::runtime::Handle,
@@ -22,6 +23,9 @@ struct FileSource {
 
 impl FileSource {
     fn read_range(&self, range: Range<usize>) -> io::Result<Vec<u8>> {
+        if let Some(root) = &self.directory_root {
+            directory_upload_metadata(root, &self.path)?;
+        }
         let mut file = fs::File::open(&self.path)?;
         self.check_snapshot(&file.metadata()?)?;
         file.seek(SeekFrom::Start(range.start as u64))?;
@@ -72,7 +76,10 @@ impl BlobSource for FileSource {
     fn same_snapshot(&self, other: &dyn BlobSource) -> bool {
         let other: &dyn std::any::Any = other;
         other.downcast_ref::<Self>().is_some_and(|other| {
-            self.path == other.path && self.size == other.size && self.modified == other.modified
+            self.path == other.path
+                && self.directory_root == other.directory_root
+                && self.size == other.size
+                && self.modified == other.modified
         })
     }
 
@@ -138,11 +145,15 @@ fn select_files(
         ))
     })?;
     if paths.len() == 1 && Path::new(&paths[0]).is_dir() {
-        let root = upload_directory_root(Path::new(&paths[0]))?;
-        let mut directories = vec![root.clone()];
+        let selected_root = upload_directory_root(Path::new(&paths[0]))?;
+        // Resolve the explicitly granted root once. Its chosen name still
+        // appears in webkitRelativePath, but retargeting that alias must not
+        // redirect existing File backings to another directory.
+        let root: Arc<Path> = fs::canonicalize(&selected_root)?.into();
+        let mut directories = vec![root.to_path_buf()];
         let mut files = Vec::new();
         while let Some(directory) = directories.pop() {
-            for entry in fs::read_dir(directory)? {
+            for entry in read_upload_directory(&root, &directory)? {
                 check_selection_cancelled(cancelled)?;
                 let entry = entry?;
                 let kind = entry.file_type()?;
@@ -158,8 +169,11 @@ fn select_files(
             .into_iter()
             .map(|path| {
                 check_selection_cancelled(cancelled)?;
-                let mut file = selected_file_from_file_path(&path, &runtime)?;
-                file.relative_path = upload_relative_path(&root, &path);
+                let mut file = selected_file_from_file_path(&path, &runtime, Some(root.clone()))?;
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("enumerated files stay below the resolved directory");
+                file.relative_path = upload_relative_path(selected_root.file_name(), relative);
                 Ok(file)
             })
             .collect();
@@ -168,7 +182,7 @@ fn select_files(
         .iter()
         .map(|path| {
             check_selection_cancelled(cancelled)?;
-            selected_file_from_file_path(Path::new(path), &runtime)
+            selected_file_from_file_path(Path::new(path), &runtime, None)
         })
         .collect()
 }
@@ -176,10 +190,16 @@ fn select_files(
 fn selected_file_from_file_path(
     file_path: &Path,
     runtime: &tokio::runtime::Handle,
+    directory_root: Option<Arc<Path>>,
 ) -> io::Result<SelectedFile> {
     let path = file_path.to_string_lossy();
-    let metadata = fs::metadata(file_path)
-        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, format!("File not found : {path}")))?;
+    let metadata = if let Some(root) = &directory_root {
+        directory_upload_metadata(root, file_path)?
+    } else {
+        fs::metadata(file_path).map_err(|_| {
+            io::Error::new(io::ErrorKind::NotFound, format!("File not found : {path}"))
+        })?
+    };
     if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -191,6 +211,7 @@ fn selected_file_from_file_path(
     let modified = metadata.modified().ok();
     let source = FileSource {
         path: std::path::absolute(file_path)?,
+        directory_root,
         size: metadata.len(),
         modified,
         runtime: runtime.clone(),
@@ -223,15 +244,58 @@ fn upload_directory_root(root: &Path) -> io::Result<PathBuf> {
     }
 }
 
-fn upload_relative_path(root: &Path, file: &Path) -> String {
-    root.file_name()
-        .into_iter()
-        .chain(
-            file.strip_prefix(root)
-                .expect("enumerated files stay below the chosen directory")
-                .components()
-                .map(|component| component.as_os_str()),
+// These pathname checks narrow the enumeration/open race but are not an
+// atomic restricted open. The resolved root and every component are checked
+// again before lazy reads; device/inode identity is not guaranteed here.
+fn directory_upload_metadata(root: &Path, path: &Path) -> io::Result<fs::Metadata> {
+    let rejected = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Directory upload path contains a symbolic link or leaves its selected root",
         )
+    };
+    let relative = path.strip_prefix(root).map_err(|_| rejected())?;
+    if !root.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err(rejected());
+    }
+    let mut checked = PathBuf::new();
+    let mut metadata = None;
+    // canonicalize() removed authorized root aliases at selection. Checking
+    // the entire resolved pathname also catches replacements above that root.
+    for part in path.components() {
+        checked.push(part.as_os_str());
+        match part {
+            Component::Prefix(_) => continue,
+            Component::RootDir | Component::Normal(_) => {}
+            _ => return Err(rejected()),
+        }
+        let current = fs::symlink_metadata(&checked)?;
+        if current.file_type().is_symlink() {
+            return Err(rejected());
+        }
+        metadata = Some(current);
+    }
+    metadata.ok_or_else(rejected)
+}
+
+fn read_upload_directory(root: &Path, path: &Path) -> io::Result<fs::ReadDir> {
+    if !directory_upload_metadata(root, path)?.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "Selected upload directory changed",
+        ));
+    }
+    fs::read_dir(path)
+}
+
+fn upload_relative_path(root_name: Option<&std::ffi::OsStr>, relative: &Path) -> String {
+    root_name
+        .into_iter()
+        .chain(relative.components().map(|component| component.as_os_str()))
         .map(|component| component.to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
@@ -287,7 +351,7 @@ mod directory_tests {
         let root = upload_directory_root(Path::new(".")).unwrap();
         assert_eq!(root, fs::canonicalize(&current).unwrap());
         assert_eq!(
-            upload_relative_path(&root, &root.join("nested/file.txt")),
+            upload_relative_path(root.file_name(), Path::new("nested/file.txt")),
             format!(
                 "{}/nested/file.txt",
                 root.file_name().unwrap().to_string_lossy()
@@ -302,11 +366,11 @@ mod directory_tests {
     fn upload_from_a_filesystem_root_does_not_emit_an_absolute_relative_path() {
         // Exercise path derivation without enumerating the machine's root.
         assert_eq!(
-            upload_relative_path(Path::new("/"), Path::new("/file.txt")),
+            upload_relative_path(Path::new("/").file_name(), Path::new("file.txt")),
             "file.txt"
         );
         assert_eq!(
-            upload_relative_path(Path::new("/"), Path::new("/nested/file.txt")),
+            upload_relative_path(Path::new("/").file_name(), Path::new("nested/file.txt")),
             "nested/file.txt"
         );
     }
@@ -357,8 +421,9 @@ mod directory_tests {
         fs::create_dir_all(&scratch).unwrap();
         let file = scratch.join(std::ffi::OsString::from_vec(b"bad-\xff.txt".to_vec()));
         fs::write(&file, b"data").unwrap();
-        let selected = selected_file_from_file_path(&file, &tokio::runtime::Handle::current())
-            .unwrap_or_else(|error| panic!("{error}"));
+        let selected =
+            selected_file_from_file_path(&file, &tokio::runtime::Handle::current(), None)
+                .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(selected.name, "bad-\u{fffd}.txt");
         assert!(selected.relative_path.is_empty());
         fs::remove_dir_all(scratch).unwrap();
@@ -479,5 +544,185 @@ mod backing_tests {
             Some(&cancelled),
         );
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    }
+    #[cfg(unix)]
+    fn matching_outside_file(original: &Path, outside: &Path) {
+        fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        fs::write(outside, b"SECRET").unwrap();
+        fs::File::open(outside)
+            .unwrap()
+            .set_modified(fs::metadata(original).unwrap().modified().unwrap())
+            .unwrap();
+        assert_eq!(
+            fs::metadata(original).unwrap().len(),
+            fs::metadata(outside).unwrap().len()
+        );
+        assert_eq!(
+            fs::metadata(original).unwrap().modified().unwrap(),
+            fs::metadata(outside).unwrap().modified().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_upload_read_rejects_a_replaced_file_symlink_with_matching_metadata() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("replaced-file");
+        let root = scratch.0.join("chosen");
+        fs::create_dir_all(&root).unwrap();
+        let original = root.join("file.txt");
+        fs::write(&original, b"public").unwrap();
+        let files = selected_files_from_paths(&[root.to_string_lossy().into_owned()]).unwrap();
+        let outside = scratch.0.join("outside/secret.txt");
+        matching_outside_file(&original, &outside);
+        fs::remove_file(&original).unwrap();
+        symlink(&outside, &original).unwrap();
+        assert_eq!(
+            files[0].data.read_blocking().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            files[0]
+                .data
+                .slice(1..3)
+                .read_blocking()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_upload_read_rejects_replaced_parent_and_root_symlinks() {
+        use std::os::unix::fs::symlink;
+        for (replaced, tail) in [
+            ("selected-parent", "chosen/nested/deep/file.txt"),
+            ("selected-parent/chosen", "nested/deep/file.txt"),
+            ("selected-parent/chosen/nested", "deep/file.txt"),
+            ("selected-parent/chosen/nested/deep", "file.txt"),
+        ] {
+            let scratch = Scratch::new("replaced-parent");
+            let root = scratch.0.join("selected-parent/chosen");
+            let original = root.join("nested/deep/file.txt");
+            fs::create_dir_all(original.parent().unwrap()).unwrap();
+            fs::write(&original, b"public").unwrap();
+            let files = selected_files_from_paths(&[root.to_string_lossy().into_owned()]).unwrap();
+            let outside = scratch.0.join("outside");
+            matching_outside_file(&original, &outside.join(tail));
+            let replaced = scratch.0.join(replaced);
+            fs::rename(&replaced, scratch.0.join("retained-directory")).unwrap();
+            symlink(&outside, &replaced).unwrap();
+            assert_eq!(
+                files[0].data.read_blocking().unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_upload_keeps_the_resolved_explicit_root_when_its_link_is_retargeted() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("retargeted-root-link");
+        let root = scratch.0.join("real-root");
+        fs::create_dir_all(&root).unwrap();
+        let original = root.join("file.txt");
+        fs::write(&original, b"public").unwrap();
+        let selected_link = scratch.0.join("chosen-link");
+        symlink(&root, &selected_link).unwrap();
+        let files =
+            selected_files_from_paths(&[selected_link.to_string_lossy().into_owned()]).unwrap();
+        let outside = scratch.0.join("outside");
+        matching_outside_file(&original, &outside.join("file.txt"));
+        fs::remove_file(&selected_link).unwrap();
+        symlink(&outside, &selected_link).unwrap();
+        assert_eq!(files[0].relative_path, "chosen-link/file.txt");
+        assert_eq!(files[0].data.read_blocking().unwrap(), b"public");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_upload_rechecks_a_queued_directory_before_enumerating() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("queued-directory");
+        let root = scratch.0.join("chosen");
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let queued = root.join("queued");
+        fs::create_dir_all(&queued).unwrap();
+        // Record the same directory kind used by the enumeration queue.
+        let entry = fs::read_dir(&root).unwrap().next().unwrap().unwrap();
+        assert!(entry.file_type().unwrap().is_dir());
+        let outside = scratch.0.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), b"SECRET").unwrap();
+        fs::remove_dir(&queued).unwrap();
+        symlink(&outside, &queued).unwrap();
+        assert_eq!(
+            read_upload_directory(&root, &entry.path())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_upload_rechecks_a_file_before_creating_its_backing() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("queued-file");
+        let root = scratch.0.join("chosen");
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let file = root.join("file.txt");
+        fs::write(&file, b"public").unwrap();
+        let entry = fs::read_dir(&root).unwrap().next().unwrap().unwrap();
+        assert!(entry.file_type().unwrap().is_file());
+        let outside = scratch.0.join("outside.txt");
+        matching_outside_file(&file, &outside);
+        fs::remove_file(&file).unwrap();
+        symlink(&outside, &file).unwrap();
+        let root: Arc<Path> = root.into();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(
+            selected_file_from_file_path(&entry.path(), runtime.handle(), Some(root))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn directory_upload_paths_cannot_traverse_out_of_the_recorded_root() {
+        let scratch = Scratch::new("path-boundary");
+        let root = fs::canonicalize(&scratch.0).unwrap();
+        fs::write(root.join("file.txt"), b"public").unwrap();
+        for path in [
+            root.parent().unwrap().join("outside.txt"),
+            root.join("../outside.txt"),
+        ] {
+            assert_eq!(
+                directory_upload_metadata(&root, &path).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn explicitly_selected_file_links_keep_their_existing_read_behavior() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("explicit-file-link");
+        let file = scratch.0.join("original.txt");
+        fs::write(&file, b"public").unwrap();
+        let link = scratch.0.join("chosen-link.txt");
+        symlink(&file, &link).unwrap();
+        let files = selected_files_from_paths(&[link.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(files[0].name, "chosen-link.txt");
+        assert!(files[0].relative_path.is_empty());
+        assert_eq!(files[0].data.read_blocking().unwrap(), b"public");
     }
 }
