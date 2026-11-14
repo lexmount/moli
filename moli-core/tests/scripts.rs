@@ -839,18 +839,27 @@ async fn runtime_inserted_stylesheet_load_can_trigger_location_replace() -> Resu
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_inserted_stylesheet_href_mutation_uses_fresh_fetch_for_parser_blocking_progress()
 -> Result<()> {
+    // Only execution of the following inline parser script acknowledges the
+    // gate. A speculative external-script request must not release stale CSS.
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     // The second parser script releases the stale stylesheet response. If it
     // waits on that stale request, the fixture never supplies CSS to unblock it.
-    let page = tokio::time::timeout(
+    let mut page = tokio::time::timeout(
         Duration::from_secs(5),
         browser.fetch(
             &server.url("/compat/runtime-inserted-stylesheet-href-mutation-uses-fresh-fetch"),
         ),
     )
     .await??;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "typeof globalThis.runtimeInsertedHrefMutationParserNotBlocked === 'boolean'",
+            Duration::from_secs(3),
+        )
+        .await?;
 
     assert_eq!(
         diagnostic_global(&page, "runtimeInsertedHrefMutationParserNotBlocked"),
@@ -860,7 +869,52 @@ async fn runtime_inserted_stylesheet_href_mutation_uses_fresh_fetch_for_parser_b
         diagnostic_global(&page, "runtimeInsertedHrefMutationSawLate"),
         Some(&JsValueSnapshot::Bool(false))
     );
+    assert!(
+        page.subresource_network_records().iter().any(|record| {
+            record.url().path() == "/assets/runtime_inserted_stylesheet_href_mutation_fresh.css"
+        }),
+        "the retargeted stylesheet must start the fresh fetch"
+    );
 
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_inserted_stylesheet_href_mutation_probe_requires_script_execution() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    // The extra parser-inserted stylesheet really blocks the script. The
+    // deadline must fire before the execution acknowledgment can arrive.
+    let mut page = tokio::time::timeout(
+        Duration::from_secs(5),
+        browser.fetch(
+            &server.url("/compat/runtime-inserted-stylesheet-href-mutation-blocked-control"),
+        ),
+    )
+    .await??;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "typeof globalThis.runtimeInsertedHrefMutationParserNotBlocked === 'boolean'",
+            Duration::from_secs(3),
+        )
+        .await?;
+    assert_eq!(
+        diagnostic_global(&page, "runtimeInsertedHrefMutationParserNotBlocked"),
+        Some(&JsValueSnapshot::Bool(false)),
+        "a genuine blocking stylesheet must fail the progress probe"
+    );
+    assert_eq!(
+        diagnostic_global(&page, "runtimeInsertedHrefMutationSawLate"),
+        Some(&JsValueSnapshot::Bool(false))
+    );
+    assert!(
+        page.subresource_network_records().iter().any(|record| {
+            record.url().path() == "/assets/runtime_inserted_stylesheet_href_mutation_fresh.css"
+        }),
+        "the control retains the ordinary fresh-fetch setup"
+    );
     server.shutdown().await;
     Ok(())
 }

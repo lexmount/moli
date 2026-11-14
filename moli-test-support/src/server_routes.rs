@@ -1334,6 +1334,10 @@ pub(super) fn build_router() -> Router {
             get(runtime_inserted_stylesheet_href_mutation_uses_fresh_fetch_page),
         )
         .route(
+            "/compat/runtime-inserted-stylesheet-href-mutation-blocked-control",
+            get(runtime_inserted_stylesheet_href_mutation_blocked_control_page),
+        )
+        .route(
             "/compat/runtime-inserted-style-import-missing-completes-load",
             get(runtime_inserted_style_import_missing_completes_load_page),
         )
@@ -2445,6 +2449,18 @@ pub(super) fn build_router() -> Router {
         .route(
             "/assets/blocking_stylesheet_slow.css",
             get(asset_blocking_stylesheet_slow_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_stale.css",
+            get(asset_runtime_inserted_stylesheet_href_mutation_stale_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_fresh.css",
+            get(asset_runtime_inserted_stylesheet_href_mutation_fresh_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_script_executed",
+            get(asset_runtime_inserted_stylesheet_href_mutation_script_executed),
         )
         .route(
             "/assets/runtime_connected_modulepreload_slow.mjs",
