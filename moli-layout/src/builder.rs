@@ -430,6 +430,7 @@ where
             style.clone(),
             None,
         );
+        layout_box.requires_empty_line = self.source.requires_empty_line(source_node);
         layout_box.replaced_context = replaced_context;
         layout_box.replaced_image = self.source.replaced_image(source_node, &style);
         if !matches!(
@@ -608,7 +609,7 @@ where
             return self.split_inline_box(world, box_id, owner, parent_style, children);
         }
 
-        let children = if matches!(
+        let mut children = if matches!(
             table_role,
             Some(
                 TableBoxRole::Root
@@ -639,6 +640,45 @@ where
             self.normalize_flow_children(world, owner, parent_style, children)?
         };
 
+        // Empty flex/grid editors need a line too. Keep their native item
+        // algorithms (including authored tracks) and give them an anonymous
+        // inline context rather than changing the container into an IFC.
+        if world.boxes[box_id.index()].requires_empty_line
+            && (parent_style.display().is_flex_container()
+                || parent_style.display().is_grid_container())
+            && !children.iter().any(|child| {
+                !world.boxes[child.index()]
+                    .style
+                    .taffy
+                    .position
+                    .is_out_of_flow()
+            })
+        {
+            let style = self.styles.anonymous_style(
+                LayoutAnonymousStyleContext::new(owner, parent_style),
+                LayoutDisplay::Block,
+            )?;
+            let kind = if parent_style.display().is_flex_container() {
+                LayoutBoxKind::AnonymousFlexItem
+            } else {
+                LayoutBoxKind::AnonymousGridItem
+            };
+            let mut line = LayoutWorld::new_box(
+                None,
+                Some(owner),
+                None,
+                format!("editing-line({})", self.source.label(owner)),
+                Some(self.source.label(owner)),
+                None,
+                Some(LayoutAnonymousReason::EmptyEditingHost),
+                kind,
+                style,
+                None,
+            );
+            line.requires_empty_line = true;
+            line.inline_formatting_context = true;
+            children.push(world.allocate(line));
+        }
         self.replace_children_and_mark_context(world, box_id, children)?;
         Ok(vec![box_id])
     }
@@ -1199,10 +1239,22 @@ where
         parent: LayoutBoxId,
         children: Vec<LayoutBoxId>,
     ) -> Result<(), LayoutError> {
-        let establishes_inline_context = children
-            .iter()
-            .copied()
-            .any(|child| self.is_meaningful_inline_in_flow(world, child))
+        let empty_editing_line = world.boxes[parent.index()].requires_empty_line
+            && matches!(
+                world.boxes[parent.index()].style.display(),
+                LayoutDisplay::Block
+                    | LayoutDisplay::FlowRoot
+                    | LayoutDisplay::InlineBlock
+                    | LayoutDisplay::BlockListItem
+                    | LayoutDisplay::InlineListItem
+                    | LayoutDisplay::TableCell
+                    | LayoutDisplay::TableCaption
+            );
+        let establishes_inline_context = (empty_editing_line
+            || children
+                .iter()
+                .copied()
+                .any(|child| self.is_meaningful_inline_in_flow(world, child)))
             && !children
                 .iter()
                 .copied()

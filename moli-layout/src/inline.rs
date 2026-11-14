@@ -166,6 +166,7 @@ pub(crate) struct InlineStructuralBox {
 
 #[derive(Debug)]
 pub(crate) struct InlineFormattingContext {
+    pub(crate) requires_empty_line: bool,
     /// The actual whitespace-processed text supplied to the shaper.
     pub(crate) text: String,
     pub(crate) root_style: LayoutBoxId,
@@ -1201,10 +1202,18 @@ fn resolve_inline_lines(
         }
         let empty_caret = context.text.is_empty()
             && matches!(context.selection, Some(InlineSelection::Caret { .. }));
+        let empty_line = empty_caret
+            || (context.requires_empty_line
+                && line_index == 0
+                && !geometries.iter().any(|geometry| geometry.creates_line)
+                && context
+                    .text_units
+                    .iter()
+                    .all(|unit| unit.control || unit.collapsible_whitespace));
         let phantom = css_line_is_phantom(
             line.break_reason(),
             geometries.iter().any(|geometry| geometry.creates_line),
-        ) && !empty_caret;
+        ) && !empty_line;
         for state in &mut states {
             state.parent = state_indices.get(&state.parent_box.index()).copied();
             state.alignment.anchor = state
@@ -1381,9 +1390,16 @@ fn resolve_inline_lines(
 
         let bounds = if phantom {
             InlineVerticalBounds::ZERO
-        } else if empty_caret {
-            // Empty editors still need their font strut for caret geometry.
-            fallback_root_bounds
+        } else if empty_line {
+            // Empty inline edge objects can leave Parley's line metrics at
+            // zero. The editing host still contributes its own font strut.
+            if context.requires_empty_line {
+                context
+                    .parent_strut
+                    .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
+            } else {
+                fallback_root_bounds
+            }
         } else if context.uses_quirks_line_height {
             root_bounds.unwrap_or(InlineVerticalBounds::ZERO)
         } else {
@@ -2044,6 +2060,7 @@ pub(crate) fn prepare_inline_contexts<N>(
         if input.units.is_empty()
             && input.objects.is_empty()
             && world.boxes[owner.index()].text_selection.is_none()
+            && !world.boxes[owner.index()].requires_empty_line
         {
             continue;
         }
@@ -2308,6 +2325,7 @@ impl InlineBuildInput {
             .map(|(_, object, _)| object)
             .collect();
         InlineFormattingContext {
+            requires_empty_line: world.boxes[self.root_style.index()].requires_empty_line,
             text: self.text,
             root_style: self.root_style,
             measurement_layout: Some(layout),
@@ -3521,6 +3539,7 @@ mod tests {
         layout.break_all_lines(Some(80.0));
 
         let context = InlineFormattingContext {
+            requires_empty_line: false,
             text: "".into(),
             root_style: root,
             measurement_layout: Some(layout.clone()),
@@ -3637,6 +3656,7 @@ mod tests {
                     })
                     .collect();
                 let context = InlineFormattingContext {
+                    requires_empty_line: false,
                     text: text.to_owned(),
                     root_style: root,
                     measurement_layout: None,
