@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     sync::Arc,
 };
 
@@ -102,13 +102,20 @@ impl StylesheetResourceManifest {
         // Stylo has already resolved effective rules and sorted them by the
         // document-wide layer order. Source order alone loses cross-sheet and
         // empty @layer statements, even though those can change font priority.
-        let document_font_order = stylist
+        // Cloned stylesheet rules can share an Arc. Retain each occurrence's
+        // rank so independent declarations keep their relative priority.
+        let mut document_font_order = HashMap::<usize, VecDeque<usize>>::new();
+        for (index, (rule, _)) in stylist
             .iter_extra_data_origins()
             .filter(|(_, origin)| *origin == Origin::Author)
             .flat_map(|(data, _)| data.font_faces.iter())
             .enumerate()
-            .map(|(index, (rule, _))| (rule.raw_ptr().as_ptr() as usize, index))
-            .collect::<HashMap<_, _>>();
+        {
+            document_font_order
+                .entry(rule.raw_ptr().as_ptr() as usize)
+                .or_default()
+                .push_back(index);
+        }
         collect_resources(
             document_stylesheets,
             stylist.device(),
@@ -116,7 +123,7 @@ impl StylesheetResourceManifest {
                 .cascade_data()
                 .borrow_for_origin(Origin::Author)
                 .custom_media_map(),
-            Some(&document_font_order),
+            Some(&mut document_font_order),
             &mut web_fonts,
             &mut imports,
         );
@@ -166,7 +173,7 @@ fn collect_resources(
     stylesheets: &ActiveStylesheetCollection,
     device: &style::device::Device,
     custom_media: &style::stylesheets::CustomMediaMap,
-    cascade_order: Option<&HashMap<usize, usize>>,
+    mut cascade_order: Option<&mut HashMap<usize, VecDeque<usize>>>,
     web_fonts: &mut Vec<StylesheetLoadBlockingResource>,
     imports: &mut BTreeMap<String, url::Url>,
 ) {
@@ -182,8 +189,9 @@ fn collect_resources(
                 continue;
             }
             let order = cascade_order
-                .and_then(|order| order.get(&resource.rule_address()))
-                .copied()
+                .as_mut()
+                .and_then(|order| order.get_mut(&resource.rule_address()))
+                .and_then(VecDeque::pop_front)
                 .unwrap_or(usize::MAX);
             let resource = resource.resource();
             if resource.web_font().is_some() {

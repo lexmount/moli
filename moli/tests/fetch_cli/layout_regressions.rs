@@ -317,3 +317,67 @@ fn wrapped_flex_distribution_keeps_child_positions_for_visible_and_scroll_overfl
     }
     Ok(())
 }
+
+#[test]
+fn flex_percentage_descendants_keep_definite_inline_axes_across_writing_modes() -> Result<()> {
+    let mut html = "<!doctype html><style>body{margin:0}</style>".to_owned();
+    for container in ["horizontal-tb", "vertical-rl", "vertical-lr"] {
+        for item in ["horizontal-tb", "vertical-rl", "vertical-lr"] {
+            let flow = if container == "horizontal-tb" {
+                "column"
+            } else {
+                "row"
+            };
+            html.push_str(&format!(
+                "<div style='width:200px;height:100px'><div style='display:flex;min-height:100%;writing-mode:{container};flex-direction:{flow}'><div style='flex-grow:1;writing-mode:{item}'><span id='{container}-{item}' style='display:block;height:100%'></span></div></div></div>"
+            ));
+        }
+    }
+    let value = run_layout(&html, GEOMETRY, false)?;
+    for container in ["horizontal-tb", "vertical-rl", "vertical-lr"] {
+        for item in ["horizontal-tb", "vertical-rl", "vertical-lr"] {
+            let expected = if container == "horizontal-tb" && item == "horizontal-tb" {
+                0.0
+            } else {
+                100.0
+            };
+            assert_dimension(&value, &format!("{container}-{item}"), "height", expected);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn rtl_column_baseline_alignment_positions_the_participating_group() -> Result<()> {
+    let mut html = "<!doctype html><style>body{margin:0}</style>".to_owned();
+    for flow in ["column", "column-reverse"] {
+        for wrap in ["nowrap", "wrap", "wrap-reverse"] {
+            for alignment in ["baseline", "flex-start"] {
+                let key = format!("{flow}-{wrap}-{alignment}");
+                html.push_str(&format!(
+                    "<div id='box-{key}' style='display:flex;direction:rtl;flex-flow:{flow} {wrap};align-content:flex-start;width:60px;height:20px'><div id='narrow-{key}' style='width:10px;height:10px;flex-shrink:0;align-self:baseline'></div><div id='wide-{key}' style='width:30px;height:10px;flex-shrink:0;align-self:{alignment}'></div></div>"
+                ));
+            }
+        }
+    }
+    let value = run_layout(&html, GEOMETRY, false)?;
+    for flow in ["column", "column-reverse"] {
+        for wrap in ["nowrap", "wrap", "wrap-reverse"] {
+            for alignment in ["baseline", "flex-start"] {
+                let key = format!("{flow}-{wrap}-{alignment}");
+                let left = value[format!("box-{key}")]["x"].as_f64().unwrap();
+                let group_width = if alignment == "baseline" { 30.0 } else { 10.0 };
+                let expected = if wrap == "wrap-reverse" {
+                    0.0
+                } else {
+                    60.0 - group_width
+                };
+                assert_dimension(&value, &format!("narrow-{key}"), "x", left + expected);
+                if alignment == "baseline" {
+                    assert_dimension(&value, &format!("wide-{key}"), "x", left + expected);
+                }
+            }
+        }
+    }
+    Ok(())
+}
