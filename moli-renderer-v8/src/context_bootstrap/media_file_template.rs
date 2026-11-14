@@ -33,7 +33,8 @@ use super::canvas::{
     canvas_gradient_add_color_stop_callback, install_canvas_rect_bindings,
     install_canvas_template_bindings, install_canvas_transform_bindings,
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
-    webgl_boolean_callback, webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
+    offscreen_canvas_transfer_to_image_bitmap_callback, webgl_boolean_callback,
+    webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
     webgl_create_framebuffer_callback, webgl_create_program_callback,
     webgl_create_renderbuffer_callback, webgl_create_shader_callback,
     webgl_get_attrib_location_callback, webgl_get_context_attributes_callback,
@@ -79,6 +80,9 @@ struct BlobTemplateMethodsDeclaration {
 struct OffscreenCanvasTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = offscreen_canvas_get_context_callback)]
     get_context: (),
+
+    #[webapi(method, length = 0, callback = offscreen_canvas_transfer_to_image_bitmap_callback)]
+    transfer_to_image_bitmap: (),
 
     #[webapi(method, length = 0, callback = offscreen_canvas_convert_to_blob_callback)]
     convert_to_blob: (),
