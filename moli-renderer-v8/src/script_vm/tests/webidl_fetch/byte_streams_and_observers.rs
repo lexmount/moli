@@ -1701,6 +1701,24 @@ fn resize_observer_callback_runs_after_microtask_checkpoint() {
 }
 
 #[test]
+fn resize_observer_measures_real_layout_before_any_snapshot_exists() {
+    let mut vm = new_parsed_test_vm(
+        "https://resize-observer-first-layout.test/",
+        "<!doctype html><div id=target style='width:300px;height:120px'></div>",
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.eval(
+        "globalThis.__sizes=[];new ResizeObserver(es=>{for(const e of es)__sizes.push(e.contentRect.width+'x'+e.contentRect.height)}).observe(target);'observed'",
+    )
+    .expect("ResizeObserver setup should evaluate");
+    assert_eq!(
+        vm.eval("__sizes.join('|')").unwrap(),
+        "300x120",
+        "the first observation must come from a layout pass, not a fake 0x0"
+    );
+}
+
+#[test]
 fn resize_observer_declared_slots_ignore_prototype_spoofing() {
     let mut vm = new_storage_test_vm("https://resize-observer-declared-slots.test/");
 
