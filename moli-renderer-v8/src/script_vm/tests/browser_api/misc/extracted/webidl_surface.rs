@@ -1,5 +1,7 @@
 use super::*;
 
+mod policy_interface;
+
 #[cfg(feature = "wpt-extensions")]
 #[test]
 fn wpt_webdriver_delete_all_cookies_is_declared_on_prototype() {
