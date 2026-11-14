@@ -613,7 +613,7 @@ class FixtureServer:
                                           "text/plain", b"", {"Location": query["to"][0],
                                           "Access-Control-Allow-Origin": "*"})
                     else:
-                        self._send_json({"method": self.command,
+                        self._send_json({"path": route, "method": self.command,
                                          "headers": {name.lower(): value for name, value in self.headers.items()},
                                          "body": _body.decode("utf-8")},
                                         headers={"Access-Control-Allow-Origin": "*"})

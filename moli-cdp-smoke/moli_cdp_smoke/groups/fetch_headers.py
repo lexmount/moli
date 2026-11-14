@@ -21,7 +21,7 @@ async def run_fetch_headers_group(browser: Any, fixture: str, results: list[dict
     escape.start()
     try:
         cases = [(f"replay-{status}", status) for status in (301, 302, 303, 307, 308)]
-        cases += [(case, 302) for case in ("noop-method", "empty-postdata", "new-content-type", "chain-replay",
+        cases += [(case, 302) for case in ("noop-method", "noop-url", "rewrite-url", "empty-postdata", "new-content-type", "chain-replay",
                                           "drop-then-replay", "fresh-then-replay", "origin-echo", "authorization")]
         for api in ("fetch", "xhr", "sync-xhr"):
             for case, status in cases:
@@ -108,6 +108,13 @@ async def _case(browser: Any, source: str, peer: FixtureServer, escape: str,
                         headers = dict(original)
                         if case == "noop-method":
                             params["method"] = pause["request"]["method"]
+                        if case in ("noop-url", "rewrite-url"):
+                            # Chromium restarts the transport whenever url is
+                            # supplied, including an unchanged URL. Headers now
+                            # apply to that new request rather than FollowRedirect.
+                            params["url"] = pause["request"]["url"]
+                            if case == "rewrite-url":
+                                params["url"] = params["url"].replace("/fetch-headers/echo?", "/fetch-headers/rewritten?")
                         if case == "empty-postdata":
                             params["postData"] = ""
                         if case == "new-content-type" or (case == "fresh-then-replay" and hop == "middle"):
@@ -120,14 +127,19 @@ async def _case(browser: Any, source: str, peer: FixtureServer, escape: str,
                     await cdp.send("Fetch.continueRequest", params)
                 value = json.loads(await operation)
             wire = value["headers"]
+            restarted = case in ("noop-url", "rewrite-url")
             keep_body = status in (307, 308) or case == "origin-echo"
-            expected_type = "text/plain" if keep_body or case in ("drop-then-replay", "fresh-then-replay") else None
+            expected_type = "text/plain" if keep_body or restarted or case in ("drop-then-replay", "fresh-then-replay") else None
             if case == "new-content-type":
                 expected_type = "application/x-new"
             assert_equal(value["method"], "POST" if keep_body else "GET", label + " wire method")
             assert_equal(value["body"], "abc" if keep_body else "", label + " wire body")
             assert_equal(wire.get("content-type"), expected_type, label + " wire Content-Type")
             assert_equal(wire.get("content-length"), "3" if keep_body else None, label + " wire Content-Length")
+            if restarted:
+                assert_equal(value["path"], "/fetch-headers/rewritten" if case == "rewrite-url" else "/fetch-headers/echo",
+                             label + " actual overridden request path")
+                assert_equal(wire.get("origin"), source, label + " restarted request accepts explicit Origin")
             if case == "authorization":
                 peer_path = urlsplit(peer_url).path + "?" + urlsplit(peer_url).query
                 assert_equal(peer.resource_request_headers(peer_path).get("authorization"), "interceptor-secret",
@@ -135,7 +147,7 @@ async def _case(browser: Any, source: str, peer: FixtureServer, escape: str,
                 assert_equal(wire.get("authorization"), None, label + " third origin has no Authorization")
             else:
                 assert_equal(wire.get("x-author"), "kept", label + " retained custom header")
-                if not keep_body:
+                if not keep_body and not restarted:
                     assert_equal(wire.get("origin"), None, label + " no replayed POST Origin")
             ids = {pause.get("networkId") for pause in pauses}
             assert_equal(len(ids), 1, label + " stable Network identity")
@@ -150,7 +162,7 @@ async def _case(browser: Any, source: str, peer: FixtureServer, escape: str,
                          and event["params"].get("requestId") == request_id]
             assert_equal(terminals, ["Network.loadingFinished"], label + " one terminal")
             record_contract(results, "intercepted_headers_" + label,
-                            contract="A redirect removes replayed upload headers, preserves fresh overrides and scopes explicit Authorization.",
+                            contract="A redirect removes replayed upload headers; a supplied URL restarts header application. Fresh overrides and single-hop Authorization remain supported.",
                             source="Executable Chromium CDP oracle",
                             commands=["Fetch.enable", "Fetch.continueRequest"],
                             observed={"api": api, "case": case, "method": value["method"], "contentType": expected_type,
