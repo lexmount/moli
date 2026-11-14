@@ -18,6 +18,7 @@ pub(super) struct ParsedDispatchKeyEvent {
     pub(super) code: String,
     pub(super) text: String,
     pub(super) modifiers: u8,
+    pub(super) location: u32,
     pub(super) auto_repeat: bool,
     pub(super) should_insert_text: bool,
 }
@@ -60,12 +61,26 @@ pub(super) fn parse_dispatch_key_event(
         KeyEventType::Char => (DevToolsKeyEventType::KeyPress, true),
     };
 
+    // Chromium turns the protocol's side bits into event modifiers. Keypad
+    // location takes precedence over either side when Blink exposes the event.
+    let side = params.location.unwrap_or_default();
+    let location = if params.is_keypad.unwrap_or(false) {
+        3
+    } else if side & 1 != 0 {
+        1
+    } else if side & 2 != 0 {
+        2
+    } else {
+        0
+    };
+
     Ok(ParsedDispatchKeyEvent {
         event_type,
         key: normalize_cdp_dom_key_string(params.key.unwrap_or_default()),
         code: params.code.unwrap_or_default(),
         text: params.text.unwrap_or_default(),
         modifiers,
+        location,
         auto_repeat: params.auto_repeat.unwrap_or(false),
         should_insert_text,
     })

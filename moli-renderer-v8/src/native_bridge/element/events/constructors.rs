@@ -141,6 +141,7 @@ struct KeyboardEventInitDeclaration<'scope> {
     composed: bool,
     key: v8::Local<'scope, v8::Value>,
     code: v8::Local<'scope, v8::Value>,
+    location: u32,
     char_code: f64,
     key_code: f64,
     which: f64,
@@ -857,6 +858,7 @@ pub(crate) fn construct_keyboard_event<'s>(
     meta: bool,
     shift: bool,
     repeat: bool,
+    location: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let (char_code, key_code, which) = keyboard_event_legacy_codes(event_type, key, code);
     let key = v8_string(scope, key)
@@ -871,6 +873,7 @@ pub(crate) fn construct_keyboard_event<'s>(
         true,
         key,
         code,
+        location,
         char_code as f64,
         key_code as f64,
         which as f64,

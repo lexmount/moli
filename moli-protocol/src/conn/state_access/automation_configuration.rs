@@ -344,6 +344,7 @@ mod tests {
     }
     fn input_command() -> AutomationCommand {
         AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+            location: 0,
             context: command_context(),
             event_type: DevToolsKeyEventType::KeyPress,
             key: "a".into(),

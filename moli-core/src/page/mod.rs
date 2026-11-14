@@ -570,6 +570,7 @@ impl Page {
             code: code.to_owned(),
             text: text.to_owned(),
             modifiers,
+            location: 0,
             auto_repeat,
             should_insert_text,
         };

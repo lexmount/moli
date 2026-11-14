@@ -192,6 +192,7 @@ pub trait PageInputExt {
         modifiers: u8,
         auto_repeat: bool,
         should_insert_text: bool,
+        location: u32,
     ) -> Result<PendingPageCommand>;
     fn finish_dispatch_key_event_with_outcome(
         &mut self,
@@ -485,6 +486,7 @@ impl PageInputExt for Page {
         modifiers: u8,
         auto_repeat: bool,
         should_insert_text: bool,
+        location: u32,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::DispatchKeyEvent {
             event_name: event_name.to_owned(),
@@ -494,6 +496,7 @@ impl PageInputExt for Page {
             modifiers,
             auto_repeat,
             should_insert_text,
+            location,
         })
     }
 

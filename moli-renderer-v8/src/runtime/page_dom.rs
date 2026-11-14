@@ -713,8 +713,9 @@ impl PageVm {
         modifiers: u8,
         auto_repeat: bool,
         should_insert_text: bool,
+        location: u32,
     ) -> Result<RendererInputDispatchOutcome> {
-        self.vm_mut().dispatch_key_event(
+        self.vm_mut().dispatch_key_event_with_location(
             event_name,
             key,
             code,
@@ -722,6 +723,7 @@ impl PageVm {
             modifiers,
             auto_repeat,
             should_insert_text,
+            location,
         )
     }
 
