@@ -1,5 +1,6 @@
 use super::super::events::{
-    xhr_dispatch_progress_event, xhr_fire_readystatechange, xhr_is_aborted,
+    xhr_dispatch_progress_event, xhr_dispatch_upload_progress_event, xhr_fire_readystatechange,
+    xhr_is_aborted,
 };
 use super::super::*;
 
@@ -16,6 +17,15 @@ pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local
     }
     if xhr_is_aborted(scope, xhr) {
         return;
+    }
+    if xhr_state_bool_property(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT).unwrap_or(false) {
+        set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, false);
+        for event in ["error", "loadend"] {
+            xhr_dispatch_upload_progress_event(scope, xhr, event, 0.0, 0.0);
+            if scope.is_execution_terminating() {
+                return;
+            }
+        }
     }
     xhr_dispatch_progress_event(scope, xhr, "error", 0.0, 0.0);
     if scope.is_execution_terminating() {
