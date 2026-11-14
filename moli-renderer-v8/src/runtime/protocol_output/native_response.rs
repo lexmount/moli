@@ -88,13 +88,30 @@ struct RendererNativeCommandResponse {
     lease: Lease,
 }
 
+/// Reserves only the original reply authority while Browser I/O prepares an
+/// operation. It does not occupy a renderer journal position or enter a Page.
+pub struct RendererNativeCommandAdmission {
+    response: RendererNativeCommandResponse,
+}
+
+impl RendererNativeCommandAdmission {
+    pub fn bind(self, operation: RendererNativeOperation) -> RendererCdpCall {
+        RendererCdpCall {
+            operation,
+            response: self.response,
+        }
+    }
+}
+
 impl RendererCdpCall {
-    pub fn new(
+    pub fn reserve(
         command_id: FrontendCommandId,
         session: DevToolsSessionKey,
         attachment_id: RendererAgentAttachmentId,
-        operation: RendererNativeOperation,
-    ) -> (Self, RendererNativeCommandResponseGuard) {
+    ) -> (
+        RendererNativeCommandAdmission,
+        RendererNativeCommandResponseGuard,
+    ) {
         let authority = Authority::session();
         let lease = authority
             .activate()
@@ -103,8 +120,7 @@ impl RendererCdpCall {
             .take_session_response_settlement_receiver()
             .expect("native frontend calls retain a publication receipt");
         (
-            Self {
-                operation,
+            RendererNativeCommandAdmission {
                 response: RendererNativeCommandResponse {
                     command_id,
                     session,
@@ -117,6 +133,16 @@ impl RendererCdpCall {
                 publication: Some(publication),
             },
         )
+    }
+
+    pub fn new(
+        command_id: FrontendCommandId,
+        session: DevToolsSessionKey,
+        attachment_id: RendererAgentAttachmentId,
+        operation: RendererNativeOperation,
+    ) -> (Self, RendererNativeCommandResponseGuard) {
+        let (admission, guard) = Self::reserve(command_id, session, attachment_id);
+        (admission.bind(operation), guard)
     }
 }
 

@@ -69,6 +69,13 @@ impl Drop for ReadReply {
 }
 
 impl BlobSource for FileSource {
+    fn same_snapshot(&self, other: &dyn BlobSource) -> bool {
+        let other: &dyn std::any::Any = other;
+        other.downcast_ref::<Self>().is_some_and(|other| {
+            self.path == other.path && self.size == other.size && self.modified == other.modified
+        })
+    }
+
     fn read(&self, range: Range<usize>, complete: BlobReadCompletion) {
         let source = self.clone();
         let reply = ReadReply(Some(complete));
@@ -83,6 +90,45 @@ impl BlobSource for FileSource {
 /// directory is enumerated in stable order; links below it are not traversed.
 /// An explicitly selected directory link retains its chosen display name.
 pub fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFile>> {
+    select_files(paths, None)
+}
+
+struct SelectionCancellation(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for SelectionCancellation {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Browser filesystem admission runs outside protocol and renderer turns. A
+/// dropped caller stops the enumeration at its next filesystem entry boundary.
+pub async fn selected_files_from_paths_async(paths: Vec<String>) -> io::Result<Vec<SelectedFile>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _cancel = SelectionCancellation(cancelled.clone());
+    tokio::task::spawn_blocking(move || select_files(&paths, Some(&cancelled)))
+        .await
+        .map_err(io::Error::other)?
+}
+
+fn check_selection_cancelled(cancelled: Option<&std::sync::atomic::AtomicBool>) -> io::Result<()> {
+    if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "File selection cancelled",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn select_files(
+    paths: &[String],
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> io::Result<Vec<SelectedFile>> {
+    check_selection_cancelled(cancelled)?;
     if paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -97,6 +143,7 @@ pub fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFil
         let mut files = Vec::new();
         while let Some(directory) = directories.pop() {
             for entry in fs::read_dir(directory)? {
+                check_selection_cancelled(cancelled)?;
                 let entry = entry?;
                 let kind = entry.file_type()?;
                 if kind.is_dir() {
@@ -110,6 +157,7 @@ pub fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFil
         return files
             .into_iter()
             .map(|path| {
+                check_selection_cancelled(cancelled)?;
                 let mut file = selected_file_from_file_path(&path, &runtime)?;
                 file.relative_path = upload_relative_path(&root, &path);
                 Ok(file)
@@ -118,7 +166,10 @@ pub fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFil
     }
     paths
         .iter()
-        .map(|path| selected_file_from_file_path(Path::new(path), &runtime))
+        .map(|path| {
+            check_selection_cancelled(cancelled)?;
+            selected_file_from_file_path(Path::new(path), &runtime)
+        })
         .collect()
 }
 
@@ -344,6 +395,18 @@ mod backing_tests {
         let path = directory.0.join("file.txt");
         fs::write(&path, b"abcdef").unwrap();
         let selected = selected_files_from_paths(&[path.to_string_lossy().into_owned()]).unwrap();
+        let reselected = selected_files_from_paths(&[path.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(
+            selected, reselected,
+            "same snapshot selection emits cancel, not change"
+        );
+        let other = directory.0.join("same-bytes.txt");
+        fs::copy(&path, &other).unwrap();
+        let other = selected_files_from_paths(&[other.to_string_lossy().into_owned()]).unwrap();
+        assert_ne!(
+            selected[0].data, other[0].data,
+            "different disk files retain different identities"
+        );
         let data = selected[0].data.clone();
         assert!(
             data.as_bytes().is_none(),
@@ -406,5 +469,15 @@ mod backing_tests {
             files[0].data.read_blocking().unwrap_err().kind(),
             io::ErrorKind::Interrupted
         );
+    }
+
+    #[test]
+    fn cancelled_selection_stops_before_filesystem_admission() {
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let result = select_files(
+            &["missing-file-must-not-be-inspected".into()],
+            Some(&cancelled),
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
     }
 }

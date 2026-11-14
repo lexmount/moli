@@ -40,6 +40,9 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
             "DOM agent hasn't been enabled",
         )));
     }
+    if action == DomAction::SetFileInputFiles {
+        return Some(files::try_start(conn, cmd));
+    }
     match prepare(conn, cmd, action) {
         Ok(Some(operation)) => Some(native::start_operation(conn, cmd, operation)),
         Ok(None) => None,
@@ -57,9 +60,6 @@ fn prepare(
 ) -> Result<Option<Operation>, StartError> {
     if action == DomAction::ResolveNode {
         return remote_object::prepare(conn, cmd).map(Some);
-    }
-    if action == DomAction::SetFileInputFiles {
-        return files::prepare(conn, cmd).map(Some);
     }
     if let Some(operation) = mutation::prepare(conn, cmd, action)? {
         return Ok(Some(operation));

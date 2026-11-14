@@ -785,6 +785,39 @@ async def _run_file_upload_smoke(
         except WebDriverHttpError as error:
             assert_equal(error.response.status, 400, "Classic non-multiple upload HTTP status")
             assert_equal(error.response.body["value"]["error"], "invalid argument", "Classic non-multiple upload error")
+        chosen = Path(tempdir) / "chosen"
+        (chosen / "nested").mkdir(parents=True)
+        (chosen / "a.txt").write_text("alpha", encoding="utf-8")
+        (chosen / "nested" / "b.txt").write_text("beta", encoding="utf-8")
+        client.post(
+            f"/session/{session_id}/execute/sync",
+            {
+                "script": "const input = document.getElementById('upload-single'); input.webkitdirectory = true; window.__fileEvents = [];",
+                "args": [],
+            },
+        )
+        client.post(
+            f"/session/{session_id}/element/{single_id}/value", {"text": str(chosen)}
+        )
+        directory_files = classic_value(
+            client.post(
+                f"/session/{session_id}/execute/async",
+                {
+                    "script": (
+                        "const done = arguments[arguments.length - 1];"
+                        "const input = document.getElementById('upload-single');"
+                        "Promise.all(Array.from(input.files, async file => "
+                        "file.webkitRelativePath + ':' + await structuredClone(file).text()))"
+                        ".then(values => done(values.sort().join('|')));"
+                    ),
+                    "args": [],
+                },
+            )
+        )
+        assert_equal(
+            directory_files, "chosen/a.txt:alpha|chosen/nested/b.txt:beta",
+            "Classic directory upload relative paths and lazy clone bytes",
+        )
     record(results, "classic_file_upload")
 
 

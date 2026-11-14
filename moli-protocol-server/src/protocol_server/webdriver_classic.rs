@@ -4616,7 +4616,8 @@ async fn webdriver_classic_send_file_input_keys(
             "the element can not hold multiple files",
         ));
     }
-    let files = selected_files_from_paths(&paths, "WebDriver Classic file upload")
+    let files = selected_files_from_paths(&paths)
+        .await
         .map_err(|error| ClassicError::new(ClassicErrorCode::InvalidArgument, error.message))?;
     let object_id = resolve_classic_remote_object(
         binding,
