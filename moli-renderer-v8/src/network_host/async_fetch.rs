@@ -579,6 +579,7 @@ pub(crate) fn spawn_async_subresource_fetch(
     task_runner.spawn(async move {
         let preflight_observer =
             CorsPreflightNetworkObserver::new(completion_tx.clone(), network_context);
+        let redirect_mode = request.redirect_mode();
         let auth_requires_buffered_transport = request.auth_requires_buffered_transport();
         let requires_manual_preflight_redirects =
             browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
@@ -661,7 +662,11 @@ pub(crate) fn spawn_async_subresource_fetch(
                 request_body,
                 response_status_text: None,
                 skip_fetch_security_validation: false,
-                response_filter: None,
+                response_filter: (redirect_mode == RequestRedirectMode::Manual
+                    && result.as_ref().is_ok_and(|response| {
+                        matches!(response.status, 301 | 302 | 303 | 307 | 308)
+                    }))
+                .then_some(crate::types::FetchResponseType::OpaqueRedirect.into()),
                 network_error_text: None,
                 result: result.into(),
             });

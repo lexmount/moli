@@ -29,6 +29,17 @@ pub(super) fn advance_subresource_response(
     }
 
     request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+    // Manual responses are filtered without following Location. Parsing it or
+    // applying the redirect limit would reject an otherwise valid response.
+    if request.redirect_mode() == RequestRedirectMode::Manual {
+        return Ok(if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
+            SubresourceResponseTransition::ManualResponse {
+                response_url: head.final_url,
+            }
+        } else {
+            SubresourceResponseTransition::FinalResponse
+        });
+    }
     let Some(next_url) = next_redirect_url(
         &head.final_url,
         head.status,
@@ -38,16 +49,6 @@ pub(super) fn advance_subresource_response(
     else {
         return Ok(SubresourceResponseTransition::FinalResponse);
     };
-    match request.redirect_mode() {
-        RequestRedirectMode::Manual => {
-            return Ok(SubresourceResponseTransition::ManualResponse {
-                response_url: head.final_url,
-            });
-        }
-        RequestRedirectMode::Follow => {}
-        RequestRedirectMode::Error => unreachable!("error-mode responses returned before CORS"),
-    }
-
     request
         .follow_redirect(head.into_redirect(
             next_url,

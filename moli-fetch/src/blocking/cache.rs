@@ -160,6 +160,11 @@ pub(crate) fn next_followed_redirect_url_from_parts(
             .validate_cors_response_for_url(final_url, headers)
             .map_err(anyhow::Error::msg)?;
     }
+    if request.redirect_mode() == crate::RequestRedirectMode::Manual {
+        // A filtered manual response never consumes a redirect target. In
+        // particular, an invalid Location must not fail buffered delivery.
+        return Ok(None);
+    }
     // A browser may follow redirects itself, preserving the full URL list for
     // CORS and Fetch Metadata while asking this transport for only one hop.
     // Only automatically followed transport requests consume this layer's limit.
@@ -217,10 +222,47 @@ mod tests {
             "URL scheme \"file\" is not supported by the HTTP network transport."
         );
 
-        let request = request.with_redirect_mode(crate::RequestRedirectMode::Manual);
+        let request = request.with_single_hop();
         let manual = next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0)?
-            .expect("manual redirect URL should remain observable");
+            .expect("a browser-followed redirect URL should remain observable");
         assert_eq!(manual.as_str(), "file:///moli-policy-must-not-open");
+        Ok(())
+    }
+
+    #[test]
+    fn manual_redirect_skips_location_parsing_and_limits_after_response_security_checks()
+    -> Result<()> {
+        let origin = Url::parse("https://origin.test/page")?;
+        let current = Url::parse("https://other.test/redirect")?;
+        let request =
+            Request::new_browser("GET", current.clone(), None, Vec::new(), (&origin).into())
+                .with_credentials_mode(crate::RequestCredentialsMode::Omit)
+                .with_redirect_mode(crate::RequestRedirectMode::Manual);
+        let headers = vec![
+            ("location".to_owned(), b"http://[".to_vec()),
+            (
+                "access-control-allow-origin".to_owned(),
+                b"https://origin.test".to_vec(),
+            ),
+        ];
+        assert!(
+            next_followed_redirect_url_from_parts(
+                &request,
+                &current,
+                302,
+                &headers,
+                super::super::MAX_REDIRECTS,
+            )?
+            .is_none()
+        );
+        let denied =
+            next_followed_redirect_url_from_parts(&request, &current, 302, &headers[..1], 0)
+                .expect_err("manual redirects still require CORS permission");
+        assert!(denied.to_string().contains("CORS"));
+        let follow = request.with_redirect_mode(crate::RequestRedirectMode::Follow);
+        assert!(
+            next_followed_redirect_url_from_parts(&follow, &current, 302, &headers, 0).is_err()
+        );
         Ok(())
     }
 
