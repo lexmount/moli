@@ -428,7 +428,9 @@ impl PageScriptHost {
             handle,
             pending_bootstrap,
             navigation_load,
-            ChildDocumentNavigationInitiator::BrowsingContext,
+            ChildDocumentNavigationInitiator::BrowsingContext(
+                entry_snapshot.pending_download_policy,
+            ),
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result

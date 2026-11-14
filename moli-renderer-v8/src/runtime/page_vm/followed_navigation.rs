@@ -87,13 +87,14 @@ pub(super) async fn load_followed_location_navigation(
                 .map_err(|_| anyhow!("local navigation download body was not materialized"))?;
             return Ok(LoadedFollowedLocationNavigation::Download(
                 RendererPendingDownloadActivation {
+                    frame_id: None,
                     url: head.final_url.as_str().to_owned(),
                     suggested_filename: None,
                     response: Some(RendererPendingDownloadResponse {
                         final_url: head.final_url.as_str().to_owned(),
                         status: head.status,
                         headers: head.headers,
-                        body,
+                        body: body.into(),
                     }),
                 },
             ));
@@ -133,13 +134,14 @@ pub(super) async fn load_followed_location_navigation(
         response.finish().await?;
         return Ok(LoadedFollowedLocationNavigation::Download(
             RendererPendingDownloadActivation {
+                frame_id: None,
                 url: response.final_url.as_str().to_owned(),
                 suggested_filename: None,
                 response: Some(RendererPendingDownloadResponse {
                     final_url: response.final_url.as_str().to_owned(),
                     status: response.status,
                     headers: response.headers.clone(),
-                    body,
+                    body: body.into(),
                 }),
             },
         ));

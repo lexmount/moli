@@ -12,6 +12,7 @@ impl PageScriptHost {
         handle: DomHandle,
         resolved_url: &str,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -31,7 +32,8 @@ impl PageScriptHost {
             }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn navigate_child_browsing_context_with_request(
@@ -40,6 +42,7 @@ impl PageScriptHost {
         handle: DomHandle,
         request: ChildBrowsingContextNavigationRequest,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -52,15 +55,18 @@ impl PageScriptHost {
             }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
-        self.queue_child_browsing_context_navigation_request(handle, request)
+        let queued = self.queue_child_browsing_context_navigation_request(handle, request);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn queue_child_browsing_context_navigation_from_existing_seed(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
         replace_current: bool,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -74,29 +80,35 @@ impl PageScriptHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_queued_navigation_to_entry_seed(&url, replace_current);
         }
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn queue_child_browsing_context_navigation_without_seed_update(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn queue_deferred_child_browsing_context_navigation_from_entry_seed(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
         entry_seed: NavigationHistoryEntrySeed,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -116,7 +128,8 @@ impl PageScriptHost {
         {
             return false;
         }
-        self.queue_child_browsing_context_navigation_commit(handle)
+        let queued = self.queue_child_browsing_context_navigation_commit(handle);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn cancel_joint_child_history_navigation(
@@ -140,9 +153,11 @@ impl PageScriptHost {
 
     pub(crate) fn queue_deferred_child_browsing_context_navigation_to_url(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -162,14 +177,17 @@ impl PageScriptHost {
         {
             return false;
         }
-        self.queue_child_browsing_context_navigation_commit(handle)
+        let queued = self.queue_child_browsing_context_navigation_commit(handle);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn queue_deferred_child_browsing_context_navigation_request(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         request: ChildBrowsingContextNavigationRequest,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
@@ -190,17 +208,21 @@ impl PageScriptHost {
         {
             return false;
         }
-        self.queue_child_browsing_context_navigation_commit(handle)
+        let queued = self.queue_child_browsing_context_navigation_commit(handle);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn queue_child_browsing_context_reload_from_existing_seed(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
     ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 }

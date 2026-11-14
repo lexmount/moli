@@ -11,6 +11,7 @@ use anyhow::{Result, bail};
 pub struct PageDocumentCommandTarget {
     pub(super) target: moli_renderer_v8::RendererDocumentCommandTarget,
     pub(super) network_pause: Option<moli_renderer_v8::network::ResourceInterceptionPause>,
+    pub(super) response_body: Option<moli_renderer_v8::network::ResourceInterceptionBody>,
 }
 
 impl PageDocumentCommandTarget {
@@ -18,6 +19,7 @@ impl PageDocumentCommandTarget {
         Self {
             target,
             network_pause: None,
+            response_body: None,
         }
     }
     pub fn document(&self) -> crate::RendererDocumentLifecycleIdentity {

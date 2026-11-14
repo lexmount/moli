@@ -2090,6 +2090,16 @@ fn anchor_download_activation(
     user_initiated: bool,
     suggested_filename: Option<String>,
 ) -> Option<RendererPendingDownloadActivation> {
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.document_allows_downloads_for_handle(handle) {
+        return None;
+    }
+    let frame_id = runtime
+        .dom_host()
+        .owner_document_handle(handle)
+        .and_then(|document| runtime.child_browsing_context_host_for_document_handle(document))
+        .and_then(|child| runtime.frame_owner_frame_id_for_child_handle(child))
+        .map(|frame| frame.0);
     let source_element = node_wrapper_from_handle(scope, handle);
     let download_request = suggested_filename.as_deref().unwrap_or("");
     let proceed =
@@ -2104,6 +2114,7 @@ fn anchor_download_activation(
             )
         });
     proceed.then_some(RendererPendingDownloadActivation {
+        frame_id,
         url: resolved,
         suggested_filename,
         response: None,

@@ -280,9 +280,8 @@ impl PageScriptHost {
                     .dom_host()
                     .get_attribute(handle, "credentialless")
                     .is_some();
-                let sandbox_policy_from_owner = super::document_sandbox_policy_from_attribute(
-                    self.dom_host().get_attribute(handle, "sandbox").as_deref(),
-                );
+                let sandbox_policy_from_owner =
+                    self.child_browsing_context_sandbox_policy_from_owner(handle);
                 let document_credentialless = if is_new {
                     self.child_browsing_context_document_credentialless_for_owner(
                         handle,
@@ -457,6 +456,9 @@ impl PageScriptHost {
                     handle,
                     ChildBrowsingContextEntry {
                         frame_id,
+                        pending_download_policy: existing
+                            .as_ref()
+                            .and_then(|entry| entry.pending_download_policy),
                         retiring: false,
                         current_document_loader_id: existing.as_ref().and_then(|entry| {
                             entry.current_document_loader_id().map(ToOwned::to_owned)

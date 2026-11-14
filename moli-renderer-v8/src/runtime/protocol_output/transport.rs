@@ -704,13 +704,14 @@ mod tests {
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(limits);
         let download = RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
             RendererOwnerAction::Download(RendererPendingDownloadActivation {
+                frame_id: None,
                 url: "https://example.test/download".to_owned(),
                 suggested_filename: Some("payload.bin".to_owned()),
                 response: Some(RendererPendingDownloadResponse {
                     final_url: "https://example.test/payload.bin".to_owned(),
                     status: 200,
                     headers: Vec::new(),
-                    body: vec![0; 8 * 1024],
+                    body: (vec![0; 8 * 1024]).into(),
                 }),
             }),
         ));

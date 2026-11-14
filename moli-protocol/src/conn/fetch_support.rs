@@ -1429,6 +1429,17 @@ pub struct PendingSubresourceFetchRequest {
 }
 
 impl PendingSubresourceFetchRequest {
+    pub(crate) fn bind_response_body(
+        &mut self,
+        body: moli_core::network::ResourceInterceptionBody,
+    ) {
+        if let PendingSubresourceFetchResidence::Document { command_target, .. } =
+            &mut self.residence
+        {
+            *command_target = command_target.clone().with_response_body(body);
+        }
+    }
+
     pub(crate) fn bind_native_network_pause(
         &mut self,
         pause: moli_core::network::ResourceInterceptionPause,

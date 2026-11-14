@@ -494,6 +494,7 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
             participant.handle,
         );
         if !host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+            scope,
             participant.handle,
             participant.url.as_str(),
             participant.seed.clone(),

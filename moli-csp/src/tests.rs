@@ -3002,3 +3002,28 @@ fn sandbox_directive_allows_popups_to_escape_only_when_all_active_sandboxes_allo
         "sandbox allow-scripts"
     ]));
 }
+
+#[test]
+fn sandbox_download_permission_requires_every_policy_to_allow_downloads() {
+    for (policies, expected) in [
+        (vec![], true),
+        (vec!["default-src 'self'"], true),
+        (vec!["sandbox"], false),
+        (vec!["sandbox allow-downloads"], true),
+        (vec!["sandbox ALLOW-DOWNLOADS"], true),
+        (
+            vec!["sandbox allow-downloads", "sandbox allow-scripts"],
+            false,
+        ),
+        (vec!["sandbox allow-downloads", "default-src 'none'"], true),
+    ] {
+        let policies = policies
+            .into_iter()
+            .map(ContentSecurityPolicy::from)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            content_security_policy_sandbox_allows_downloads(&policies),
+            expected
+        );
+    }
+}

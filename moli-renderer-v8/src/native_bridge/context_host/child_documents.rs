@@ -24,6 +24,7 @@ pub(in crate::native_bridge::context_host) use frame_owner_resource_timing::{
     PendingFrameOwnerResourceTiming,
 };
 pub(super) use initial_empty::ChildInitialEmptyDocumentInit;
+pub(in crate::native_bridge::context_host) use loads::ChildNavigationDownloadPolicy;
 pub(crate) use loads::{
     ChildDocumentFetch, ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity,
 };

@@ -562,6 +562,7 @@ impl PreparedProtocolOutputs {
                     .append_to_output_sink(&mut prepared);
             }
             RendererOwnerAction::SubresourceContinue {
+                response_body,
                 source_document,
                 event,
                 network_pause,
@@ -573,6 +574,7 @@ impl PreparedProtocolOutputs {
                         source_document,
                         *event,
                         network_pause,
+                        response_body,
                     )
                     .append_to_output_sink(&mut prepared);
             }

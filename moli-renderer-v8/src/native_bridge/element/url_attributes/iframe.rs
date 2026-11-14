@@ -40,6 +40,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
         );
         let replace_current = runtime.child_current_document_is_initial_empty(handle);
         if runtime.queue_child_browsing_context_navigation_from_existing_seed(
+            scope,
             handle,
             &navigation_target,
             replace_current,
@@ -49,6 +50,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     }
 
     if runtime.queue_child_browsing_context_navigation_from_existing_seed(
+        scope,
         handle,
         &navigation_target,
         true,

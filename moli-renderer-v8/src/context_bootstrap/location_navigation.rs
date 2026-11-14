@@ -666,11 +666,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             let host = unsafe { &mut *host_ptr };
             if matches!(kind, LocationNavigationKind::Reload) {
                 host.queue_child_browsing_context_reload_from_existing_seed(
+                    scope,
                     handle,
                     resolved.as_str(),
                 );
             } else {
                 host.queue_child_browsing_context_navigation_without_seed_update(
+                    scope,
                     handle,
                     resolved.as_str(),
                 );

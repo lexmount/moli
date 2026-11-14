@@ -543,8 +543,15 @@ pub(super) fn navigate_hyperlink_source_browsing_context(
     };
     match dispatch_scope {
         crate::native_bridge::OwnerDispatchScope::Top => false,
-        crate::native_bridge::OwnerDispatchScope::Child(handle) => unsafe { &mut *runtime_ptr }
-            .navigate_child_browsing_context_to_url(scope, handle, resolved_url),
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            let runtime = unsafe { &mut *runtime_ptr };
+            let queued =
+                runtime.navigate_child_browsing_context_to_url(scope, handle, resolved_url);
+            if queued {
+                runtime.set_pending_child_navigation_download_source(handle, source_handle);
+            }
+            queued
+        }
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
             let Some(source_window) =
                 unsafe { &*runtime_ptr }.lightweight_popup_window(scope, popup_id)
@@ -803,7 +810,11 @@ pub(in crate::native_bridge) fn navigate_named_iframe_target_from_document<'s>(
     {
         return true;
     }
-    runtime.navigate_child_browsing_context_to_url(scope, target_iframe, resolved_url)
+    let queued = runtime.navigate_child_browsing_context_to_url(scope, target_iframe, resolved_url);
+    if queued && let Some(document) = source_document {
+        runtime.set_pending_child_navigation_download_source(target_iframe, document);
+    }
+    queued
 }
 
 pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_navigation_from_document<'s>(
@@ -846,9 +857,15 @@ pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_navigation_fr
     {
         return Some(target_iframe);
     }
-    runtime
-        .queue_deferred_child_browsing_context_navigation_to_url(target_iframe, resolved_url)
-        .then_some(target_iframe)
+    let queued = runtime.queue_deferred_child_browsing_context_navigation_to_url(
+        scope,
+        target_iframe,
+        resolved_url,
+    );
+    if queued && let Some(document) = source_document {
+        runtime.set_pending_child_navigation_download_source(target_iframe, document);
+    }
+    queued.then_some(target_iframe)
 }
 
 fn urls_refer_to_same_document(current: &url::Url, target: &url::Url) -> bool {
@@ -873,7 +890,13 @@ pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_request(
         source_document,
     )?;
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime
-        .queue_deferred_child_browsing_context_navigation_request(target_iframe, request)
-        .then_some(target_iframe)
+    let queued = runtime.queue_deferred_child_browsing_context_navigation_request(
+        scope,
+        target_iframe,
+        request,
+    );
+    if queued && let Some(document) = source_document {
+        runtime.set_pending_child_navigation_download_source(target_iframe, document);
+    }
+    queued.then_some(target_iframe)
 }

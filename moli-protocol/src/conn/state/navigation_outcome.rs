@@ -187,6 +187,7 @@ impl RendererMainDocumentCommitSeed {
 pub(crate) enum CompletedDownloadBody {
     Buffered(Vec<u8>),
     Streaming(Box<StreamingRawResponse>),
+    Intercepted(moli_core::network::ResourceInterceptionBody),
 }
 
 #[derive(Debug)]

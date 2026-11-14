@@ -30,6 +30,21 @@ async fn runtime_click_download_link(
     command_id: u64,
     session_id: &str,
 ) -> VecDeque<Value> {
+    runtime_click_download_expression(
+        socket,
+        command_id,
+        session_id,
+        "document.getElementById('dl').click(); 'clicked'",
+    )
+    .await
+}
+
+async fn runtime_click_download_expression(
+    socket: &mut CdpTestSocket,
+    command_id: u64,
+    session_id: &str,
+    expression: &str,
+) -> VecDeque<Value> {
     socket
         .send(WsMessage::Text(
             json!({
@@ -37,7 +52,7 @@ async fn runtime_click_download_link(
                 "method": "Runtime.evaluate",
                 "sessionId": session_id,
                 "params": {
-                    "expression": "document.getElementById('dl').click(); 'clicked'",
+                    "expression": expression,
                     "userGesture": true,
                     "returnByValue": true
                 }
@@ -719,9 +734,36 @@ async fn websocket_cdp_page_download_events_do_not_require_browser_events_enable
 
 #[tokio::test]
 async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
-    let (fixture_addr, fixture_server) =
-        spawn_delayed_plain_attachment_fixture_server("download-body", Duration::from_millis(100))
-            .await;
+    check_plain_anchor_attachment_download_keeps_document(0, None, false).await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_child_frame_attachment_download_keeps_document() {
+    for depth in [1, 2] {
+        check_plain_anchor_attachment_download_keeps_document(depth, None, false).await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_cdp_child_frame_download_begins_before_body_with_fetch_interception() {
+    for stage in [None, Some("Request"), Some("Response")] {
+        check_plain_anchor_attachment_download_keeps_document(2, stage, true).await;
+    }
+}
+
+async fn check_plain_anchor_attachment_download_keeps_document(
+    depth: usize,
+    stage: Option<&str>,
+    gated: bool,
+) {
+    let body_gate = gated.then(|| Arc::new(tokio::sync::Notify::new()));
+    let (fixture_addr, fixture_server, download_requests) = spawn_plain_attachment_fixture_server(
+        "download-body",
+        Duration::ZERO,
+        depth,
+        body_gate.clone(),
+    )
+    .await;
     let download_root = std::env::temp_dir().join(format!(
         "moli-cdp-plain-anchor-download-{}-{}",
         std::process::id(),
@@ -874,7 +916,46 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
         .await
         .expect("send Page.navigate");
     wait_for_session_navigation_response_and_load(&mut socket, 8, &session_id).await;
-    let mut click_response = runtime_click_download_link(&mut socket, 9, &session_id).await;
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 80, "method": "Page.getFrameTree", "sessionId": session_id,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let frames = recv_until_id(&mut socket, 80).await;
+    let frame_tree = &frames.iter().find(|m| m["id"] == 80).unwrap()["result"]["frameTree"];
+    let mut leaf = frame_tree;
+    let mut document_expression = "document".to_owned();
+    for _ in 0..depth {
+        leaf = &leaf["childFrames"][0];
+        document_expression.push_str(".querySelector('iframe').contentDocument");
+    }
+    let source_frame_id = leaf["frame"]["id"]
+        .as_str()
+        .expect("download source frame")
+        .to_owned();
+    if let Some(stage) = stage {
+        socket.send(WsMessage::Text(json!({
+            "id": 81, "method": "Fetch.enable", "sessionId": session_id,
+            "params": { "patterns": [{ "urlPattern": "*/download", "requestStage": stage }] }
+        }).to_string().into())).await.unwrap();
+        let enabled = recv_until_id(&mut socket, 81).await;
+        assert!(
+            enabled
+                .iter()
+                .find(|m| m["id"] == 81)
+                .unwrap()
+                .get("error")
+                .is_none()
+        );
+    }
+    let mut click_response = runtime_click_download_expression(&mut socket, 9, &session_id,
+        &format!("globalThis.downloadDocument={document_expression};downloadDocument.getElementById('dl').click();'clicked'"),
+    ).await;
     assert_eq!(
         runtime_click_response_value(&click_response, 9),
         Some("clicked")
@@ -885,6 +966,13 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
         loop {
             let message = recv_download_message(&mut socket, &mut click_response).await;
             click_messages.push(message.clone());
+            if message["method"] == "Fetch.requestPaused" {
+                socket.send(WsMessage::Text(json!({
+                    "id": 82, "sessionId": session_id,
+                    "method": if stage == Some("Response") { "Fetch.continueResponse" } else { "Fetch.continueRequest" },
+                    "params": { "requestId": message["params"]["requestId"] }
+                }).to_string().into())).await.unwrap();
+            }
             if message["method"] == json!("Browser.downloadWillBegin") {
                 return message;
             }
@@ -892,12 +980,17 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
     })
     .await
     .expect("receive Browser.downloadWillBegin");
-    assert_eq!(will_begin["params"]["frameId"], json!(target_id));
+    assert_eq!(will_begin["params"]["frameId"], json!(source_frame_id));
     assert_eq!(
         will_begin["params"]["suggestedFilename"],
         json!("saved.txt")
     );
 
+    // The server cannot send even the first body byte until willBegin.
+    // A buffered navigation or delayed protocol publication deadlocks here.
+    if let Some(gate) = body_gate {
+        gate.notify_one();
+    }
     let completed = timeout(Duration::from_secs(2), async {
         loop {
             let message = recv_download_message(&mut socket, &mut click_response).await;
@@ -918,6 +1011,11 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
     let body =
         std::fs::read_to_string(&artifact_path).expect("download artifact should be written");
     assert_eq!(body, "download-body");
+    assert_eq!(
+        download_requests.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the prefetched attachment must not be fetched a second time"
+    );
 
     let request = click_messages
         .iter()
@@ -926,6 +1024,7 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
                 && message["params"]["request"]["url"] == format!("http://{fixture_addr}/download")
         })
         .expect("attachment navigation should publish its Document request");
+    assert_eq!(request["params"]["frameId"], source_frame_id);
     let request_id = &request["params"]["requestId"];
     let terminals = click_messages
         .iter()
@@ -953,7 +1052,7 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
                 "method": "Runtime.evaluate",
                 "sessionId": session_id,
                 "params": {
-                    "expression": "location.pathname + '|' + document.getElementById('dl').id"
+                    "expression": format!("String(downloadDocument==={document_expression})+'|'+downloadDocument.location.pathname+'|'+downloadDocument.getElementById('dl').id")
                 }
             })
             .to_string()
@@ -967,7 +1066,20 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
         .find(|message| message["id"] == json!(10_u64))
         .and_then(|message| message["result"]["result"]["value"].as_str())
         .expect("Runtime.evaluate string result");
-    assert_eq!(evaluated_value, "/page|dl");
+    assert_eq!(
+        evaluated_value,
+        match depth {
+            0 => "true|/page|dl",
+            1 => "true|/frame|dl",
+            _ => "true|/leaf|dl",
+        }
+    );
+    assert!(
+        click_messages
+            .iter()
+            .all(|message| message["method"] != "Page.frameNavigated"),
+        "an attachment must not commit a replacement Document: {click_messages:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&download_root);
     let _ = socket.close(None).await;

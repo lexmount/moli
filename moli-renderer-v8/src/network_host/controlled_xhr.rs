@@ -144,6 +144,7 @@ impl ControlledXhrLoad {
         let _ = self
             .output
             .publish(RendererOwnerAction::SubresourceContinue {
+                response_body: None,
                 source_document: self.source_document,
                 event: Box::new(PendingSubresourceContinueEvent::Completed {
                     internal_id: self.info.internal_id,
@@ -387,6 +388,7 @@ impl ControlledXhrLoad {
                 if !self
                     .output
                     .publish(RendererOwnerAction::SubresourceContinue {
+                        response_body: None,
                         source_document: self.source_document,
                         event: Box::new(PendingSubresourceContinueEvent::AuthRequired(
                             PendingSubresourceAuthInfo {
@@ -433,6 +435,7 @@ impl ControlledXhrLoad {
                 if !self
                     .output
                     .publish(RendererOwnerAction::SubresourceContinue {
+                        response_body: None,
                         source_document: self.source_document,
                         event: Box::new(PendingSubresourceContinueEvent::ResponsePaused(
                             PendingSubresourceResponseInfo {
@@ -523,6 +526,7 @@ impl ControlledXhrLoad {
             // its next one. The stable native network handle keeps Network ID.
             self.output
                 .publish(RendererOwnerAction::SubresourceContinue {
+                    response_body: None,
                     source_document: self.source_document,
                     event: Box::new(PendingSubresourceContinueEvent::Completed {
                         internal_id: self.info.internal_id,

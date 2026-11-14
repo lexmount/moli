@@ -84,6 +84,7 @@ pub enum RendererOwnerAction {
         redirect: Option<Box<crate::protocol_types::NavigationRedirect>>,
     },
     SubresourceContinue {
+        response_body: Option<crate::network::ResourceInterceptionBody>,
         network_pause: Option<crate::network::ResourceInterceptionPause>,
         source_document: RendererDocumentLifecycleIdentity,
         event: Box<PendingSubresourceContinueEvent>,

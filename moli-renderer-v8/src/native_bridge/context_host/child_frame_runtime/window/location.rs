@@ -159,13 +159,13 @@ fn navigate_cross_origin_child<'s>(
         }
         crate::context_bootstrap::LocationNavigationKind::Replace => host
             .queue_child_browsing_context_navigation_from_existing_seed(
+                scope,
                 handle,
                 target.as_str(),
                 true,
             ),
-        crate::context_bootstrap::LocationNavigationKind::Reload => {
-            host.queue_child_browsing_context_reload_from_existing_seed(handle, target.as_str())
-        }
+        crate::context_bootstrap::LocationNavigationKind::Reload => host
+            .queue_child_browsing_context_reload_from_existing_seed(scope, handle, target.as_str()),
     })
 }
 

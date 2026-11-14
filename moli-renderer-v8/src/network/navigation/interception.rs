@@ -139,6 +139,22 @@ impl NavigationInterception {
         async move { Self::execute(&loader, loader.fetch_raw_with_network_metadata(request?)).await }
     }
 
+    pub fn fetch_streaming(
+        &self,
+    ) -> impl std::future::Future<Output = Result<NetworkFetchResult<StreamingRawResponse>>>
+    + Send
+    + 'static {
+        let loader = self.loader.clone();
+        let request = self.transport_request();
+        async move {
+            Self::execute(
+                &loader,
+                loader.fetch_raw_stream_with_network_metadata(request?),
+            )
+            .await
+        }
+    }
+
     /// Returns the next hop to its owner before any transport is started.
     /// Synthetic and network responses use exactly the same redirect rules.
     pub fn follow_redirect(&mut self, head: &ResponseHead) -> Result<Option<RedirectInfo>> {
