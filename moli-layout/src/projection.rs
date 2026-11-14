@@ -234,6 +234,7 @@ where
     pub(crate) background_clips: Vec<Option<LayoutClipChainId>>,
     pub(crate) content_clips: Vec<Option<LayoutClipChainId>>,
     pub(crate) paint_events: Vec<PaintOrderEvent>,
+    pub(crate) text_overflow_visibility: crate::text_overflow::TextOverflowVisibility,
 }
 
 impl<'a, N> OutputProjection<'a, N>
@@ -279,6 +280,7 @@ where
             background_clips: vec![None; count],
             content_clips: vec![None; count],
             paint_events: Vec::new(),
+            text_overflow_visibility: crate::text_overflow::TextOverflowVisibility::new(world),
         }
     }
 
@@ -765,7 +767,7 @@ where
             self.scroll_extents[self.world.root.index()].scrollport,
         );
         self.assign_box_clip_metadata(self.world.root, Some(viewport_clip), viewport_clip);
-        self.paint_events = build_paint_order(self.world);
+        self.paint_events = build_paint_order(self.world, &self.text_overflow_visibility);
         let mut text_owners = HashMap::new();
         for event in self.paint_events.clone() {
             match event {
@@ -778,7 +780,22 @@ where
                 PaintOrderEvent::InlineContents(id) => {
                     self.assign_owner_paint_metadata(id, false);
                 }
-                PaintOrderEvent::BoxText(id) => self.assign_owner_paint_metadata(id, true),
+                PaintOrderEvent::BoxText(id) => {
+                    self.assign_owner_paint_metadata(id, true);
+                    let lines = self.world.boxes[id.index()]
+                        .inline_layout
+                        .as_ref()
+                        .unwrap()
+                        .fragments
+                        .lines
+                        .len();
+                    for line in 0..lines {
+                        self.assign_ellipsis_metadata(id, line);
+                    }
+                }
+                PaintOrderEvent::InlineEllipsis { owner, line } => {
+                    self.assign_ellipsis_metadata(owner, line);
+                }
                 PaintOrderEvent::InlineBox { owner, fragment } => {
                     let fragment = self.owner_paint_fragments[owner.index()][fragment];
                     self.assign_fragment_paint_metadata(
@@ -786,7 +803,13 @@ where
                         self.content_clips[owner.index()],
                     );
                 }
-                PaintOrderEvent::InlineText { owner, line, item } => {
+                PaintOrderEvent::InlineText {
+                    owner,
+                    line,
+                    start,
+                    end,
+                    ..
+                } => {
                     // Index the shaped line and its hit fragments once. Repeated
                     // runs must not scan the paragraph or all its text nodes.
                     let lines = text_owners.entry(owner).or_insert_with(|| {
@@ -794,36 +817,21 @@ where
                             .inline_layout
                             .as_ref()
                             .unwrap();
-                        let layout = context.laid_out.as_ref().unwrap();
-                        let mut lines = layout
-                            .lines()
-                            .map(|line| {
-                                let ranges = line
-                                    .items()
-                                    .map(|item| match item {
-                                        parley::PositionedLayoutItem::GlyphRun(run) => {
-                                            Some(run.run().text_range())
-                                        }
-                                        parley::PositionedLayoutItem::InlineBox(_) => None,
-                                    })
-                                    .collect::<Vec<_>>();
-                                (ranges, Vec::new())
-                            })
-                            .collect::<Vec<_>>();
+                        let mut lines = vec![Vec::new(); context.fragments.lines.len()];
                         for (index, text) in context.fragments.text.iter().enumerate() {
-                            lines[text.line_index].1.push((
+                            lines[text.line_index].push((
                                 text.output_range.clone(),
                                 self.owner_paint_fragments[owner.index()]
                                     [context.fragments.boxes.len() + index],
                             ));
                         }
-                        for (_, fragments) in &mut lines {
+                        for fragments in &mut lines {
                             fragments.sort_by_key(|(range, _)| (range.start, range.end));
                         }
                         lines
                     });
-                    let (ranges, fragments) = &lines[line];
-                    let range = ranges[item].as_ref().unwrap();
+                    let fragments = &lines[line];
+                    let range = start..end;
                     let start =
                         fragments.partition_point(|(fragment, _)| fragment.end <= range.start);
                     for (_, fragment) in fragments[start..]
@@ -853,6 +861,83 @@ where
                 | PaintOrderEvent::PushStackingContext(_)
                 | PaintOrderEvent::TableCollapsedBorders(_)
                 | PaintOrderEvent::PopStackingContext(_) => {}
+            }
+        }
+        self.clip_truncated_text_hits();
+    }
+
+    fn assign_ellipsis_metadata(&mut self, owner: LayoutBoxId, line: usize) {
+        let layout_box = &self.world.boxes[owner.index()];
+        let Some(context) = &layout_box.inline_layout else {
+            return;
+        };
+        let Some(overflow) = &context.text_overflow else {
+            return;
+        };
+        let Some(Some(ellipsis)) = overflow.lines.get(line) else {
+            return;
+        };
+        let layout = layout_box.final_layout;
+        let rect = context.fragments.lines[line].rect;
+        // Generated text participates in paint/hit order, but is deliberately
+        // absent from source-box fragments: CSSOM/Range still see the original
+        // untruncated text and no invented DOM characters.
+        let fragment = self.push_fragment(LayoutFragment {
+            id: LayoutFragmentId::from_index(0),
+            kind: LayoutFragmentKind::Text {
+                box_id: LayoutOutputBoxId::from_index(ellipsis.target.index()),
+                line_index: line,
+                source_utf16_range: ellipsis.source_offset..ellipsis.source_offset,
+                rtl: ellipsis.rtl,
+            },
+            rect: LayoutRect::new(
+                layout.border.left
+                    + layout.padding.left
+                    + ellipsis.marker_offset(overflow.marker_width),
+                layout.border.top + layout.padding.top + rect.y,
+                overflow.marker_width,
+                rect.height,
+            ),
+            box_model: None,
+            coordinate_space: self.boxes[owner.index()].coordinate_space,
+            clip_chain: None,
+            paint_order: None,
+        });
+        self.assign_fragment_paint_metadata(fragment, self.content_clips[owner.index()]);
+    }
+
+    fn clip_truncated_text_hits(&mut self) {
+        for index in 0..self.world.boxes.len() {
+            let layout_box = &self.world.boxes[index];
+            let Some(context) = &layout_box.inline_layout else {
+                continue;
+            };
+            let Some(overflow) = &context.text_overflow else {
+                continue;
+            };
+            let origin = layout_box.final_layout.border.left + layout_box.final_layout.padding.left;
+            for (text_index, text) in context.fragments.text.iter().enumerate() {
+                let Some(Some(line)) = overflow.lines.get(text.line_index) else {
+                    continue;
+                };
+                let id =
+                    self.owner_paint_fragments[index][context.fragments.boxes.len() + text_index];
+                let fragment = &self.fragments[id.index()];
+                let (visible_start, visible_end) = line.visible_bounds();
+                let start = fragment.rect.x.max(origin + visible_start);
+                let end = fragment.rect.right().min(origin + visible_end);
+                let clip = self.push_clip(
+                    fragment.clip_chain,
+                    None,
+                    fragment.coordinate_space,
+                    LayoutRect::new(
+                        start,
+                        fragment.rect.y,
+                        (end - start).max(0.0),
+                        fragment.rect.height,
+                    ),
+                );
+                self.fragments[id.index()].clip_chain = Some(clip);
             }
         }
     }

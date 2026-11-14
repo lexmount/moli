@@ -50,6 +50,7 @@ from .groups.inspector_routing import run_inspector_routing_group
 from .groups.iframe_input import run_iframe_input_group
 from .groups.layout_policy import run_layout_policy_group
 from .groups.layout_screenshot import run_layout_screenshot_group
+from .groups.text_overflow import run_text_overflow_group
 from .groups.locale_timezone_inputs import run_locale_timezone_inputs_group
 from .groups.process_environment import run_process_environment_group
 from .groups.scrollbar_visibility import run_scrollbar_visibility_group
@@ -229,6 +230,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "Raw viewport PNG, stable Shadow/iframe TreeScopes, generation-gated 1 FPS JPEG screencast, ACK, mutation, and default-Mock boundaries.",
         "raw",
         run_layout_screenshot_group,
+    ),
+    SmokeGroup(
+        "text-overflow",
+        "Chromium-calibrated ellipsis pixels, RTL, line style, padding, atomic inlines, and source geometry.",
+        "browser",
+        run_text_overflow_group,
     ),
     SmokeGroup(
         "pdf",

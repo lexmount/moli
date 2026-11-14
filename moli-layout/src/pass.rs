@@ -237,6 +237,7 @@ where
     let phase_started = Instant::now();
     let numeric_metrics = compute_world_layout_with_scrollbars(&mut world, request.viewport);
     let object_geometry = prepare_svg_content(&mut world, source);
+    crate::text_overflow::prepare_text_overflow(&mut world, services);
     let numeric_layout_elapsed = phase_started.elapsed();
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();

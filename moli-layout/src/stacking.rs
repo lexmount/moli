@@ -4,7 +4,8 @@ use parley::PositionedLayoutItem;
 
 use crate::{
     LayoutBoxId, LayoutPosition, LayoutWorld,
-    inline::{InlineFormattingContext, InlineObjectRole, InlineSelection, glyph_cluster_ranges},
+    inline::{GlyphSourceCursor, InlineFormattingContext, InlineObjectRole, InlineSelection},
+    text_overflow::TextOverflowVisibility,
 };
 
 /// One order shared by pixels and hit geometry. Inline events select individual
@@ -22,6 +23,11 @@ pub(crate) enum PaintOrderEvent {
     BoxText(LayoutBoxId),
     /// A mixed IFC's caret paints after its contents, including glyphless lines.
     BoxCaret(LayoutBoxId),
+    /// Generated line-end text; original source offsets are unchanged.
+    InlineEllipsis {
+        owner: LayoutBoxId,
+        line: usize,
+    },
     /// Selected text not covered by a drawable glyph run, placed in source order.
     InlineSelection {
         owner: LayoutBoxId,
@@ -37,6 +43,8 @@ pub(crate) enum PaintOrderEvent {
         owner: LayoutBoxId,
         line: usize,
         item: usize,
+        start: usize,
+        end: usize,
     },
     BoxOutline(LayoutBoxId),
     PopStackingContext(LayoutBoxId),
@@ -92,21 +100,23 @@ struct StackingDescendants {
     positive: Vec<ChildContext>,
 }
 
-/// Only IFCs containing atomic objects need fragment-level interleaving. Keep
-/// the existing single-pass text projection for all other paragraphs.
-struct InlineOrder {
+/// Fragment events interleave atomics and let independently painted inlines
+/// retain their share of a hidden host IFC. Other paragraphs use bulk text.
+struct InlineOrder<'a> {
     split: Vec<bool>,
+    visibility: &'a TextOverflowVisibility,
     entries: Vec<Vec<PaintOrderEvent>>,
     atomic_lines: Vec<Option<(LayoutBoxId, usize)>>,
 }
 
-impl InlineOrder {
-    fn new<N>(world: &LayoutWorld<N>) -> Self
+impl<'a> InlineOrder<'a> {
+    fn new<N>(world: &LayoutWorld<N>, visibility: &'a TextOverflowVisibility) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
         let mut result = Self {
             split: vec![false; world.boxes.len()],
+            visibility,
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
@@ -114,14 +124,19 @@ impl InlineOrder {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };
-            if !context
+            let owner = LayoutBoxId::from_index(owner_index);
+            let has_atomic = context
                 .objects
                 .iter()
-                .any(|object| object.role == InlineObjectRole::Atomic)
-            {
+                .any(|object| object.role == InlineObjectRole::Atomic);
+            let has_independent_inline = visibility.is_hidden(owner)
+                && context
+                    .structural_boxes
+                    .iter()
+                    .any(|inline| !visibility.is_hidden(inline.box_id));
+            if !has_atomic && !has_independent_inline {
                 continue;
             }
-            let owner = LayoutBoxId::from_index(owner_index);
             result.split[owner_index] = true;
             for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
                 result.entries[inline.box_id.index()]
@@ -141,8 +156,7 @@ impl InlineOrder {
                     _ => None,
                 };
                 let mut covered = Vec::new();
-                let mut mapped_run = None;
-                let mut cluster_ranges = Vec::new().into_iter();
+                let mut sources = GlyphSourceCursor::default();
                 for (_, inline) in line.inline_box_indices() {
                     if let Some(object) = context.object(inline.id)
                         && object.role == InlineObjectRole::Atomic
@@ -154,22 +168,17 @@ impl InlineOrder {
                     let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
                         continue;
                     };
+                    // Styled glyph segments can share one shaped run. Route
+                    // each segment by its own source range, so hidden siblings
+                    // cannot capture the independent inline's paint or hits.
+                    let Some(range) = sources.segment(&glyphs).map(|(_, range)| range).reduce(
+                        |range, cluster| range.start.min(cluster.start)..range.end.max(cluster.end),
+                    ) else {
+                        continue;
+                    };
                     if selected.is_some() {
-                        if mapped_run != Some(glyphs.run().index()) {
-                            cluster_ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
-                            mapped_run = Some(glyphs.run().index());
-                        }
-                        if let Some(range) = cluster_ranges
-                            .by_ref()
-                            .take(glyphs.glyphs().count())
-                            .reduce(|range, cluster| {
-                                range.start.min(cluster.start)..range.end.max(cluster.end)
-                            })
-                        {
-                            covered.push(range);
-                        }
+                        covered.push(range.clone());
                     }
-                    let range = glyphs.run().text_range();
                     let source_index = context
                         .source_map
                         .partition_point(|source| source.output_range.end <= range.start);
@@ -178,10 +187,15 @@ impl InlineOrder {
                         .get(source_index)
                         .filter(|source| source.output_range.start < range.end)
                         .map_or(owner, |source| source.box_id);
+                    if !world.boxes[target.index()].style.is_visible() {
+                        continue;
+                    }
                     result.entries[target.index()].push(PaintOrderEvent::InlineText {
                         owner,
                         line: line_index,
                         item,
+                        start: range.start,
+                        end: range.end,
                     });
                 }
                 if let Some(selected) = selected {
@@ -300,14 +314,17 @@ impl InlineOrder {
 /// CSS atomic pseudo-contexts have their own block/float/inline stages, while
 /// positioned descendants and real stacking contexts escape to the enclosing
 /// real stacking context. They must not inherit one flattened paint level.
-pub(crate) fn build_paint_order<N>(world: &LayoutWorld<N>) -> Vec<PaintOrderEvent>
+pub(crate) fn build_paint_order<N>(
+    world: &LayoutWorld<N>,
+    visibility: &TextOverflowVisibility,
+) -> Vec<PaintOrderEvent>
 where
     N: Copy + Debug + Eq + Hash,
 {
     let mut sequence = vec![0; world.boxes.len()];
     let mut next = 0;
     assign_tree_order(world, world.root, &mut sequence, &mut next);
-    let inline = InlineOrder::new(world);
+    let inline = InlineOrder::new(world, visibility);
     let mut events = Vec::with_capacity(world.boxes.len() * 4);
     emit_context(world, world.root, &sequence, &inline, &mut events);
     events
@@ -338,10 +355,15 @@ fn emit_context<N>(
     N: Copy + Debug + Eq + Hash,
 {
     events.push(PaintOrderEvent::PushStackingContext(root));
-    push_background(root, events);
+    let hidden = inline.visibility.is_hidden(root);
+    if !hidden {
+        push_background(root, events);
+    }
     let mut flow = FlowCollection::default();
     let mut stacking = StackingDescendants::default();
-    collect_contents(world, root, sequence, inline, &mut flow);
+    if !hidden {
+        collect_contents(world, root, sequence, inline, &mut flow);
+    }
     for child in ordered_children(world, root) {
         collect_subtree(world, child, sequence, inline, &mut flow, &mut stacking);
     }
@@ -361,7 +383,9 @@ fn emit_context<N>(
         emit_context(world, context.id, sequence, inline, events);
     }
     emit_entries(world, outlines, sequence, inline, events);
-    events.push(PaintOrderEvent::BoxOutline(root));
+    if !hidden {
+        events.push(PaintOrderEvent::BoxOutline(root));
+    }
     events.push(PaintOrderEvent::PopStackingContext(root));
 }
 
@@ -377,7 +401,18 @@ fn collect_subtree<N>(
 {
     let layout_box = &world.boxes[id.index()];
     let flex_or_grid_item = is_flex_or_grid_item(world, id);
-    if layout_box.creates_stacking_context(false, flex_or_grid_item) {
+    let creates_context = layout_box.creates_stacking_context(false, flex_or_grid_item);
+    if inline.visibility.is_hidden(id) && !creates_context {
+        // Do not emit this box's normal-flow paint/hit events, but still find
+        // independent descendants collected by the enclosing real context.
+        for child in ordered_children(world, id) {
+            collect_subtree(world, child, sequence, inline, flow, stacking);
+        }
+        return;
+    }
+    // A hidden stacking root still contains independently painted descendants;
+    // retain its effects and z-order, omitting only its own paint in emit_context.
+    if creates_context {
         let context = ChildContext {
             id,
             z_index: layout_box.style.explicit_z_index().unwrap_or(0),
@@ -481,6 +516,24 @@ fn collect_contents<N>(
             kind: PaintEntryKind::Event(PaintOrderEvent::BoxCaret(id)),
         });
     }
+    if inline.split[id.index()]
+        && let Some(overflow) = layout_box
+            .inline_layout
+            .as_ref()
+            .and_then(|context| context.text_overflow.as_ref())
+    {
+        for (line, ellipsis) in overflow.lines.iter().enumerate() {
+            if ellipsis.is_some() {
+                flow.inline_contents.push(PaintEntry {
+                    order: (tree_order, line, usize::MAX, usize::MAX),
+                    kind: PaintEntryKind::Event(PaintOrderEvent::InlineEllipsis {
+                        owner: id,
+                        line,
+                    }),
+                });
+            }
+        }
+    }
     for event in &inline.entries[id.index()] {
         let (owner, line, item) = match *event {
             PaintOrderEvent::InlineBox { owner, fragment } => (
@@ -494,7 +547,9 @@ fn collect_contents<N>(
                     .line_index,
                 0,
             ),
-            PaintOrderEvent::InlineText { owner, line, item } => (owner, line, item + 1),
+            PaintOrderEvent::InlineText {
+                owner, line, item, ..
+            } => (owner, line, item + 1),
             // Backgrounds precede the source's glyphs; sibling tree order is
             // still shared with inline fragments and atomic groups.
             PaintOrderEvent::InlineSelection { owner, line, .. } => (owner, line, 0),
