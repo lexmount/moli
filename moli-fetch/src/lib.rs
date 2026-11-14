@@ -60,7 +60,7 @@ pub use headers::{
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
 pub use moli_curl::websocket::CurlWebSocketConnector;
 pub use moli_curl::{CurlTlsConfig, validate_http_host_resolve_entries};
-pub use moli_fetch_types::{FetchResponseMetadata, FetchResponseType};
+pub use moli_fetch_types::{FetchPriorityHint, FetchResponseMetadata, FetchResponseType};
 pub use moli_header_field::HeaderFields as RequestHeaders;
 pub use moli_header_field::HeaderFields as ResponseHeaders;
 pub use moli_header_field::{
@@ -79,12 +79,12 @@ pub use referrer_policy::{
     response_referrer_policy_from_headers, sanitized_referrer_url,
 };
 pub use request::{
-    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, FetchPriorityHint,
-    Request, RequestAuth, RequestAuthScheme, RequestAuthTarget, RequestCacheMode,
-    RequestCredentialsMode, RequestHeaderOverride, RequestMode, RequestOverrides,
-    RequestPriorityHints, RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy,
-    RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
-    ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
+    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, Request, RequestAuth,
+    RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
+    RequestHeaderOverride, RequestMode, RequestOverrides, RequestPriorityHints,
+    RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy, RequestResourceType,
+    ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
+    SubresourceRequestMetadata,
 };
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{

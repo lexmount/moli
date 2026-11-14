@@ -1,4 +1,5 @@
-//! Response state shared by Fetch, Service Workers and Cache Storage.
+//! Transport-independent request and response types shared by the parser,
+//! Fetch, Service Workers and Cache Storage.
 //!
 //! These values contain no execution context or transport handles. In
 //! particular, delivery through a Service Worker is a property of a fetch,
@@ -6,6 +7,43 @@
 
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::AsRefStr,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "kebab-case")]
+pub enum FetchPriorityHint {
+    Low,
+    #[default]
+    Auto,
+    High,
+}
+
+impl FetchPriorityHint {
+    pub fn from_attribute(value: Option<&str>) -> Option<Self> {
+        // HTML `fetchpriority` attributes are ASCII case-insensitive, while
+        // RequestInit.priority uses the case-sensitive WebIDL enum parser.
+        let value = value?.trim();
+        if value.eq_ignore_ascii_case("low") {
+            Some(Self::Low)
+        } else if value.eq_ignore_ascii_case("auto") {
+            Some(Self::Auto)
+        } else if value.eq_ignore_ascii_case("high") {
+            Some(Self::High)
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -104,4 +142,26 @@ impl FetchResponseHead {
 pub struct FetchResponse {
     pub head: FetchResponseHead,
     pub body: Vec<u8>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FetchPriorityHint;
+
+    #[test]
+    fn fetch_priority_hint_parsing_keeps_webidl_strict_and_html_case_insensitive() {
+        assert_eq!(
+            "high".parse::<FetchPriorityHint>().ok(),
+            Some(FetchPriorityHint::High)
+        );
+        assert!(
+            "HIGH".parse::<FetchPriorityHint>().is_err(),
+            "RequestInit priority is a WebIDL enum and must stay case-sensitive"
+        );
+        assert_eq!(
+            FetchPriorityHint::from_attribute(Some(" HIGH ")),
+            Some(FetchPriorityHint::High),
+            "HTML fetchpriority attribute keywords are ASCII case-insensitive"
+        );
+    }
 }

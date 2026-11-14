@@ -9,7 +9,8 @@ use moli_url::{WebOrigin, same_origin};
 use url::Url;
 
 use crate::{
-    FetchConfig, FetchUrlList, RedirectInfo, network_fetch_result::NetworkObservationRecorder,
+    FetchConfig, FetchPriorityHint, FetchUrlList, RedirectInfo,
+    network_fetch_result::NetworkObservationRecorder,
 };
 
 /// Plain HTTP exchanges and browser Fetch requests have different security
@@ -306,44 +307,6 @@ impl RequestCacheMode {
 
     pub fn allows_stale_http_cache_response(self) -> bool {
         matches!(self, Self::ForceCache | Self::OnlyIfCached)
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    Hash,
-    strum::AsRefStr,
-    strum::EnumString,
-    strum::IntoStaticStr,
-)]
-#[strum(serialize_all = "kebab-case")]
-pub enum FetchPriorityHint {
-    Low,
-    #[default]
-    Auto,
-    High,
-}
-
-impl FetchPriorityHint {
-    pub fn from_attribute(value: Option<&str>) -> Option<Self> {
-        // HTML `fetchpriority` attributes are ASCII case-insensitive, while
-        // RequestInit.priority uses the strum-derived, case-sensitive WebIDL
-        // enum parser below.
-        let value = value?.trim();
-        if value.eq_ignore_ascii_case("low") {
-            Some(Self::Low)
-        } else if value.eq_ignore_ascii_case("auto") {
-            Some(Self::Auto)
-        } else if value.eq_ignore_ascii_case("high") {
-            Some(Self::High)
-        } else {
-            None
-        }
     }
 }
 

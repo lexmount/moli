@@ -5,7 +5,7 @@ use moli_dom::{
     NodeId,
     native::{DomHost, NativeDom, NativeNodeId, Node},
 };
-use moli_fetch::FetchPriorityHint;
+use moli_fetch_types::FetchPriorityHint;
 use moli_page_types::{ScriptKind, ScriptMode, ScriptSourceKind};
 use moli_script::{
     ScriptElementClassificationInput, ScriptPreparationClassificationInput,
