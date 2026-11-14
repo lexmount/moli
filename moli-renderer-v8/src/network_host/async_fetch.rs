@@ -28,6 +28,7 @@ pub(crate) async fn fetch_intercepted_window_hop(
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
 ) -> Result<NetworkFetchResult<Response>, String> {
+    let mode = request.redirect_mode();
     let preflight_headers = request.request_headers.to_byte_strings();
     let cancel = cancel_handle.unwrap_or_default();
     let response_cancel = cancel.child_for_subrequest();
@@ -41,11 +42,12 @@ pub(crate) async fn fetch_intercepted_window_hop(
     .await?;
     let (response, journal) = observed.into_parts_with_observation_journal();
     let redirect = matches!(response.head.status, 301 | 302 | 303 | 307 | 308)
-        && response
-            .head
-            .headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("location"));
+        && (mode == RequestRedirectMode::Manual
+            || response
+                .head
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("location")));
     let materialized = if redirect {
         // Redirect bodies are never delivered to fetch(). Dropping the hop
         // retires its transport before the renderer announces the next pause.
@@ -930,10 +932,11 @@ fn validate_redirect_mode_parts(
     headers: &[(String, Vec<u8>)],
     redirect_mode: RequestRedirectMode,
 ) -> Result<(), String> {
-    if redirect_mode != RequestRedirectMode::Error {
+    if redirect_mode == RequestRedirectMode::Manual {
         return Ok(());
     }
-    if next_redirect_url(final_url, status, headers, 0)?.is_some() {
+    let target = next_redirect_url(final_url, status, headers, 0)?;
+    if redirect_mode == RequestRedirectMode::Error && target.is_some() {
         return Err(redirect_mode_error_message(final_url));
     }
     Ok(())
@@ -1079,6 +1082,21 @@ mod tests {
         assert_eq!(redirects.request().url, current_url);
         assert!(redirects.request().redirect_chain().is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn follow_rejects_an_invalid_final_redirect_location_without_parsing_manual_redirects() {
+        let url = Url::parse("https://origin.test/source").unwrap();
+        let headers = vec![("Location".to_owned(), b"http://[".to_vec())];
+        for mode in [RequestRedirectMode::Follow, RequestRedirectMode::Error] {
+            assert!(validate_redirect_mode_parts(&url, 302, &headers, mode).is_err());
+        }
+        assert!(
+            validate_redirect_mode_parts(&url, 302, &headers, RequestRedirectMode::Manual).is_ok()
+        );
+        assert!(
+            validate_redirect_mode_parts(&url, 200, &headers, RequestRedirectMode::Follow).is_ok()
+        );
     }
 
     #[test]

@@ -343,7 +343,9 @@ async fn fulfilled_window_fetch_redirect_modes_and_missing_location() {
             }),
         )
         .await;
-        let expected = if !location {
+        let expected = if mode == "manual" {
+            json!({"status":0,"type":"opaqueredirect","body":"","redirected":false})
+        } else if !location {
             json!({"status":302,"type":"basic","body":"noloc","redirected":false})
         } else if mode == "error" {
             json!({"error":"TypeError"})
@@ -460,6 +462,63 @@ async fn intercepted_window_redirect_advances_before_the_intermediate_body_is_re
         server.await.unwrap();
         fixture_server.abort();
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fulfilled_manual_redirect_does_not_parse_location_but_still_checks_cors() {
+    let (mut ctx, origin, server) = fixture().await;
+    for (index, (mode, status, cross, cors_allowed)) in [
+        ("manual", 302, false, true),
+        ("follow", 302, false, true),
+        ("error", 302, false, true),
+        ("manual", 302, true, true),
+        ("manual", 302, true, false),
+        ("manual", 200, false, true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 50_000 + index as u64 * 10;
+        let source = format!(
+            "{}/invalid-location-{index}",
+            if cross {
+                "http://cross-origin.test"
+            } else {
+                &origin
+            }
+        );
+        command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
+            "globalThis.redirectResult=fetch({source:?},{{redirect:{mode:?}}}).then(async r=>({{status:r.status,type:r.type,body:await r.text(),redirected:r.redirected}})).catch(e=>({{error:e.name}}));'started'"
+        )})).await;
+        let pause = wait_for_request_paused(&mut ctx, &source, "invalid redirect source").await;
+        command(&mut ctx, id + 1, "Fetch.fulfillRequest", json!({
+            "requestId":pause["params"]["requestId"], "responseCode":status,
+            "responseHeaders":[{"name":"Location","value":"http://["},
+                {"name":"Access-Control-Allow-Origin","value":if cors_allowed {"*"} else {"http://wrong.test"}}],
+            "body":"cmVzcG9uc2U=",
+        })).await;
+        let response = command(
+            &mut ctx,
+            id + 2,
+            "Runtime.evaluate",
+            json!({
+                "expression":"redirectResult", "awaitPromise":true, "returnByValue":true,
+            }),
+        )
+        .await;
+        let expected = if !cors_allowed || (status == 302 && mode != "manual") {
+            json!({"error":"TypeError"})
+        } else if status == 302 {
+            json!({"status":0,"type":"opaqueredirect","body":"","redirected":false})
+        } else {
+            json!({"status":200,"type":"basic","body":"response","redirected":false})
+        };
+        assert_eq!(
+            response["result"]["result"]["value"], expected,
+            "{mode}/{status}/{cross}/{cors_allowed}"
+        );
+    }
+    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]

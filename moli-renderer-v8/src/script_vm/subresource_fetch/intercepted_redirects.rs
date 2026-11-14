@@ -7,6 +7,11 @@ pub(super) fn follow_intercepted_redirect(
     document_url: &Url,
     network_headers: Option<&[(String, String)]>,
 ) -> Result<Option<(Request, RedirectInfo)>, String> {
+    // A manual response does not follow Location, so even an invalid URL must
+    // remain opaque. The completion path still checks the response's CORS policy.
+    if request.redirect_mode() == RequestRedirectMode::Manual {
+        return Ok(None);
+    }
     let Some(mut target) = crate::network_host::next_redirect_url(
         &head.final_url,
         head.status,
@@ -17,7 +22,7 @@ pub(super) fn follow_intercepted_redirect(
         return Ok(None);
     };
     match request.redirect_mode() {
-        RequestRedirectMode::Manual => return Ok(None),
+        RequestRedirectMode::Manual => unreachable!("manual redirects do not resolve Location"),
         RequestRedirectMode::Error => return Err("fetch: redirect mode is error".to_owned()),
         RequestRedirectMode::Follow => {}
     }
