@@ -1621,6 +1621,7 @@ mod xhr_failure;
 mod payment_events;
 
 mod performance_handler_order;
+mod trusted_type_policy_interface;
 
 mod performance_user_timing;
 
