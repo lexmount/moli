@@ -729,7 +729,57 @@ pub(in crate::native_bridge) fn html_ping_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    attribute_property_getter_from_object_or_detached(scope, args.this(), "ping", rv);
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, args.this())
+    else {
+        return;
+    };
+    let value = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(|element| element.attribute_ns("", "ping"))
+        .unwrap_or_default()
+        .to_owned();
+    let mut rv = rv;
+    if let Some(value) = v8_string(scope, &value) {
+        rv.set(value.into());
+    }
+}
+
+pub(in crate::native_bridge) fn html_ping_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(descriptor) = UsvStringReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    let Some(value) = super::reflection::property_usv_string_value(
+        scope,
+        args.get(0),
+        descriptor.interface,
+        descriptor.member,
+    ) else {
+        return;
+    };
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, args.this())
+    else {
+        return;
+    };
+    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        super::set_live_element_attribute_ns_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            None,
+            None,
+            "ping",
+            "ping",
+            &value,
+        );
+    });
+    rv.set_undefined();
 }
 
 pub(in crate::native_bridge) fn html_hreflang_getter_function<'s>(
