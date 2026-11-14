@@ -1,5 +1,7 @@
 use super::*;
 
+mod nested_window_events;
+
 #[test]
 fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() {
     let mut vm = new_parsed_test_vm(

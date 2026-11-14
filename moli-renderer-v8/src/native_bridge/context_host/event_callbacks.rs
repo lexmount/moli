@@ -19,6 +19,20 @@ pub(crate) struct PreparedEventCallback {
     relevant_identity: Option<WindowExecutionContextIdentity>,
 }
 
+pub(crate) struct WindowErrorReportingScope {
+    host_ptr: *mut PageScriptHost,
+    owner: WindowExecutionContextOwner,
+}
+
+impl Drop for WindowErrorReportingScope {
+    fn drop(&mut self) {
+        let removed = unsafe { &mut *self.host_ptr }
+            .active_window_error_report_owners
+            .remove(&self.owner);
+        debug_assert!(removed, "Window error reporting scope must be active");
+    }
+}
+
 impl PreparedEventCallback {
     pub(crate) fn callback<'s>(
         &self,
@@ -88,6 +102,18 @@ impl EventCallbackRegistry {
 }
 
 impl PageScriptHost {
+    pub(crate) fn enter_window_error_reporting_scope(
+        &mut self,
+        owner: WindowExecutionContextOwner,
+    ) -> Option<WindowErrorReportingScope> {
+        self.active_window_error_report_owners
+            .insert(owner)
+            .then(|| WindowErrorReportingScope {
+                host_ptr: self,
+                owner,
+            })
+    }
+
     pub(crate) fn register_target_event_listener<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
