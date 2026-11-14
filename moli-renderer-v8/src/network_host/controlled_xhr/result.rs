@@ -199,7 +199,7 @@ mod tests {
                 resource_type: SubresourceResourceType::Xhr,
                 request_cookie_report: None,
             };
-            let loaded = super::super::LoadedXhrResponse {
+            let loaded = super::super::LoadedResponse {
                 head: moli_fetch::ResponseHead {
                     final_url: url,
                     status: 200,

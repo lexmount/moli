@@ -89,6 +89,44 @@ async fn assert_chromium_successful_http_extra_info(
     assert_eq!(finished.len(), 1, "one successful network terminal");
 }
 
+// A response override applies to one HTTP hop. Continue the redirect first,
+// then pause and inspect the final response under its new Fetch identity.
+async fn continue_to_final_fetch_response(
+    ctx: &mut TestContext,
+    redirect: &Value,
+    final_url: &str,
+    id: u64,
+) -> Value {
+    assert_eq!(redirect["params"]["responseStatusCode"], 307);
+    let original_id = &redirect["params"]["requestId"];
+    ctx.process_async(json!({"id":id,"sessionId":"SID-1","method":"Fetch.continueResponse","params":{"requestId":original_id}})).await;
+    ctx.expect_result(id, json!({}), Some("SID-1"));
+    wait_until_message(ctx, "SID-1", "redirected request pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["params"]["request"]["url"] == final_url
+            && message["params"].get("responseStatusCode").is_none()
+    })
+    .await;
+    let next = ctx.take_first_matching("redirected request pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["params"]["request"]["url"] == final_url
+            && message["params"].get("responseStatusCode").is_none()
+    });
+    assert_ne!(next["params"]["requestId"], *original_id);
+    assert_eq!(next["params"]["redirectedRequestId"], *original_id);
+    assert_eq!(next["params"]["networkId"], redirect["params"]["networkId"]);
+    let request_id = next["params"]["requestId"].as_str().unwrap();
+    ctx.process_async(json!({"id":id+1,"sessionId":"SID-1","method":"Fetch.continueRequest","params":{"requestId":request_id,"interceptResponse":true}})).await;
+    ctx.expect_result(id + 1, json!({}), Some("SID-1"));
+    wait_until_message(ctx, "SID-1", "final response pause", |message| {
+        is_fetch_event_for_request(message, "Fetch.requestPaused", request_id)
+    })
+    .await;
+    let response = take_fetch_event_for_request(ctx, "Fetch.requestPaused", request_id);
+    assert_eq!(response["params"]["responseStatusCode"], 200);
+    response
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_fetch_subresource_intercept_response_pauses_after_response_until_continue_response()
  {
@@ -1066,6 +1104,12 @@ async fn runtime_fetch_subresource_redirect_preserves_request_id_under_fetch_int
 
     let response_paused =
         take_fetch_event_for_request(&mut ctx, "Fetch.requestPaused", &request_id);
+    let response_paused =
+        continue_to_final_fetch_response(&mut ctx, &response_paused, &final_url, 48_000).await;
+    let request_id = response_paused["params"]["requestId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(response_paused["method"], "Fetch.requestPaused");
     assert_eq!(response_paused["params"]["requestId"], request_id);
     assert_eq!(response_paused["params"]["networkId"], network_id);
@@ -4764,6 +4808,17 @@ async fn runtime_fetch_redirect_subresource_take_response_body_as_stream_at_resp
     .await;
     let response_paused =
         take_fetch_event_for_request(&mut ctx, "Fetch.requestPaused", &request_id);
+    let response_paused = continue_to_final_fetch_response(
+        &mut ctx,
+        &response_paused,
+        &format!("http://{addr}/api-final"),
+        48_010,
+    )
+    .await;
+    let request_id = response_paused["params"]["requestId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(response_paused["method"], "Fetch.requestPaused");
 
     ctx.process_async(json!({

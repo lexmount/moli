@@ -1861,6 +1861,13 @@ impl PageScriptHost {
         pending: PendingSubresourceFetchState,
         redirect: moli_fetch::RedirectInfo,
     ) {
+        // Retire the previous hop before a pattern-mismatched next hop can
+        // install its automatic continuation/auth correlation under this id.
+        self.record_pending_subresource_continue_event(
+            PendingSubresourceContinueEvent::Completed {
+                internal_id: pending.info.internal_id,
+            },
+        );
         self.push_subresource_fetch_pause(pending.info.clone(), None, Some(redirect.into()));
         self.restore_pending_subresource_fetch(pending);
     }

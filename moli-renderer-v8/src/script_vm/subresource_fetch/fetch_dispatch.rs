@@ -441,6 +441,57 @@ impl ScriptVm {
             }
             AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
         };
+        let response_filter = response_filter.or_else(|| {
+            (!skip_fetch_security_validation
+                && pending
+                    .continuation
+                    .window_fetch()
+                    .and_then(|fetch| fetch.intercepted_request.as_ref())
+                    .is_some_and(|request| {
+                        request.redirect_mode() == moli_fetch::RequestRedirectMode::Manual
+                    })
+                && result.as_ref().is_ok_and(|response| {
+                    matches!(response.status, 301 | 302 | 303 | 307 | 308)
+                        && response
+                            .head()
+                            .headers
+                            .iter()
+                            .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                }))
+            .then_some(crate::types::FetchResponseType::OpaqueRedirect.into())
+        });
+        // Only intercepted Window requests stop after each network hop. The
+        // transport and fulfilled responses share redirect validation, policy,
+        // and the next Fetch pause; ordinary fetch streaming stays unchanged.
+        let result = if !skip_fetch_security_validation
+            && pending
+                .continuation
+                .window_fetch()
+                .is_some_and(|fetch| fetch.intercepted_request.is_some())
+            && let Ok(response) = &result
+        {
+            let request = super::pending_fetch::request_for_pending_subresource(
+                &pending,
+                &pending.info.url,
+                &pending.info.method,
+                pending.info.request_headers.clone(),
+                pending.info.request_body_bytes.clone(),
+            );
+            match super::intercepted_redirects::follow_intercepted_redirect(
+                request,
+                &response.head(),
+                &pending.info.document_url,
+                response.network_request_headers(),
+            ) {
+                Ok(Some((request, redirect))) => {
+                    return self.continue_intercepted_window_redirect(pending, request, redirect);
+                }
+                Ok(None) => result,
+                Err(error) => Err(error),
+            }
+        } else {
+            result
+        };
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let trace_fields = async_subresource_trace_fields_for_pending(
             "completion",
