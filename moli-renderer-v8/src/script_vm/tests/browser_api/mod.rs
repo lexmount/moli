@@ -65,6 +65,7 @@ mod pointing_event_init;
 mod popup_hyperlinks;
 mod promise_rejection;
 mod request_init;
+mod retained_simple_targets;
 mod rtc_dictionary_init;
 mod rtc_error;
 mod rtc_peer_dictionary;
