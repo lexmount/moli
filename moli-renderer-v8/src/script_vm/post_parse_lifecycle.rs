@@ -2497,6 +2497,7 @@ impl ScriptVm {
         let mut host = self._context_host.borrow_mut();
         for network_result in results {
             let crate::document_runtime::ConnectedLoadNetworkResult {
+                network_observed,
                 stylesheet_fetch,
                 blocking_operation: _,
                 source_operation: _,
@@ -2622,14 +2623,16 @@ impl ScriptVm {
                     }
                 }
             }
-            host.record_get_subresource_network_result_with_initiator(
-                None,
-                document_url,
-                request_url,
-                resource_type,
-                SubresourceRequestInitiatorType::Parser,
-                &result,
-            );
+            if !network_observed {
+                host.record_get_subresource_network_result_with_initiator(
+                    None,
+                    document_url,
+                    request_url,
+                    resource_type,
+                    SubresourceRequestInitiatorType::Parser,
+                    &result,
+                );
+            }
         }
         for (root, responses) in import_graph_results {
             let _ = host.install_and_refresh_live_stylesheet_import_graph(root, &responses);

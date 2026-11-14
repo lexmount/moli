@@ -40,9 +40,21 @@ pub(crate) struct RendererStylesheetFetcher {
     request_resource_type: moli_fetch::RequestResourceType,
     link_preload: bool,
     csp_context: Option<crate::content_security_policy::StylesheetFetchCspContext>,
+    interception: Option<crate::network::interception_output::ResourceInterceptionContext>,
+    frame_id: Option<String>,
 }
 
 impl RendererStylesheetFetcher {
+    pub(crate) fn with_interception(
+        mut self,
+        context: Option<crate::network::interception_output::ResourceInterceptionContext>,
+        frame_id: Option<String>,
+    ) -> Self {
+        self.interception = context;
+        self.frame_id = frame_id;
+        self
+    }
+
     pub(crate) fn resource_loader(&self) -> &crate::network::context::DocumentResourceLoader {
         &self.loader
     }
@@ -67,6 +79,8 @@ impl RendererStylesheetFetcher {
             request_resource_type: moli_fetch::RequestResourceType::CssStyleSheet,
             link_preload: false,
             csp_context: None,
+            interception: None,
+            frame_id: None,
         }
     }
 
@@ -82,6 +96,8 @@ impl RendererStylesheetFetcher {
             request_resource_type,
             link_preload,
             csp_context: None,
+            interception: None,
+            frame_id: None,
         }
     }
 
@@ -121,6 +137,9 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 ))
             });
         }
+        let authority = self.loader.clone();
+        let interception = self.interception.clone();
+        let frame_id = self.frame_id.clone();
         let loader = self.loader.request_client().clone();
         let request_origin = self.loader.fetch_context().request_origin();
         let resource_task_runner = self.loader.task_runner();
@@ -143,6 +162,9 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 request_resource_type,
                 link_preload,
                 csp_check,
+                authority,
+                interception,
+                frame_id,
             )
             .await
         })
@@ -180,6 +202,9 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
     request_resource_type: moli_fetch::RequestResourceType,
     link_preload: bool,
     csp_check: Option<crate::content_security_policy::StylesheetRequestCspCheck>,
+    authority: crate::network::context::DocumentResourceLoader,
+    interception: Option<crate::network::interception_output::ResourceInterceptionContext>,
+    frame_id: Option<String>,
 ) -> StylesheetFetchTerminal {
     let mut request = stylesheet_readiness_request(
         &document_url,
@@ -244,6 +269,76 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
                 ));
             }
         }
+    }
+    if loader
+        .page_network_policy()
+        .should_intercept_subresource(SubresourceResourceType::Stylesheet)
+        && matches!(request.url.scheme(), "http" | "https")
+    {
+        let Some(context) = interception else {
+            return StylesheetFetchTerminal::network_error(
+                "stylesheet interception has no protocol output owner",
+            );
+        };
+        let cancel = moli_fetch::FetchCancelHandle::new();
+        let Some(load) = authority.register_load(
+            crate::network::loads::ResourceLoadKind::Stylesheet,
+            crate::network::loads::ResourceLoadDisposition::Ordinary,
+            Some(cancel.clone()),
+        ) else {
+            return StylesheetFetchTerminal::network_error("net::ERR_ABORTED");
+        };
+        let info = crate::types::PendingSubresourceFetchInfo {
+            internal_id: crate::network::interception_control::next_subresource_request_id(),
+            network_request_handle: Some(
+                crate::network::interception_control::next_subresource_network_handle(),
+            ),
+            frame_id,
+            document_url,
+            url: request.url.clone(),
+            websocket_socket_id: None,
+            method: request.method.clone(),
+            request_headers: request.request_headers.clone(),
+            request_body: None,
+            request_body_bytes: None,
+            resource_type: SubresourceResourceType::Stylesheet,
+            request_cookie_report: None,
+        };
+        let completed =
+            crate::network_host::controlled_xhr::ControlledResourceLoad::for_stylesheet(
+                context, request, info, load, cancel,
+            )
+            .run()
+            .await;
+        let terminal = match completed.result {
+            Ok(response) => {
+                let bytes = match completed.network_record.outcome() {
+                    crate::types::SubresourceNetworkOutcome::Success { response_body, .. } => {
+                        response_body
+                            .materialize_bytes()
+                            .map(Some)
+                            .map_err(|error| error.to_string())
+                    }
+                    _ => Ok(None),
+                };
+                match bytes {
+                    Ok(Some(bytes)) => terminal_from_response(
+                        crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
+                            response.head(),
+                            moli_fetch::ResponseBody::materialized_bytes(bytes),
+                        ),
+                        StylesheetResponseProvenance::Network,
+                    ),
+                    Ok(None) => terminal_from_response(
+                        response.into(),
+                        StylesheetResponseProvenance::Network,
+                    ),
+                    Err(error) => StylesheetFetchTerminal::network_error(error),
+                }
+            }
+            Err(error) => StylesheetFetchTerminal::network_error(error),
+        };
+        return terminal.with_observed_network();
     }
     match loader.fetch_text_stream(request).await {
         Ok(response) => {

@@ -1,4 +1,4 @@
-//! One native loading/decision path for intercepted asynchronous and synchronous XHR.
+//! Shared native interception transport for XHR and stylesheet resources.
 
 mod context;
 mod result;
@@ -28,14 +28,14 @@ use crate::{
     },
 };
 
-pub(crate) struct ControlledXhrLoad {
+pub(crate) struct ControlledResourceLoad {
     request: Request,
     info: PendingSubresourceFetchInfo,
     load: ResourceLoadLease,
     cancel: FetchCancelHandle,
     source_document: RendererDocumentLifecycleIdentity,
     output: InterceptionOutput,
-    connect_policy: DocumentConnectPolicySnapshot,
+    connect_policy: Option<DocumentConnectPolicySnapshot>,
     preflight_headers: Vec<(String, String)>,
     initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
 }
@@ -79,7 +79,27 @@ impl LoadedResponse {
     }
 }
 
-impl ControlledXhrLoad {
+impl ControlledResourceLoad {
+    pub(crate) fn for_stylesheet(
+        interception: crate::network::interception_output::ResourceInterceptionContext,
+        request: Request,
+        info: PendingSubresourceFetchInfo,
+        load: ResourceLoadLease,
+        cancel: FetchCancelHandle,
+    ) -> Self {
+        Self {
+            request,
+            info,
+            load,
+            cancel,
+            source_document: interception.source_document,
+            output: interception.output,
+            connect_policy: None,
+            preflight_headers: Vec::new(),
+            initial_decision: None,
+        }
+    }
+
     /// The Page can publish request admission in the initiating turn. Network
     /// execution then awaits the same native port, preserving async XHR's
     /// existing request-notification boundary without running a Page task.
@@ -199,17 +219,24 @@ impl ControlledXhrLoad {
         } else {
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
         };
-        if let Some(violation) = self.connect_policy.enforce_violation(
-            &self.info.document_url,
-            &self.request.url,
-            redirect_status,
-        ) {
+        if let Some(policy) = &self.connect_policy
+            && let Some(violation) = policy.enforce_violation(
+                &self.info.document_url,
+                &self.request.url,
+                redirect_status,
+            )
+        {
             return Err(
                 crate::document_runtime::document_content_security_policy_error_message(
                     &violation,
                     "XMLHttpRequest",
                 ),
             );
+        }
+        if self.connect_policy.is_none() {
+            self.request
+                .admit_request_url(&self.request.url)
+                .map_err(|error| error.to_string())?;
         }
         moli_url_policy::ensure_http_network_transport_url(&self.request.url)
             .map_err(|error| error.to_string())
@@ -288,42 +315,15 @@ impl ControlledXhrLoad {
                         intercept_response: response,
                         handle_auth_requests: auth,
                     } => {
-                        if let Some(url) = url {
-                            self.request.url = url;
+                        let headers_changed = headers.is_some();
+                        moli_fetch::RequestOverrides {
+                            url,
+                            method,
+                            body,
+                            headers,
                         }
-                        if let Some(method) = method {
-                            self.request.method = method.clone();
-                            self.request.cookie_context.set_request_method(&method);
-                        }
-                        self.request.cookie_context = self
-                            .request
-                            .cookie_context
-                            .clone()
-                            .recompute_site_context_for_request(&self.request.url);
-                        if let Some(body) = body {
-                            let text = body.as_ref().map(|bytes| {
-                                std::sync::Arc::from(String::from_utf8_lossy(bytes).as_ref())
-                            });
-                            self.request.set_body(body, text);
-                        }
-                        if let Some(headers) = headers {
-                            match headers {
-                                moli_fetch::RequestHeaderOverride::CurrentRequest {
-                                    headers,
-                                    redirect_headers,
-                                } => {
-                                    self.request.set_redirect_headers(Some(
-                                        redirect_headers.unwrap_or_else(|| {
-                                            self.request.request_headers.clone()
-                                        }),
-                                    ));
-                                    self.request.request_headers = headers;
-                                }
-                                moli_fetch::RequestHeaderOverride::RedirectChain(headers) => {
-                                    self.request.set_redirect_headers(None);
-                                    self.request.request_headers = headers;
-                                }
-                            }
+                        .apply(&mut self.request);
+                        if headers_changed {
                             self.preflight_headers = self.request.request_headers.to_byte_strings();
                         }
                         intercept_response = response;
@@ -495,13 +495,15 @@ impl ControlledXhrLoad {
                 response.head.redirected = !response.head.redirect_chain.is_empty();
                 // Client-provided responses have the same CORS obligations as
                 // transport responses. Validate before any success is published.
-                super::validate_cors_response_chain(
-                    self.request
-                        .request_origin()
-                        .expect("XHR has a requesting origin"),
-                    &response.head,
-                    self.request.credentials_mode,
-                )?;
+                if self.request.request_mode == moli_fetch::RequestMode::Cors {
+                    super::validate_cors_response_chain(
+                        self.request
+                            .request_origin()
+                            .expect("XHR has a requesting origin"),
+                        &response.head,
+                        self.request.credentials_mode,
+                    )?;
+                }
                 if !is_synthetic {
                     self.cancel.adopt_response_progress(&hop_cancel);
                 }

@@ -506,3 +506,103 @@ async fn bidi_extra_header_bytes_reach_fetch_xhr_worker_and_navigation() {
     .await;
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_interception_aborts_before_transport_and_can_fulfill() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured = hits.clone();
+    let server = tokio::spawn(async move {
+        let app = Router::new()
+            .route(
+                "/page",
+                get(|| async {
+                    (
+                        [(CONTENT_TYPE.as_str(), "text/html")],
+                        "<!doctype html><body>styles",
+                    )
+                }),
+            )
+            .route(
+                "/test.css",
+                get(move || {
+                    let captured = captured.clone();
+                    async move {
+                        captured.fetch_add(1, Ordering::SeqCst);
+                        (
+                            [(CONTENT_TYPE.as_str(), "text/css")],
+                            "body{background-color:pink}",
+                        )
+                    }
+                }),
+            );
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    enable_runtime_async(&mut ctx, "SID-1", 70400).await;
+    ctx.process_async(json!({"id":70401,"sessionId":"SID-1","method":"Fetch.enable","params":{"patterns":[{"urlPattern":"*/test.css","resourceType":"Stylesheet","requestStage":"Request"}]}})).await;
+    ctx.expect_result(70401, json!({}), Some("SID-1"));
+    for (index, fulfilled) in [false, true, true].into_iter().enumerate() {
+        let command_id = 70410 + index as u64 * 10;
+        if index == 2 {
+            ctx.process_async(json!({"id":70409,"sessionId":"SID-1","method":"Runtime.evaluate","params":{"expression":"document.open(); document.write('<!doctype html><body>new document'); document.close();"}})).await;
+            let _ = take_response_by_id(&mut ctx, 70409);
+        }
+        ctx.process_async(json!({"id":command_id,"sessionId":"SID-1","method":"Runtime.evaluate","params":{"expression":"globalThis.__styleDone=null; globalThis.__styleLink=document.createElement('link'); __styleLink.rel='stylesheet'; __styleLink.href='/test.css'; __styleLink.onload=()=>{__styleDone='load'}; __styleLink.onerror=()=>{__styleDone='error'}; document.head.appendChild(__styleLink);"}})).await;
+        let _ = take_response_by_id(&mut ctx, command_id);
+        wait_until_message(&mut ctx, "SID-1", "stylesheet request pause", |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["params"]["request"]["url"] == format!("http://{addr}/test.css")
+        })
+        .await;
+        let paused = ctx.take_first_matching("stylesheet pause", |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["params"]["request"]["url"] == format!("http://{addr}/test.css")
+        });
+        assert_eq!(paused["params"]["resourceType"], "Stylesheet");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "request pause precedes HTTP dispatch"
+        );
+        let params = if fulfilled {
+            json!({"requestId":paused["params"]["requestId"],"responseCode":200,"responseHeaders":[{"name":"Content-Type","value":"text/css"}],"body":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"body{background-color:rgb(1,2,3)}")})
+        } else {
+            json!({"requestId":paused["params"]["requestId"],"errorReason":"Aborted"})
+        };
+        ctx.process_async(json!({"id":command_id+1,"sessionId":"SID-1","method":if fulfilled {"Fetch.fulfillRequest"} else {"Fetch.failRequest"},"params":params})).await;
+        ctx.expect_result(command_id + 1, json!({}), Some("SID-1"));
+        evaluate_until_value_async(
+            &mut ctx,
+            "SID-1",
+            command_id + 2,
+            "globalThis.__styleDone",
+            &json!(if fulfilled { "load" } else { "error" }),
+            "stylesheet terminal event",
+        )
+        .await;
+        evaluate_until_value_async(
+            &mut ctx,
+            "SID-1",
+            command_id + 3,
+            "getComputedStyle(document.body).backgroundColor",
+            &json!(if fulfilled {
+                "rgb(1, 2, 3)"
+            } else {
+                "rgba(0, 0, 0, 0)"
+            }),
+            "stylesheet usability follows interception",
+        )
+        .await;
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "abort and fulfillment must not start a second transport"
+        );
+        ctx.process_async(json!({"id":command_id+4,"sessionId":"SID-1","method":"Runtime.evaluate","params":{"expression":"__styleLink.remove()"}})).await;
+        let _ = take_response_by_id(&mut ctx, command_id + 4);
+    }
+    server.abort();
+}

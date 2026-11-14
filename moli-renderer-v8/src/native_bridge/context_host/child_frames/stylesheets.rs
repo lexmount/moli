@@ -29,6 +29,10 @@ impl PageScriptHost {
             .frame_owner_current_child_snapshot(child_handle)
             .map(|snapshot| snapshot.document_url)
             .unwrap_or_else(|| self.document_url().clone());
+        let interception = self.native_interception_context();
+        let frame_id = self
+            .frame_owner_frame_id_for_child_handle(child_handle)
+            .map(|id| id.0);
         let fetcher = self
             .document_resource_loader_for_owner(owner)
             .map(|loader| {
@@ -42,6 +46,7 @@ impl PageScriptHost {
                         client_id,
                     }),
                 )
+                .with_interception(interception.clone(), frame_id.clone())
             });
         let mut accepted = 0;
         for input in inputs {
@@ -190,6 +195,9 @@ impl PageScriptHost {
         completion: ChildBlockingStylesheetLoadCompletion,
     ) {
         for network_result in completion.graph.network_results() {
+            if network_result.terminal().network_was_observed() {
+                continue;
+            }
             let physical_result = network_result.terminal().physical().as_result();
             self.record_get_subresource_network_result_with_initiator(
                 completion.frame_id.clone(),
@@ -449,6 +457,9 @@ impl PageScriptHost {
         completion: &ChildBlockingStylesheetLoadCompletion,
     ) {
         for network_result in completion.graph.network_results() {
+            if network_result.terminal().network_was_observed() {
+                continue;
+            }
             let physical_result = network_result.terminal().physical().as_result();
             self.record_historical_get_subresource_network_result_with_initiator(
                 completion.frame_id.clone(),

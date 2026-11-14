@@ -1051,29 +1051,28 @@ async fn enable_with_other_resource_type_filter_sets_other_filter() {
 }
 
 #[tokio::test]
-async fn enable_rejects_unsupported_stylesheet_and_text_track_filters() {
-    for resource_type in ["Stylesheet", "TextTrack"] {
-        let mut ctx = TestContext::new();
-        ctx.with_fixture(|conn| {
-            conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-                format!("BID-{resource_type}"),
-                "TID-1",
-            ));
-        });
-        ctx.process_async(json!({
-            "id": 20,
-            "method": "Fetch.enable",
-            "params": {
-                "patterns": [{ "resourceType": resource_type }]
-            }
-        }))
-        .await;
-        ctx.expect_error(20, -32602, "InvalidParams");
-        ctx.with_fixture(|conn| {
-            let bc = conn.browser_context.as_ref().unwrap();
-            assert!(!bc.active_page_target().fetch_owner.is_enabled());
-        });
-    }
+async fn enable_rejects_unsupported_text_track_filter() {
+    let resource_type = "TextTrack";
+    let mut ctx = TestContext::new();
+    ctx.with_fixture(|conn| {
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+            format!("BID-{resource_type}"),
+            "TID-1",
+        ));
+    });
+    ctx.process_async(json!({
+        "id": 20,
+        "method": "Fetch.enable",
+        "params": {
+            "patterns": [{ "resourceType": resource_type }]
+        }
+    }))
+    .await;
+    ctx.expect_error(20, -32602, "InvalidParams");
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(!bc.active_page_target().fetch_owner.is_enabled());
+    });
 }
 
 #[tokio::test]

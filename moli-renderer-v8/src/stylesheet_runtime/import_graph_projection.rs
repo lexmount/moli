@@ -33,6 +33,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
             let origin_clean = terminal.origin_clean().unwrap_or(false);
             let result = terminal.physical().as_result();
             ConnectedLoadNetworkResult {
+                network_observed: terminal.network_was_observed(),
                 stylesheet_fetch: None,
                 blocking_operation: None,
                 source_operation: None,

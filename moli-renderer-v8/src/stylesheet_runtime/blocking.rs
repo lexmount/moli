@@ -414,6 +414,7 @@ impl DocumentRuntime {
                 let origin_clean = result.terminal.origin_clean().unwrap_or(false);
                 let physical_result = result.terminal.physical().as_result();
                 ConnectedLoadNetworkResult {
+                    network_observed: result.terminal.network_was_observed(),
                     stylesheet_fetch: result.fetch,
                     blocking_operation: result.blocking_operation,
                     source_operation: None,
