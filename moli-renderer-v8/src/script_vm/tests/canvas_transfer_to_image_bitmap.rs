@@ -72,6 +72,42 @@ fn transfer_to_image_bitmap_throws_unknown_error_for_a_zero_sized_canvas() {
 }
 
 #[test]
+fn transfer_to_image_bitmap_rejects_unallocatable_backing_store_and_recovers_after_resize() {
+    const SIZE: u32 = 23_171;
+    // Exercise Moli's allocation limit without attempting a multi-gigabyte allocation.
+    assert!(moli_canvas::byte_len(SIZE, SIZE).is_none());
+    let error = "UnknownError: Failed to execute 'transferToImageBitmap' on 'OffscreenCanvas': \
+                 ImageBitmap construction failed";
+    for kind in ["2d", "webgl", "webgl2"] {
+        for resize in [false, true] {
+            let initial_size = if resize { 2 } else { SIZE };
+            let result = run(&format!(
+                r#"
+                  const canvas = new OffscreenCanvas({initial_size}, {initial_size});
+                  const context = canvas.getContext('{kind}');
+                  if ({resize}) {{
+                    canvas.width = {SIZE};
+                    canvas.height = {SIZE};
+                  }}
+                  const error = caught(() => canvas.transferToImageBitmap());
+                  const state = [error, canvas.width, canvas.height,
+                    canvas.getContext('{kind}') === context];
+                  canvas.width = 2;
+                  canvas.height = 2;
+                  const bitmap = canvas.transferToImageBitmap();
+                  return JSON.stringify([...state, bitmap.width, bitmap.height]);
+                "#
+            ));
+            assert_eq!(
+                result,
+                format!(r#"["{error}",{SIZE},{SIZE},true,2,2]"#),
+                "kind={kind}, resize={resize}",
+            );
+        }
+    }
+}
+
+#[test]
 fn transfer_to_image_bitmap_clears_the_bitmap_and_keeps_context_state_and_size() {
     let result = run(r#"
       const canvas = new OffscreenCanvas(4, 4);
