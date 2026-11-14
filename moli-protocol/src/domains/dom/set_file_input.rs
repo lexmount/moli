@@ -552,8 +552,12 @@ pub(super) fn selected_files_from_paths(
     paths: &[String],
 ) -> Result<Vec<SelectedFile>, PendingDomCommandStartError> {
     if paths.len() == 1 && Path::new(&paths[0]).is_dir() {
-        let root = Path::new(&paths[0]);
-        let parent = root.parent().unwrap_or_else(|| Path::new(""));
+        let root = upload_directory_root(Path::new(&paths[0])).map_err(|error| {
+            PendingDomCommandStartError {
+                code: -32000,
+                message: format!("Could not resolve upload directory: {error}"),
+            }
+        })?;
         let mut directories = vec![root.to_path_buf()];
         let mut paths = Vec::new();
         while let Some(directory) = directories.pop() {
@@ -583,13 +587,7 @@ pub(super) fn selected_files_from_paths(
             .into_iter()
             .map(|path| {
                 let mut file = selected_file_from_file_path(&path)?;
-                file.relative_path = path
-                    .strip_prefix(parent)
-                    .expect("enumerated files stay below the chosen directory")
-                    .components()
-                    .map(|part| part.as_os_str().to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join("/");
+                file.relative_path = upload_relative_path(&root, &path);
                 Ok(file)
             })
             .collect();
@@ -598,6 +596,30 @@ pub(super) fn selected_files_from_paths(
         .iter()
         .map(|path| selected_file_from_file_path(Path::new(path)))
         .collect()
+}
+
+fn upload_directory_root(root: &Path) -> std::io::Result<std::path::PathBuf> {
+    if root.file_name().is_some() {
+        // Preserve the name of an explicitly selected symlink. Only "." and
+        // ".." need the resolved directory's name rather than a path component.
+        std::path::absolute(root)
+    } else {
+        fs::canonicalize(root)
+    }
+}
+
+fn upload_relative_path(root: &Path, file: &Path) -> String {
+    root.file_name()
+        .into_iter()
+        .chain(
+            file.strip_prefix(root)
+                .expect("enumerated files stay below the chosen directory")
+                .components()
+                .map(|component| component.as_os_str()),
+        )
+        .map(|component| component.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn selected_file_from_file_path(
@@ -620,10 +642,10 @@ fn selected_file_from_file_path(
     })?;
     let name = file_path
         .file_name()
-        .and_then(|name| name.to_str())
+        .map(|name| name.to_string_lossy())
         .filter(|name| !name.is_empty())
-        .unwrap_or(path.as_ref())
-        .to_owned();
+        .unwrap_or_else(|| path.clone())
+        .into_owned();
     let last_modified = metadata
         .modified()
         .ok()
@@ -686,6 +708,89 @@ mod directory_tests {
             selected_files_from_paths(&[root.join("missing").to_string_lossy().into_owned()])
                 .is_err()
         );
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn upload_relative_paths_use_the_selected_directory_name() {
+        let current = std::env::current_dir().unwrap();
+        let root = upload_directory_root(Path::new(".")).unwrap();
+        assert_eq!(root, fs::canonicalize(&current).unwrap());
+        assert_eq!(
+            upload_relative_path(&root, &root.join("nested/file.txt")),
+            format!(
+                "{}/nested/file.txt",
+                root.file_name().unwrap().to_string_lossy()
+            )
+        );
+        let parent = upload_directory_root(&current.join("..")).unwrap();
+        assert_eq!(parent, fs::canonicalize(current.join("..")).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upload_from_a_filesystem_root_does_not_emit_an_absolute_relative_path() {
+        // Exercise path derivation without enumerating the machine's root.
+        assert_eq!(
+            upload_relative_path(Path::new("/"), Path::new("/file.txt")),
+            "file.txt"
+        );
+        assert_eq!(
+            upload_relative_path(Path::new("/"), Path::new("/nested/file.txt")),
+            "nested/file.txt"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_directory_symlink_is_followed_but_descendant_links_are_skipped() {
+        use std::os::unix::fs::symlink;
+        let scratch = std::env::temp_dir().join(format!(
+            "moli-directory-links-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = scratch.join("chosen");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::create_dir_all(scratch.join("outside")).unwrap();
+        fs::write(root.join("nested/real.txt"), b"real").unwrap();
+        fs::write(scratch.join("outside/secret.txt"), b"outside").unwrap();
+        symlink(scratch.join("outside"), root.join("directory-link")).unwrap();
+        symlink(root.join("nested/real.txt"), root.join("file-link")).unwrap();
+        symlink(&root, scratch.join("selected-link")).unwrap();
+        let selected = selected_files_from_paths(&[scratch
+            .join("selected-link")
+            .to_string_lossy()
+            .into_owned()])
+        .unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].relative_path, "selected-link/nested/real.txt");
+        assert_eq!(selected[0].bytes, b"real");
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_upload_name_never_falls_back_to_the_absolute_path() {
+        use std::os::unix::ffi::OsStringExt;
+        let scratch = std::env::temp_dir().join(format!(
+            "moli-directory-name-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&scratch).unwrap();
+        let file = scratch.join(std::ffi::OsString::from_vec(b"bad-\xff.txt".to_vec()));
+        fs::write(&file, b"data").unwrap();
+        let selected =
+            selected_file_from_file_path(&file).unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(selected.name, "bad-\u{fffd}.txt");
+        assert!(selected.relative_path.is_empty());
         fs::remove_dir_all(scratch).unwrap();
     }
 }

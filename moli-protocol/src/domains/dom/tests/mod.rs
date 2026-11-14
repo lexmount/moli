@@ -659,6 +659,7 @@ fn child_default_context_id_from_events(ctx: &TestContext, child_frame_id: &str)
 }
 
 mod async_dispatch;
+mod directory_upload;
 mod frames;
 mod geometry;
 mod misc;
