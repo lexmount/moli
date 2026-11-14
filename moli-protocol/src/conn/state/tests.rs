@@ -166,8 +166,8 @@ fn target_fetch_owner_projects_config_without_exposing_slots() {
     let snapshot = owner.subresource_interception_snapshot();
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL,
-        "handleAuthRequests routes every class through the protocol"
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET),
+        "handleAuthRequests routes HTTP classes through the protocol"
     );
     assert_eq!(
         snapshot.event_session_id(None),
@@ -186,7 +186,7 @@ fn target_fetch_owner_projects_config_without_exposing_slots() {
             DevToolsNetworkResourceType::WebSocket,
             &Url::parse("wss://example.test/ws").unwrap(),
         ),
-        Some(FetchRequestStage::Request)
+        None
     );
     assert_eq!(
         owner.matching_document_request_stage(&Url::parse("https://example.test/api").unwrap()),
@@ -209,7 +209,7 @@ fn target_fetch_owner_projects_config_without_exposing_slots() {
     );
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL,
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET),
         "aggregate subresource config keeps handleAuthRequests broad admission"
     );
     let root_config = owner.config_snapshot_for_session(None);
@@ -345,7 +345,7 @@ fn target_fetch_owner_keeps_fetch_enable_configs_per_session() {
     assert!(aggregate.handle_auth_requests());
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL,
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET),
         "aggregate handleAuthRequests broadens the renderer class set"
     );
 
@@ -359,7 +359,7 @@ fn target_fetch_owner_keeps_fetch_enable_configs_per_session() {
     );
     assert_eq!(
         primary.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL,
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET),
         "session handleAuthRequests broadens the renderer class set"
     );
 
@@ -782,7 +782,7 @@ fn target_fetch_owner_reports_matching_auth_required_network_intercepts() {
     let config = owner.config_snapshot();
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET)
     );
     assert!(config.matches_auth_required(&matching_url));
     assert!(config.matches_auth_required(&other_url));
@@ -851,7 +851,7 @@ fn cdp_auth_is_independent_of_network_intercept_registration() {
     assert!(config.matches_auth_required(&any_url));
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET)
     );
     assert!(owner.remove_network_intercept("intercept-no-auth"));
     assert!(owner.config_snapshot().matches_auth_required(&any_url));
@@ -895,7 +895,7 @@ fn cdp_auth_is_independent_of_network_intercept_registration() {
     assert!(owner.config_snapshot().matches_auth_required(&any_url));
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET)
     );
 
     owner.configure(Some("SID-other".to_owned()), false, image_patterns);
@@ -915,11 +915,11 @@ fn cdp_auth_is_independent_of_network_intercept_registration() {
         snapshot.auth_required_owner_kind(&other_url),
         Some(PendingSubresourceFetchOwnerKind::NetworkOrBidi)
     );
-    // A real auth rule still requires all resource classes even though it
+    // A real auth rule still requires all HTTP resource classes even though it
     // no longer authorizes unrelated URLs after the last CDP handler stops.
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET)
     );
     assert!(owner.remove_network_intercept("intercept-auth"));
     assert_eq!(
@@ -1965,7 +1965,7 @@ fn interception_eligibility_includes_authentication_independent_of_resource_type
     );
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET)
     );
     owner.configure(
         Some("CDP".to_owned()),
@@ -1978,12 +1978,12 @@ fn interception_eligibility_includes_authentication_independent_of_resource_type
     );
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET)
     );
     owner.remove_fetch_session(Some("CDP"));
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::ALL.difference(SubresourceInterceptionClasses::WEBSOCKET)
     );
     owner.remove_network_intercept("auth");
     assert_eq!(

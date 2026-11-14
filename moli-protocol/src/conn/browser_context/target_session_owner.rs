@@ -3206,6 +3206,7 @@ mod tests {
             assert_eq!(
                 owner.configure_fetch(Some("SID-active".to_owned()), true, patterns.clone()),
                 SubresourceInterceptionClasses::ALL
+                    .difference(SubresourceInterceptionClasses::WEBSOCKET)
             );
             assert!(owner.register_pending_subresource_fetch_request(
                 "FETCH-active".to_owned(),
@@ -3242,6 +3243,7 @@ mod tests {
             assert_eq!(
                 owner.configure_fetch(Some("SID-background".to_owned()), true, patterns),
                 SubresourceInterceptionClasses::ALL
+                    .difference(SubresourceInterceptionClasses::WEBSOCKET)
             );
             assert!(owner.register_pending_subresource_fetch_request(
                 "FETCH-background".to_owned(),
@@ -3712,6 +3714,7 @@ mod tests {
         assert_eq!(
             inputs.fetch_subresource_interception,
             SubresourceInterceptionClasses::ALL
+                .difference(SubresourceInterceptionClasses::WEBSOCKET)
         );
     }
 
@@ -3813,6 +3816,7 @@ mod tests {
         assert_eq!(
             inputs.fetch_subresource_interception,
             SubresourceInterceptionClasses::ALL
+                .difference(SubresourceInterceptionClasses::WEBSOCKET)
         );
     }
 

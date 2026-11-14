@@ -47,8 +47,10 @@ pub struct FetchInterceptionPattern {
 
 impl FetchInterceptionPattern {
     pub fn matches_request(&self, resource_type: DevToolsNetworkResourceType, url: &Url) -> bool {
-        self.resource_type_filter
-            .is_none_or(|filter| filter.matches_resource_type(resource_type))
+        resource_type != DevToolsNetworkResourceType::WebSocket
+            && self
+                .resource_type_filter
+                .is_none_or(|filter| filter.matches_resource_type(resource_type))
             && url_pattern_matches(&self.url_pattern, url.as_str())
     }
 }
@@ -138,7 +140,7 @@ impl FetchResourceTypeFilter {
             }
             Self::Ping => SubresourceInterceptionClasses::PING,
             Self::CspViolationReport => SubresourceInterceptionClasses::CSP_VIOLATION_REPORT,
-            Self::WebSocket => SubresourceInterceptionClasses::WEBSOCKET,
+            Self::WebSocket => SubresourceInterceptionClasses::NONE,
             Self::Other => SubresourceInterceptionClasses::OTHER,
         }
     }
@@ -152,19 +154,20 @@ pub fn fetch_subresource_interception_config_for_patterns(
         return SubresourceInterceptionClasses::NONE;
     }
     if patterns.is_empty() {
-        // Fetch.enable without patterns can pause any resource class, so the
-        // renderer must route everything through the protocol and let it
-        // match per request.
-        return SubresourceInterceptionClasses::ALL;
+        // WebSocket handshakes use Network.webSocket* events and are not
+        // intercepted by Fetch, including an unfiltered Fetch.enable.
+        return SubresourceInterceptionClasses::ALL
+            .difference(SubresourceInterceptionClasses::WEBSOCKET);
     }
 
-    // Type-less patterns route every class; typed patterns contribute only
+    // Type-less patterns route HTTP classes; typed patterns contribute only
     // their supported classes. URL and stage matching stay in the protocol.
     patterns
         .iter()
         .map(|pattern| {
             pattern.resource_type_filter.map_or(
-                SubresourceInterceptionClasses::ALL,
+                SubresourceInterceptionClasses::ALL
+                    .difference(SubresourceInterceptionClasses::WEBSOCKET),
                 FetchResourceTypeFilter::interception_classes,
             )
         })
@@ -1877,7 +1880,6 @@ mod tests {
             FetchResourceTypeFilter::Xhr,
             FetchResourceTypeFilter::Ping,
             FetchResourceTypeFilter::CspViolationReport,
-            FetchResourceTypeFilter::WebSocket,
             FetchResourceTypeFilter::Other,
         ] {
             let patterns = [FetchInterceptionPattern {
@@ -2042,7 +2044,7 @@ mod tests {
     }
 
     #[test]
-    fn type_less_and_missing_patterns_intercept_every_class() {
+    fn type_less_and_missing_patterns_intercept_http_classes() {
         let type_less = vec![FetchInterceptionPattern {
             url_pattern: "*://example.test/*".to_owned(),
             resource_type_filter: None,
@@ -2051,6 +2053,7 @@ mod tests {
         assert_eq!(
             fetch_subresource_interception_config_for_patterns(true, &type_less),
             SubresourceInterceptionClasses::ALL
+                .difference(SubresourceInterceptionClasses::WEBSOCKET)
         );
         // A typed pattern next to a type-less one still routes everything.
         let mixed = vec![
@@ -2064,10 +2067,12 @@ mod tests {
         assert_eq!(
             fetch_subresource_interception_config_for_patterns(true, &mixed),
             SubresourceInterceptionClasses::ALL
+                .difference(SubresourceInterceptionClasses::WEBSOCKET)
         );
         assert_eq!(
             fetch_subresource_interception_config_for_patterns(true, &[]),
             SubresourceInterceptionClasses::ALL
+                .difference(SubresourceInterceptionClasses::WEBSOCKET)
         );
     }
 
