@@ -1143,3 +1143,5 @@ async fn network_redirect_repauses_and_expires_request_scoped_header_edits() {
     }
     server.abort();
 }
+
+mod exact_patterns;
