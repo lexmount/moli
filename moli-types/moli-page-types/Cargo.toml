@@ -1,0 +1,32 @@
+[package]
+license.workspace = true
+name = "moli-page-types"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = ["moli-disk-pool/test-support"]
+
+[dependencies]
+bitflags = "2.11.0"
+bytes = "1"
+moli-browser-profile = { path = "../../moli-browser-profile" }
+moli-cookie-jar = { path = "../../moli-cookie-jar" }
+moli-dom = { path = "../../moli-dom" }
+moli-disk-pool = { path = "../../moli-disk-pool" }
+moli-fetch = { path = "../../moli-fetch" }
+moli-parkable-image = { path = "../../moli-parkable-image" }
+moli-session-history = { path = "../../moli-session-history" }
+moli-history = { path = "../../moli-history" }
+moli-web-mime = { path = "../../moli-web-mime" }
+http-auth = { version = "0.1.10", default-features = false }
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+url = "2.5.7"
+
+[dev-dependencies]
+moli-disk-pool = { path = "../../moli-disk-pool", features = ["test-support"] }
+
+[lints]
+workspace = true
