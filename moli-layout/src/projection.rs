@@ -24,7 +24,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 use taffy::ResolveOrZero;
 
 use crate::inline::display::{
-    self, DisplayLineItems, InlineDisplayItems, InlineItemContent, TextOrigin,
+    self, InlineDisplayItem, InlineDisplayItems, InlineItemContent, TextOrigin,
 };
 use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
 
@@ -767,11 +767,6 @@ where
         self.boxes[box_index].fragments.push(fragment);
     }
 
-    fn push_display_fragment(&mut self, fragment: LayoutFragment) -> LayoutFragmentId {
-        assert_eq!(fragment.role, LayoutFragmentRole::DisplayOnly);
-        self.push_fragment(fragment)
-    }
-
     fn push_fragment(&mut self, mut fragment: LayoutFragment) -> LayoutFragmentId {
         let id = LayoutFragmentId::from_index(self.fragments.len());
         fragment.id = id;
@@ -808,36 +803,7 @@ where
                             // compact batch. No glyph index or geometry copy.
                             self.assign_owner_paint_metadata(id, true);
                         } else {
-                            for line in 0..context.lines.len() {
-                                match self.inline_display.context(id).unwrap().lines[line]
-                                    .items
-                                    .clone()
-                                {
-                                    DisplayLineItems::Natural => {
-                                        let range = self
-                                            .inline_display
-                                            .context(id)
-                                            .unwrap()
-                                            .natural_source_range(line)
-                                            .unwrap();
-                                        self.assign_source_range_metadata(
-                                            id,
-                                            line,
-                                            range,
-                                            &mut text_owners,
-                                        );
-                                    }
-                                    DisplayLineItems::Materialized(items) => {
-                                        for item in items {
-                                            self.assign_inline_item_metadata(
-                                                id,
-                                                item,
-                                                &mut text_owners,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
+                            self.assign_inline_items_metadata(id, None, &mut text_owners);
                         }
                     }
                 }
@@ -849,7 +815,7 @@ where
                     );
                 }
                 PaintOrderEvent::InlineItem { owner, item } => {
-                    self.assign_inline_item_metadata(owner, item, &mut text_owners);
+                    self.assign_inline_items_metadata(owner, Some(item), &mut text_owners);
                 }
                 PaintOrderEvent::BoxOutline(id) => {
                     let index = id.index();
@@ -871,90 +837,88 @@ where
         }
     }
 
-    fn assign_inline_item_metadata(
+    fn assign_inline_items_metadata(
         &mut self,
         owner: LayoutBoxId,
-        item: usize,
+        item: Option<usize>,
         text_owners: &mut TextFragmentIndex,
     ) {
         let context = self.inline_display.context(owner).unwrap();
-        let item = &context.items[item];
-        let source_range = match &item.content {
-            InlineItemContent::Text(view) if matches!(view.origin, TextOrigin::Source) => {
-                Some(view.glyphs.text_range())
+        let source = self.world.boxes[owner.index()]
+            .inline_layout
+            .as_ref()
+            .unwrap();
+        let owner_fragments = &self.owner_paint_fragments[owner.index()];
+        let content_box = self.boxes[owner.index()].content_box;
+        let coordinate_space = self.boxes[owner.index()].coordinate_space;
+        let clip = self.content_clips[owner.index()];
+        let fragments = &mut self.fragments;
+        let paint_order = &mut self.paint_order_count;
+        let mut project = |item: InlineDisplayItem<'_>| {
+            if let Some(range) = item.source_range() {
+                // Final source spans select existing cluster/caret geometry.
+                // Omitted originals retain their complete source-only geometry.
+                let lines = text_owners.entry(owner).or_insert_with(|| {
+                    let mut lines = vec![Vec::new(); source.fragments.lines.len()];
+                    for (index, text) in source.fragments.text.iter().enumerate() {
+                        lines[text.line_index].push((
+                            text.output_range.clone(),
+                            owner_fragments[source.fragments.boxes.len() + index],
+                        ));
+                    }
+                    for line in &mut lines {
+                        line.sort_by_key(|(range, _)| (range.start, range.end));
+                    }
+                    lines
+                });
+                let line = &lines[item.line];
+                let first = line.partition_point(|(fragment, _)| fragment.end <= range.start);
+                for (_, fragment) in line[first..]
+                    .iter()
+                    .take_while(|(fragment, _)| fragment.start < range.end)
+                {
+                    assign_paint_metadata(fragments, paint_order, *fragment, clip);
+                }
+                return;
             }
-            InlineItemContent::Control(range) => Some(range.clone()),
-            _ => None,
+            let InlineItemContent::Text(view) = &item.content else {
+                return;
+            };
+            if let TextOrigin::Generated { anchor, .. } = &view.origin {
+                let line = source.fragments.lines[item.line].rect;
+                let id = LayoutFragmentId::from_index(fragments.len());
+                // Display-only hits never enter any box's source fragment list.
+                fragments.push(LayoutFragment {
+                    id,
+                    kind: LayoutFragmentKind::Text {
+                        box_id: LayoutOutputBoxId::from_index(anchor.target.index()),
+                        line_index: item.line,
+                        source_utf16_range: anchor.utf16_offset..anchor.utf16_offset,
+                        rtl: anchor.rtl,
+                    },
+                    role: LayoutFragmentRole::DisplayOnly,
+                    rect: LayoutRect::new(
+                        view.offset.x + view.glyphs.offset(),
+                        content_box.y + line.y,
+                        view.glyphs.advance(),
+                        line.height,
+                    ),
+                    box_model: None,
+                    coordinate_space,
+                    clip_chain: None,
+                    paint_order: None,
+                });
+                assign_paint_metadata(fragments, paint_order, id, clip);
+            }
         };
-        if let Some(range) = source_range {
-            self.assign_source_range_metadata(owner, item.line, range, text_owners);
-            return;
-        }
-        let InlineItemContent::Text(view) = &item.content else {
-            return;
-        };
-        if let TextOrigin::Generated { anchor, .. } = &view.origin {
-            let layout_box = &self.world.boxes[owner.index()];
-            let line = layout_box.inline_layout.as_ref().unwrap().fragments.lines[item.line].rect;
-            let fragment = self.push_display_fragment(LayoutFragment {
-                id: LayoutFragmentId::from_index(0),
-                kind: LayoutFragmentKind::Text {
-                    box_id: LayoutOutputBoxId::from_index(anchor.target.index()),
-                    line_index: item.line,
-                    source_utf16_range: anchor.utf16_offset..anchor.utf16_offset,
-                    rtl: anchor.rtl,
-                },
-                role: LayoutFragmentRole::DisplayOnly,
-                rect: LayoutRect::new(
-                    view.offset.x + view.glyphs.offset(),
-                    self.boxes[owner.index()].content_box.y + line.y,
-                    view.glyphs.advance(),
-                    line.height,
-                ),
-                box_model: None,
-                coordinate_space: self.boxes[owner.index()].coordinate_space,
-                clip_chain: None,
-                paint_order: None,
-            });
-            self.assign_fragment_paint_metadata(fragment, self.content_clips[owner.index()]);
-        }
-    }
-
-    fn assign_source_range_metadata(
-        &mut self,
-        owner: LayoutBoxId,
-        line: usize,
-        range: std::ops::Range<usize>,
-        text_owners: &mut TextFragmentIndex,
-    ) {
-        // A natural line uses its full source range, including glyphless
-        // controls. Materialized views select their finalized source spans.
-        // Both retain the original cluster/caret geometry without copies.
-        let lines = text_owners.entry(owner).or_insert_with(|| {
-            let context = self.world.boxes[owner.index()]
-                .inline_layout
-                .as_ref()
-                .unwrap();
-            let mut lines = vec![Vec::new(); context.fragments.lines.len()];
-            for (index, text) in context.fragments.text.iter().enumerate() {
-                lines[text.line_index].push((
-                    text.output_range.clone(),
-                    self.owner_paint_fragments[owner.index()]
-                        [context.fragments.boxes.len() + index],
-                ));
+        if let Some(item) = item {
+            project(context.item(item));
+        } else {
+            for line in 0..context.lines.len() {
+                for (_, item) in context.display_items(line) {
+                    project(item);
+                }
             }
-            for fragments in &mut lines {
-                fragments.sort_by_key(|(range, _)| (range.start, range.end));
-            }
-            lines
-        });
-        let fragments = &lines[line];
-        let start = fragments.partition_point(|(fragment, _)| fragment.end <= range.start);
-        for (_, fragment) in fragments[start..]
-            .iter()
-            .take_while(|(fragment, _)| fragment.start < range.end)
-        {
-            self.assign_fragment_paint_metadata(*fragment, self.content_clips[owner.index()]);
         }
     }
 
@@ -1024,26 +988,16 @@ where
         fragment_id: LayoutFragmentId,
         clip_chain: Option<LayoutClipChainId>,
     ) {
-        match self.fragments[fragment_id.index()].kind {
-            LayoutFragmentKind::Box { .. }
-            | LayoutFragmentKind::InlineBox { .. }
-            | LayoutFragmentKind::Text { .. } => {}
-            LayoutFragmentKind::Line { .. } => return,
-        }
-        let order = self.next_paint_order();
-        let fragment = &mut self.fragments[fragment_id.index()];
-        if fragment.role == LayoutFragmentRole::SourceOnly {
-            fragment.role = LayoutFragmentRole::SourceAndDisplay;
-        }
-        fragment.clip_chain = clip_chain;
-        fragment.paint_order = Some(order);
+        assign_paint_metadata(
+            &mut self.fragments,
+            &mut self.paint_order_count,
+            fragment_id,
+            clip_chain,
+        );
     }
 
     fn next_paint_order(&mut self) -> u32 {
-        let order = u32::try_from(self.paint_order_count)
-            .expect("one frozen layout tree exceeded the u32 paint-order limit");
-        self.paint_order_count = self.paint_order_count.saturating_add(1);
-        order
+        next_paint_order(&mut self.paint_order_count)
     }
 
     fn push_clip(
@@ -1168,6 +1122,34 @@ where
             embedded_frames,
         )
     }
+}
+
+fn assign_paint_metadata(
+    fragments: &mut [LayoutFragment],
+    paint_order: &mut usize,
+    fragment_id: LayoutFragmentId,
+    clip_chain: Option<LayoutClipChainId>,
+) {
+    if matches!(
+        fragments[fragment_id.index()].kind,
+        LayoutFragmentKind::Line { .. }
+    ) {
+        return;
+    }
+    let order = next_paint_order(paint_order);
+    let fragment = &mut fragments[fragment_id.index()];
+    if fragment.role == LayoutFragmentRole::SourceOnly {
+        fragment.role = LayoutFragmentRole::SourceAndDisplay;
+    }
+    fragment.clip_chain = clip_chain;
+    fragment.paint_order = Some(order);
+}
+
+fn next_paint_order(count: &mut usize) -> u32 {
+    let order =
+        u32::try_from(*count).expect("one frozen layout tree exceeded the u32 paint-order limit");
+    *count = count.saturating_add(1);
+    order
 }
 
 /// Pass-local dependency coordination. CSS decisions are resolved here; the

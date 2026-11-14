@@ -111,18 +111,23 @@ impl<'a> InlineOrder<'a> {
                 continue;
             }
             result.split[index] = true;
-            for (item, entry) in items.items.iter().enumerate() {
-                let event = match entry.content {
-                    InlineItemContent::Atomic(id) => {
-                        result.atomic_lines[id.index()] = Some((owner, entry.line));
-                        continue;
-                    }
-                    InlineItemContent::InlineBox { fragment } => {
-                        PaintOrderEvent::InlineBox { owner, fragment }
-                    }
-                    _ => PaintOrderEvent::InlineItem { owner, item },
-                };
-                result.entries[entry.paint_owner.index()].push(event);
+            for line in 0..items.lines.len() {
+                for (item, entry) in items.display_items(line) {
+                    let event = match entry.content {
+                        InlineItemContent::Atomic(id) => {
+                            result.atomic_lines[id.index()] = Some((owner, entry.line));
+                            continue;
+                        }
+                        InlineItemContent::InlineBox { fragment } => {
+                            PaintOrderEvent::InlineBox { owner, fragment }
+                        }
+                        _ => PaintOrderEvent::InlineItem {
+                            owner,
+                            item: item.expect("fragment paint uses finalized item IDs"),
+                        },
+                    };
+                    result.entries[entry.paint_owner.index()].push(event);
+                }
             }
         }
         result
@@ -353,14 +358,14 @@ fn collect_contents<N>(
                 0,
             ),
             PaintOrderEvent::InlineItem { owner, item } => {
-                let entry = &inline.display.context(owner).unwrap().items[item];
+                let entry = inline.display.context(owner).unwrap().item(item);
                 (owner, entry.line, entry.order)
             }
             _ => unreachable!(),
         };
         let source_order = match *event {
             PaintOrderEvent::InlineItem { owner, item } => {
-                let entry = &inline.display.context(owner).unwrap().items[item];
+                let entry = inline.display.context(owner).unwrap().item(item);
                 if matches!(&entry.content, InlineItemContent::Text(view) if matches!(view.origin, TextOrigin::Generated { .. }))
                 {
                     usize::MAX

@@ -102,6 +102,7 @@ pub(crate) struct TextAnchor {
     pub(crate) rtl: bool,
 }
 
+#[derive(Clone)]
 pub(crate) enum TextOrigin<'a> {
     Source,
     /// Generated text has a pointer/caret anchor, not invented source
@@ -112,6 +113,7 @@ pub(crate) enum TextOrigin<'a> {
     },
 }
 
+#[derive(Clone)]
 pub(crate) struct TextView<'a> {
     pub(crate) glyphs: GlyphRun<'a, TextBrush>,
     /// Final placement in the IFC owner's local coordinate space. The shape
@@ -120,6 +122,7 @@ pub(crate) struct TextView<'a> {
     pub(crate) origin: TextOrigin<'a>,
 }
 
+#[derive(Clone)]
 pub(crate) enum InlineItemContent<'a> {
     Text(TextView<'a>),
     InlineBox {
@@ -130,31 +133,48 @@ pub(crate) enum InlineItemContent<'a> {
     Control(Range<usize>),
 }
 
+/// Cloning copies only view metadata; all shape data remains borrowed.
+#[derive(Clone)]
 pub(crate) struct InlineDisplayItem<'a> {
     pub(crate) line: usize,
+    /// Scheduling owner; source identity is retained by source_range().
     pub(crate) paint_owner: LayoutBoxId,
     /// Original visual item order. Generated line-end content follows the line.
     pub(crate) order: usize,
     pub(crate) content: InlineItemContent<'a>,
-    /// Selection paint is finalized along with text, independent of glyphs.
-    pub(crate) selection: Vec<LayoutRect>,
     pub(crate) paint_bounds: InlinePaintBounds,
 }
 
+impl InlineDisplayItem<'_> {
+    pub(crate) fn source_range(&self) -> Option<Range<usize>> {
+        match &self.content {
+            InlineItemContent::Text(view) if matches!(view.origin, TextOrigin::Source) => {
+                Some(view.glyphs.text_range())
+            }
+            InlineItemContent::Control(range) => Some(range.clone()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DisplayLineItems {
-    Natural,
+enum DisplayLineItems {
+    /// Positioned text is borrowed; only glyphless source spans are stored.
+    Natural(Range<usize>),
     Materialized(Range<usize>),
 }
 
 pub(crate) struct DisplayLine {
-    pub(crate) items: DisplayLineItems,
+    items: DisplayLineItems,
     pub(crate) paint_bounds: InlinePaintBounds,
     pub(crate) selection: Vec<LayoutRect>,
 }
 
 pub(crate) struct InlineDisplayContext<'a> {
-    pub(crate) items: Vec<InlineDisplayItem<'a>>,
+    items: Vec<InlineDisplayItem<'a>>,
+    controls: Vec<Range<usize>>,
+    /// Query index into existing source geometry, never another box tree.
+    inline_boxes_by_line: Vec<usize>,
     pub(crate) lines: Vec<DisplayLine>,
     pub(crate) caret: Option<(LayoutRect, PaintColor)>,
     /// The final source hit geometry can reuse its original batch unchanged.
@@ -164,49 +184,155 @@ pub(crate) struct InlineDisplayContext<'a> {
     pub(crate) split_paint: bool,
     source: &'a InlineFormattingContext,
     origin: LayoutPoint,
+    owner: LayoutBoxId,
 }
 
 impl<'a> InlineDisplayContext<'a> {
-    /// Both representations yield finalized text views through the same entry.
-    /// Natural lines borrow positioned runs directly; they allocate no items.
-    pub(crate) fn for_each_text_view(&self, line: usize, mut visit: impl FnMut(&TextView<'a>)) {
-        match &self.lines[line].items {
-            DisplayLineItems::Natural => {
-                let source = self.source;
-                for (item, positioned) in source
-                    .laid_out
-                    .as_ref()
-                    .unwrap()
-                    .get(line)
-                    .unwrap()
-                    .items()
-                    .enumerate()
-                {
-                    if let PositionedLayoutItem::GlyphRun(glyphs) = positioned {
-                        visit(&source_view(source, line, item, glyphs, self.origin));
-                    }
-                }
-            }
-            DisplayLineItems::Materialized(items) => {
-                for item in &self.items[items.clone()] {
-                    if let InlineItemContent::Text(view) = &item.content {
-                        visit(view);
-                    }
-                }
-            }
+    /// One final-item stream for paint, selection, masks and source hit mapping.
+    /// Optional IDs address retained items when fragment scheduling needs them.
+    pub(crate) fn display_items(
+        &self,
+        line: usize,
+    ) -> impl Iterator<Item = (Option<usize>, InlineDisplayItem<'a>)> + '_ {
+        self.line_items(line, self.lines[line].items.clone())
+    }
+
+    pub(crate) fn item(&self, index: usize) -> InlineDisplayItem<'a> {
+        self.items[index].clone()
+    }
+
+    pub(crate) fn visit_item_selection(
+        &self,
+        item: &InlineDisplayItem<'_>,
+        mut visit: impl FnMut(LayoutRect),
+    ) {
+        if let Some(range) = item.source_range() {
+            for_each_selected_rect(self.source, item.line, range, |rect| {
+                visit(crate::overflow::offset_rect(rect, self.origin));
+            });
         }
     }
 
-    pub(crate) fn natural_source_range(&self, line: usize) -> Option<Range<usize>> {
-        matches!(self.lines[line].items, DisplayLineItems::Natural).then(|| {
-            self.source
-                .laid_out
-                .as_ref()
-                .unwrap()
-                .get(line)
-                .unwrap()
-                .text_range()
-        })
+    fn line_items(
+        &self,
+        line: usize,
+        storage: DisplayLineItems,
+    ) -> impl Iterator<Item = (Option<usize>, InlineDisplayItem<'a>)> + '_ {
+        let (natural, range) = match storage {
+            DisplayLineItems::Natural(range) => (true, range),
+            DisplayLineItems::Materialized(range) => (false, range),
+        };
+        let source = self.source;
+        let origin = self.origin;
+        let owner = self.owner;
+        let first = self
+            .inline_boxes_by_line
+            .partition_point(|fragment| source.fragments.boxes[*fragment].line_index < line);
+        let boxes = self.inline_boxes_by_line[first..]
+            .iter()
+            .take_while(move |fragment| source.fragments.boxes[**fragment].line_index == line)
+            .map(move |fragment| {
+                (
+                    None,
+                    InlineDisplayItem {
+                        line,
+                        paint_owner: source.fragments.boxes[*fragment].box_id,
+                        order: 0,
+                        content: InlineItemContent::InlineBox {
+                            fragment: *fragment,
+                        },
+                        paint_bounds: InlinePaintBounds::Empty,
+                    },
+                )
+            });
+        let text = natural
+            .then(|| source.laid_out.as_ref().unwrap().get(line).unwrap())
+            .into_iter()
+            .flat_map(|line| line.items().enumerate())
+            .filter_map(move |(position, positioned)| {
+                let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
+                    return None;
+                };
+                Some((
+                    None,
+                    resolve_item(
+                        source,
+                        origin,
+                        InlineDisplayItem {
+                            line,
+                            paint_owner: owner,
+                            order: position + 1,
+                            content: InlineItemContent::Text(source_view(
+                                source, line, position, glyphs, origin,
+                            )),
+                            paint_bounds: InlinePaintBounds::Empty,
+                        },
+                    ),
+                ))
+            });
+        let control_range = if natural { range.clone() } else { 0..0 };
+        let controls = self.controls[control_range]
+            .iter()
+            .map(move |control| (None, self.control_item(line, control)));
+        let retained_range = if natural { 0..0 } else { range };
+        let retained_start = retained_range.start;
+        let retained = self.items[retained_range]
+            .iter()
+            .enumerate()
+            .map(move |(index, item)| (Some(retained_start + index), item.clone()));
+        boxes.chain(text).chain(controls).chain(retained)
+    }
+
+    fn control_item(&self, line: usize, control: &Range<usize>) -> InlineDisplayItem<'a> {
+        resolve_item(
+            self.source,
+            self.origin,
+            InlineDisplayItem {
+                line,
+                paint_owner: self.owner,
+                order: 0,
+                content: InlineItemContent::Control(control.clone()),
+                paint_bounds: InlinePaintBounds::Empty,
+            },
+        )
+    }
+
+    fn line_summary(
+        &self,
+        line: usize,
+        storage: DisplayLineItems,
+    ) -> (InlinePaintBounds, usize, bool) {
+        let mut bounds = InlinePaintBounds::Empty;
+        let mut covered = 0;
+        let mut all_paint = true;
+        for (_, item) in self.line_items(line, storage) {
+            include_bounds(&mut bounds, item.paint_bounds);
+            if let InlineItemContent::Text(view) = &item.content
+                && matches!(view.origin, TextOrigin::Source)
+            {
+                covered += view.glyphs.text_range().len();
+                all_paint &= view.glyphs.style().brush.paint;
+            }
+        }
+        (bounds, covered, all_paint)
+    }
+
+    fn line_selection(&self, line: usize, storage: DisplayLineItems) -> Vec<LayoutRect> {
+        if !matches!(self.source.selection, Some(InlineSelection::Range(_))) {
+            return Vec::new();
+        }
+        let mut ranges = self
+            .line_items(line, storage)
+            .filter_map(|(_, item)| item.source_range())
+            .collect::<Vec<_>>();
+        merge_ranges(&mut ranges);
+        let mut rects = Vec::new();
+        for range in ranges {
+            for_each_selected_rect(self.source, line, range, |rect| {
+                rects.push(crate::overflow::offset_rect(rect, self.origin));
+            });
+        }
+        rects
     }
 }
 
@@ -267,14 +393,27 @@ impl DisplayBuilder {
                             && world.boxes[source.box_id.index()].style.is_visible()
                     });
                 let natural_allowed = !split_paint && source_participates;
+                let mut inline_boxes_by_line = context
+                    .fragments
+                    .boxes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, fragment)| paints_self(&self.paints_self, fragment.box_id))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                inline_boxes_by_line.sort_unstable_by_key(|fragment| {
+                    (context.fragments.boxes[*fragment].line_index, *fragment)
+                });
                 let mut result = InlineDisplayContext {
                     items: Vec::with_capacity(if natural_allowed {
                         plans.map_or(0, |lines| {
                             lines.iter().filter(|line| line.is_some()).count() * 2
                         })
                     } else {
-                        layout.len() + context.fragments.boxes.len() + context.objects.len()
+                        layout.len() + context.objects.len()
                     }),
+                    controls: Vec::new(),
+                    inline_boxes_by_line,
                     lines: Vec::with_capacity(layout.len()),
                     caret: caret(context)
                         .filter(|_| owner_participates && layout_box.style.is_visible()),
@@ -282,39 +421,51 @@ impl DisplayBuilder {
                     split_paint,
                     source: context,
                     origin,
+                    owner,
                 };
-                let mut boxes = None;
                 let mut covered = Vec::new();
-                let has_selection = matches!(context.selection, Some(InlineSelection::Range(_)));
                 for (line_index, line) in layout.lines().enumerate() {
                     let plan = plans.and_then(|lines| lines[line_index].as_ref());
                     if natural_allowed && plan.is_none() {
-                        let mut bounds = InlinePaintBounds::Empty;
-                        let natural = line.items().enumerate().all(|(item, positioned)| {
-                            let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
-                                return true;
-                            };
-                            if !glyphs.style().brush.paint {
-                                return false;
+                        let start = result.controls.len();
+                        let (mut bounds, covered_bytes, all_paint) = result
+                            .line_summary(line_index, DisplayLineItems::Natural(start..start));
+                        let line_range = line.text_range();
+                        if all_paint && covered_bytes <= line_range.len() {
+                            if covered_bytes < line_range.len() {
+                                covered.clear();
+                                covered.extend(line.items().filter_map(
+                                    |positioned| match positioned {
+                                        PositionedLayoutItem::GlyphRun(glyphs) => {
+                                            Some(glyphs.text_range())
+                                        }
+                                        PositionedLayoutItem::InlineBox(_) => None,
+                                    },
+                                ));
+                                for_each_uncovered_range(&mut covered, line_range, |range| {
+                                    for_each_control_span(
+                                        world,
+                                        &self.paints_self,
+                                        context,
+                                        owner,
+                                        range,
+                                        |_, range| result.controls.push(range),
+                                    );
+                                });
+                                for control in &result.controls[start..] {
+                                    include_bounds(
+                                        &mut bounds,
+                                        result.control_item(line_index, control).paint_bounds,
+                                    );
+                                }
                             }
-                            include_bounds(
-                                &mut bounds,
-                                text_view_bounds(&source_view(
-                                    context, line_index, item, glyphs, origin,
-                                )),
-                            );
-                            true
-                        });
-                        if natural {
-                            let selection = selected_rects(context, line_index, line.text_range())
-                                .into_iter()
-                                .map(|rect| crate::overflow::offset_rect(rect, origin))
-                                .collect::<Vec<_>>();
+                            let storage = DisplayLineItems::Natural(start..result.controls.len());
+                            let selection = result.line_selection(line_index, storage.clone());
                             for rect in &selection {
                                 bounds.include(*rect);
                             }
                             result.lines.push(DisplayLine {
-                                items: DisplayLineItems::Natural,
+                                items: storage,
                                 paint_bounds: bounds,
                                 selection,
                             });
@@ -322,25 +473,6 @@ impl DisplayBuilder {
                         }
                     }
                     let start = result.items.len();
-                    let boxes = boxes.get_or_insert_with(|| {
-                        let mut boxes = vec![Vec::new(); layout.len()];
-                        for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
-                            boxes[inline.line_index].push((fragment, inline.box_id));
-                        }
-                        boxes
-                    });
-                    for &(fragment, target) in boxes.get(line_index).into_iter().flatten() {
-                        if paints_self(&self.paints_self, target) {
-                            result.items.push(InlineDisplayItem {
-                                line: line_index,
-                                paint_owner: target,
-                                order: 0,
-                                content: InlineItemContent::InlineBox { fragment },
-                                selection: Vec::new(),
-                                paint_bounds: InlinePaintBounds::Empty,
-                            });
-                        }
-                    }
                     covered.clear();
                     for (item_index, positioned) in line.items().enumerate() {
                         match positioned {
@@ -353,7 +485,6 @@ impl DisplayBuilder {
                                         paint_owner: object.box_id,
                                         order: item_index + 1,
                                         content: InlineItemContent::Atomic(object.box_id),
-                                        selection: Vec::new(),
                                         paint_bounds: InlinePaintBounds::Empty,
                                     });
                                 }
@@ -370,24 +501,19 @@ impl DisplayBuilder {
                                     continue;
                                 }
                                 let mut push_view = |view: GlyphRun<'a, TextBrush>| {
-                                    let offset = context
-                                        .line_placements
-                                        .get(line_index)
-                                        .map_or(0.0, |line| line.item_offset(item_index));
-                                    let selection =
-                                        selected_rects(context, line_index, view.text_range());
-                                    result.items.push(InlineDisplayItem {
-                                        line: line_index,
-                                        paint_owner: target,
-                                        order: item_index + 1,
-                                        content: InlineItemContent::Text(TextView {
-                                            glyphs: view,
-                                            offset: LayoutPoint::new(0.0, offset),
-                                            origin: TextOrigin::Source,
-                                        }),
-                                        selection,
-                                        paint_bounds: InlinePaintBounds::Empty,
-                                    });
+                                    result.items.push(resolve_item(
+                                        context,
+                                        origin,
+                                        InlineDisplayItem {
+                                            line: line_index,
+                                            paint_owner: if split_paint { target } else { owner },
+                                            order: item_index + 1,
+                                            content: InlineItemContent::Text(source_view(
+                                                context, line_index, item_index, view, origin,
+                                            )),
+                                            paint_bounds: InlinePaintBounds::Empty,
+                                        },
+                                    ));
                                 };
                                 if let Some(plan) = plan {
                                     for range in plan.visible_ranges(range) {
@@ -403,40 +529,33 @@ impl DisplayBuilder {
                             }
                         }
                     }
-                    // A removed glyph is not a glyphless control. Find controls
-                    // from the original streams, then apply line participation.
+                    // Controls come from gaps in the original shape, never omitted glyphs.
                     if plan.is_none() {
-                        covered.sort_unstable_by_key(|range| (range.start, range.end));
-                        let line_range = line.text_range();
-                        let mut offset = line_range.start;
-                        for range in &covered {
-                            if offset < range.start {
-                                add_controls(
-                                    &mut result.items,
-                                    world,
-                                    &self.paints_self,
-                                    context,
-                                    owner,
-                                    line_index,
-                                    offset..range.start,
-                                );
-                            }
-                            offset = offset.max(range.end);
-                        }
-                        if offset < line_range.end {
-                            add_controls(
-                                &mut result.items,
+                        for_each_uncovered_range(&mut covered, line.text_range(), |range| {
+                            for_each_control_span(
                                 world,
                                 &self.paints_self,
                                 context,
                                 owner,
-                                line_index,
-                                offset..line_range.end,
+                                range,
+                                |target, range| {
+                                    result.items.push(resolve_item(
+                                        context,
+                                        origin,
+                                        InlineDisplayItem {
+                                            line: line_index,
+                                            paint_owner: if split_paint { target } else { owner },
+                                            order: 0,
+                                            content: InlineItemContent::Control(range),
+                                            paint_bounds: InlinePaintBounds::Empty,
+                                        },
+                                    ))
+                                },
                             );
-                        }
+                        });
                     }
                     if let Some(plan) = plan
-                        && paints_self(&self.paints_self, owner)
+                        && owner_participates
                         && let Some(marker) = &pool.0[index]
                     {
                         for marker_line in marker.layout.lines() {
@@ -447,75 +566,45 @@ impl DisplayBuilder {
                                 if !glyphs.style().brush.paint {
                                     continue;
                                 }
-                                result.items.push(InlineDisplayItem {
-                                    line: line_index,
-                                    paint_owner: owner,
-                                    order: usize::MAX,
-                                    content: InlineItemContent::Text(TextView {
-                                        glyphs,
-                                        offset: LayoutPoint::new(
-                                            plan.marker_offset(marker.width),
-                                            context.line_placements[line_index].baseline
-                                                - marker_line.metrics().baseline,
-                                        ),
-                                        origin: TextOrigin::Generated {
-                                            text: &marker.text,
-                                            anchor: TextAnchor {
-                                                target: plan.target,
-                                                utf16_offset: plan.source_offset,
-                                                rtl: plan.rtl,
+                                result.items.push(resolve_item(
+                                    context,
+                                    origin,
+                                    InlineDisplayItem {
+                                        line: line_index,
+                                        paint_owner: owner,
+                                        order: usize::MAX,
+                                        content: InlineItemContent::Text(TextView {
+                                            glyphs,
+                                            offset: LayoutPoint::new(
+                                                origin.x + plan.marker_offset(marker.width),
+                                                origin.y
+                                                    + (context.line_placements[line_index]
+                                                        .baseline
+                                                        - marker_line.metrics().baseline),
+                                            ),
+                                            origin: TextOrigin::Generated {
+                                                text: &marker.text,
+                                                anchor: TextAnchor {
+                                                    target: plan.target,
+                                                    utf16_offset: plan.source_offset,
+                                                    rtl: plan.rtl,
+                                                },
                                             },
-                                        },
-                                    }),
-                                    selection: Vec::new(),
-                                    paint_bounds: InlinePaintBounds::Empty,
-                                });
+                                        }),
+                                        paint_bounds: InlinePaintBounds::Empty,
+                                    },
+                                ));
                             }
                         }
                     }
-                    let end = result.items.len();
-                    let mut bounds = InlinePaintBounds::Empty;
-                    let mut selected = Vec::new();
-                    for item in &mut result.items[start..end] {
-                        if let InlineItemContent::Text(view) = &mut item.content {
-                            view.offset.x += origin.x;
-                            view.offset.y += origin.y;
-                        }
-                        for rect in &mut item.selection {
-                            *rect = crate::overflow::offset_rect(*rect, origin);
-                        }
-                        let mut item_bounds = InlinePaintBounds::Empty;
-                        match &item.content {
-                            InlineItemContent::Text(view) => {
-                                item_bounds = text_view_bounds(view);
-                                if has_selection && matches!(view.origin, TextOrigin::Source) {
-                                    selected.push(view.glyphs.text_range());
-                                }
-                            }
-                            InlineItemContent::Control(range) if has_selection => {
-                                selected.push(range.clone())
-                            }
-                            _ => {}
-                        }
-                        for rect in &item.selection {
-                            item_bounds.include(*rect);
-                        }
-                        item.paint_bounds = item_bounds;
-                        include_bounds(&mut bounds, item_bounds);
-                    }
-                    // Bulk selection retains merged geometry, while fragment events
-                    // use each item's geometry at its own place in paint order.
-                    merge_ranges(&mut selected);
-                    let selection = selected
-                        .into_iter()
-                        .flat_map(|range| selected_rects(context, line_index, range))
-                        .map(|rect| crate::overflow::offset_rect(rect, origin))
-                        .collect::<Vec<_>>();
+                    let storage = DisplayLineItems::Materialized(start..result.items.len());
+                    let (mut bounds, _, _) = result.line_summary(line_index, storage.clone());
+                    let selection = result.line_selection(line_index, storage.clone());
                     for rect in &selection {
                         bounds.include(*rect);
                     }
                     result.lines.push(DisplayLine {
-                        items: DisplayLineItems::Materialized(start..end),
+                        items: storage,
                         paint_bounds: bounds,
                         selection,
                     });
@@ -590,14 +679,13 @@ fn source_owner(
         .map_or(fallback, |source| source.box_id)
 }
 
-fn add_controls<N: Copy + Debug + Eq + Hash>(
-    items: &mut Vec<InlineDisplayItem<'_>>,
+fn for_each_control_span<N: Copy + Debug + Eq + Hash>(
     world: &LayoutWorld<N>,
     box_participation: &[bool],
     context: &InlineFormattingContext,
     owner: LayoutBoxId,
-    line: usize,
     range: Range<usize>,
+    mut visit: impl FnMut(LayoutBoxId, Range<usize>),
 ) {
     let first = context
         .source_map
@@ -606,15 +694,7 @@ fn add_controls<N: Copy + Debug + Eq + Hash>(
     let mut push = |target: LayoutBoxId, range: Range<usize>| {
         if paints_self(box_participation, target) && world.boxes[target.index()].style.is_visible()
         {
-            let selection = selected_rects(context, line, range.clone());
-            items.push(InlineDisplayItem {
-                line,
-                paint_owner: target,
-                order: 0,
-                content: InlineItemContent::Control(range),
-                selection,
-                paint_bounds: InlinePaintBounds::Empty,
-            });
+            visit(target, range);
         }
     };
     for source in context.source_map[first..]
@@ -637,6 +717,41 @@ fn add_controls<N: Copy + Debug + Eq + Hash>(
     }
 }
 
+fn for_each_uncovered_range(
+    covered: &mut [Range<usize>],
+    range: Range<usize>,
+    mut visit: impl FnMut(Range<usize>),
+) {
+    covered.sort_unstable_by_key(|range| (range.start, range.end));
+    let mut offset = range.start;
+    for covered in covered {
+        if offset < covered.start {
+            visit(offset..covered.start);
+        }
+        offset = offset.max(covered.end);
+    }
+    if offset < range.end {
+        visit(offset..range.end);
+    }
+}
+
+fn resolve_item<'a>(
+    context: &InlineFormattingContext,
+    origin: LayoutPoint,
+    mut item: InlineDisplayItem<'a>,
+) -> InlineDisplayItem<'a> {
+    if let InlineItemContent::Text(view) = &item.content {
+        item.paint_bounds = text_view_bounds(view);
+    }
+    if let Some(range) = item.source_range() {
+        for_each_selected_rect(context, item.line, range, |rect| {
+            item.paint_bounds
+                .include(crate::overflow::offset_rect(rect, origin));
+        });
+    }
+    item
+}
+
 fn merge_ranges(ranges: &mut Vec<Range<usize>>) {
     ranges.sort_unstable_by_key(|range| (range.start, range.end));
     let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
@@ -655,22 +770,22 @@ fn merge_ranges(ranges: &mut Vec<Range<usize>>) {
 // Selection geometry and the 1.5 CSS px caret below retain the Blitz d788124a
 // editing projection. Finalize them with line placement before paint consumes
 // the display items, including controls with no drawable glyphs.
-fn selected_rects(
+fn for_each_selected_rect(
     context: &InlineFormattingContext,
     line: usize,
     range: Range<usize>,
-) -> Vec<LayoutRect> {
+    mut visit: impl FnMut(LayoutRect),
+) {
     let Some(InlineSelection::Range(selected)) = &context.selection else {
-        return Vec::new();
+        return;
     };
     let range = range.start.max(selected.start)..range.end.min(selected.end);
     if range.is_empty() {
-        return Vec::new();
+        return;
     }
     let layout = context.laid_out.as_ref().unwrap();
     let anchor = Cursor::from_byte_index(layout, range.start, Affinity::Downstream);
     let focus = Cursor::from_byte_index(layout, range.end, Affinity::Downstream);
-    let mut rects = Vec::new();
     Selection::new(anchor, focus).geometry_with(layout, |rect, index| {
         if index != line {
             return;
@@ -684,10 +799,9 @@ fn selected_rects(
             (rect.y1 - rect.y0).max(0.0) as f32,
         );
         if rect.width > 0.0 && rect.height > 0.0 {
-            rects.push(rect);
+            visit(rect);
         }
     });
-    rects
 }
 
 fn caret(context: &InlineFormattingContext) -> Option<(LayoutRect, PaintColor)> {
@@ -757,6 +871,11 @@ mod tests {
                 include_bytes!("../../tests/fixtures/moli-hebrew-emoji.ttf").as_slice(),
                 parley::BaseDirection::Rtl,
             ),
+            (
+                "office ffi a\u{301}\n\nABCD EFGH",
+                include_bytes!("../../../moli-paint/tests/fixtures/moli-pdf.ttf").as_slice(),
+                parley::BaseDirection::Ltr,
+            ),
         ] {
             let mut services =
                 DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
@@ -798,7 +917,7 @@ mod tests {
                 no_soft_wrap: false,
                 text_units: Vec::new(),
                 source_map: Vec::new(),
-                selection: None,
+                selection: Some(InlineSelection::Range(split..text.len())),
                 objects: Vec::new(),
                 font_metrics: vec![None; 2],
                 parent_strut: None,
@@ -831,19 +950,19 @@ mod tests {
             let world = LayoutWorld::new(root_box, false);
             let pool = GeneratedTextPool(Vec::new());
             let origin = LayoutPoint::new(7.0, 11.0);
-            let display = DisplayBuilder {
+            let mut display = DisplayBuilder {
                 paragraphs: Vec::new(),
                 paints_self: Vec::new(),
             }
             .finish(&world, &pool, |_| origin);
-            let display = display.context(root).unwrap();
+            let display = display.contexts[root.index()].as_deref_mut().unwrap();
             assert!(display.items.is_empty());
             assert_eq!(display.items.capacity(), 0);
             assert!(
                 display
                     .lines
                     .iter()
-                    .all(|line| line.items == DisplayLineItems::Natural)
+                    .all(|line| matches!(line.items, DisplayLineItems::Natural(_)))
             );
             let layout = world.boxes[0]
                 .inline_layout
@@ -866,17 +985,94 @@ mod tests {
                     }
                 }
                 let mut actual = Vec::new();
-                display.for_each_text_view(index, |view| {
-                    actual.extend(view.glyphs.positioned_glyphs().map(|glyph| {
-                        (
-                            glyph.id,
-                            (glyph.x + view.offset.x).to_bits(),
-                            (glyph.y + view.offset.y).to_bits(),
-                        )
-                    }));
-                });
+                for (_, item) in display.display_items(index) {
+                    if let InlineItemContent::Text(view) = &item.content {
+                        actual.extend(view.glyphs.positioned_glyphs().map(|glyph| {
+                            (
+                                glyph.id,
+                                (glyph.x + view.offset.x).to_bits(),
+                                (glyph.y + view.offset.y).to_bits(),
+                            )
+                        }));
+                    }
+                }
                 assert_eq!(actual, expected, "{text}: line {index}");
+                let mut ranges = display
+                    .display_items(index)
+                    .filter_map(|(_, item)| item.source_range())
+                    .collect::<Vec<_>>();
+                ranges.sort_unstable_by_key(|range| (range.start, range.end));
+                let line_range = line.text_range();
+                let mut next = line_range.start;
+                for range in ranges {
+                    assert_eq!(range.start, next, "source coverage: {text}: line {index}");
+                    next = range.end;
+                }
+                assert_eq!(
+                    next, line_range.end,
+                    "glyphless coverage: {text}: line {index}"
+                );
             }
+
+            let signature = |context: &InlineDisplayContext<'_>| {
+                (0..context.lines.len())
+                    .map(|line| {
+                        context
+                            .display_items(line)
+                            .map(|(_, item)| {
+                                let mut selection = Vec::new();
+                                context.visit_item_selection(&item, |rect| selection.push(rect));
+                                let glyphs = match &item.content {
+                                    InlineItemContent::Text(view) => view
+                                        .glyphs
+                                        .positioned_glyphs()
+                                        .map(|glyph| {
+                                            (
+                                                glyph.id,
+                                                (glyph.x + view.offset.x).to_bits(),
+                                                (glyph.y + view.offset.y).to_bits(),
+                                            )
+                                        })
+                                        .collect::<Vec<_>>(),
+                                    _ => Vec::new(),
+                                };
+                                (
+                                    item.paint_owner,
+                                    item.order,
+                                    item.source_range(),
+                                    glyphs,
+                                    selection,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let borrowed = signature(display);
+            let mut retained = Vec::new();
+            let mut lines = Vec::new();
+            for line in 0..display.lines.len() {
+                let start = retained.len();
+                retained.extend(
+                    display
+                        .display_items(line)
+                        .map(|(_, item)| item)
+                        .filter(|item| {
+                            !matches!(item.content, InlineItemContent::InlineBox { .. })
+                        }),
+                );
+                lines.push(DisplayLineItems::Materialized(start..retained.len()));
+            }
+            display.items = retained;
+            display.controls.clear();
+            for (line, items) in display.lines.iter_mut().zip(lines) {
+                line.items = items;
+            }
+            assert_eq!(
+                signature(display),
+                borrowed,
+                "storage changes must preserve glyphs, source identity and selection: {text}"
+            );
         }
     }
 }

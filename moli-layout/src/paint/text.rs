@@ -98,7 +98,10 @@ fn project_lines<N>(
             metrics.culled_text_line_count = metrics.culled_text_line_count.saturating_add(1);
             continue;
         }
-        display.for_each_text_view(line_index, |view| {
+        for (_, item) in display.display_items(line_index) {
+            let InlineItemContent::Text(view) = &item.content else {
+                continue;
+            };
             if let TextClipMaskScope::InlineBox(target) = scope
                 && (matches!(view.origin, TextOrigin::Generated { .. })
                     || !layout_box
@@ -107,10 +110,10 @@ fn project_lines<N>(
                         .unwrap()
                         .style_is_within_box(usize::from(view.glyphs.style_index()), target))
             {
-                return;
+                continue;
             }
             paint_text_view(view, transform, phase, text.clone(), snapshot);
-        });
+        }
     }
 }
 
@@ -311,7 +314,7 @@ impl<'a> InlineTextPaint<'a> {
         metrics: &mut PaintProjectionMetrics,
         snapshot: &mut PaintSnapshot,
     ) {
-        let item = &self.display.items[item];
+        let item = self.display.item(item);
         let culled = line_is_culled(self.display, item.line, local_cull);
         if self.lines.insert(item.line) {
             metrics.text_line_count = metrics.text_line_count.saturating_add(1);
@@ -322,7 +325,9 @@ impl<'a> InlineTextPaint<'a> {
         if culled {
             return;
         }
-        paint_selection(&item.selection, transform, local_cull, snapshot);
+        self.display.visit_item_selection(&item, |rect| {
+            paint_selection(std::slice::from_ref(&rect), transform, local_cull, snapshot);
+        });
         if let InlineItemContent::Text(view) = &item.content {
             paint_text_view(
                 view,

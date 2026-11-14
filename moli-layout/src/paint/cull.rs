@@ -199,7 +199,7 @@ where
         }
         PaintOrderEvent::InlineItem { owner, item } => {
             let display = projection.inline_display.context(owner).unwrap();
-            match display.items[item].paint_bounds {
+            match display.item(item).paint_bounds {
                 InlinePaintBounds::Empty => PaintCullBounds::Empty,
                 InlinePaintBounds::Unbounded => PaintCullBounds::Unbounded,
                 InlinePaintBounds::Bounded(bounds) => map_box_rect(projection, owner, bounds),
