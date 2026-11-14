@@ -242,7 +242,7 @@ fn visible_getter<'s>(
                 OwnerDispatchScope::Top => {
                     return Some(
                         host.auxiliary_window()
-                            .is_none_or(|window| !window.is_closed() && !window.is_popup()),
+                            .is_none_or(|window| !window.is_popup()),
                     );
                 }
                 OwnerDispatchScope::LightweightPopup(id) => {
