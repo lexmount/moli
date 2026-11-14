@@ -134,7 +134,7 @@ fn canvas_declarations_check_setters_before_conversion_and_keep_foreign_backing_
           setter.call(canvas, 4);
           assert(canvas[name] === 4, 'foreign canvas setter updates receiver');
         }
-        for (const name of ['getContext', 'convertToBlob']) check(realm, canvas, realm.OffscreenCanvas.prototype[name]);
+        for (const name of ['getContext', 'convertToBlob', 'transferToImageBitmap']) check(realm, canvas, realm.OffscreenCanvas.prototype[name]);
         assert(realm.OffscreenCanvas.prototype.getContext.call(canvas, '2d') === canvas.getContext('2d'), 'foreign canvas context identity');
         const bitmap = await other.createImageBitmap(canvas);
         getters(realm, 'ImageBitmap', bitmap, ['width', 'height']);

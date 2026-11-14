@@ -250,6 +250,7 @@ pub(crate) use objects::{
 };
 pub(crate) use offscreen::{
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
+    offscreen_canvas_transfer_to_image_bitmap_callback,
 };
 pub(crate) use webgl::{
     WEBGL_CONSTANTS, WEBGL2_CONSTANTS, webgl_boolean_callback,

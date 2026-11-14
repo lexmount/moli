@@ -1,4 +1,8 @@
-use super::backing_store::{attach_canvas_like_context_object, reset_canvas_like_backing_store};
+use super::backing_store::{
+    attach_canvas_like_context_object, canvas_like_dimensions, canvas_like_has_context,
+    reset_canvas_like_backing_store, with_canvas_like_pixels_mut,
+};
+use super::image_bitmap::build_image_bitmap_object;
 use super::objects::{
     build_offscreen_2d_context_object, build_webgl_context_object, build_webgl2_context_object,
 };
@@ -192,6 +196,48 @@ pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(
         .unwrap_or_else(|| v8::undefined(scope).into());
     let _ = resolver.resolve(scope, value);
     rv.set(promise.into());
+}
+
+/// `OffscreenCanvas.prototype.transferToImageBitmap()`: hands the current bitmap to a new
+/// `ImageBitmap` and leaves the canvas with a transparent-black bitmap of the same size. The
+/// rendering context and its state (transform, styles, ...) are kept, as the HTML Standard asks.
+///
+/// Moli's `ImageBitmap` carries only its dimensions today (see `createImageBitmap`), so the
+/// returned object does too.
+pub(crate) fn offscreen_canvas_transfer_to_image_bitmap_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    const PREFIX: &str = "Failed to execute 'transferToImageBitmap' on 'OffscreenCanvas'";
+    let canvas = args.this();
+    if !canvas_like_has_context(scope, canvas) {
+        webidl::throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            &format!(
+                "{PREFIX}: Cannot transfer an ImageBitmap from an OffscreenCanvas with no context"
+            ),
+        );
+        return;
+    }
+    let bitmap = match canvas_like_dimensions(scope, canvas) {
+        Some((width, height)) if width > 0 && height > 0 => {
+            build_image_bitmap_object(scope, width, height)
+        }
+        _ => None,
+    };
+    let Some(bitmap) = bitmap else {
+        // Chromium reports a zero-sized or unallocatable canvas as UnknownError.
+        webidl::throw_dom_exception(
+            scope,
+            "UnknownError",
+            &format!("{PREFIX}: ImageBitmap construction failed"),
+        );
+        return;
+    };
+    with_canvas_like_pixels_mut(scope, canvas, |bytes, _width, _height| bytes.fill(0));
+    rv.set(bitmap.into());
 }
 
 const OFFSCREEN_CANVAS_ATTRIBUTE_SLOTS: &[&str] =
