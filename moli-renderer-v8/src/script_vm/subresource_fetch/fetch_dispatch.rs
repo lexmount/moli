@@ -450,14 +450,9 @@ impl ScriptVm {
                     .is_some_and(|request| {
                         request.redirect_mode() == moli_fetch::RequestRedirectMode::Manual
                     })
-                && result.as_ref().is_ok_and(|response| {
-                    matches!(response.status, 301 | 302 | 303 | 307 | 308)
-                        && response
-                            .head()
-                            .headers
-                            .iter()
-                            .any(|(name, _)| name.eq_ignore_ascii_case("location"))
-                }))
+                && result
+                    .as_ref()
+                    .is_ok_and(|response| matches!(response.status, 301 | 302 | 303 | 307 | 308)))
             .then_some(crate::types::FetchResponseType::OpaqueRedirect.into())
         });
         // Only intercepted Window requests stop after each network hop. The
