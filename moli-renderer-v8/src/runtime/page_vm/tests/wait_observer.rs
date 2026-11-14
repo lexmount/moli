@@ -3,6 +3,8 @@ use super::*;
 use crate::page_task_queue::{RendererPageReadyDescriptor, RendererPageSchedulerTask};
 use crate::runtime::{PageVmIdleWaitAdvance, PageVmIdleWaitState};
 
+mod blob_io;
+
 #[tokio::test(flavor = "current_thread")]
 async fn network_idle_wait_observes_deadline_without_checkpointing_the_agent() {
     run_page_vm_async_test(async move {

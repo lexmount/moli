@@ -21,7 +21,7 @@ use anyhow::Result;
 use anyhow::{Context, anyhow};
 use clap::Parser;
 use moli_core::runtime::{
-    Browser, FetchReadinessTimeout, FetchedDocument, NavigationRuntimeConfig,
+    Browser, FetchReadinessTimeout, FetchTimeoutPhase, FetchedDocument, NavigationRuntimeConfig,
     RawDocumentFetchPolicy, storage_partition::StoragePartitionState,
 };
 use moli_fetch::{CookieHeaderPolicy, NetworkFetchFailureContext, Request};
@@ -146,10 +146,13 @@ pub async fn run_cli_with_config<W: Write>(
                 let readiness_result = async {
                     readiness.wait_for_page(&browser, &mut page).await?;
                     if args.delay_ms > 0 {
-                        browser
-                            .wait_for_page_delay(
-                                &mut page,
-                                std::time::Duration::from_millis(args.delay_ms),
+                        readiness
+                            .within_idle_deadline(
+                                FetchTimeoutPhase::WaitingForPageDelay,
+                                browser.wait_for_page_delay(
+                                    &mut page,
+                                    std::time::Duration::from_millis(args.delay_ms),
+                                ),
                             )
                             .await
                             .context("failed while waiting for page delay")?;
@@ -202,47 +205,49 @@ pub async fn run_cli_with_config<W: Write>(
                 let http_failure = http_status_failure(&args, page_status, final_url.as_str());
                 let with_output_context =
                     |error| with_http_status_context(error, &args, page_status, final_url.as_str());
-                if !args.fail || http_failure.is_none() {
-                    let rendered = if let Some(expression) = eval_expression.as_deref() {
-                        if config.browser.layout_policy().uses_real_layout() {
-                            page.publish_layout_async()
-                                .await
-                                .context("failed to publish layout before evaluating JavaScript")
-                                .map_err(with_output_context)?;
-                        }
-                        if args.dump.is_some() {
-                            eval_output::execute(&mut page, expression)
-                                .await
-                                .map_err(with_output_context)?;
-                            readiness
-                                .wait_for_idle(&browser, &mut page)
-                                .await
-                                .map_err(with_output_context)?;
-                            fetch_dump::render_page_output_async(&mut page, &config.fetch).await
-                        } else {
-                            async {
-                                let result = eval_output::evaluate(&mut page, expression).await?;
-                                readiness.wait_for_idle(&browser, &mut page).await?;
-                                Ok(result)
+                let output_result = async {
+                    if !args.fail || http_failure.is_none() {
+                        let rendered = if let Some(expression) = eval_expression.as_deref() {
+                            let value = readiness
+                                .within_idle_deadline(FetchTimeoutPhase::EvaluatingScript, async {
+                                    if config.browser.layout_policy().uses_real_layout() {
+                                        page.publish_layout_async()
+                                            .await
+                                            .context("failed to publish layout before evaluating JavaScript")?;
+                                    }
+                                    if args.dump.is_some() {
+                                        eval_output::execute(&mut page, expression).await?;
+                                        Ok(None)
+                                    } else {
+                                        eval_output::evaluate(&mut page, expression).await.map(Some)
+                                    }
+                                })
+                                .await?;
+                            readiness.wait_for_idle(&browser, &mut page).await?;
+                            match value {
+                                Some(value) => value,
+                                None => {
+                                    fetch_dump::render_page_output_async(&mut page, &config.fetch).await?
+                                }
                             }
-                            .await
-                        }
-                    } else {
-                        fetch_dump::render_page_output_async(&mut page, &config.fetch).await
+                        } else {
+                            fetch_dump::render_page_output_async(&mut page, &config.fetch).await?
+                        };
+                        stdout
+                            .write_all(&rendered)
+                            .context("failed to write fetch output")?;
+                        stdout
+                            .flush()
+                            .context("failed to flush fetch output")?;
                     }
-                    .map_err(with_output_context)?;
-                    stdout
-                        .write_all(&rendered)
-                        .context("failed to write fetch output")
-                        .map_err(with_output_context)?;
-                    stdout
-                        .flush()
-                        .context("failed to flush fetch output")
-                        .map_err(with_output_context)?;
+                    Ok::<(), anyhow::Error>(())
                 }
+                .await
+                .map_err(with_output_context);
                 if let Err(error) = page.close_async().await {
                     tracing::warn!(error = %error, "failed to close fetched page before browser shutdown");
                 }
+                output_result?;
                 if let Some(error) = http_failure {
                     return Err(error);
                 }

@@ -27,7 +27,11 @@ impl ScriptVm {
             || self.has_pending_runtime_script_work()
             || self.has_pending_webcrypto_tasks()
             || self.has_pending_opfs_tasks()
+            || self.has_pending_indexed_db_work()?
         {
+            return Ok(true);
+        }
+        if self._context_host.borrow().has_pending_file_reading_tasks() {
             return Ok(true);
         }
         let host = self._context_host.clone();

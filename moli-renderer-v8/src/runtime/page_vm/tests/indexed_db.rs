@@ -6,6 +6,8 @@ use crate::{
     script_vm::{IndexedDbStaleTaskCleanupEffect, IndexedDbTaskBodyEffect},
 };
 
+mod idle;
+
 fn install_indexed_db_manager(page_vm: &mut PageVm, manager: &crate::SharedIndexedDbManager) {
     let buckets = crate::new_shared_storage_bucket_store_with_indexed_db_manager(manager);
     page_vm.storage_bucket_store = Some(buckets.clone());

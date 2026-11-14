@@ -80,6 +80,10 @@ impl<I: Copy + Eq, K: Copy + Eq, P, T: Copy + Eq> WindowTaskLedger<I, K, P, T> {
             .find(|pending| pending.task_id() == task_id)
     }
 
+    pub(super) fn targets(&self) -> impl Iterator<Item = T> + '_ {
+        self.pending.iter().map(PendingWindowTask::target)
+    }
+
     pub(super) fn find_slot_index(
         &self,
         target: T,

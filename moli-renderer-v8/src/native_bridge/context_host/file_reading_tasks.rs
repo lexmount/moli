@@ -39,6 +39,12 @@ impl FileReadingTask {
 }
 
 impl PageScriptHost {
+    pub(crate) fn has_pending_file_reading_tasks(&self) -> bool {
+        self.file_reading_tasks
+            .targets()
+            .any(|target| self.window_execution_context_identity_is_current(target))
+    }
+
     pub(crate) fn register_blob_read_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

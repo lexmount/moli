@@ -13,11 +13,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use moli_core::{
     page::{Page, SubresourceResponseWaitCriteria},
     runtime::{
-        Browser, FetchDeadline, FetchedDocument, RawDocumentFetchPolicy, RenderedDomWaitUntil,
+        Browser, FetchDeadline, FetchTimeoutPhase, FetchedDocument, RawDocumentFetchPolicy,
+        RenderedDomWaitUntil,
     },
 };
 use moli_fetch::Request;
-use std::{path::Path, time::Duration};
+use std::{future::Future, path::Path, time::Duration};
 
 #[derive(Debug)]
 pub(super) struct ReadinessPlan {
@@ -119,6 +120,20 @@ impl ReadinessPlan {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Idle bounds execution as well as the subsequent resource observation.
+    /// Other modes retain their existing delay and evaluation policy.
+    pub(super) async fn within_idle_deadline<T>(
+        &self,
+        phase: FetchTimeoutPhase,
+        operation: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        if self.wait_until == RenderedDomWaitUntil::Idle {
+            self.deadline.wait(phase, operation).await
+        } else {
+            operation.await
+        }
     }
 }
 

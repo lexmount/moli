@@ -7,7 +7,7 @@ use axum::{
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use std::time::Duration;
+use std::{process::Command, time::Duration};
 
 fn document(script: &str) -> String {
     format!(
@@ -181,6 +181,31 @@ fn idle_waits_for_fetch_and_xhr_callbacks_and_their_timers() -> Result<()> {
         xhr.open('GET', '/data');
         xhr.onloadend = () => Promise.resolve().then(() => finish(xhr.responseText));
         xhr.send();
+    "#,
+    )?;
+    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    Ok(())
+}
+
+#[test]
+fn idle_waits_for_indexed_db_requests_transactions_and_their_followups() -> Result<()> {
+    let server = Server::new(
+        r#"
+        const open = indexedDB.open('idle-requests', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('kv');
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction('kv', 'readwrite');
+          const write = tx.objectStore('kv').put('payload', 1);
+          let received = false;
+          write.onsuccess = () => queueMicrotask(() => received = true);
+          tx.oncomplete = () => {
+            db.close();
+            queueMicrotask(() => {
+              document.querySelector('main').textContent = received ? 'done' : 'missing request';
+            });
+          };
+        };
     "#,
     )?;
     assert_done(run(&server.url, "5000", &["--dump", "html"])?);
@@ -476,6 +501,90 @@ fn idle_keeps_one_deadline_for_work_started_after_initial_readiness() -> Result<
         "{}",
         clean_output(&output.stderr)
     );
+    Ok(())
+}
+
+fn assert_idle_execution_times_out(extra: &[&str], phase: &str) -> Result<()> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+    command
+        .args([
+            "fetch",
+            "--wait",
+            "idle",
+            "--timeout-ms",
+            "1000",
+            "--http-no-proxy",
+            "*",
+            "--log-level",
+            "error",
+        ])
+        .args(extra)
+        .arg(document(""));
+    // Also bound teardown: dropping only the caller future would leave an
+    // awaited Promise in the renderer and hang browser shutdown.
+    let output =
+        super::subprocess::run_command_with_process_timeout(command, Duration::from_secs(5))?;
+    let stderr = clean_output(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "stdout={}",
+        clean_output(&output.stdout)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr.contains(&format!("timed out after 1000 ms while {phase}")),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn idle_deadline_interrupts_async_eval_and_acknowledges_page_cleanup() -> Result<()> {
+    for expression in [
+        "new Promise(resolve => setTimeout(() => resolve('late'), 10000))",
+        "new Promise(() => {})",
+    ] {
+        assert_idle_execution_times_out(&["--eval", expression], "evaluating JavaScript")?;
+        assert_idle_execution_times_out(
+            &["--dump", "html", "--eval", expression],
+            "evaluating JavaScript",
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn idle_deadline_interrupts_eval_file() -> Result<()> {
+    let path = unique_temp_file_path("idle-eval-timeout", "eval.js")?;
+    std::fs::write(&path, "new Promise(resolve => setTimeout(resolve, 10000))")?;
+    let result = assert_idle_execution_times_out(
+        &["--dump", "html", "--eval-file", path.to_str().unwrap()],
+        "evaluating JavaScript",
+    );
+    std::fs::remove_file(path)?;
+    result
+}
+
+#[test]
+fn idle_deadline_interrupts_page_delay() -> Result<()> {
+    assert_idle_execution_times_out(
+        &["--dump", "html", "--delay-ms", "10000"],
+        "waiting for page delay",
+    )
+}
+
+#[test]
+fn idle_waits_for_async_eval_and_followup_work_that_fit_the_deadline() -> Result<()> {
+    assert_done(run(
+        &document(""),
+        "3000",
+        &[
+            "--dump",
+            "html",
+            "--eval",
+            "new Promise(resolve => setTimeout(() => { setTimeout(() => document.querySelector('main').textContent = 'done', 100); resolve('value'); }, 100))",
+        ],
+    )?);
     Ok(())
 }
 
