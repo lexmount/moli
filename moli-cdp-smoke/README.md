@@ -176,6 +176,14 @@ readers. A watchdog independently prints
 Python thread stacks before the worker deadline, including when the event loop
 is blocked. The deadline and failure status do not change.
 
+Managed Chromium startup discovers its endpoint from the listening log or the
+fresh profile's `DevToolsActivePort` file. Both sources require a responding
+`/json/version` and matching browser identity before attachment. Discovery keeps
+its ten-second deadline. Incomplete port-file publication is awaited; malformed
+complete files fail. Chromium logging is explicitly sent to stderr. Startup
+failures retain process status, thread wait channels, descendants, and the port
+file in `browserLaunches[].startupFailure`, before cleanup removes the profile.
+
 CPU traces are saved in full before validation, for both successful and failed
 workloads. Profile IDs are scoped by process; an expected hot function must be
 on an actually sampled stack, not merely declared in the profile's node table.
@@ -701,6 +709,19 @@ headed Debian Chromium 145.0.7632.116 through CDP. It checks the full trusted
 `keydown -> keypress -> beforeinput -> input -> keyup` sequence for Playwright
 typing, cancellation at keypress, the distinct `rawKeyDown` and `char` paths,
 and the absence of keyboard events for `Input.insertText`.
+
+The `text-input` legacy `TextEvent` contract was recalibrated on 2026-11-14
+against Playwright's Chromium 145.0.7632.6 and Chrome for Testing 156.0.8078.73.
+Both crash when `Input.insertText` synchronously removes its iframe from a
+`textInput` listener, including a listener that cancels the event. That path
+cannot supply a shared native event/result expectation. The shared matrix
+instead verifies keyboard frame removal during `textInput`, IME frame removal
+during `beforeinput`, and IME node removal during `textInput` inside a frame.
+It requires the exact native event, an empty value, and no post-invalidation
+`input`; removal during `beforeinput` must produce only that native event.
+Moli's stronger uncanceled IME frame-removal protection during `textInput`
+remains in `cdp_text_input_revalidates_targets_after_legacy_listeners` in
+`moli-protocol/src/domains/input/tests/text_input_events.rs`.
 
 The modifier regression for [#2864](https://github.com/lexmount/moli/issues/2864)
 was calibrated against headless Chrome 156.0.8078.73, including the reported
