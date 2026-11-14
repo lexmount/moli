@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use crate::{
     document_runtime::DocumentConnectPolicySnapshot,
     network::{
-        ResourceInterceptionBody, ResourceRequestClient,
+        ResourceRequestClient,
         interception_control::{
             InterceptionPhase, ResourceInterceptionDecision, ResourceInterceptionPause,
         },
@@ -40,34 +40,9 @@ pub(crate) struct ControlledXhrLoad {
     initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
 }
 
-/// A hop is complete at headers. Its owner cancels any unread body on redirect,
-/// authentication retry, fail or replacement, even if a protocol read holds a
-/// clone of the body capability.
-pub(super) struct LoadedXhrResponse {
-    head: ResponseHead,
-    body: ResourceInterceptionBody,
-}
+use super::loaded_response::LoadedResponse;
 
-impl LoadedXhrResponse {
-    pub(super) fn from_response(response: Response) -> Self {
-        Self {
-            head: response.head(),
-            body: ResourceInterceptionBody::from_complete(
-                SubresourceResponseBody::from_fetch_response(&response),
-            ),
-        }
-    }
-
-    pub(super) fn from_stream(
-        response: moli_fetch::StreamingRawResponse,
-        disk_pool: Option<moli_disk_pool::DiskPool>,
-    ) -> Self {
-        Self {
-            head: response.head(),
-            body: ResourceInterceptionBody::new(response, disk_pool),
-        }
-    }
-
+impl LoadedResponse {
     async fn deliver(
         &self,
         info: &PendingSubresourceFetchInfo,
@@ -99,24 +74,8 @@ impl LoadedXhrResponse {
             // The stream consumer already owns delivery; no buffered Response is needed.
             return Ok(None);
         }
-        let body = self
-            .body
-            .capture(usize::MAX)
-            .await
-            .map_err(|error| format!("{error:#}"))?;
-        let bytes = body
-            .materialize_bytes()
-            .map_err(|error| error.to_string())?;
-        Ok(Some(BufferedXhrResponse {
-            response: Response::from_head_and_lossy_body_bytes(self.head.clone(), bytes),
-            body,
-        }))
-    }
-}
-
-impl Drop for LoadedXhrResponse {
-    fn drop(&mut self) {
-        self.body.cancel();
+        let (response, body) = self.materialize().await?;
+        Ok(Some(BufferedXhrResponse { response, body }))
     }
 }
 
@@ -398,14 +357,14 @@ impl ControlledXhrLoad {
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
             let (response, mut is_synthetic, observed_request_headers) = match synthetic.take() {
-                Some(response) => (LoadedXhrResponse::from_response(response), true, None),
+                Some(response) => (LoadedResponse::from_response(response), true, None),
                 None => {
-                    let observed = super::async_fetch::fetch_controlled_subresource_hop(
+                    let observed = super::async_fetch::fetch_subresource_hop(
                         &loader,
                         self.request.clone(),
                         hop_cancel.clone(),
                         self.preflight_headers.clone(),
-                        &preflight_observer,
+                        Some(&preflight_observer),
                     )
                     .await?;
                     let (response, observation) = observed.into_parts();
@@ -514,7 +473,7 @@ impl ControlledXhrLoad {
                         headers,
                         body,
                     } => {
-                        response = LoadedXhrResponse::from_response(
+                        response = LoadedResponse::from_response(
                             self.synthetic_response(status, headers, body),
                         );
                         is_synthetic = true;

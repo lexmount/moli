@@ -10,8 +10,8 @@ use super::{AsyncSubresourceCommandExecution, ScriptVm};
 
 mod document_completion;
 mod fetch_dispatch;
-mod fulfilled_redirects;
 mod intercepted_fetch;
+mod intercepted_redirects;
 mod pending_fetch;
 mod streaming;
 

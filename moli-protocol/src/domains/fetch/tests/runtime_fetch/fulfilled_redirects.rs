@@ -153,6 +153,24 @@ async fn fixture_with_userinfo(
                 )
                 .route("/network-final", get(|| async { "network-body" }))
                 .route(
+                    "/header-start",
+                    get(|| async { axum::response::Redirect::temporary("/header-end") }),
+                )
+                .route(
+                    "/header-end",
+                    get(|headers: axum::http::HeaderMap| async move {
+                        format!(
+                            "{}:{}",
+                            headers
+                                .get("x-original")
+                                .map_or("", |value| value.to_str().unwrap()),
+                            headers
+                                .get("x-edited")
+                                .map_or("", |value| value.to_str().unwrap())
+                        )
+                    }),
+                )
+                .route(
                     "/rewritten/base/destination",
                     axum::routing::any(|request: axum::extract::Request| async move {
                         let method = request.method().to_string();
@@ -341,6 +359,110 @@ async fn fulfilled_window_fetch_redirect_modes_and_missing_location() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn intercepted_window_redirect_advances_before_the_intermediate_body_is_released() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for intercept_response in [false, true] {
+        let (mut ctx, _origin, fixture_server) = fixture().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let source = format!("http://{address}/held-start");
+        let destination = format!("http://{address}/held-final");
+        let (release, held) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut held = Some(held);
+            for redirect in [true, false] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.windows(4).any(|end| end == b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert_ne!(read, 0);
+                    headers.extend_from_slice(&buffer[..read]);
+                }
+                if redirect {
+                    stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: /held-final\r\nContent-Length: 1\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n").await.unwrap();
+                    // The owner releases this only after the next Fetch pause.
+                    let _ = held.take().unwrap().await;
+                    let _ = stream.write_all(b"x").await;
+                } else {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nfinal").await.unwrap();
+                }
+            }
+        });
+        command(
+            &mut ctx,
+            51_000,
+            "Runtime.evaluate",
+            json!({"expression":format!(
+                "globalThis.heldResult=fetch({source:?}).then(r=>r.text());'started'"
+            )}),
+        )
+        .await;
+        let first = wait_for_request_paused(&mut ctx, &source, "held source").await;
+        command(
+            &mut ctx,
+            51_001,
+            "Fetch.continueRequest",
+            json!({
+                "requestId":first["params"]["requestId"], "interceptResponse":intercept_response,
+            }),
+        )
+        .await;
+        if intercept_response {
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                wait_for_request_paused(&mut ctx, &source, "held redirect response headers"),
+            )
+            .await
+            .expect("redirect response interception must not wait for its body");
+            assert_eq!(response["params"]["responseStatusCode"], 302);
+            command(
+                &mut ctx,
+                51_002,
+                "Fetch.continueResponse",
+                json!({
+                    "requestId":response["params"]["requestId"],
+                }),
+            )
+            .await;
+        }
+        let next = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            wait_for_request_paused(
+                &mut ctx,
+                &destination,
+                "next hop while redirect body is held",
+            ),
+        )
+        .await
+        .expect("the next Fetch pause must precede releasing the redirect body");
+        release.send(()).unwrap();
+        command(
+            &mut ctx,
+            51_003,
+            "Fetch.continueRequest",
+            json!({
+                "requestId":next["params"]["requestId"],
+            }),
+        )
+        .await;
+        let response = command(
+            &mut ctx,
+            51_004,
+            "Runtime.evaluate",
+            json!({
+                "expression":"heldResult", "awaitPromise":true, "returnByValue":true,
+            }),
+        )
+        .await;
+        assert_eq!(response["result"]["result"]["value"], "final");
+        server.await.unwrap();
+        fixture_server.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fulfilled_window_fetch_redirect_limit_is_shared_across_pauses() {
     let (mut ctx, origin, server) = fixture().await;
     let url = format!("{origin}/loop");
@@ -492,6 +614,19 @@ async fn fulfilled_window_fetch_redirect_preserves_prefix_when_continued_to_netw
         45_002,
         "Fetch.continueRequest",
         json!({"requestId":next["params"]["requestId"]}),
+    )
+    .await;
+    let final_pause = wait_for_request_paused(
+        &mut ctx,
+        &format!("{origin}/network-final"),
+        "network redirect hop",
+    )
+    .await;
+    command(
+        &mut ctx,
+        45_004,
+        "Fetch.continueRequest",
+        json!({"requestId":final_pause["params"]["requestId"]}),
     )
     .await;
     let result = command(
@@ -743,5 +878,57 @@ async fn fulfilled_window_fetch_redirect_checks_csp_before_the_next_pause() {
     )
     .await;
     assert_eq!(result["result"]["result"]["value"], "TypeError");
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn network_redirect_repauses_and_expires_request_scoped_header_edits() {
+    let (mut ctx, origin, server) = fixture().await;
+    for (index, reapply) in [false, true].into_iter().enumerate() {
+        let id = 50_000 + index as u64 * 10;
+        let source = format!("{origin}/header-start");
+        let destination = format!("{origin}/header-end");
+        command(&mut ctx,id,"Runtime.evaluate",json!({"expression":
+            "globalThis.headersResult=fetch('/header-start',{headers:{'X-Original':'original'}}).then(r=>r.text());'started'"
+        })).await;
+        let first = wait_for_request_paused(&mut ctx, &source, "header redirect source").await;
+        command(&mut ctx,id+1,"Fetch.continueRequest",json!({
+            "requestId":first["params"]["requestId"],"headers":[{"name":"X-Edited","value":"edited"}]
+        })).await;
+        let next =
+            wait_for_request_paused(&mut ctx, &destination, "header redirect destination").await;
+        let headers = next["params"]["request"]["headers"].as_object().unwrap();
+        assert!(
+            headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("x-original"))
+        );
+        assert!(
+            !headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("x-edited"))
+        );
+        assert_eq!(next["params"]["networkId"], first["params"]["networkId"]);
+        assert_eq!(
+            next["params"]["redirectedRequestId"],
+            first["params"]["requestId"]
+        );
+        let mut params = json!({"requestId":next["params"]["requestId"]});
+        if reapply {
+            params["headers"] = json!([{"name":"X-Edited","value":"edited"}]);
+        }
+        command(&mut ctx, id + 2, "Fetch.continueRequest", params).await;
+        let result = command(
+            &mut ctx,
+            id + 3,
+            "Runtime.evaluate",
+            json!({"expression":"headersResult","awaitPromise":true,"returnByValue":true}),
+        )
+        .await;
+        assert_eq!(
+            result["result"]["result"]["value"],
+            if reapply { ":edited" } else { "original:" }
+        );
+    }
     server.abort();
 }
