@@ -2785,6 +2785,29 @@ impl ScriptVm {
                 return Ok(input_dispatch_outcome(true));
             }
 
+            if (ctrl || meta) && !alt {
+                let editing_host = contenteditable_editing_host(runtime, handle).unwrap_or(handle);
+                if key_lower == "z" || key_lower == "y" {
+                    let redo = key_lower == "y" || shift;
+                    crate::native_bridge::element::undo_redo_native_edit(
+                        scope,
+                        runtime_ptr,
+                        editing_host,
+                        redo,
+                    );
+                    return Ok(input_dispatch_outcome(true));
+                }
+                if matches!(key_lower.as_str(), "c" | "x" | "v") {
+                    crate::native_bridge::element::perform_clipboard_shortcut(
+                        scope,
+                        runtime_ptr,
+                        editing_host,
+                        &key_lower,
+                    );
+                    return Ok(input_dispatch_outcome(true));
+                }
+            }
+
             if target.is_radio
                 && matches!(
                     key_lower.as_str(),

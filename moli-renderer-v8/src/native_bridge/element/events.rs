@@ -7,8 +7,9 @@ pub(crate) use self::constructors::construct_keyboard_event;
 pub(super) use self::constructors::{ClickEventSource, construct_click_event};
 pub(crate) use self::constructors::{
     InputEventCoordinates, TextEditInputType, construct_command_event, construct_form_data_event,
-    construct_input_event, construct_interest_event, construct_simple_event,
-    construct_simple_event_for_target, construct_submit_event, construct_toggle_event,
+    construct_input_event, construct_input_event_with_transfer, construct_interest_event,
+    construct_simple_event, construct_simple_event_for_target, construct_submit_event,
+    construct_toggle_event,
 };
 #[cfg(any(feature = "devtools", test))]
 pub(crate) use self::constructors::{TouchEventPoint, construct_touch_event_with_points};
@@ -27,3 +28,5 @@ pub(crate) use self::constructors::{
 pub(crate) use self::dispatch::{
     NodePublicEventDispatchOutcome, dispatch_beforeinput, dispatch_public_event,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use moli_webapi::events::subclasses::construct_native_clipboard_event as construct_clipboard_event;

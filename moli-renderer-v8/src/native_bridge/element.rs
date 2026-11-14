@@ -304,7 +304,7 @@ use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     construct_command_event, construct_form_data_event, construct_input_event,
-    construct_interest_event, construct_simple_event, construct_simple_event_for_target,
+    construct_interest_event, construct_input_event_with_transfer, construct_simple_event, construct_simple_event_for_target,
     construct_submit_event, construct_toggle_event, dispatch_beforeinput, dispatch_public_event,
 };
 #[cfg(any(feature = "devtools", test))]
@@ -2166,3 +2166,11 @@ pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_ha
 
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::read_client_rects;
+
+#[cfg(feature = "devtools")]
+pub(crate) use activation::clipboard::perform_clipboard_shortcut;
+#[cfg(feature = "devtools")]
+pub(crate) use activation::editing_history::undo_redo as undo_redo_native_edit;
+
+#[cfg(feature = "devtools")]
+pub(crate) use events::construct_clipboard_event;

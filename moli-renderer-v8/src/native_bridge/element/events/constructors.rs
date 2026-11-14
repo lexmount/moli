@@ -45,7 +45,7 @@ impl ClickEventSource {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextEditInputType {
     None,
     InsertText,
@@ -55,10 +55,12 @@ pub(crate) enum TextEditInputType {
     InsertParagraph,
     #[cfg(feature = "devtools")]
     InsertFromDrop,
-    #[cfg(feature = "devtools")]
     DeleteContentBackward,
-    #[cfg(feature = "devtools")]
     DeleteContentForward,
+    HistoryUndo,
+    HistoryRedo,
+    InsertFromPaste,
+    DeleteByCut,
 }
 
 impl TextEditInputType {
@@ -72,24 +74,28 @@ impl TextEditInputType {
             Self::InsertParagraph => "insertParagraph",
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => "insertFromDrop",
-            #[cfg(feature = "devtools")]
             Self::DeleteContentBackward => "deleteContentBackward",
-            #[cfg(feature = "devtools")]
             Self::DeleteContentForward => "deleteContentForward",
+            Self::HistoryUndo => "historyUndo",
+            Self::HistoryRedo => "historyRedo",
+            Self::InsertFromPaste => "insertFromPaste",
+            Self::DeleteByCut => "deleteByCut",
         }
     }
 
     pub(crate) fn data(self, text: &str) -> Option<&str> {
         match self {
-            Self::InsertText => Some(text),
+            Self::InsertText | Self::InsertFromPaste => Some(text),
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => Some(text),
-            Self::None => None,
-            #[cfg(feature = "devtools")]
-            Self::InsertLineBreak
-            | Self::InsertParagraph
+            Self::None
             | Self::DeleteContentBackward
-            | Self::DeleteContentForward => None,
+            | Self::DeleteContentForward
+            | Self::HistoryUndo
+            | Self::HistoryRedo
+            | Self::DeleteByCut => None,
+            #[cfg(feature = "devtools")]
+            Self::InsertLineBreak | Self::InsertParagraph => None,
         }
     }
 }
@@ -415,7 +421,7 @@ pub(crate) fn construct_text_input_event_for_target<'s>(
     crate::context_bootstrap::construct_original_text_input_event(scope, text)
 }
 
-fn construct_input_event_with_transfer<'s>(
+pub(crate) fn construct_input_event_with_transfer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
     input_type: TextEditInputType,

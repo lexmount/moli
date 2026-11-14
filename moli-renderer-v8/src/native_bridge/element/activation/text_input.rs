@@ -12,8 +12,6 @@ use super::super::{
     TextEditInputType, contenteditable_editing_host, dispatch_beforeinput, dispatch_public_event,
     is_text_control, update_focus,
 };
-#[cfg(feature = "devtools")]
-use super::default_action::replace_contenteditable_selection_after_beforeinput;
 
 #[derive(Clone, Copy)]
 pub(crate) enum TextInputSource {
@@ -31,6 +29,26 @@ pub(crate) fn perform_text_input(
     text: &str,
     input_type: TextEditInputType,
     source: TextInputSource,
+) -> bool {
+    perform_text_input_with_transfer(
+        scope,
+        runtime_ptr,
+        initial_target,
+        text,
+        input_type,
+        source,
+        None,
+    )
+}
+
+pub(crate) fn perform_text_input_with_transfer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    initial_target: DomHandle,
+    text: &str,
+    input_type: TextEditInputType,
+    source: TextInputSource,
+    data_transfer: Option<v8::Local<'s, v8::Object>>,
 ) -> bool {
     let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
         scope,
@@ -80,13 +98,27 @@ pub(crate) fn perform_text_input(
         None
     };
     let beforeinput_target = editing_host.unwrap_or(initial_target);
-    if !dispatch_beforeinput(
-        scope,
-        runtime_ptr,
-        beforeinput_target,
-        input_type,
-        input_type.data(text),
-    ) {
+    let allowed = if let Some(transfer) = data_transfer {
+        super::super::construct_input_event_with_transfer(
+            scope,
+            "beforeinput",
+            input_type,
+            None,
+            Some(transfer),
+        )
+        .is_some_and(|event| {
+            dispatch_public_event(scope, runtime_ptr, beforeinput_target, event).allows_default()
+        })
+    } else {
+        dispatch_beforeinput(
+            scope,
+            runtime_ptr,
+            beforeinput_target,
+            input_type,
+            input_type.data(text),
+        )
+    };
+    if !allowed {
         return false;
     }
     let runtime = unsafe { &*runtime_ptr };
@@ -155,11 +187,12 @@ pub(crate) fn perform_text_input(
     let Some(editing_host) = contenteditable_editing_host(runtime, edit_target) else {
         return false;
     };
-    replace_contenteditable_selection_after_beforeinput(
+    super::default_action::replace_contenteditable_selection_after_beforeinput_with_transfer(
         scope,
         runtime_ptr,
         editing_host,
         text,
         input_type,
+        data_transfer,
     )
 }

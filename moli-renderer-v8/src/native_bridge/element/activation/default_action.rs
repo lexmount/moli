@@ -373,14 +373,84 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput(
     replacement_text: &str,
     input_type: TextEditInputType,
 ) -> bool {
+    replace_contenteditable_selection_after_beforeinput_with_transfer(
+        scope,
+        runtime_ptr,
+        handle,
+        replacement_text,
+        input_type,
+        None,
+    )
+}
+
+pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    replacement_text: &str,
+    input_type: TextEditInputType,
+    data_transfer: Option<v8::Local<'s, v8::Object>>,
+) -> bool {
     let Some(handle) = contenteditable_editing_host(unsafe { &*runtime_ptr }, handle) else {
         return false;
     };
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
+    // A selection moved by an author callback must not turn a read-only or
+    // inert descendant into a native editing target.
+    if let Some((anchor, _, focus, _)) = crate::context_bootstrap::native_editing_selection(scope) {
+        let runtime = unsafe { &*runtime_ptr };
+        for boundary in [anchor, focus] {
+            if contenteditable_editing_host(runtime, boundary) != Some(handle) {
+                return false;
+            }
+            let mut current = Some(boundary);
+            while let Some(node) = current {
+                if runtime
+                    .dom_host()
+                    .node(node)
+                    .and_then(|node| node.as_element())
+                    .is_some_and(|element| element.has_attribute("inert"))
+                {
+                    return false;
+                }
+                if node == handle {
+                    break;
+                }
+                current = runtime
+                    .dom_host()
+                    .node(node)
+                    .and_then(|node| node.parent_node());
+            }
+        }
+    }
+    let undo = super::editing_history::capture_edit(scope, runtime_ptr, handle);
     let inserted = if let Some(selection) = window_selection(scope) {
-        if let Some((node, start, end)) = selected_text_node_range(scope, target, selection) {
+        if let Some((node, mut start, mut end)) = selected_text_node_range(scope, target, selection)
+        {
+            if start == end
+                && matches!(
+                    input_type,
+                    TextEditInputType::DeleteContentBackward
+                        | TextEditInputType::DeleteContentForward
+                )
+            {
+                let value = node
+                    .get(scope, v8str(scope, "textContent").into())
+                    .and_then(|value| value.to_string(scope))
+                    .map(|value| value.to_rust_string_lossy(scope))
+                    .unwrap_or_default();
+                let units = utf16_units(&value);
+                if input_type == TextEditInputType::DeleteContentBackward {
+                    start = crate::util::utf16_previous_scalar_boundary(&units, start);
+                } else {
+                    end = crate::util::utf16_next_scalar_boundary(&units, end);
+                }
+                if start == end {
+                    return false;
+                }
+            }
             if !replace_text_node_range(scope, node, start, end, replacement_text) {
                 return false;
             }
@@ -403,11 +473,17 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput(
     if !inserted {
         return false;
     }
-    if let Some(event) = construct_input_event(
+    super::editing_history::commit_edit(scope, runtime_ptr, undo, input_type);
+    if let Some(event) = super::super::construct_input_event_with_transfer(
         scope,
         "input",
         input_type,
-        input_type.data(replacement_text),
+        if data_transfer.is_some() {
+            None
+        } else {
+            input_type.data(replacement_text)
+        },
+        data_transfer,
     ) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }

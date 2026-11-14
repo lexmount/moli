@@ -217,6 +217,21 @@ fn replace_text_control_selection_with_events(
         return false;
     }
 
+    if let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+        && context != scope.get_current_context()
+    {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        return replace_text_control_selection_with_events(
+            scope,
+            runtime_ptr,
+            handle,
+            replacement_text,
+            input_type,
+            events,
+        );
+    }
+
     if matches!(events, TextControlEditEvents::BeforeInputAndInput)
         && !dispatch_beforeinput(
             scope,
@@ -310,6 +325,11 @@ fn replace_text_control_selection_with_events(
         &replacement_units,
     );
 
+    let undo = crate::native_bridge::element::activation::editing_history::capture_edit(
+        scope,
+        runtime_ptr,
+        handle,
+    );
     let runtime = unsafe { &mut *runtime_ptr };
     let changed = runtime.set_input_value_from_user_edit(handle, &next_value);
     if changed {
@@ -326,6 +346,12 @@ fn replace_text_control_selection_with_events(
         u32::try_from(caret_start.saturating_add(replacement_units.len())).unwrap_or(u32::MAX);
     let selection_changed =
         text_control_set_selection_range_internal(scope, runtime_ptr, handle, caret, caret);
+    crate::native_bridge::element::activation::editing_history::commit_edit(
+        scope,
+        runtime_ptr,
+        undo,
+        input_type,
+    );
     if changed
         || selection_changed
         || matches!(
