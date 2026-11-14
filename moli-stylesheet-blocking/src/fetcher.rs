@@ -301,6 +301,12 @@ pub trait StylesheetFetcher: Clone + Send + 'static {
         0
     }
 
+    /// Controls reuse of a completed resource by a new stylesheet consumer.
+    /// In-flight sharing and adoption of an unused preload are independent.
+    fn reuse_completed_stylesheets(&self) -> bool {
+        true
+    }
+
     fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>);
 
     fn fetch_stylesheet_resource(

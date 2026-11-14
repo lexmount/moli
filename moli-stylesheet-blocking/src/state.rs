@@ -28,7 +28,7 @@ use crate::types::{
 pub struct StylesheetBlockingState {
     owner_fetches: HashMap<NodeId, StylesheetFetchEntry>,
     blocking_entries: HashMap<NodeId, StylesheetBlockingEntry>,
-    url_fetches: HashMap<(u64, Url, StylesheetResourceKey), StylesheetFetch>,
+    url_fetches: HashMap<(u64, Url, StylesheetResourceKey), CachedStylesheetFetch>,
     completion_source: OwnerTaskSource<StylesheetCompletion>,
     ready_network_results: VecDeque<StylesheetFetchNetworkResult>,
     // The stylesheet queue is local to document processing, not the renderer
@@ -42,6 +42,11 @@ pub struct StylesheetBlockingState {
     /// and optional wake above; the two transports are mutually exclusive for
     /// every operation because the selected publisher is captured at spawn.
     completion_publisher: Option<Arc<dyn Fn(StylesheetCompletion) + Send + Sync + 'static>>,
+}
+
+struct CachedStylesheetFetch {
+    fetch: StylesheetFetch,
+    unused_preload: bool,
 }
 
 impl StylesheetBlockingState {
@@ -256,7 +261,7 @@ impl StylesheetBlockingState {
     where
         F: StylesheetFetcher,
     {
-        self.ensure_resource(fetcher.clone(), document_url, url, options)
+        self.ensure_resource(fetcher.clone(), document_url, url, options, true)
     }
 
     fn rebind_blocking_link(
@@ -334,7 +339,7 @@ impl StylesheetBlockingState {
             return entry.fetch.clone();
         }
         let resource_cache_scope = fetcher.resource_cache_scope();
-        let fetch = self.ensure_resource(fetcher, document_url, url, options);
+        let fetch = self.ensure_resource(fetcher, document_url, url, options, false);
         self.owner_fetches.insert(
             node_id,
             StylesheetFetchEntry {
@@ -352,27 +357,40 @@ impl StylesheetBlockingState {
         document_url: Url,
         url: Url,
         options: StylesheetFetchOptions,
+        preload: bool,
     ) -> StylesheetFetch
     where
         F: StylesheetFetcher,
     {
         let resource_cache_scope = fetcher.resource_cache_scope();
         let resource_key = options.resource_key(url.clone());
-        if let Some(url_fetch) = self.url_fetches.get(&(
+        if let Some(cached) = self.url_fetches.get_mut(&(
             resource_cache_scope,
             document_url.clone(),
             resource_key.clone(),
-        )) && !url_fetch.terminal().is_some_and(|terminal| {
-            matches!(
-                terminal.physical(),
-                crate::StylesheetPhysicalOutcome::NetworkError(_)
-            )
-        }) {
-            return url_fetch.clone();
+        )) {
+            let terminal = cached.fetch.terminal();
+            let failed_transfer = terminal.as_ref().is_some_and(|terminal| {
+                matches!(
+                    terminal.physical(),
+                    crate::StylesheetPhysicalOutcome::NetworkError(_)
+                )
+            });
+            if !failed_transfer
+                && (terminal.is_none()
+                    || cached.unused_preload
+                    || fetcher.reuse_completed_stylesheets())
+            {
+                if !preload {
+                    cached.unused_preload = false;
+                }
+                return cached.fetch.clone();
+            }
         }
-        // A failed transfer has no resource to reuse. A later owner can retry;
-        // existing owners retain their own terminal and concurrent loads join
-        // the newly pending physical request as usual.
+        // Failed transfers can be retried. A completed response also needs a
+        // new request when caching is disabled, after any preload was consumed.
+        // Existing owners retain their terminal; concurrent new owners join
+        // this newly pending transfer.
         let start_unix_millis = moli_time::unix_epoch_millis();
         let request_url = resource_key.request_url().clone();
         let fetch = StylesheetFetch::new(
@@ -387,7 +405,10 @@ impl StylesheetBlockingState {
         let completion_fetch = fetch.clone();
         self.url_fetches.insert(
             (resource_cache_scope, document_url.clone(), resource_key),
-            fetch.clone(),
+            CachedStylesheetFetch {
+                fetch: fetch.clone(),
+                unused_preload: preload,
+            },
         );
         let task_fetcher = fetcher.clone();
         fetcher.spawn_stylesheet_task(Box::pin(async move {
@@ -838,6 +859,32 @@ mod tests {
 
     #[derive(Clone)]
     struct PendingStylesheetFetcher;
+
+    #[derive(Clone)]
+    struct NoCacheStylesheetFetcher<F>(F);
+
+    impl<F: StylesheetFetcher> StylesheetFetcher for NoCacheStylesheetFetcher<F> {
+        fn resource_cache_scope(&self) -> u64 {
+            self.0.resource_cache_scope()
+        }
+
+        fn reuse_completed_stylesheets(&self) -> bool {
+            false
+        }
+
+        fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+            self.0.spawn_stylesheet_task(task);
+        }
+
+        fn fetch_stylesheet_resource(
+            &self,
+            document_url: Url,
+            url: Url,
+            options: StylesheetFetchOptions,
+        ) -> Pin<Box<dyn Future<Output = StylesheetFetchTerminal> + Send + 'static>> {
+            self.0.fetch_stylesheet_resource(document_url, url, options)
+        }
+    }
 
     impl StylesheetFetcher for PendingStylesheetFetcher {
         fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
@@ -1679,6 +1726,133 @@ mod tests {
 
         assert!(fetch.terminal().is_some_and(|terminal| terminal.is_ready()));
         assert_eq!(state.take_ready_network_results().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn disabled_cache_refetches_completed_resources_for_new_and_readmitted_owners() {
+        for same_owner in [false, true] {
+            let mut state = StylesheetBlockingState::default();
+            let document_url = Url::parse("https://example.com/").unwrap();
+            let url = Url::parse("https://example.com/a.css").unwrap();
+            let first_owner = NodeId::new(1);
+            let first = state.adopt_or_begin_link_load(
+                &PendingStylesheetFetcher,
+                first_owner,
+                document_url.clone(),
+                url.clone(),
+                StylesheetFetchOptions::default(),
+            );
+            complete_cached_resource(&first);
+            let next_owner = if same_owner {
+                state.invalidate_node(first_owner);
+                first_owner
+            } else {
+                NodeId::new(2)
+            };
+            let fetcher = NoCacheStylesheetFetcher(PendingStylesheetFetcher);
+            let next = state.adopt_or_begin_link_load(
+                &fetcher,
+                next_owner,
+                document_url.clone(),
+                url.clone(),
+                StylesheetFetchOptions::default(),
+            );
+            assert!(
+                !first.ptr_eq(&next),
+                "completed material cannot bypass the new request"
+            );
+            assert!(
+                first.terminal().unwrap().is_ready(),
+                "existing consumers keep their response"
+            );
+            assert!(next.terminal().is_none());
+            let concurrent = state.adopt_or_begin_link_load(
+                &fetcher,
+                NodeId::new(3),
+                document_url.clone(),
+                url.clone(),
+                StylesheetFetchOptions::default(),
+            );
+            assert!(
+                next.ptr_eq(&concurrent),
+                "pending transfers still coalesce with caching disabled"
+            );
+            let adopted = state.adopt_or_begin_link_load(
+                &fetcher,
+                next_owner,
+                document_url,
+                url,
+                StylesheetFetchOptions::default(),
+            );
+            assert!(
+                next.ptr_eq(&adopted),
+                "rediscovery of an existing owner is not a new load"
+            );
+        }
+    }
+
+    fn complete_cached_resource(fetch: &StylesheetFetch) {
+        assert!(fetch.finish(Arc::new(StylesheetFetchTerminal::ready(
+            moli_page_types::NavigationResponse::from_text_body(
+                fetch.request_url().clone(),
+                200,
+                vec![("content-type".into(), b"text/css".to_vec())],
+                "body{color:red}".into(),
+            ),
+            true,
+        ))));
+    }
+
+    #[tokio::test]
+    async fn disabled_cache_preserves_preload_adoption_once_before_or_after_completion() {
+        for completed_before_adoption in [false, true] {
+            let mut state = StylesheetBlockingState::default();
+            let document_url = Url::parse("https://example.com/").unwrap();
+            let url = Url::parse("https://example.com/preload.css").unwrap();
+            let fetcher = NoCacheStylesheetFetcher(PendingStylesheetFetcher);
+            let preload = state.preload_stylesheet(
+                &fetcher,
+                document_url.clone(),
+                url.clone(),
+                StylesheetFetchOptions::default(),
+            );
+            if completed_before_adoption {
+                complete_cached_resource(&preload);
+            }
+            let consumer = state.adopt_or_begin_link_load(
+                &fetcher,
+                NodeId::new(1),
+                document_url.clone(),
+                url.clone(),
+                StylesheetFetchOptions::default(),
+            );
+            assert!(
+                preload.ptr_eq(&consumer),
+                "an unused preload supplies its first stylesheet consumer"
+            );
+            if !completed_before_adoption {
+                let concurrent = state.adopt_or_begin_link_load(
+                    &fetcher,
+                    NodeId::new(2),
+                    document_url.clone(),
+                    url.clone(),
+                    StylesheetFetchOptions::default(),
+                );
+                assert!(consumer.ptr_eq(&concurrent));
+                complete_cached_resource(&preload);
+            }
+            let fresh = state.adopt_or_begin_link_load(
+                &fetcher,
+                NodeId::new(3),
+                document_url,
+                url,
+                StylesheetFetchOptions::default(),
+            );
+            assert!(
+                !consumer.ptr_eq(&fresh),
+                "a consumed preload cannot become a sticky response cache"
+            );
+        }
     }
 
     #[tokio::test]

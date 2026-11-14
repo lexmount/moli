@@ -24,7 +24,7 @@ use crate::{
     runtime::{RendererDocumentLifecycleIdentity, RendererOwnerAction},
     types::{
         PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-        PendingSubresourceResponseInfo, SubresourceResponseBody,
+        PendingSubresourceResponseInfo, SubresourceRequestInitiatorType, SubresourceResponseBody,
     },
 };
 
@@ -38,6 +38,7 @@ pub(crate) struct ControlledResourceLoad {
     connect_policy: Option<DocumentConnectPolicySnapshot>,
     preflight_headers: Vec<(String, String)>,
     initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
+    request_initiator_type: SubresourceRequestInitiatorType,
 }
 
 use super::loaded_response::LoadedResponse;
@@ -86,6 +87,7 @@ impl ControlledResourceLoad {
         info: PendingSubresourceFetchInfo,
         load: ResourceLoadLease,
         cancel: FetchCancelHandle,
+        request_initiator_type: SubresourceRequestInitiatorType,
     ) -> Self {
         Self {
             request,
@@ -97,6 +99,7 @@ impl ControlledResourceLoad {
             connect_policy: None,
             preflight_headers: Vec::new(),
             initial_decision: None,
+            request_initiator_type,
         }
     }
 
@@ -144,7 +147,10 @@ impl ControlledResourceLoad {
             }
             Err(error) => (Err(error), None),
         };
-        let completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
+        let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
+        completed.network_record = completed
+            .network_record
+            .with_request_initiator_type(self.request_initiator_type);
         if completed.info.network_request_handle.is_some() {
             // Redirects already crossed their own native request-pause boundary.
             // Diagnostics retain the full chain; protocol sees only the terminal.
@@ -187,7 +193,12 @@ impl ControlledResourceLoad {
         let redirect = (phase == InterceptionPhase::Request)
             .then(|| self.request.redirect_chain().last().cloned())
             .flatten();
-        (pause.with_request_redirect(redirect), rx)
+        (
+            pause
+                .with_request_redirect(redirect)
+                .with_request_initiator_type(self.request_initiator_type),
+            rx,
+        )
     }
 
     async fn decision(

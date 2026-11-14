@@ -371,12 +371,13 @@ pub(crate) fn fetch_subresource_initial_request_network_events(
         request_headers: output.request_headers().to_vec(),
         request_body: output.request_body().map(str::to_owned),
         request_initiator_type: Some(
-            SubresourceRequestInitiatorType::Script
+            output
+                .request_initiator_type()
                 .as_cdp_initiator_type()
                 .to_owned(),
         ),
         bidi_request_initiator_type: bidi_request_initiator_type_override(
-            SubresourceRequestInitiatorType::Script,
+            output.request_initiator_type(),
         )
         .map(str::to_owned),
         redirect_response: output
