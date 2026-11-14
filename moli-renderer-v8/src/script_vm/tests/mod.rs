@@ -2100,6 +2100,7 @@ fn test_trusted_key_dispatch_callback(
         meta,
         shift,
         false,
+        0,
     ) else {
         rv.set(v8::Boolean::new(scope, false).into());
         return;

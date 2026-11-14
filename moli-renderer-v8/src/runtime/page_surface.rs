@@ -5073,6 +5073,7 @@ pub enum RendererPageCommand {
         code: String,
         text: String,
         modifiers: u8,
+        location: u32,
         auto_repeat: bool,
         should_insert_text: bool,
     },

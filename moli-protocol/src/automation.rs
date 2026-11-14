@@ -1281,6 +1281,7 @@ pub struct DevToolsDispatchKeyEventCommand {
     pub code: String,
     pub text: String,
     pub modifiers: u8,
+    pub location: u32,
     pub auto_repeat: bool,
     pub should_insert_text: bool,
 }

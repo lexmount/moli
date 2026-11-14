@@ -721,6 +721,7 @@ fn build_cdp_dispatch_key_event_command(
         code: parsed.code,
         text: parsed.text,
         modifiers: parsed.modifiers,
+        location: parsed.location,
         auto_repeat: parsed.auto_repeat,
         should_insert_text: parsed.should_insert_text,
     }
@@ -1049,6 +1050,7 @@ fn start_devtools_dispatch_key_event_command(
                 command.modifiers,
                 command.auto_repeat,
                 command.should_insert_text,
+                command.location,
             )
         },
     )
@@ -1838,6 +1840,7 @@ mod protocol_neutral_tests {
             key: "A".to_owned(),
             code: "KeyA".to_owned(),
             text: "a".to_owned(),
+            location: 2,
             modifiers: 2,
             auto_repeat: true,
             should_insert_text: true,
@@ -1857,6 +1860,7 @@ mod protocol_neutral_tests {
         assert_eq!(command.code, "KeyA");
         assert_eq!(command.text, "a");
         assert_eq!(command.modifiers, 2);
+        assert_eq!(command.location, 2);
         assert!(command.auto_repeat);
         assert!(command.should_insert_text);
     }
@@ -1877,6 +1881,7 @@ mod protocol_neutral_tests {
             key: "A".to_owned(),
             code: "KeyA".to_owned(),
             text: String::new(),
+            location: 0,
             modifiers: 0,
             auto_repeat: false,
             should_insert_text: false,

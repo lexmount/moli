@@ -7,6 +7,7 @@ mod contenteditable_selection;
 mod drop_events;
 mod element_click;
 mod keyboard_events;
+mod keyboard_location;
 mod mouse_snapshot;
 mod text_control_compat;
 mod text_input_events;
@@ -4026,6 +4027,7 @@ async fn input_ready_receipt_keeps_fence_without_adopting_recreated_host_state()
     let mut context = TestContext::new();
     with_loaded_document(&mut context, "<body>origin</body>").await;
     let command = AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+        location: 0,
         context: AutomationContext {
             protocol: crate::automation::FrontendProtocol::WebDriverBidi,
             session_id: None,
@@ -4156,6 +4158,7 @@ async fn input_admission_rejects_closing_owner_with_canonical_document_error() {
                 None,
                 &owner,
                 AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+                    location: 0,
                     context: AutomationContext {
                         protocol: crate::automation::FrontendProtocol::WebDriverBidi,
                         session_id: None,

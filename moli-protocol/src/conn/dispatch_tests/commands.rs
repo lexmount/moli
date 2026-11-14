@@ -1148,6 +1148,7 @@ async fn automation_command_executes_input_key_command_without_cdp_sidecar() {
     let (key_result, scheduler_events, protocol_events, predecessor) = ctx
         .execute_owned_automation_command_for_test(AutomationCommand::DispatchKeyEvent(
             DevToolsDispatchKeyEventCommand {
+                location: 0,
                 context: target_context.clone(),
                 event_type: DevToolsKeyEventType::KeyPress,
                 key: "Z".to_owned(),

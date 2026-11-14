@@ -1502,6 +1502,12 @@ fn dispatch_key_event_command_with_modifiers(
     should_insert_text: bool,
 ) -> AutomationCommand {
     AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+        location: match code {
+            "ShiftLeft" | "ControlLeft" | "AltLeft" | "MetaLeft" => 1,
+            "ShiftRight" | "ControlRight" | "AltRight" | "MetaRight" => 2,
+            code if code.starts_with("Numpad") => 3,
+            _ => 0,
+        },
         context: context.command_context(),
         event_type,
         key: key.to_owned(),

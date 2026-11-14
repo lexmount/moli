@@ -237,6 +237,7 @@ impl PageVm {
                 code,
                 text,
                 modifiers,
+                location,
                 auto_repeat,
                 should_insert_text,
             } => self
@@ -248,6 +249,7 @@ impl PageVm {
                     modifiers,
                     auto_repeat,
                     should_insert_text,
+                    location,
                 )
                 .map(RendererPageReply::InputDispatchOutcome),
             RendererPageCommand::CreateIsolatedWorld {
