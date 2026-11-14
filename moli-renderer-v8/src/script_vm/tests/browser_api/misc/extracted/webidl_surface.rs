@@ -255,7 +255,7 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
                 "CompressionStream","DecompressionStream",
                 "ReadableStreamBYOBReader","ReadableStreamBYOBRequest","ReadableByteStreamController",
                 "Geolocation","GeolocationPosition","GeolocationCoordinates","GeolocationPositionError",
-                "MediaCapabilities","Clipboard","ClipboardItem",
+                "MediaCapabilities","Clipboard","ClipboardItem","ClipboardChangeEvent",
               ];
               const out = [];
               for (const name of names) {
@@ -267,6 +267,7 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
               out.push(`DOMRect<DOMRectReadOnly:${DOMRect.prototype instanceof DOMRectReadOnly}`);
               out.push(`DOMPoint<DOMPointReadOnly:${DOMPoint.prototype instanceof DOMPointReadOnly}`);
               out.push(`Clipboard<EventTarget:${Clipboard.prototype instanceof EventTarget}`);
+              out.push(`ClipboardChangeEvent<Event:${ClipboardChangeEvent.prototype instanceof Event}`);
               return out.join("|");
             })()
             "#,
@@ -304,11 +305,13 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
         "MediaCapabilities:function:true",
         "Clipboard:function:true",
         "ClipboardItem:function:true",
+        "ClipboardChangeEvent:function:true",
         "ToggleEvent<Event:true",
         "HashChangeEvent<Event:true",
         "DOMRect<DOMRectReadOnly:true",
         "DOMPoint<DOMPointReadOnly:true",
         "Clipboard<EventTarget:true",
+        "ClipboardChangeEvent<Event:true",
     ];
     assert_eq!(result, expected_parts.join("|"));
 }
