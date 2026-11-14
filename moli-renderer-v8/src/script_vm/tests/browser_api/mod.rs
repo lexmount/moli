@@ -2,6 +2,8 @@ mod document_node_factory_realms;
 mod insert_adjacent_element_conversion;
 use super::*;
 
+mod media_attribute_namespaces;
+
 mod abort_controller_receivers;
 mod abort_signal_events;
 mod abort_signal_statics;
