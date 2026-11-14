@@ -1625,3 +1625,5 @@ mod performance_handler_order;
 mod performance_user_timing;
 
 mod abort_controller_receivers;
+
+mod synthetic_exceptions;

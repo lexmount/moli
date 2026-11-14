@@ -267,9 +267,7 @@ async fn simple_handler_object_worker_globals_preserve_objects_and_order() {
         ("dedicated", "online"),
         ("shared", "connect"),
     ] {
-        // Synthetic worker exception reporting is independent of handler conversion.
-        // This probe exercises legacy handler conversion and callback-interface separation.
-        let expression = format!("exerciseHandler(self, {event:?}, self, false)");
+        let expression = format!("exerciseHandler(self, {event:?}, self, true)");
         let source = if mode == "shared" {
             format!(
                 "{HANDLER_PROBE} addEventListener('connect', e => {{ e.ports[0].postMessage({expression}); close(); }}, {{once:true}});"
@@ -284,7 +282,7 @@ async fn simple_handler_object_worker_globals_preserve_objects_and_order() {
             )
             .replace("__SOURCE__", &serde_json::to_string(&source).unwrap());
         let value = run_async_handler_probe("https://simple-handler-object.test/", &probe).await;
-        assert_eq!(value, expected_handler_value(false), "{mode}/{event}");
+        assert_eq!(value, expected_handler_value(true), "{mode}/{event}");
     }
 }
 
