@@ -128,6 +128,7 @@ pub(crate) fn decode_png_colors(
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info()?;
     let (width, height) = (reader.info().width, reader.info().height);
+    let orientation = crate::orientation::from_exif(reader.info().exif_metadata.as_deref());
     checked_rgba_len(width, height)?;
     let cicp = cicp_profile(reader.info());
     let expand_gray = cicp.is_some();
@@ -190,7 +191,7 @@ pub(crate) fn decode_png_colors(
         profile,
         cmyk: false,
     }
-    .finish(convert_profile)?)
+    .finish(convert_profile, orientation)?)
 }
 
 pub(crate) fn png_metadata(
@@ -204,14 +205,19 @@ pub(crate) fn png_metadata(
     );
     let reader = decoder.read_info()?;
     let info = reader.info();
+    let (width, height) = crate::orientation::dimensions(
+        info.width,
+        info.height,
+        crate::orientation::from_exif(info.exif_metadata.as_deref()),
+    );
     checked_rgba_len(info.width, info.height)?;
     let high_precision = info.bit_depth == png::BitDepth::Sixteen
         || info.icc_profile.is_some()
         || info.coding_independent_code_points.is_some()
         || (info.srgb.is_none() && (info.gama_chunk.is_some() || info.chrm_chunk.is_some()));
     Ok((
-        info.width,
-        info.height,
+        width,
+        height,
         if high_precision {
             crate::RasterColorPrecision::Float32
         } else {
