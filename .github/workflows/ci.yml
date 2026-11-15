@@ -146,6 +146,17 @@ jobs:
         with:
           tool: nextest@0.9.132
 
+      - name: Configure Nextest parallelism
+        shell: bash
+        run: |
+          cpu_count=$(nproc)
+          test_threads=$((cpu_count / 2))
+          if (( test_threads < 1 )); then
+            test_threads=1
+          fi
+          echo "NEXTEST_TEST_THREADS=$test_threads" >> "$GITHUB_ENV"
+          echo "Nextest test threads: $test_threads ($cpu_count available CPUs)"
+
       - name: Run full workspace tests
         run: cargo nextest run --workspace --profile ci
 
@@ -176,6 +187,14 @@ jobs:
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
         with:
           tool: nextest@0.9.132
+
+      - name: Configure Nextest parallelism
+        shell: pwsh
+        run: |
+          $cpuCount = [Environment]::ProcessorCount
+          $testThreads = [Math]::Max(1, [int][Math]::Floor($cpuCount / 2))
+          "NEXTEST_TEST_THREADS=$testThreads" >> $env:GITHUB_ENV
+          Write-Host "Nextest test threads: $testThreads ($cpuCount available CPUs)"
 
       - name: Cache Windows persistence dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
