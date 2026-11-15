@@ -823,6 +823,7 @@ pub(super) fn next_chained_subresource_response_pause_event(
     pending.action_session_id = next.session_id.clone();
     pending.owner_kind = next.owner_kind;
     let event = pending_subresource_response_stage_request_paused_event(
+        conn,
         next.session_id.as_deref(),
         &next.request_id,
         &pending,

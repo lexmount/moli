@@ -2352,6 +2352,12 @@ impl SubresourceNetworkRecord {
         self
     }
 
+    /// Retains the initiating resource URL when the transport follows redirects.
+    pub fn with_request_url(mut self, url: Url) -> Self {
+        Arc::make_mut(&mut self.inner).url = url;
+        self
+    }
+
     pub fn with_request_body_bytes(mut self, request_body_bytes: Option<bytes::Bytes>) -> Self {
         let inner = Arc::make_mut(&mut self.inner);
         inner.request_body_bytes =
@@ -3485,6 +3491,7 @@ pub struct ChildFrameDetachmentSnapshot {
 pub enum ChildFrameTreeEventSnapshot {
     Attached(ChildFrameAttachmentSnapshot),
     Detached(ChildFrameDetachmentSnapshot),
+    NavigationStopped { frame_id: String, loader_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

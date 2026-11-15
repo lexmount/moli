@@ -545,6 +545,20 @@ impl TargetNetworkAgentState {
             .replace_navigation_fetch_request_id(network_id, session_id, fetch_id)
     }
 
+    pub(crate) fn navigation_fetch_hop_ids(
+        &self,
+        network_id: &str,
+        session_id: Option<&str>,
+    ) -> Option<(String, Option<String>)> {
+        self.artifacts
+            .subresource_network_artifacts
+            .fetch_pause_announced_request_ids
+            .get(network_id)?
+            .fetch_ids
+            .get(&session_id.map(str::to_owned))
+            .cloned()
+    }
+
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
         self.artifacts
             .subresource_network_artifacts
@@ -1890,7 +1904,7 @@ struct SubresourceNetworkArtifacts {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FetchPauseAnnouncement {
-    fetch_ids: HashMap<Option<String>, String>,
+    fetch_ids: HashMap<Option<String>, (String, Option<String>)>,
     announced_redirects: usize,
 }
 
@@ -1974,11 +1988,18 @@ impl SubresourceNetworkArtifacts {
         session_id: Option<String>,
         fetch_id: String,
     ) -> Option<String> {
-        self.fetch_pause_announced_request_ids
+        let announcement = self
+            .fetch_pause_announced_request_ids
             .entry(network_id)
-            .or_default()
+            .or_default();
+        let previous = announcement
             .fetch_ids
-            .insert(session_id, fetch_id)
+            .get(&session_id)
+            .map(|(id, _)| id.clone());
+        announcement
+            .fetch_ids
+            .insert(session_id, (fetch_id, previous.clone()));
+        previous
     }
 
     fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {

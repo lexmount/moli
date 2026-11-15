@@ -1,12 +1,11 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU8, Ordering},
-};
+use std::sync::{Arc, OnceLock};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererChildFrameNavigationOutcome {
     Committed,
     Aborted,
+    Download,
+    Failed(String),
 }
 
 /// The result of one admitted child navigation, independent of later navigations.
@@ -15,7 +14,7 @@ pub enum RendererChildFrameNavigationOutcome {
 pub struct RendererChildFrameNavigation {
     frame_id: String,
     loader_id: String,
-    outcome: Arc<AtomicU8>,
+    outcome: Arc<OnceLock<RendererChildFrameNavigationOutcome>>,
 }
 
 impl RendererChildFrameNavigation {
@@ -23,7 +22,7 @@ impl RendererChildFrameNavigation {
         Self {
             frame_id,
             loader_id,
-            outcome: Arc::new(AtomicU8::new(0)),
+            outcome: Arc::new(OnceLock::new()),
         }
     }
 
@@ -36,25 +35,19 @@ impl RendererChildFrameNavigation {
     }
 
     pub fn outcome(&self) -> Option<RendererChildFrameNavigationOutcome> {
-        match self.outcome.load(Ordering::Acquire) {
-            1 => Some(RendererChildFrameNavigationOutcome::Committed),
-            2 => Some(RendererChildFrameNavigationOutcome::Aborted),
-            _ => None,
-        }
+        self.outcome.get().cloned()
     }
 
     pub(crate) fn commit(&self) {
-        self.settle(1);
+        self.finish(RendererChildFrameNavigationOutcome::Committed);
     }
 
     pub(crate) fn abort(&self) {
-        self.settle(2);
+        self.finish(RendererChildFrameNavigationOutcome::Aborted);
     }
 
-    fn settle(&self, outcome: u8) {
+    pub(crate) fn finish(&self, outcome: RendererChildFrameNavigationOutcome) {
         // A later replacement must not change a navigation that already committed.
-        let _ = self
-            .outcome
-            .compare_exchange(0, outcome, Ordering::AcqRel, Ordering::Acquire);
+        let _ = self.outcome.set(outcome);
     }
 }

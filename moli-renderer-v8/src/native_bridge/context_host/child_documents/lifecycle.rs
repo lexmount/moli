@@ -406,6 +406,19 @@ impl PageScriptHost {
         child_handle: DomHandle,
         expected: FrameDocumentNavigationLoadBinding,
     ) -> bool {
+        self.finish_child_frame_navigation_without_load_dispatch_with_outcome(
+            child_handle,
+            expected,
+            crate::runtime::RendererChildFrameNavigationOutcome::Aborted,
+        )
+    }
+
+    pub(in crate::native_bridge::context_host) fn finish_child_frame_navigation_without_load_dispatch_with_outcome(
+        &mut self,
+        child_handle: DomHandle,
+        expected: FrameDocumentNavigationLoadBinding,
+        outcome: crate::runtime::RendererChildFrameNavigationOutcome,
+    ) -> bool {
         let navigation = self
             .child_browsing_contexts
             .get(&child_handle)
@@ -424,7 +437,11 @@ impl PageScriptHost {
             return false;
         };
         if let Some(navigation) = navigation {
-            navigation.abort();
+            navigation.finish(outcome);
+            self.queue_child_frame_navigation_stopped_event(
+                navigation.frame_id().to_owned(),
+                navigation.loader_id().to_owned(),
+            );
         }
         crate::context_bootstrap::web_mcp::cancel_child_navigation(self, child_handle);
         tracing::debug!(

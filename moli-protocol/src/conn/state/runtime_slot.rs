@@ -960,6 +960,15 @@ impl TargetRuntimeSlot {
             .replace_navigation_fetch_request_id(network_id, session_id, fetch_id)
     }
 
+    pub(crate) fn navigation_fetch_hop_ids(
+        &self,
+        network_id: &str,
+        session_id: Option<&str>,
+    ) -> Option<(String, Option<String>)> {
+        self.network_agent
+            .navigation_fetch_hop_ids(network_id, session_id)
+    }
+
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
         self.network_agent
             .request_was_announced_by_fetch_pause(request_id)

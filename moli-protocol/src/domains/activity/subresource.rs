@@ -156,7 +156,7 @@ pub(crate) fn prepare_subresource_continue_action(
             let Some(ClaimedSubresourceContinueRequest::InFlight(in_flight)) = request else {
                 return None;
             };
-            let Some(request_id) = in_flight.request_id else {
+            let Some(mut request_id) = in_flight.request_id else {
                 return PreparedSubresourceContinueWait::prepare(
                     conn,
                     out,
@@ -234,6 +234,19 @@ pub(crate) fn prepare_subresource_continue_action(
                 );
                 pending_response.owner_kind = first_pause_session.owner_kind;
                 response_event_session_id = first_pause_session.session_id.clone();
+                if first_pause_session.owner_kind
+                    == crate::conn::PendingSubresourceFetchOwnerKind::Fetch
+                    && let Some((current, _)) = conn
+                        .runtime_session_owner_slot_mut_for_owner(command_owner)
+                        .and_then(|slot| {
+                            slot.navigation_fetch_hop_ids(
+                                &in_flight.pending.network_request_id,
+                                first_pause_session.session_id.as_deref(),
+                            )
+                        })
+                {
+                    request_id = current;
+                }
                 response_event_blocked_intercepts = stage_blocked_intercepts(
                     first_pause_session.owner_kind,
                     first_pause_session.blocked_intercepts,
@@ -241,8 +254,29 @@ pub(crate) fn prepare_subresource_continue_action(
                 );
                 let mut remaining_sessions = Vec::new();
                 for session in response_stage_sessions.into_iter().skip(1) {
-                    let (next_request_id, _) = conn
-                        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)?;
+                    let hop_id = if session.owner_kind
+                        == crate::conn::PendingSubresourceFetchOwnerKind::Fetch
+                    {
+                        conn.runtime_session_owner_slot_mut_for_owner(command_owner)
+                            .and_then(|slot| {
+                                slot.navigation_fetch_hop_ids(
+                                    &in_flight.pending.network_request_id,
+                                    session.session_id.as_deref(),
+                                )
+                            })
+                            .map(|(id, _)| id)
+                    } else {
+                        None
+                    };
+                    let next_request_id = match hop_id {
+                        Some(id) => id,
+                        None => {
+                            conn.allocate_pending_subresource_fetch_request_ids_for_owner(
+                                command_owner,
+                            )?
+                            .0
+                        }
+                    };
                     remaining_sessions.push(PendingSubresourceFetchResponseStage {
                         session_id: session.session_id,
                         owner_kind: session.owner_kind,
@@ -276,6 +310,7 @@ pub(crate) fn prepare_subresource_continue_action(
             }
             out.push(
                 fetch::pending_subresource_response_stage_request_paused_event(
+                    conn,
                     response_event_session_id.as_deref(),
                     &request_id,
                     &pending_response,

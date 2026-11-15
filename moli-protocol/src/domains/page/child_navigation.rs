@@ -75,13 +75,23 @@ pub(super) async fn finish_navigation(
         if let Some(navigation) = navigation.filter(|_| wait_for_commit) {
             match navigation.outcome() {
                 Some(moli_core::page::RendererChildFrameNavigationOutcome::Committed) => {}
-                Some(moli_core::page::RendererChildFrameNavigationOutcome::Aborted) => {
+                Some(outcome) => {
+                    use moli_core::page::RendererChildFrameNavigationOutcome;
+                    let (error_text, is_download) = match outcome {
+                        RendererChildFrameNavigationOutcome::Aborted => {
+                            (moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(), false)
+                        }
+                        RendererChildFrameNavigationOutcome::Download => {
+                            (moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(), true)
+                        }
+                        RendererChildFrameNavigationOutcome::Failed(error) => (error, false),
+                        RendererChildFrameNavigationOutcome::Committed => {
+                            unreachable!("committed navigation handled above")
+                        }
+                    };
                     if let Some(payload) = input.result_projection.payload_mut().as_object_mut() {
-                        payload.insert(
-                            "errorText".to_owned(),
-                            serde_json::json!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT),
-                        );
-                        payload.insert("isDownload".to_owned(), serde_json::json!(false));
+                        payload.insert("errorText".to_owned(), serde_json::json!(error_text));
+                        payload.insert("isDownload".to_owned(), serde_json::json!(is_download));
                     }
                 }
                 None => {

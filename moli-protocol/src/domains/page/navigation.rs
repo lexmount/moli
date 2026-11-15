@@ -1960,7 +1960,11 @@ fn merge_child_frame_tree_attachments_into_events(
             }) => {
                 *existing_parent_frame_id = parent_frame_id;
             }
-            Some(PagePreparedChildFrameTreeEvent::Detached { .. }) | None => {
+            Some(
+                PagePreparedChildFrameTreeEvent::Detached { .. }
+                | PagePreparedChildFrameTreeEvent::NavigationStopped { .. },
+            )
+            | None => {
                 events.push(PagePreparedChildFrameTreeEvent::Attached {
                     frame_id,
                     parent_frame_id,
@@ -2067,7 +2071,8 @@ fn emit_renderer_command_child_frame_document_opened_background_events_with_secu
 fn prepared_child_frame_tree_event_frame_id(event: &PagePreparedChildFrameTreeEvent) -> &str {
     match event {
         PagePreparedChildFrameTreeEvent::Attached { frame_id, .. }
-        | PagePreparedChildFrameTreeEvent::Detached { frame_id } => frame_id,
+        | PagePreparedChildFrameTreeEvent::Detached { frame_id }
+        | PagePreparedChildFrameTreeEvent::NavigationStopped { frame_id, .. } => frame_id,
     }
 }
 
@@ -2172,16 +2177,6 @@ pub(crate) fn emit_prepared_child_frame_activity(
             document_network.timestamp,
             &document_network.snapshot,
         );
-        if matches!(document_network.snapshot.status, 204 | 205) {
-            for event_session_id in &page_event_session_ids {
-                super::lifecycle::emit_navigation_frame_stopped_loading_background_events(
-                    &mut activity_events,
-                    event_session_id.as_deref(),
-                    &document_network.frame_id,
-                    &document_network.loader_id,
-                );
-            }
-        }
     }
     for commit in document.commits {
         let _ = conn.with_target_owner_state_for_owner_mut(&owner, |state| {
@@ -2388,6 +2383,21 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
                             frame_id.clone(),
                             parent_frame_id.clone(),
                         ));
+                    }
+                }
+            }
+            PagePreparedChildFrameTreeEvent::NavigationStopped {
+                frame_id,
+                loader_id,
+            } => {
+                if conn.browsing_context_owner(&frame_id).is_some() {
+                    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
+                        super::lifecycle::emit_navigation_frame_stopped_loading_background_events(
+                            out,
+                            session_id.as_deref(),
+                            &frame_id,
+                            &loader_id,
+                        );
                     }
                 }
             }

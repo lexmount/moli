@@ -671,6 +671,9 @@ document.body.appendChild(outer);
             crate::protocol_types::ChildFrameTreeEventSnapshot::Attached(attachment) => {
                 attachment.frame_id.clone()
             }
+            crate::protocol_types::ChildFrameTreeEventSnapshot::NavigationStopped { .. } => {
+                panic!("expected a child attachment before any navigation terminal")
+            }
             crate::protocol_types::ChildFrameTreeEventSnapshot::Detached(_) => {
                 panic!("outer child should first produce an attachment")
             }

@@ -246,6 +246,10 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
                         .unwrap_or(0),
                 )
             }
+            crate::protocol_types::ChildFrameTreeEventSnapshot::NavigationStopped {
+                frame_id,
+                loader_id,
+            } => string_charge(frame_id).saturating_add(string_charge(loader_id)),
             crate::protocol_types::ChildFrameTreeEventSnapshot::Detached(event) => {
                 string_charge(&event.frame_id)
             }

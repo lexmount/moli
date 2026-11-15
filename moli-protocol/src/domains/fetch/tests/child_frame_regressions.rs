@@ -29,6 +29,18 @@ fn fixture() -> Router {
         )
         .route("/no-content", get(|| async { StatusCode::NO_CONTENT }))
         .route(
+            "/attachment",
+            get(|| async {
+                (
+                    [
+                        ("content-type", "application/octet-stream"),
+                        ("content-disposition", "attachment; filename=child.bin"),
+                    ],
+                    "child download",
+                )
+            }),
+        )
+        .route(
             "/script-child",
             get(|| async {
                 (
@@ -495,6 +507,152 @@ async fn ignored_child_navigation_balances_loading_without_committing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn failed_child_navigation_preserves_connection_refused_and_stops_loading() {
+    check_failed_child_navigation(false, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_child_navigation_preserves_empty_response_and_stops_loading() {
+    check_failed_child_navigation(true, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_child_navigation_stops_loading_without_network_events() {
+    check_failed_child_navigation(false, false).await;
+}
+
+async fn check_failed_child_navigation(disconnect: bool, network_enabled: bool) {
+    let (base, server) = serve(fixture()).await;
+    let mut ctx = context(&base).await;
+    let frame = append(&mut ctx, &base, "/initial").await;
+    let refused = tokio::net::TcpSocket::new_v4().unwrap();
+    refused.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = if disconnect {
+        listener.local_addr().unwrap()
+    } else {
+        refused.local_addr().unwrap()
+    };
+    let disconnect_server = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut request = Vec::new();
+            let mut buf = [0; 1024];
+            loop {
+                match socket.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(&buf[..n]),
+                }
+                if request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    break;
+                }
+            }
+        }
+    });
+    if !network_enabled {
+        ctx.process_async(json!({"id":72700,"sessionId":"SID-1","method":"Network.disable"}))
+            .await;
+    }
+    ctx.sent.clear();
+    ctx.process_async(json!({"id":72701,"sessionId":"SID-1","method":"Page.navigate","params":{"frameId":frame["id"],"url":format!("http://{address}/failure")}})).await;
+    let response = take_response_by_id(&mut ctx, 72701);
+    let expected = if disconnect {
+        "net::ERR_EMPTY_RESPONSE"
+    } else {
+        "net::ERR_CONNECTION_REFUSED"
+    };
+    assert_eq!(response["result"]["errorText"], expected, "{response}");
+    assert_eq!(response["result"]["isDownload"], false);
+    assert_ne!(response["result"]["loaderId"], frame["loaderId"]);
+    wait_until_frame_stopped_loading(&mut ctx, frame["id"].as_str().unwrap()).await;
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|m| m["method"] == "Page.frameStartedLoading"
+                && m["params"]["frameId"] == frame["id"])
+            .count(),
+        1
+    );
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|m| m["method"] == "Page.frameStoppedLoading"
+                && m["params"]["frameId"] == frame["id"])
+            .count(),
+        1
+    );
+    if network_enabled {
+        let failures: Vec<_> = ctx
+            .sent
+            .iter()
+            .filter(|m| {
+                m["method"] == "Network.loadingFailed"
+                    && m["params"]["requestId"] == response["result"]["loaderId"]
+            })
+            .collect();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0]["params"]["errorText"], expected);
+    } else {
+        assert!(!ctx.sent.iter().any(|m| {
+            m["method"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("Network."))
+        }));
+    }
+    disconnect_server.abort();
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_navigation_download_reports_download_and_stops_loading() {
+    let (base, server) = serve(fixture()).await;
+    let mut ctx = context(&base).await;
+    let frame = append(&mut ctx, &base, "/initial").await;
+    let dir = std::env::temp_dir().join(format!(
+        "moli-child-download-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    ctx.process_async(json!({"id":72800,"method":"Browser.setDownloadBehavior","params":{"behavior":"allow","downloadPath":dir.to_string_lossy(),"eventsEnabled":true}})).await;
+    assert!(take_response_by_id(&mut ctx, 72800).get("error").is_none());
+    ctx.sent.clear();
+    ctx.process_async(json!({"id":72801,"sessionId":"SID-1","method":"Page.navigate","params":{"frameId":frame["id"],"url":format!("{base}/attachment")}})).await;
+    let result = take_response_by_id(&mut ctx, 72801);
+    assert_eq!(result["result"]["isDownload"], true, "{result}");
+    assert_eq!(result["result"]["errorText"], "net::ERR_ABORTED");
+    assert_ne!(result["result"]["loaderId"], frame["loaderId"]);
+    ctx.wait_for_scheduler_message("child download actually completes", |m| {
+        m["method"] == "Browser.downloadProgress" && m["params"]["state"] == "completed"
+    })
+    .await;
+    wait_until_frame_stopped_loading(&mut ctx, frame["id"].as_str().unwrap()).await;
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|m| m["method"] == "Page.frameStoppedLoading"
+                && m["params"]["frameId"] == frame["id"])
+            .count(),
+        1
+    );
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|m| m["method"] == "Page.frameNavigated")
+    );
+    assert_eq!(
+        std::fs::read(dir.join("child.bin")).unwrap(),
+        b"child download"
+    );
+    server.abort();
+    drop(ctx);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn repeated_child_navigation_preserves_cache_attribution() {
     let (base, server) = serve(fixture()).await;
     let cache = std::env::temp_dir().join(format!(
@@ -551,17 +709,31 @@ async fn repeated_child_navigation_preserves_cache_attribution() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_script_redirect_links_fetch_hops() {
+    check_child_script_redirect("Request").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_script_response_stage_redirect_links_fetch_hops() {
+    check_child_script_redirect("Response").await;
+}
+
+async fn check_child_script_redirect(stage: &str) {
     let (base, server) = serve(fixture()).await;
     let mut ctx = context(&base).await;
-    ctx.process_async(json!({"id":72400,"sessionId":"SID-1","method":"Fetch.enable","params":{"patterns":[{"resourceType":"Script","requestStage":"Request"}]}})).await;
+    ctx.process_async(json!({"id":72400,"sessionId":"SID-1","method":"Fetch.enable","params":{"patterns":[{"resourceType":"Script","requestStage":stage}]}})).await;
     evaluate(&mut ctx, 72401, "globalThis.frame=document.createElement('iframe');frame.src='/redirect-child';document.body.appendChild(frame)").await;
+    let continuation = if stage == "Response" {
+        "Fetch.continueResponse"
+    } else {
+        "Fetch.continueRequest"
+    };
     let first = ctx
         .wait_for_scheduler_message("script redirect first pause", |m| {
             m["method"] == "Fetch.requestPaused"
                 && m["params"]["request"]["url"] == format!("{base}/redirect.js")
         })
         .await;
-    ctx.process_async(json!({"id":72402,"sessionId":"SID-1","method":"Fetch.continueRequest","params":{"requestId":first["params"]["requestId"]}})).await;
+    ctx.process_async(json!({"id":72402,"sessionId":"SID-1","method":continuation,"params":{"requestId":first["params"]["requestId"]}})).await;
     let second = ctx
         .wait_for_scheduler_message("script redirect second pause", |m| {
             m["method"] == "Fetch.requestPaused"
@@ -573,8 +745,24 @@ async fn child_script_redirect_links_fetch_hops() {
         first["params"]["requestId"]
     );
     assert_eq!(second["params"]["networkId"], first["params"]["networkId"]);
-    ctx.process_async(json!({"id":72403,"sessionId":"SID-1","method":"Fetch.continueRequest","params":{"requestId":second["params"]["requestId"]}})).await;
+    ctx.process_async(json!({"id":72403,"sessionId":"SID-1","method":continuation,"params":{"requestId":second["params"]["requestId"]}})).await;
     console(&mut ctx, "redirect executed").await;
+    ctx.process_async(json!({"id":72404,"sessionId":"SID-1","method":"Page.getFrameTree"}))
+        .await;
+    let tree = take_response_by_id(&mut ctx, 72404);
+    let frame_id = tree["result"]["frameTree"]["childFrames"][0]["frame"]["id"]
+        .as_str()
+        .unwrap();
+    wait_until_frame_stopped_loading(&mut ctx, frame_id).await;
+    for (id, path) in [(72405, "/redirect.js"), (72406, "/final.js")] {
+        ctx.process_async(json!({"id":id,"sessionId":"SID-1","method":"Page.searchInResource","params":{"frameId":frame_id,"url":format!("{base}{path}"),"query":"redirect executed"}})).await;
+        let source = take_response_by_id(&mut ctx, id);
+        assert_eq!(
+            source["result"]["result"].as_array().map(Vec::len),
+            Some(1),
+            "{stage} interception must retain source for {path}: {source}"
+        );
+    }
     server.abort();
 }
 

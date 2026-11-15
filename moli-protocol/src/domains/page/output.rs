@@ -220,6 +220,13 @@ impl PagePreparedOutputs {
                     parent_frame_id: attachment.parent_frame_id.unwrap_or(root_frame_id),
                 }
             }
+            ChildFrameTreeEventSnapshot::NavigationStopped {
+                frame_id,
+                loader_id,
+            } => PagePreparedChildFrameTreeEvent::NavigationStopped {
+                frame_id,
+                loader_id,
+            },
             ChildFrameTreeEventSnapshot::Detached(detachment) => {
                 PagePreparedChildFrameTreeEvent::Detached {
                     frame_id: detachment.frame_id,

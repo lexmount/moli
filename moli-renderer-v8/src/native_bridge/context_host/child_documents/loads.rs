@@ -561,6 +561,11 @@ impl PageScriptHost {
                     }
                     _ => unreachable!("only non-committing outcomes enter this branch"),
                 };
+                let outcome = if download.is_some() {
+                    crate::runtime::RendererChildFrameNavigationOutcome::Download
+                } else {
+                    crate::runtime::RendererChildFrameNavigationOutcome::Aborted
+                };
                 self.record_child_document_load_network(&network_attribution, network);
                 if let Some(response) = download {
                     self.record_pending_download_activation(
@@ -581,9 +586,10 @@ impl PageScriptHost {
                     handle,
                     "Cannot navigate to URL.".to_owned(),
                 );
-                let _ = self.finish_child_frame_navigation_without_load_dispatch(
+                let _ = self.finish_child_frame_navigation_without_load_dispatch_with_outcome(
                     handle,
                     target.navigation_load(),
+                    outcome,
                 );
                 return ChildDocumentLoadApplication::Applied {
                     followup: None,
@@ -728,9 +734,10 @@ impl PageScriptHost {
                     handle,
                     format!("Cannot navigate to URL: {error}"),
                 );
-                let _ = self.finish_child_frame_navigation_without_load_dispatch(
+                let _ = self.finish_child_frame_navigation_without_load_dispatch_with_outcome(
                     handle,
                     target.navigation_load(),
+                    crate::runtime::RendererChildFrameNavigationOutcome::Failed(error),
                 );
                 None
             }
@@ -1199,10 +1206,8 @@ impl ChildDocumentFetch {
                 // Curl-managed multi-round authentication requires its buffered
                 // transport, just as in controlled XHR. Preserve that contract.
                 if let Some(buffered) = buffered {
-                    let (response, observation) = buffered
-                        .await
-                        .map_err(|error| error.to_string())?
-                        .into_parts();
+                    let (response, observation) =
+                        buffered.await.map_err(Self::fetch_error_text)?.into_parts();
                     let (head, body) = response.into_body();
                     return Ok(AsyncSubresourceFetchResult::Response(
                         crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
@@ -1214,10 +1219,8 @@ impl ChildDocumentFetch {
                     ));
                 }
                 let response = response.expect("a supported transfer was prepared above");
-                let (response, observation) = response
-                    .await
-                    .map_err(|error| error.to_string())?
-                    .into_parts();
+                let (response, observation) =
+                    response.await.map_err(Self::fetch_error_text)?.into_parts();
                 let network_headers = observation.map(|observation| observation.into_headers());
                 let head = response.head();
                 // A caller-owned redirect advances on headers, not after an
@@ -1260,7 +1263,7 @@ impl ChildDocumentFetch {
                 let response = response
                     .into_materialized_raw_response()
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(Self::fetch_error_text)?;
                 let (head, body) = response.into_body();
                 Ok(AsyncSubresourceFetchResult::Response(
                     crate::protocol_types::NavigationResponse::from_head_and_materialized_body(
@@ -1290,6 +1293,10 @@ impl ChildDocumentFetch {
         if let Some(body) = self.response_body.take() {
             body.cancel();
         }
+    }
+
+    fn fetch_error_text(error: anyhow::Error) -> String {
+        moli_fetch::browser_network_error_text(&error).to_owned()
     }
 
     fn complete_transfer(mut self, result: crate::types::AsyncSubresourceFetchResult) {

@@ -138,6 +138,7 @@ impl ControlledResourceLoad {
         mut self,
         mut stream: Option<ControlledXhrStream>,
     ) -> ControlledXhrCompletion {
+        let initial_url = self.info.url.clone();
         let result = self.run_inner(stream.as_mut()).await;
         if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id) {
             self.publish_completed();
@@ -157,6 +158,7 @@ impl ControlledResourceLoad {
         let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
         completed.network_record = completed
             .network_record
+            .with_request_url(initial_url)
             .with_request_initiator_type(self.request_initiator_type);
         if completed.info.network_request_handle.is_some() {
             // Redirects already crossed their own native request-pause boundary.

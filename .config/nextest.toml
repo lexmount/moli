@@ -1,4 +1,7 @@
 [profile.ci]
+# Full renderer instances in CLI deadline tests need a bounded CPU budget on
+# shared runners. Keep their deadlines and assertions unchanged.
+test-threads = 8
 fail-fast = false
 retries = 2
 status-level = "retry"
