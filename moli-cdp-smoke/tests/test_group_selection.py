@@ -53,12 +53,12 @@ class GroupSelectionTests(unittest.TestCase):
             ("protocol-schema", "puppeteer"),
         )
 
-    def test_only_external_environment_groups_remain_opt_in(self) -> None:
+    def test_external_clients_and_unreleased_web_security_oracle_remain_opt_in(self) -> None:
         optional_names = tuple(group.name for group in OPTIONAL_EXTERNAL_GROUPS)
 
         self.assertEqual(
             optional_names,
-            ("chrome-remote-interface", "cdp-use", "stagehand", "agent-browser"),
+            ("web-security", "chrome-remote-interface", "cdp-use", "stagehand", "agent-browser"),
         )
         self.assertTrue(set(optional_names).isdisjoint(DEFAULT_GROUP_NAMES))
 
