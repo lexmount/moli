@@ -284,6 +284,7 @@ pub fn svg_image_metadata_from_root_attributes(
         .zip(intrinsic_height)
         .filter(|(_, height)| *height > 0.0)
         .map(|(width, height)| width / height)
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
         .or(view_box_ratio)
         .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
     let (concrete_width, concrete_height) =
@@ -561,6 +562,18 @@ mod tests {
             decode_inline_svg_scene(source, &[], (100.0, 100.0)),
             Err(SvgDecodeError::StyleElementCount { .. })
         ));
+    }
+
+    #[test]
+    fn zero_natural_dimensions_preserve_view_box_ratio() {
+        for (width, height) in [("0", "40"), ("80", "0"), ("0", "0")] {
+            let metadata = svg_image_metadata_from_root_attributes(
+                Some(width),
+                Some(height),
+                Some("0 0 80 40"),
+            );
+            assert_eq!(metadata.intrinsic_ratio, Some(2.0));
+        }
     }
 
     #[test]

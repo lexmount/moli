@@ -6,6 +6,100 @@ const SVG_PUBLICATION_FIXTURE: &str = include_str!(concat!(
 ));
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_svg_negative_intrinsic_lengths_respect_css_viewport_sizes() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-viewport-sizes.html")?,
+        );
+        let fixture = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/inline-svg-viewport-sizes.js"
+        ));
+        let metadata: serde_json::Value = serde_json::from_str(&page_vm.vm_mut().eval(
+            &format!("{fixture}\nJSON.stringify(installSvgViewportSizes())"),
+        )?)?;
+        let viewport = moli_layout::PaintViewport::new(
+            metadata["width"].as_u64().unwrap() as u32,
+            metadata["height"].as_u64().unwrap() as u32,
+            1.0,
+        );
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .unwrap();
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        for case in metadata["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let observed: serde_json::Value =
+                serde_json::from_str(&page_vm.vm_mut().eval(&format!(
+                    "JSON.stringify(readSvgViewportSize({}))",
+                    serde_json::to_string(name)?
+                ))?)?;
+            assert_eq!(
+                observed,
+                json!([0, case["top"], case["size"][0], case["size"][1]]),
+                "{name}"
+            );
+            let y = case["top"].as_u64().unwrap() as usize + 10;
+            let offset = (y * raster.width as usize + 10) * 4;
+            let visible =
+                case["size"][0].as_u64().unwrap() > 0 && case["size"][1].as_u64().unwrap() > 0;
+            assert_eq!(
+                &raster.rgba[offset..offset + 4],
+                if visible {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[255, 255, 255, 255]
+                },
+                "{name} paint"
+            );
+        }
+        for (width, expected) in [("", 0), ("80px", 80), ("", 0)] {
+            page_vm.vm_mut().eval(&format!(
+                "document.getElementById('svg-viewport-css-width').style.width={};'changed'",
+                serde_json::to_string(width)?,
+            ))?;
+            let snapshot = page_vm
+                .vm_mut()
+                .screenshot_layout_snapshot(viewport)?
+                .unwrap();
+            assert_eq!(
+                page_vm
+                    .vm_mut()
+                    .eval("readSvgViewportSize('css-width')[2]")?,
+                expected.to_string(),
+                "changing CSS must reveal or override the negative intrinsic width",
+            );
+            let raster = moli_paint::raster_snapshot(&snapshot)?;
+            let top = metadata["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == "css-width")
+                .unwrap()["top"]
+                .as_u64()
+                .unwrap() as usize;
+            let offset = ((top + 10) * raster.width as usize + 10) * 4;
+            assert_eq!(
+                &raster.rgba[offset..offset + 4],
+                if expected > 0 {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[255, 255, 255, 255]
+                }
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline SVG negative sizes must match Chromium geometry and paint");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inline_svg_zoom_preserves_font_and_stroke_user_units() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

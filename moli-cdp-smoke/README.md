@@ -780,6 +780,13 @@ and restricted-float conversion contracts. It was calibrated on 2026-09-07
 against Debian `/usr/bin/chromium` 145.0.7632.116 and runs independently of
 IndexedDB startup coverage.
 
+Its inline-SVG viewport cases also share a renderer fixture and compare both
+geometry and pixels. Negative intrinsic lengths must not trigger a 300x150
+fallback; author CSS, including percentages and min/max sizes, and a valid
+viewBox still control the used viewport. Negative percentage attributes retain
+their separate fallback.
+These cases were calibrated against Chromium 145.0.7632.6 on 2026-11-15.
+
 The default `target-lifecycle` process group locks down Moli's resource lifetime,
 not a Chromium-specific FD count. In one server it closes 800 default-context
 targets with `Target.closeTarget`, 800 with `Page.close`, 128 after detaching,
