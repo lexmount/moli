@@ -94,7 +94,7 @@ pub(super) async fn start_bidi_input_command(
                 ));
             }
         };
-        let files = match selected_files_from_paths(&paths).await {
+        let files = match selected_files_from_paths(paths).await {
             Ok(files) => files,
             Err(error) => return failed(bidi_response_from_devtools_error(dispatch.id, error)),
         };
