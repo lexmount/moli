@@ -234,24 +234,6 @@ impl PageScriptHost {
         self.pending_network_output.push(item);
     }
 
-    pub(crate) fn record_get_subresource_network_result(
-        &mut self,
-        frame_id: Option<String>,
-        document_url: url::Url,
-        request_url: url::Url,
-        resource_type: SubresourceResourceType,
-        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
-    ) {
-        self.record_get_subresource_network_result_with_initiator(
-            frame_id,
-            document_url,
-            request_url,
-            resource_type,
-            SubresourceRequestInitiatorType::Script,
-            result,
-        );
-    }
-
     pub(crate) fn record_get_subresource_network_result_with_initiator(
         &mut self,
         frame_id: Option<String>,
@@ -374,7 +356,7 @@ impl PageScriptHost {
         request_initiator_type: SubresourceRequestInitiatorType,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        let record = Self::get_subresource_network_record_with_initiator(
+        self.record_historical_get_subresource_network_result_with_handle(
             frame_id,
             document_url,
             request_url,
@@ -383,6 +365,30 @@ impl PageScriptHost {
             result,
             None,
         );
+    }
+
+    pub(crate) fn record_historical_get_subresource_network_result_with_handle(
+        &mut self,
+        frame_id: Option<String>,
+        document_url: url::Url,
+        request_url: url::Url,
+        resource_type: SubresourceResourceType,
+        request_initiator_type: SubresourceRequestInitiatorType,
+        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
+        request_handle: Option<SubresourceNetworkRequestHandle>,
+    ) {
+        let mut record = Self::get_subresource_network_record_with_initiator(
+            frame_id,
+            document_url,
+            request_url,
+            resource_type,
+            request_initiator_type,
+            result,
+            None,
+        );
+        if let Some(handle) = request_handle {
+            record = record.with_request_handle(handle);
+        }
         self.push_network_output_item(ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
             record,
         )));

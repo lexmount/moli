@@ -827,6 +827,7 @@ fn child_pending_external_load_completion_carries_owner_and_record() {
         result: Ok("globalThis.__complete = true".to_owned()),
         network_result: None,
         network_attribution: ChildClassicScriptNetworkAttribution {
+            request_handle: None,
             frame_id: Some("child-frame".to_owned()),
             document_url: Url::parse("https://child-classic-source-load.test/document").unwrap(),
             request_url: script_url.clone(),
