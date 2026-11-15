@@ -225,6 +225,45 @@ impl DocumentRuntime {
         Vec::new()
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn handle_builtin_element_attribute_change(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+        old_value: Option<&str>,
+        new_value: Option<&str>,
+        reaction_policy: AttributeChangedReactionPolicy,
+    ) {
+        self.handle_details_attribute_change(
+            scope,
+            host_ptr,
+            handle,
+            namespace,
+            local_name,
+            old_value,
+            new_value,
+            reaction_policy,
+        );
+        if namespace.is_none()
+            && local_name.eq_ignore_ascii_case("inert")
+            && old_value.is_none()
+            && new_value.is_some()
+            && self
+                .dom_host
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| {
+                    element.namespace() == crate::native_bridge::document::XHTML_NS
+                })
+            && let Some(active) = self.active_element_handle()
+        {
+            crate::native_bridge::element::schedule_focus_blur_if_needed(scope, host_ptr, active);
+        }
+    }
+
     pub(crate) fn set_text_content(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -660,7 +699,7 @@ impl DocumentRuntime {
         let changed =
             self.apply_runtime_mutation_effects(scope, host_ptr, effects, mutation_options);
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -834,7 +873,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -969,7 +1008,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -1109,7 +1148,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
