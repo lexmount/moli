@@ -2114,11 +2114,36 @@ fn anchor_download_activation(
                 Some(download_request),
             )
         });
-    proceed.then_some(RendererPendingDownloadActivation {
+    if !proceed {
+        return None;
+    }
+    // Retain the authorized backing at activation, before script can revoke
+    // the URL. Reading it belongs to the asynchronous download task.
+    let response = url::Url::parse(&resolved)
+        .ok()
+        .filter(|url| url.scheme() == "blob")
+        .and_then(|_| {
+            crate::blob::object_url_download_data(unsafe { &mut *runtime_ptr }, handle, &resolved)
+        })
+        .map(
+            |(data, mime_type)| crate::runtime::RendererPendingDownloadResponse {
+                final_url: resolved.clone(),
+                status: 200,
+                headers: vec![
+                    ("Content-Type".to_owned(), mime_type.into_bytes()),
+                    (
+                        "Content-Length".to_owned(),
+                        data.len().to_string().into_bytes(),
+                    ),
+                ],
+                body: crate::runtime::RendererDownloadBody::Blob(data),
+            },
+        );
+    Some(RendererPendingDownloadActivation {
         frame_id,
         url: resolved,
         suggested_filename,
-        response: None,
+        response,
     })
 }
 

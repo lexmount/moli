@@ -193,6 +193,7 @@ struct PreparedDownloadActivation {
 }
 
 struct PreparedNavigationDownload {
+    suggested_filename_hint: Option<String>,
     frame_id: String,
     response_url: Url,
     response_headers: Vec<(String, Vec<u8>)>,
@@ -332,6 +333,12 @@ impl CdpConnection {
                 Some(prepared) => PreparedDownloadDeliveryKind::Prefetched(Box::new(prepared)),
                 None => PreparedDownloadDeliveryKind::Events(Vec::new()),
             }
+        } else if Url::parse(&activation.url).is_ok_and(|url| url.scheme() == "blob") {
+            // Missing, revoked and unauthorized Blob URLs still produce the
+            // observable download/canceled pair, without entering HTTP fetch.
+            PreparedDownloadDeliveryKind::Events(
+                self.unavailable_blob_download_activation_events(owner, activation)?,
+            )
         } else {
             match self.prepare_pending_download_activation(owner, activation)? {
                 Some(prepared) => PreparedDownloadDeliveryKind::Fetch(Box::new(prepared)),
@@ -463,6 +470,40 @@ impl CdpConnection {
         )))
     }
 
+    fn unavailable_blob_download_activation_events(
+        &mut self,
+        command_owner: &CommandOwnerScope,
+        activation: RendererPendingDownloadActivation,
+    ) -> Result<Vec<BackgroundProtocolEvent>> {
+        let Some(owner) = self.pending_download_owner_context(command_owner) else {
+            return Ok(Vec::new());
+        };
+        let settings = self
+            .download_behavior
+            .effective_for_browser_context(Some(&owner.browser_context_id));
+        let route = self.download_event_route(command_owner, settings.automation_events_enabled);
+        let filename = activation
+            .suggested_filename
+            .as_deref()
+            .and_then(non_empty_filename)
+            .map(str::to_owned)
+            .or_else(|| {
+                Url::parse(&activation.url)
+                    .ok()
+                    .and_then(|url| filename_from_url(&url))
+            })
+            .unwrap_or_else(|| "download".to_owned());
+        let guid = generate_download_guid()?;
+        self.download_registry.mark_canceled(&guid);
+        Ok(denied_download_activation_events(
+            &route,
+            activation.frame_id.as_deref().unwrap_or(&owner.frame_id),
+            &guid,
+            &activation.url,
+            &filename,
+        ))
+    }
+
     fn prepare_prefetched_download_activation(
         &mut self,
         command_owner: &CommandOwnerScope,
@@ -482,18 +523,23 @@ impl CdpConnection {
             moli_core::page::RendererDownloadBody::Buffered(body) => {
                 CompletedDownloadBody::Buffered(body)
             }
+            moli_core::page::RendererDownloadBody::Blob(body) => CompletedDownloadBody::Blob(body),
             moli_core::page::RendererDownloadBody::Network(body) => {
                 CompletedDownloadBody::Intercepted(body)
             }
         };
 
-        self.prepare_download_from_response(
+        let mut prepared = self.prepare_download_from_response(
             command_owner,
             Some(&owner.browser_context_id),
             activation.frame_id.unwrap_or(owner.frame_id),
             response_url,
             CompletedDownloadBodyArtifact::from_body(response_body, response.headers),
-        )
+        )?;
+        if let Some(prepared) = &mut prepared {
+            prepared.suggested_filename_hint = activation.suggested_filename;
+        }
+        Ok(prepared)
     }
 
     fn prepare_navigation_download(
@@ -540,6 +586,7 @@ impl CdpConnection {
         let (response_body, response_headers) = body_artifact.into_parts();
 
         Ok(Some(PreparedNavigationDownload {
+            suggested_filename_hint: None,
             frame_id,
             response_url,
             response_headers,
@@ -863,6 +910,13 @@ async fn complete_navigation_download_async(
     sender: Option<&BackgroundEventSender>,
 ) -> Vec<BackgroundProtocolEvent> {
     let suggested_filename = filename_from_headers(&prepared.response_headers)
+        .or_else(|| {
+            prepared
+                .suggested_filename_hint
+                .as_deref()
+                .and_then(non_empty_filename)
+                .map(str::to_owned)
+        })
         .or_else(|| filename_from_url(&prepared.response_url))
         .unwrap_or_else(|| "download".to_owned());
     let artifact_name = artifact_file_name(
@@ -875,7 +929,9 @@ async fn complete_navigation_download_async(
     let mut events = build_navigation_download_will_begin_event(&prepared, &suggested_filename);
     events.extend(build_navigation_download_in_progress_event(&prepared));
     let cancel = match &prepared.response_body {
-        CompletedDownloadBody::Buffered(_) => FetchCancelHandle::new(),
+        CompletedDownloadBody::Buffered(_) | CompletedDownloadBody::Blob(_) => {
+            FetchCancelHandle::new()
+        }
         CompletedDownloadBody::Streaming(response) => response.cancellation_handle(),
         CompletedDownloadBody::Intercepted(body) => body.cancellation_handle(),
     };
@@ -947,6 +1003,21 @@ async fn write_navigation_download_body_async(
                         break;
                     }
                     std::mem::take(bytes)
+                }
+                CompletedDownloadBody::Blob(data) => {
+                    let offset = usize::try_from(total_bytes)?;
+                    if offset == data.len() {
+                        break;
+                    }
+                    let end = offset.saturating_add(64 * 1024).min(data.len());
+                    let (send, receive) = tokio::sync::oneshot::channel();
+                    data.read(
+                        offset..end,
+                        Box::new(move |result| {
+                            let _ = send.send(result);
+                        }),
+                    );
+                    receive.await.context("Blob download read canceled")??
                 }
                 CompletedDownloadBody::Streaming(response) => match response.next_chunk().await {
                     Some(chunk) => chunk,
@@ -1568,11 +1639,336 @@ mod tests {
         use super::*;
         use crate::conn::{CommandResponseFlushState, CompletedDownloadBody};
         use axum::{Router, routing::get};
+        use parking_lot::Mutex;
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
         use std::time::Duration;
+        use url::Url;
+
+        #[tokio::test]
+        async fn prefetched_blob_download_preserves_anchor_name_and_binary_content() {
+            for disposition in [None, Some("attachment; filename=server.bin")] {
+                let mut conn = CdpConnection::new();
+                let mut context = BrowserContext::new("blob-download-context".to_owned());
+                context.set_active_target_id("blob-download-target");
+                conn.install_browser_context_fixture_for_test(context);
+                let root = std::env::temp_dir().join(format!(
+                    "blob-download-{}",
+                    generate_download_guid().unwrap()
+                ));
+                conn.download_behavior.set_global(
+                    "allow".to_owned(),
+                    Some(root.to_string_lossy().into_owned()),
+                    true,
+                );
+                let owner = CommandOwnerScope::capture(&conn, None);
+                let bytes = vec![0, 255, 128, b'a', b'\r', b'\n'];
+                let mut headers = vec![(
+                    "Content-Type".to_owned(),
+                    b"application/octet-stream".to_vec(),
+                )];
+                if let Some(disposition) = disposition {
+                    headers.push((
+                        "Content-Disposition".to_owned(),
+                        disposition.as_bytes().to_vec(),
+                    ));
+                }
+                let delivery = conn
+                    .prepare_pending_download_activation_delivery(
+                        &owner,
+                        RendererPendingDownloadActivation {
+                            frame_id: None,
+                            url: "blob:https://download.test/retained".to_owned(),
+                            suggested_filename: Some("anchor.bin".to_owned()),
+                            response: Some(RendererPendingDownloadResponse {
+                                final_url: "blob:https://download.test/retained".to_owned(),
+                                status: 200,
+                                headers,
+                                body: moli_core::page::RendererDownloadBody::Blob(
+                                    bytes.clone().into(),
+                                ),
+                            }),
+                        },
+                        false,
+                    )
+                    .unwrap();
+                let mut events = Vec::new();
+                delivery.run(&mut events).await;
+                let name = if disposition.is_some() {
+                    "server.bin"
+                } else {
+                    "anchor.bin"
+                };
+                assert_eq!(tokio::fs::read(root.join(name)).await.unwrap(), bytes);
+                assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+                tokio::fs::remove_dir_all(root).await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn unavailable_blob_download_reports_cancellation_without_fetching() {
+            let mut conn = CdpConnection::new();
+            let mut context = BrowserContext::new("unavailable-blob-context".to_owned());
+            context.set_active_target_id("blob-target");
+            conn.install_browser_context_fixture_for_test(context);
+            let root = std::env::temp_dir().join(format!(
+                "unavailable-blob-{}",
+                generate_download_guid().unwrap()
+            ));
+            conn.download_behavior.set_global(
+                "allow".to_owned(),
+                Some(root.to_string_lossy().into_owned()),
+                true,
+            );
+            conn.download_behavior
+                .set_browser_events_enabled_for_session(None, true);
+            let owner = CommandOwnerScope::capture(&conn, None);
+            let delivery = conn
+                .prepare_pending_download_activation_delivery(
+                    &owner,
+                    RendererPendingDownloadActivation {
+                        frame_id: Some("child-frame".to_owned()),
+                        url: "blob:https://download.test/revoked".to_owned(),
+                        suggested_filename: Some("gone.bin".to_owned()),
+                        response: None,
+                    },
+                    false,
+                )
+                .unwrap();
+            assert!(
+                matches!(delivery.kind, PreparedDownloadDeliveryKind::Events(_)),
+                "unavailable Blob must not prepare a network fetch"
+            );
+            let mut events = Vec::new();
+            delivery.run(&mut events).await;
+            let events: Vec<_> = events
+                .into_iter()
+                .map(|event| event.into_parts().0)
+                .collect();
+            let begin = events
+                .iter()
+                .find(|event| event["method"] == "Browser.downloadWillBegin")
+                .unwrap();
+            assert_eq!(begin["params"]["suggestedFilename"], "gone.bin");
+            assert_eq!(begin["params"]["frameId"], "child-frame");
+            let guid = begin["params"]["guid"].as_str().unwrap();
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["method"] == "Browser.downloadProgress"
+                        && event["params"]["state"] == "canceled"
+                        && event["params"]["guid"] == guid)
+            );
+            assert!(matches!(
+                conn.download_registry.open_artifact(guid),
+                OpenDownloadArtifactOutcome::NotAvailable
+            ));
+            assert!(!root.exists());
+        }
+
+        #[tokio::test]
+        async fn retained_blob_download_reads_bounded_chunks_and_cleans_up_read_errors() {
+            #[derive(Debug)]
+            struct Source {
+                ranges: Mutex<Vec<std::ops::Range<usize>>>,
+                fail: bool,
+            }
+            impl moli_file_api::BlobSource for Source {
+                fn read(
+                    &self,
+                    range: std::ops::Range<usize>,
+                    complete: moli_file_api::BlobReadCompletion,
+                ) {
+                    self.ranges.lock().push(range.clone());
+                    if self.fail && range.start != 0 {
+                        complete(Err(io::Error::other("source read failed")));
+                    } else {
+                        complete(Ok(vec![0xa5; range.len()]));
+                    }
+                }
+            }
+            for (size, fail) in [(0, false), (65 * 1024 * 1024, false), (128 * 1024, true)] {
+                let source = Arc::new(Source {
+                    ranges: Mutex::default(),
+                    fail,
+                });
+                let mut conn = CdpConnection::new();
+                let mut context = BrowserContext::new("chunked-blob-context".to_owned());
+                context.set_active_target_id("blob-target");
+                conn.install_browser_context_fixture_for_test(context);
+                let root = std::env::temp_dir().join(format!(
+                    "chunked-blob-{}",
+                    generate_download_guid().unwrap()
+                ));
+                conn.download_behavior.set_global(
+                    "allow".to_owned(),
+                    Some(root.to_string_lossy().into_owned()),
+                    true,
+                );
+                conn.download_behavior
+                    .set_browser_events_enabled_for_session(None, true);
+                let owner = CommandOwnerScope::capture(&conn, None);
+                let delivery = conn
+                    .prepare_pending_download_activation_delivery(
+                        &owner,
+                        RendererPendingDownloadActivation {
+                            frame_id: None,
+                            url: "blob:https://download.test/retained".to_owned(),
+                            suggested_filename: Some("large.bin".to_owned()),
+                            response: Some(RendererPendingDownloadResponse {
+                                final_url: "blob:https://download.test/retained".to_owned(),
+                                status: 200,
+                                headers: Vec::new(),
+                                body: moli_core::page::RendererDownloadBody::Blob(
+                                    moli_file_api::BlobData::from_source(source.clone(), size),
+                                ),
+                            }),
+                        },
+                        false,
+                    )
+                    .unwrap();
+                assert!(
+                    source.ranges.lock().is_empty(),
+                    "preparing a download must not read backing"
+                );
+                let mut events = Vec::new();
+                delivery.run(&mut events).await;
+                let events: Vec<_> = events
+                    .into_iter()
+                    .map(|event| event.into_parts().0)
+                    .collect();
+                let state = if fail { "canceled" } else { "completed" };
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| event["method"] == "Browser.downloadProgress"
+                            && event["params"]["state"] == state)
+                );
+                let ranges = source.ranges.lock().clone();
+                for (index, range) in ranges.iter().enumerate() {
+                    assert_eq!(range.start, index * 64 * 1024);
+                    assert!(range.len() <= 64 * 1024);
+                }
+                if fail {
+                    assert_eq!(ranges.len(), 2);
+                    assert_eq!(
+                        std::fs::read_dir(&root).unwrap().count(),
+                        0,
+                        "failed download removes partial artifact"
+                    );
+                } else {
+                    assert_eq!(ranges.len(), size.div_ceil(64 * 1024));
+                    let mut file = std::fs::File::open(root.join("large.bin")).unwrap();
+                    assert_eq!(file.metadata().unwrap().len(), size as u64);
+                    let mut buffer = vec![0; 64 * 1024];
+                    loop {
+                        let read = std::io::Read::read(&mut file, &mut buffer).unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        assert!(buffer[..read].iter().all(|byte| *byte == 0xa5));
+                    }
+                    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+                }
+                assert_eq!(
+                    Arc::strong_count(&source),
+                    1,
+                    "terminal download releases its backing"
+                );
+                tokio::fs::remove_dir_all(root).await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn canceling_blob_download_releases_backing_and_removes_partial_file() {
+            struct Source {
+                started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+                completion: Mutex<Option<moli_file_api::BlobReadCompletion>>,
+            }
+            impl std::fmt::Debug for Source {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.debug_struct("PendingBlobSource").finish_non_exhaustive()
+                }
+            }
+            impl moli_file_api::BlobSource for Source {
+                fn read(
+                    &self,
+                    range: std::ops::Range<usize>,
+                    complete: moli_file_api::BlobReadCompletion,
+                ) {
+                    assert_eq!(range, 0..64 * 1024);
+                    *self.completion.lock() = Some(complete);
+                    self.started.lock().take().unwrap().send(()).unwrap();
+                }
+            }
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let source = Arc::new(Source {
+                started: Mutex::new(Some(started_tx)),
+                completion: Mutex::default(),
+            });
+            let root = std::env::temp_dir()
+                .join(format!("cancel-blob-{}", generate_download_guid().unwrap()));
+            let guid = generate_download_guid().unwrap();
+            let registry = super::super::SharedDownloadRegistry::default();
+            let prepared = PreparedNavigationDownload {
+                suggested_filename_hint: Some("slow.bin".to_owned()),
+                frame_id: "child-frame".to_owned(),
+                response_url: Url::parse("blob:https://download.test/retained").unwrap(),
+                response_headers: Vec::new(),
+                response_body: CompletedDownloadBody::Blob(moli_file_api::BlobData::from_source(
+                    source.clone(),
+                    128 * 1024,
+                )),
+                download_root: root.to_string_lossy().into_owned(),
+                guid: guid.clone(),
+                behavior: "allow".to_owned(),
+                event_route: super::super::DownloadEventRoute {
+                    browser_observers: vec![BrowserDownloadObserver {
+                        session_id: None,
+                        subscription_generation: 1,
+                    }],
+                    automation_events_enabled: false,
+                    page_observers: Vec::new(),
+                },
+                registry: registry.clone(),
+            };
+            let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+            PreparedDownloadActivationDelivery {
+                kind: PreparedDownloadDeliveryKind::Prefetched(Box::new(prepared)),
+                sender: Some(sender),
+            }
+            .run(&mut Vec::new())
+            .await;
+            tokio::time::timeout(Duration::from_secs(2), started_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(partial_artifact_path(&root.join("slow.bin")).exists());
+            assert!(matches!(
+                registry.cancel(&guid),
+                super::super::CancelDownloadOutcome::Handled
+            ));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let event = events.recv().await.unwrap().into_parts().0;
+                    if event["method"] == "Browser.downloadProgress"
+                        && event["params"]["state"] == "canceled"
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+            // An already admitted backend read can finish after cancellation.
+            // Its callback must safely discard the now unobserved result.
+            source.completion.lock().take().unwrap()(Ok(vec![0; 64 * 1024]));
+            assert_eq!(Arc::strong_count(&source), 1);
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        }
 
         #[tokio::test]
         async fn fetch_download_does_not_wait_for_command_output() {
@@ -1621,6 +2017,7 @@ mod tests {
             };
             let kind = if prefetched {
                 PreparedDownloadDeliveryKind::Prefetched(Box::new(PreparedNavigationDownload {
+                    suggested_filename_hint: None,
                     frame_id: "download-frame".into(),
                     response_url: url.parse().unwrap(),
                     response_headers: Vec::new(),
@@ -1730,6 +2127,7 @@ mod tests {
                 let artifact = root.join(&guid);
                 let registry = SharedDownloadRegistry::default();
                 let prepared = PreparedNavigationDownload {
+                    suggested_filename_hint: None,
                     frame_id: "child-frame".into(),
                     response_url: response.final_url.clone(),
                     response_headers: Vec::new(),

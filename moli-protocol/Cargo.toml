@@ -18,6 +18,7 @@ bytes = "1"
 indexmap = "2.14.2"
 moli-bounded-buffer = { path = "../moli-bounded-buffer" }
 moli-core = { path = "../moli-core" }
+moli-file-api = { path = "../moli-file-api" }
 moli-header-field = { path = "../moli-header-field" }
 moli-page-types = { path = "../moli-types/moli-page-types" }
 moli-browser-profile = { path = "../moli-browser-profile" }

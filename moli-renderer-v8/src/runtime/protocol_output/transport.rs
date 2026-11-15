@@ -723,6 +723,39 @@ mod tests {
         assert_eq!(receiver.diagnostics().pending_messages, 0);
     }
 
+    #[tokio::test]
+    async fn large_blob_download_handles_do_not_close_the_output_transport() {
+        let mut limits = test_limits();
+        limits.max_message_bytes = 4 * 1024;
+        let (sender, mut receiver) = renderer_output_transport_channel_with_limits(limits);
+        let body = crate::runtime::RendererDownloadBody::Blob(vec![0; 64 * 1024 * 1024].into());
+        let download = RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
+            RendererOwnerAction::Download(RendererPendingDownloadActivation {
+                frame_id: None,
+                url: "blob:https://example.test/retained".to_owned(),
+                suggested_filename: Some("large.bin".to_owned()),
+                response: Some(RendererPendingDownloadResponse {
+                    final_url: "blob:https://example.test/retained".to_owned(),
+                    status: 200,
+                    headers: Vec::new(),
+                    body,
+                }),
+            }),
+        ));
+        let message = publication(1, vec![download]);
+        sender
+            .send(message.clone())
+            .expect("backing stays outside inline message");
+        assert_eq!(receiver.recv().await, Some(message));
+        let next = publication(2, vec![owner_action_record()]);
+        sender
+            .send(next.clone())
+            .expect("subsequent actions still work");
+        assert_eq!(receiver.recv().await, Some(next));
+        assert!(!receiver.is_terminal());
+        assert_eq!(receiver.diagnostics().pending_messages, 0);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_last_admission_cannot_enqueue_after_terminal() {
         let mut limits = test_limits();
