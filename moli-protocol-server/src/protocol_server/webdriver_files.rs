@@ -16,9 +16,9 @@ const MAX_UPLOAD_BASE64_CHARS: usize = MAX_UPLOAD_ZIP_ARCHIVE_BYTES.div_ceil(3) 
 const MAX_DOWNLOAD_BYTES: usize = 50 * 1024 * 1024;
 
 pub(super) async fn selected_files_from_paths(
-    paths: &[String],
+    paths: Vec<String>,
 ) -> Result<Vec<SelectedFile>, DevToolsError> {
-    moli_protocol::file_upload::selected_files_from_paths_async(paths.to_vec())
+    moli_protocol::file_upload::selected_files_from_paths_async(paths)
         .await
         .map_err(|error| {
             DevToolsError::new(DevToolsErrorKind::UnableToSetFileInput, error.to_string())
