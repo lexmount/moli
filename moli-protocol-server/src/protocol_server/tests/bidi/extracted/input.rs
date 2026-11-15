@@ -712,7 +712,7 @@ async fn websocket_bidi_input_element_origin_uses_real_geometry() {
 async fn websocket_bidi_actions_preserve_right_modifier_and_keypad_locations() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut socket, context) = bidi_session_with_context(addr).await;
-    let page = "data:text/html,<input id=field><script>window.events=[];field.focus();for(const type of ['keydown','keypress','keyup'])document.addEventListener(type,e=>events.push([e.type,e.key,e.code,e.location]));</script>";
+    let page = "data:text/html,<input id=field><script>window.events=[];field.focus();for(const type of ['keydown','keypress','keyup'])document.addEventListener(type,e=>events.push([e.type,e.key,e.code,e.location,e.repeat]));</script>";
     let response = send_bidi_command_response(
         &mut socket,
         3,
@@ -741,11 +741,11 @@ async fn websocket_bidi_actions_preserve_right_modifier_and_keypad_locations() {
     ] {
         actions.push(json!({"type":"keyDown","value":raw}));
         actions.push(json!({"type":"keyUp","value":raw}));
-        expected.push(json!(["keydown", key, code, location]));
+        expected.push(json!(["keydown", key, code, location, false]));
         if key == "=" {
-            expected.push(json!(["keypress", key, code, location]));
+            expected.push(json!(["keypress", key, code, location, false]));
         }
-        expected.push(json!(["keyup", key, code, location]));
+        expected.push(json!(["keyup", key, code, location, false]));
     }
     let response = send_bidi_command_response(
         &mut socket,
@@ -755,11 +755,54 @@ async fn websocket_bidi_actions_preserve_right_modifier_and_keypad_locations() {
     )
     .await;
     assert_eq!(response["type"], "success");
-    let response=send_bidi_command_response(&mut socket,6,"script.evaluate",json!({"target":{"context":context},"expression":"JSON.stringify(events)","awaitPromise":false})).await;
+    let response=send_bidi_command_response(&mut socket,6,"script.evaluate",json!({"target":{"context":context},"expression":"JSON.stringify(events.splice(0))","awaitPromise":false})).await;
     assert_eq!(response["type"], "success");
     let observed: serde_json::Value =
         serde_json::from_str(response["result"]["result"]["value"].as_str().unwrap()).unwrap();
     assert_eq!(observed, json!(expected));
+
+    for (index, (first, last, first_code, last_code, first_location, last_location)) in [
+        ("\u{E008}", "\u{E050}", "ShiftLeft", "ShiftRight", 1, 2),
+        ("\u{E050}", "\u{E008}", "ShiftRight", "ShiftLeft", 2, 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 7 + index as u64 * 3;
+        let response = send_bidi_command_response(
+            &mut socket,
+            id,
+            "input.performActions",
+            json!({"context":context,"actions":[{
+                "type":"key","id":"keyboard","actions":[
+                    {"type":"keyDown","value":first},{"type":"keyDown","value":last}
+                ]
+            }]}),
+        )
+        .await;
+        assert_eq!(response["type"], "success");
+        let response = send_bidi_command_response(
+            &mut socket,
+            id + 1,
+            "input.releaseActions",
+            json!({"context":context}),
+        )
+        .await;
+        assert_eq!(response["type"], "success");
+        let response=send_bidi_command_response(&mut socket,id+2,"script.evaluate",json!({"target":{"context":context},"expression":"JSON.stringify(events.splice(0))","awaitPromise":false})).await;
+        assert_eq!(response["type"], "success");
+        let observed: serde_json::Value =
+            serde_json::from_str(response["result"]["result"]["value"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            observed,
+            json!([
+                ["keydown", "Shift", first_code, first_location, false],
+                ["keydown", "Shift", last_code, last_location, true],
+                ["keyup", "Shift", last_code, last_location, false]
+            ])
+        );
+    }
+
     let _ = socket.close(None).await;
     server.abort();
 }
