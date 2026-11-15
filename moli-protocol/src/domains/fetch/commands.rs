@@ -310,7 +310,14 @@ fn start_devtools_continue_intercepted_request_command(
         let handle_auth_requests = conn.target_fetch_handle_auth_requests_for_owner(owner);
         let should_register =
             pending.resource_type != SubresourceResourceType::WebSocket || intercept_response;
-        let correlation = match if configured_response_stage && !command.intercept_response {
+        let correlation = match if command.intercept_response {
+            PreparedSubresourceCorrelation::prepare_explicit_response_stage(
+                conn,
+                owner,
+                &request_id,
+                &pending,
+            )
+        } else if configured_response_stage {
             PreparedSubresourceCorrelation::prepare_deferred_response_stage(
                 conn,
                 owner,

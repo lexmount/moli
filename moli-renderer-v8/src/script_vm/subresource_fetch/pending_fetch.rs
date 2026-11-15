@@ -562,7 +562,7 @@ impl ScriptVm {
         self.spawn_running_subresource_response(state, async move {
             match prepared {
                 Ok(()) => response.await,
-                Err(error) => AsyncSubresourceFetchResult::Failure(error),
+                Err(error) => AsyncSubresourceFetchResult::Failure(error.into()),
             }
         });
     }

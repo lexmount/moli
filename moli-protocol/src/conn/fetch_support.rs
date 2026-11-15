@@ -179,6 +179,8 @@ pub fn fetch_subresource_interception_config_for_patterns(
 pub enum ResponseStageUrlMatchPolicy {
     AlreadyMatched,
     MatchFinalUrl,
+    /// The client requested a response pause for this individual request.
+    ExplicitlyRequested,
 }
 
 impl ResponseStageUrlMatchPolicy {

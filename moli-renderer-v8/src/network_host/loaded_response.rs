@@ -29,12 +29,14 @@ impl LoadedResponse {
         }
     }
 
-    pub(super) async fn materialize(&self) -> Result<(Response, SubresourceResponseBody), String> {
+    pub(super) async fn materialize(
+        &self,
+    ) -> Result<(Response, SubresourceResponseBody), super::SubresourceFetchError> {
         let body = self
             .body
             .capture(usize::MAX)
             .await
-            .map_err(|error| format!("{error:#}"))?;
+            .map_err(super::SubresourceFetchError::from)?;
         let bytes = body
             .materialize_bytes()
             .map_err(|error| error.to_string())?;

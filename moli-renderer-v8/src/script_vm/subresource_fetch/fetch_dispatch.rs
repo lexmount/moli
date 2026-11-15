@@ -440,7 +440,7 @@ impl ScriptVm {
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error.message)),
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
                 unreachable!("body bound above")
             }

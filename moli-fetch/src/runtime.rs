@@ -1556,6 +1556,20 @@ impl RuntimeOwner {
             .and_then(|easy| easy.get_mut().buffered_mut())
             .and_then(ResponseCollector::take_callback_error)
         {
+            // Header rejection must not discard HTTP side effects. These
+            // cookies belong to the received response even when Location is
+            // invalid, and must be handled before waiting for any body bytes.
+            if job.request.allows_credentials_for_url(&job.current_url)
+                && let Some(collector) = easy.as_ref().and_then(|easy| easy.get_ref().buffered())
+                && let Err(error) = store_response_cookies(
+                    &self.cookie_store,
+                    &job.current_url,
+                    collector.headers(),
+                    &job.current_cookie_context,
+                )
+            {
+                return Err((job.response_tx, error));
+            }
             return Err((job.response_tx, anyhow::Error::msg(error)));
         }
         let header_terminated = easy

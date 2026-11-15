@@ -70,6 +70,8 @@ async fn manual_network_redirect_preserves_chromium_network_hosts() -> Result<()
     for transport in [Transport::Buffered, Transport::Raw] {
         for location in [
             "http://example%20host.test/",
+            "http://caf%C3%A9%20domain.test/",
+            "//caf%C3%A9%20domain.test/",
             "http://xn--a.invalid/",
             "//example%20host.test/",
             "//xn--a.invalid/",

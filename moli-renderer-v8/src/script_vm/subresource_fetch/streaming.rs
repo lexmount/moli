@@ -63,13 +63,13 @@ impl ScriptVm {
                 )
                 .await
             };
-            result.map(|observed| {
+            AsyncSubresourceFetchResult::from_network_result(result.map(|observed| {
                 let (response, request_observation) = observed.into_parts();
                 crate::protocol_types::NavigationResponse::from(response)
                     .with_network_request_headers(
                         request_observation.map(|observation| observation.into_headers()),
                     )
-            })
+            }))
         };
         self.spawn_running_subresource_response(state, response);
     }
@@ -120,12 +120,20 @@ impl ScriptVm {
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result =
             completion_result.bind_child_body(&mut running.pending.continuation);
+        let mut response_error_reason =
+            crate::network_host::fetch_response_error_reason(network_error_text.as_deref());
         let (encoded, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error) => {
+                if let Some(error_text) = error.network_error_text {
+                    response_error_reason =
+                        crate::network_host::fetch_response_error_reason(Some(error_text));
+                }
+                (None, Err(error.message))
+            }
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
                 unreachable!("body bound above")
             }
@@ -298,7 +306,8 @@ impl ScriptVm {
                         skip_fetch_security_validation,
                         response_filter,
                     };
-                    let info = state.response_info();
+                    let mut info = state.response_info();
+                    info.response_error_reason = Some(response_error_reason.to_owned());
                     let mut host = self._context_host.borrow_mut();
                     host.record_pending_subresource_response(state);
                     host.record_pending_subresource_continue_event(

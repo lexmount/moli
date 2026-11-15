@@ -20,6 +20,26 @@ pub(super) struct PreparedSubresourceCorrelation {
 }
 
 impl PreparedSubresourceCorrelation {
+    pub(super) fn prepare_explicit_response_stage(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        request_id: &str,
+        pending: &PendingSubresourceFetchRequest,
+    ) -> Option<Self> {
+        conn.register_in_flight_subresource_fetch_request_with_response_match_policy_for_owner(
+            owner,
+            Some(request_id.to_owned()),
+            pending.clone(),
+            crate::conn::ResponseStageUrlMatchPolicy::ExplicitlyRequested,
+        )
+        .then(|| Self {
+            internal_id: pending.internal_id,
+            registered: true,
+            owner_scope: owner.clone(),
+            network_request_id: pending.network_request_id.clone(),
+        })
+    }
+
     pub(super) fn prepare(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,

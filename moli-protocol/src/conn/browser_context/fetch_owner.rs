@@ -940,6 +940,21 @@ impl CdpConnection {
         request_id: Option<String>,
         pending: PendingSubresourceFetchRequest,
     ) -> bool {
+        self.register_in_flight_subresource_fetch_request_with_response_match_policy_for_owner(
+            owner,
+            request_id,
+            pending,
+            crate::conn::ResponseStageUrlMatchPolicy::MatchFinalUrl,
+        )
+    }
+
+    pub(crate) fn register_in_flight_subresource_fetch_request_with_response_match_policy_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        request_id: Option<String>,
+        pending: PendingSubresourceFetchRequest,
+        policy: crate::conn::ResponseStageUrlMatchPolicy,
+    ) -> bool {
         if !self.pending_subresource_fetch_request_residence_is_current(&pending) {
             return false;
         }
@@ -947,9 +962,7 @@ impl CdpConnection {
         self.target_session_owner_mut_for_owner(owner)
             .is_some_and(|mut owner| {
                 owner.register_in_flight_subresource_fetch_request_with_response_match_policy(
-                    request_id,
-                    pending,
-                    crate::conn::ResponseStageUrlMatchPolicy::MatchFinalUrl,
+                    request_id, pending, policy,
                 )
             })
     }

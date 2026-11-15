@@ -25,12 +25,26 @@ async fn redirect_server(
             get(|| async { axum::response::Html("<!doctype html>ready") }),
         )
         .route(
+            "/worker.js",
+            get(|| async {
+                (
+                    [("content-type", "text/javascript")],
+                    "onmessage = e => { eval(e.data); };",
+                )
+            }),
+        )
+        .route(
             "/redirect",
             axum::routing::any(move |request: axum::extract::Request| {
                 let release = body_release.clone();
                 let observed = observed.clone();
                 async move {
                     let method = request.method().as_str();
+                    let location = if request.uri().query() == Some("valid") {
+                        "/valid"
+                    } else {
+                        "http://["
+                    };
                     observed.lock().push(method.to_owned());
                     let cors = [
                         ("access-control-allow-origin", "*"),
@@ -57,7 +71,8 @@ async fn redirect_server(
                         StatusCode::FOUND,
                         cors,
                         [
-                            ("location", "http://["),
+                            ("location", location),
+                            ("set-cookie", "s=1; Path=/"),
                             ("content-length", "5"),
                             ("cache-control", "no-store"),
                         ],
@@ -124,9 +139,164 @@ async fn ordinary_manual_redirect_rejects_before_body_in_window_and_worker() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn manual_redirect_invalid_headers_preserve_cookies_by_credentials_mode() {
+    for worker in [false, true] {
+        for cross in [false, true] {
+            for credentials in ["omit", "same-origin", "include"] {
+                for invalid in [false, true] {
+                    let (base, _release, _requests, server) = redirect_server(invalid).await;
+                    let (page_base, page_server) = if cross {
+                        let (base, _, _, server) = redirect_server(false).await;
+                        (base, Some(server))
+                    } else {
+                        (base.clone(), None)
+                    };
+                    let mut ctx = TestContext::new();
+                    with_loaded_http_document(
+                        &mut ctx,
+                        &format!("{page_base}/page"),
+                        "SID-1",
+                        "TID-1",
+                    )
+                    .await;
+                    enable_runtime_async(&mut ctx, "SID-1", 63_000).await;
+                    command(
+                        &mut ctx,
+                        63_001,
+                        "Runtime.evaluate",
+                        json!({
+                            "expression":"document.cookie='s=; Max-Age=0; Path=/'"
+                        }),
+                    )
+                    .await;
+                    let url = format!("{base}/redirect{}", if invalid { "" } else { "?valid" });
+                    let fetch = fetch_expression(&url, false, false, true).replace(
+                        "redirect:'manual'",
+                        &format!("redirect:'manual',credentials:'{credentials}'"),
+                    );
+                    let fetch = if worker {
+                        let script = format!("{fetch}.then(postMessage)");
+                        format!(
+                            "new Promise((resolve,reject)=>{{const w=new Worker('/worker.js');w.onmessage=e=>{{w.terminate();resolve(e.data)}};w.onerror=reject;w.postMessage({script:?})}})"
+                        )
+                    } else {
+                        fetch
+                    };
+                    let result = command(&mut ctx, 63_002, "Runtime.evaluate", json!({
+                        "expression":format!("{fetch}.then(result=>({{...result,cookie:document.cookie.split('; ').includes('s=1')}}))"),
+                        "awaitPromise":true,"returnByValue":true
+                    })).await;
+                    let cookie =
+                        credentials == "include" || (credentials == "same-origin" && !cross);
+                    let expected = if invalid || (cross && credentials == "include") {
+                        json!({"error":"TypeError","cookie":cookie})
+                    } else {
+                        json!({"type":"opaqueredirect","status":0,"body":"","cookie":cookie})
+                    };
+                    assert_eq!(
+                        result["result"]["result"]["value"], expected,
+                        "worker={worker}, cross={cross}, credentials={credentials}, invalid={invalid}: {result}"
+                    );
+                    if let Some(server) = page_server {
+                        server.abort();
+                    }
+                    server.abort();
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_redirect_response_pause_preserves_connection_error_reason() {
+    // Binding without listening reserves the port while deterministically
+    // refusing connections, including when other tests allocate local ports.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let source = format!("http://{}/refused", socket.local_addr().unwrap());
+    for (worker, mode) in [
+        (false, "manual"),
+        (false, "follow"),
+        (true, "manual"),
+        (true, "follow"),
+    ] {
+        for per_request in [false, true] {
+            for fulfill in [false, true] {
+                let (mut ctx, _, server) = fixture().await;
+                command(&mut ctx, 64_000, "Fetch.enable", json!({
+                    "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":if per_request { "Request" } else { "Response" }}]
+                })).await;
+                command(&mut ctx, 64_001, "Runtime.evaluate", json!({
+                    "expression":format!("globalThis.refusedResult={};'started'",fetch_expression(&source,worker,false,false).replace("redirect:'manual'", &format!("redirect:'{mode}'")))
+                })).await;
+                if per_request {
+                    let pause =
+                        wait_for_request_paused(&mut ctx, &source, "request to refused connection")
+                            .await;
+                    command(
+                        &mut ctx,
+                        64_002,
+                        "Fetch.continueRequest",
+                        json!({
+                            "requestId":pause["params"]["requestId"],"interceptResponse":true
+                        }),
+                    )
+                    .await;
+                }
+                let pause =
+                    wait_for_request_paused(&mut ctx, &source, "connection error response").await;
+                assert_eq!(
+                    pause["params"]["responseErrorReason"], "ConnectionRefused",
+                    "worker={worker}, per_request={per_request}: {pause}"
+                );
+                assert!(pause["params"].get("responseStatusCode").is_none());
+                let mut params = json!({"requestId":pause["params"]["requestId"]});
+                if fulfill {
+                    params["responseCode"] = json!(200);
+                    params["body"] = json!(BASE64_STANDARD.encode("replacement"));
+                    params["responseHeaders"] =
+                        json!([{"name":"Access-Control-Allow-Origin","value":"*"}]);
+                }
+                command(
+                    &mut ctx,
+                    64_003,
+                    if fulfill {
+                        "Fetch.fulfillRequest"
+                    } else {
+                        "Fetch.continueResponse"
+                    },
+                    params,
+                )
+                .await;
+                let result = command(
+                    &mut ctx,
+                    64_004,
+                    "Runtime.evaluate",
+                    json!({
+                        "expression":"refusedResult","awaitPromise":true,"returnByValue":true
+                    }),
+                )
+                .await;
+                assert_eq!(
+                    result["result"]["result"]["value"],
+                    if fulfill {
+                        json!({"type":"cors","status":200,"body":"replacement"})
+                    } else {
+                        json!({"error":"TypeError"})
+                    },
+                    "worker={worker}, per_request={per_request}: {result}"
+                );
+                server.abort();
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
     for worker in [false, true] {
-        for preflight in [false, true] {
+        for (preflight, per_request) in [(false, false), (false, true), (true, false), (true, true)]
+        {
             for fulfill in [false, true] {
                 let (base, _release, requests, server) = redirect_server(true).await;
                 let (mut ctx, page_server) = if preflight {
@@ -141,11 +311,29 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
                 };
                 let source = format!("{base}/redirect");
                 command(&mut ctx, 62_001, "Fetch.enable", json!({
-                    "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":"Response"}]
+                    "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":if per_request { "Request" } else { "Response" }}]
                 })).await;
                 command(&mut ctx, 62_002, "Runtime.evaluate", json!({
                     "expression":format!("globalThis.failedRedirectResult={};'started'", fetch_expression(&source,worker,preflight,false))
                 })).await;
+                if per_request {
+                    let request = wait_for_request_paused(
+                        &mut ctx,
+                        &source,
+                        "request before failed response",
+                    )
+                    .await;
+                    assert!(request["params"].get("responseStatusCode").is_none());
+                    command(
+                        &mut ctx,
+                        62_005,
+                        "Fetch.continueRequest",
+                        json!({
+                            "requestId":request["params"]["requestId"],"interceptResponse":true
+                        }),
+                    )
+                    .await;
+                }
                 let pause =
                     wait_for_request_paused(&mut ctx, &source, "failed redirect response").await;
                 assert_eq!(pause["params"]["responseErrorReason"], "Failed");

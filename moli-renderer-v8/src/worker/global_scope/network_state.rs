@@ -27,6 +27,10 @@ pub(in crate::worker) struct PendingWorkerFetch {
 
 pub(in crate::worker) enum WorkerFetchEvent {
     Completion(Box<WorkerFetchCompletion>),
+    NetworkFailure {
+        completion: Box<WorkerFetchCompletion>,
+        network_error_text: &'static str,
+    },
     StreamingStarted(WorkerFetchStreamingStarted),
     StreamingChunk(WorkerFetchStreamingChunk),
     StreamingFinished(WorkerFetchStreamingFinished),

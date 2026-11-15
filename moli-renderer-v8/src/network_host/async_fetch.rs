@@ -19,6 +19,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight(
     fetch_browser_subresource_with_preflight_and_network_metadata(loader, request, cancel_handle)
         .await
         .map(NetworkFetchResult::into_response)
+        .map_err(String::from)
 }
 
 /// Fetch interception owns redirect decisions, so every HTTP hop must return
@@ -27,7 +28,7 @@ pub(crate) async fn fetch_intercepted_window_hop(
     loader: ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<NetworkFetchResult<Response>, SubresourceFetchError> {
     let mode = request.redirect_mode();
     let preflight_headers = request.request_headers.to_byte_strings();
     let cancel = cancel_handle.unwrap_or_default();
@@ -66,7 +67,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_and_network_metadat
     loader: ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<NetworkFetchResult<Response>, SubresourceFetchError> {
     let preflight_request_headers = request.request_headers.to_byte_strings();
     fetch_browser_subresource_with_preflight_headers_and_observer(
         loader,
@@ -92,6 +93,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_headers(
     )
     .await
     .map(NetworkFetchResult::into_response)
+    .map_err(String::from)
 }
 
 pub(crate) async fn fetch_browser_subresource_with_preflight_headers_and_network_metadata(
@@ -99,7 +101,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_headers_and_network
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<NetworkFetchResult<Response>, SubresourceFetchError> {
     fetch_browser_subresource_with_preflight_headers_and_observer(
         loader,
         request,
@@ -116,7 +118,7 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<NetworkFetchResult<Response>, SubresourceFetchError> {
     if browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers) {
         return fetch_browser_subresource_with_manual_preflight_redirects(
             loader,
@@ -149,7 +151,7 @@ pub(super) async fn fetch_subresource_hop(
     cancel: FetchCancelHandle,
     preflight_headers: Vec<(String, String)>,
     observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<NetworkFetchResult<super::loaded_response::LoadedResponse>, String> {
+) -> Result<NetworkFetchResult<super::loaded_response::LoadedResponse>, SubresourceFetchError> {
     // Both intercepted fetch and native XHR can echo browser-generated fields.
     // Origin, Host, Content-Length and Sec-* are not author CORS permissions.
     let preflight_headers: Vec<_> = preflight_headers
@@ -241,7 +243,7 @@ impl ManualCorsRedirectState {
         loader: &ResourceRequestClient,
         cancel_handle: Option<FetchCancelHandle>,
         preflight_observer: Option<&CorsPreflightNetworkObserver>,
-    ) -> Result<(), String> {
+    ) -> Result<(), SubresourceFetchError> {
         run_cors_preflight_if_needed(
             loader,
             self.request(),
@@ -276,7 +278,7 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<NetworkFetchResult<Response>, SubresourceFetchError> {
     if !request.auth_requires_buffered_transport()
         && request.redirect_mode() == RequestRedirectMode::Follow
     {
@@ -349,7 +351,7 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+) -> Result<NetworkFetchResult<StreamingRawResponse>, SubresourceFetchError> {
     let mut redirects = ManualCorsRedirectState::new(
         loader.bind_browser_site_context(request),
         preflight_request_headers,
@@ -382,7 +384,8 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
                 return Err(format!(
                     "manual redirect unexpectedly entered follow-mode streaming from {}",
                     response_url
-                ));
+                )
+                .into());
             }
             SubresourceResponseTransition::FollowedRedirect => {}
         }
@@ -426,7 +429,7 @@ pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
-) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+) -> Result<NetworkFetchResult<StreamingRawResponse>, SubresourceFetchError> {
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
         loader,
         request,
@@ -443,7 +446,7 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+) -> Result<NetworkFetchResult<StreamingRawResponse>, SubresourceFetchError> {
     // Borrow the loader so its fetch runtime stays alive until the caller drains
     // and finishes the returned StreamingRawResponse.
     run_cors_preflight_if_needed(
@@ -468,8 +471,8 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     Ok(result)
 }
 
-fn format_network_error(error: anyhow::Error) -> String {
-    format!("{error:#}")
+fn format_network_error(error: anyhow::Error) -> SubresourceFetchError {
+    error.into()
 }
 
 async fn run_cors_preflight_if_needed(
@@ -478,7 +481,7 @@ async fn run_cors_preflight_if_needed(
     cancel_handle: Option<FetchCancelHandle>,
     preflight_request_headers: &[(String, String)],
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
-) -> Result<(), String> {
+) -> Result<(), SubresourceFetchError> {
     let request_origin = request
         .browser_origin()
         .map_err(|error| error.to_string())?;
@@ -535,7 +538,7 @@ async fn run_cors_preflight_if_needed(
                             &observable_preflight_headers,
                         )
                         .expect("observed request headers are ByteStrings"),
-                        error.clone(),
+                        error.message.clone(),
                     );
                 }
                 return Err(error);
@@ -674,7 +677,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                     }))
                 .then_some(crate::types::FetchResponseType::OpaqueRedirect.into()),
                 network_error_text: None,
-                result: result.into(),
+                result: crate::types::AsyncSubresourceFetchResult::from_network_result(result),
             });
             return;
         }
@@ -793,7 +796,7 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     request_method: String,
     request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), SubresourceFetchError> {
     let body_source_id = new_network_body_source_id();
     let requires_manual_preflight_redirects =
         browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
@@ -846,7 +849,7 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
         AsyncSubresourceFetchEvent::StreamingFinished(AsyncSubresourceStreamingFinished {
             internal_id,
             body_source_id,
-            result,
+            result: result.map_err(String::from),
         }),
     );
     Ok(())
@@ -860,13 +863,14 @@ async fn fetch_once(
     fetch_once_with_network_metadata(loader, request, cancel_handle)
         .await
         .map(NetworkFetchResult::into_response)
+        .map_err(String::from)
 }
 
 async fn fetch_once_with_network_metadata(
     loader: &ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<NetworkFetchResult<Response>, SubresourceFetchError> {
     let redirect_mode = request.redirect_mode();
     let result =
         fetch_once_with_network_metadata_unvalidated(loader, request, cancel_handle).await?;
@@ -879,7 +883,7 @@ async fn fetch_once_with_network_metadata_unvalidated(
     loader: &ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
-) -> Result<NetworkFetchResult<Response>, String> {
+) -> Result<NetworkFetchResult<Response>, SubresourceFetchError> {
     let result = match cancel_handle {
         Some(cancel_handle) => loader
             .fetch_text_stream_with_cancel_and_network_metadata(request, cancel_handle)
@@ -897,14 +901,15 @@ async fn fetch_response_head_once(
     loader: &ResourceRequestClient,
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
-) -> Result<ResponseHead, String> {
+) -> Result<ResponseHead, SubresourceFetchError> {
     // Challenge-response auth retries are completed inside libcurl on the
     // buffered path. Preemptive Basic auth can still use the streaming head
     // path because credentials are already represented as request headers.
     if request.auth_requires_buffered_transport() {
         return fetch_once(loader, request, cancel_handle)
             .await
-            .map(|response| response.head());
+            .map(|response| response.head())
+            .map_err(Into::into);
     }
 
     let cancel_handle = cancel_handle.unwrap_or_default();
