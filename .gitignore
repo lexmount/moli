@@ -25,3 +25,6 @@ node_modules
 
 !/vendor/quinn-0.11.12/
 !/vendor/quinn-0.11.12/**
+
+!/vendor/web-transport-proto-0.6.3/
+!/vendor/web-transport-proto-0.6.3/**
