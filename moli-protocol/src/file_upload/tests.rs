@@ -119,9 +119,12 @@ mod directory_tests {
         fs::create_dir_all(&scratch).unwrap();
         let file = scratch.join(std::ffi::OsString::from_vec(b"bad-\xff.txt".to_vec()));
         fs::write(&file, b"data").unwrap();
-        let selected =
-            selected_file_from_file_path(&file, &tokio::runtime::Handle::current(), None)
-                .unwrap_or_else(|error| panic!("{error}"));
+        let selected = selected_file_from_file_path(
+            &file,
+            &tokio::runtime::Handle::current(),
+            FileReadPolicy::ExplicitFile,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(selected.name, "bad-\u{fffd}.txt");
         assert!(selected.relative_path.is_empty());
         fs::remove_dir_all(scratch).unwrap();
@@ -439,9 +442,13 @@ mod backing_tests {
             .build()
             .unwrap();
         assert_eq!(
-            selected_file_from_file_path(&entry.path(), runtime.handle(), Some(root))
-                .unwrap_err()
-                .kind(),
+            selected_file_from_file_path(
+                &entry.path(),
+                runtime.handle(),
+                FileReadPolicy::DirectoryMember { root },
+            )
+            .unwrap_err()
+            .kind(),
             io::ErrorKind::PermissionDenied
         );
     }

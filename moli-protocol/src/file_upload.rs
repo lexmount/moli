@@ -12,10 +12,16 @@ use std::{
 use moli_core::page::SelectedFile;
 use moli_file_api::{BlobData, BlobReadCompletion, BlobSource};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileReadPolicy {
+    ExplicitFile,
+    DirectoryMember { root: Arc<Path> },
+}
+
 #[derive(Debug, Clone)]
 struct FileSource {
     path: PathBuf,
-    directory_root: Option<Arc<Path>>,
+    read_policy: FileReadPolicy,
     size: u64,
     modified: Option<SystemTime>,
     runtime: tokio::runtime::Handle,
@@ -23,10 +29,11 @@ struct FileSource {
 
 impl FileSource {
     fn read_range(&self, range: Range<usize>) -> io::Result<Vec<u8>> {
-        let metadata = if let Some(root) = &self.directory_root {
-            directory_upload_metadata(root, &self.path)?
-        } else {
-            fs::metadata(&self.path)?
+        let metadata = match &self.read_policy {
+            FileReadPolicy::ExplicitFile => fs::metadata(&self.path)?,
+            FileReadPolicy::DirectoryMember { root } => {
+                directory_upload_metadata(root, &self.path)?
+            }
         };
         // A FIFO open can wait for a writer before fd-based checks can run.
         self.check_snapshot(&metadata)?;
@@ -81,7 +88,7 @@ impl BlobSource for FileSource {
         let other: &dyn std::any::Any = other;
         other.downcast_ref::<Self>().is_some_and(|other| {
             self.path == other.path
-                && self.directory_root == other.directory_root
+                && self.read_policy == other.read_policy
                 && self.size == other.size
                 && self.modified == other.modified
         })
@@ -100,7 +107,7 @@ impl BlobSource for FileSource {
 /// Resolve selected paths without opening or copying file contents. A single
 /// directory is enumerated in stable order; links below it are not traversed.
 /// An explicitly selected directory link retains its chosen display name.
-pub fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFile>> {
+pub(crate) fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFile>> {
     select_files(paths, None)
 }
 
@@ -173,7 +180,11 @@ fn select_files(
             .into_iter()
             .map(|path| {
                 check_selection_cancelled(cancelled)?;
-                let mut file = selected_file_from_file_path(&path, &runtime, Some(root.clone()))?;
+                let mut file = selected_file_from_file_path(
+                    &path,
+                    &runtime,
+                    FileReadPolicy::DirectoryMember { root: root.clone() },
+                )?;
                 let relative = path
                     .strip_prefix(&root)
                     .expect("enumerated files stay below the resolved directory");
@@ -186,7 +197,7 @@ fn select_files(
         .iter()
         .map(|path| {
             check_selection_cancelled(cancelled)?;
-            selected_file_from_file_path(Path::new(path), &runtime, None)
+            selected_file_from_file_path(Path::new(path), &runtime, FileReadPolicy::ExplicitFile)
         })
         .collect()
 }
@@ -194,15 +205,14 @@ fn select_files(
 fn selected_file_from_file_path(
     file_path: &Path,
     runtime: &tokio::runtime::Handle,
-    directory_root: Option<Arc<Path>>,
+    read_policy: FileReadPolicy,
 ) -> io::Result<SelectedFile> {
     let path = file_path.to_string_lossy();
-    let metadata = if let Some(root) = &directory_root {
-        directory_upload_metadata(root, file_path)?
-    } else {
-        fs::metadata(file_path).map_err(|_| {
+    let metadata = match &read_policy {
+        FileReadPolicy::DirectoryMember { root } => directory_upload_metadata(root, file_path)?,
+        FileReadPolicy::ExplicitFile => fs::metadata(file_path).map_err(|_| {
             io::Error::new(io::ErrorKind::NotFound, format!("File not found : {path}"))
-        })?
+        })?,
     };
     if !metadata.is_file() {
         return Err(io::Error::new(
@@ -215,7 +225,7 @@ fn selected_file_from_file_path(
     let modified = metadata.modified().ok();
     let source = FileSource {
         path: std::path::absolute(file_path)?,
-        directory_root,
+        read_policy,
         size: metadata.len(),
         modified,
         runtime: runtime.clone(),
