@@ -1,0 +1,60 @@
+[package]
+name = "web-transport-quinn"
+description = "WebTransport library for Quinn"
+authors = ["Luke Curley"]
+repository = "https://github.com/moq-dev/web-transport"
+license = "MIT OR Apache-2.0"
+
+version = "0.13.5"
+edition = "2021"
+
+keywords = ["quic", "http3", "webtransport"]
+categories = ["network-programming", "web-programming"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["aws-lc-rs"]
+aws-lc-rs = ["quinn/rustls-aws-lc-rs", "rustls/aws-lc-rs"]
+ring = ["quinn/rustls-ring", "rustls/ring"]
+# Unlocks `quinn::TransportConfig::qlog_stream` and `quinn::QlogConfig`, which this
+# crate re-exports but cannot enable on a caller's behalf.
+qlog = ["quinn/qlog"]
+
+[dependencies]
+bytes = "1"
+futures = "0.3"
+http = "1"
+kio = "0.6.2"
+
+quinn = { version = "0.11", default-features = false, features = [
+    "platform-verifier",
+    "runtime-tokio",
+    "bloom",
+] }
+
+rustls = { version = "0.23", default-features = false, features = [
+    "logging",
+    "std",
+] }
+rustls-native-certs = "0.8"
+thiserror = "2"
+
+tokio = { version = "1", default-features = false, features = [
+    "io-util",
+    "net",
+] }
+tracing = "0.1"
+url = "2"
+web-transport-proto = { workspace = true }
+web-transport-trait = { workspace = true }
+
+[dev-dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rcgen = "0.14"
+rustls-pemfile = "2"
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"

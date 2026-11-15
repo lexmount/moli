@@ -28,3 +28,6 @@ node_modules
 
 !/vendor/web-transport-proto-0.6.3/
 !/vendor/web-transport-proto-0.6.3/**
+
+!/vendor/web-transport-quinn-0.13.5/
+!/vendor/web-transport-quinn-0.13.5/**
