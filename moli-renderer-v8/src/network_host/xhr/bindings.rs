@@ -35,6 +35,7 @@ pub(crate) use self::constants::{
     install_window_xml_http_request_template_bindings, install_xml_http_request_template_surface,
 };
 pub(crate) use self::constructor::xhr_constructor_callback;
+pub(super) use self::progress_event::construct_native_progress_event;
 pub(crate) use self::progress_event::{
     progress_event_constructor_callback, progress_event_length_computable_function_getter,
     progress_event_loaded_function_getter, progress_event_total_function_getter,
