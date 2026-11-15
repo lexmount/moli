@@ -1184,12 +1184,13 @@ impl ClassicKeyActionSource {
             "keyDown" => {
                 let key = webdriver_key_for_action(object)?;
                 let auto_repeat = self.pressed.contains_key(&key.key);
-                if !auto_repeat {
-                    cancel_list.push(ClassicActionCancel::Key {
-                        source_id: self.id.clone(),
-                        key: key.clone(),
-                    });
-                }
+                // Every keyDown contributes an undo action, including repeats.
+                // A later raw key can share the same normalized key but have a
+                // different physical code/location. Release uses reverse order.
+                cancel_list.push(ClassicActionCancel::Key {
+                    source_id: self.id.clone(),
+                    key: key.clone(),
+                });
                 if let Some(mask) = key.modifier_mask {
                     self.modifiers |= mask;
                 }
