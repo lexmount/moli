@@ -50,7 +50,8 @@ use crate::native_bridge::element::{
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
-    CurrentInputEvent, CurrentInputEventScope, MouseReleaseFollowUp, PointerCaptureDispatchEvent,
+    CurrentInputEvent, CurrentInputEventScope, MouseReleaseFollowUp, PageScriptHost,
+    PointerCaptureDispatchEvent,
 };
 use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererInterceptedDrag,
@@ -815,6 +816,20 @@ fn dispatch_touch_pointer_boundary_events(
 }
 
 impl ScriptVm {
+    /// Native keyboard delivery has no outer JavaScript invocation. Checkpoint
+    /// when each outermost callback returns, including between listeners and
+    /// before defaults. Nested dispatchEvent() stays inside its calling script.
+    fn with_native_keyboard_event_scope<T>(
+        &mut self,
+        operation: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
+    ) -> Result<T> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            moli_v8_util::with_microtasks_policy(scope, v8::MicrotasksPolicy::Scoped, |scope| {
+                operation(scope, host_ptr)
+            })
+        })
+    }
+
     /// Completes one JS-capable input protocol command.
     ///
     /// Entering a V8 realm only authorizes the command body; it is not a task
@@ -2627,7 +2642,7 @@ impl ScriptVm {
         let shift = modifiers & 8 == 8;
         let canceled_raw_keydown = Cell::new(false);
 
-        let result = self.with_default_context_scope(|scope, runtime_ptr| {
+        let result = self.with_native_keyboard_event_scope(|scope, runtime_ptr| {
             let Some(event) = construct_keyboard_event(
                 scope,
                 event_name,
@@ -2651,8 +2666,8 @@ impl ScriptVm {
             }
 
             // Combined keydown/text input includes a cancelable keypress before
-            // editing. Keep both events in this input turn; an explicit char
-            // command already dispatched keypress and must not emit it twice.
+            // editing. Callback cleanup checkpoints between native listeners;
+            // an explicit char command must not emit keypress twice.
             let handle = if event_name == "keydown" && should_insert_text && !text.is_empty() {
                 // Like Blink's KeyboardEventManager, resolve focus again after
                 // keydown listeners before targeting the character event.
