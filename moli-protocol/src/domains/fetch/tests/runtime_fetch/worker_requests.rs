@@ -51,6 +51,7 @@ fetch('/worker-api', {
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -142,6 +143,15 @@ fetch('/worker-api', {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn csp_report_request_stage_continue_preserves_service_worker_dispatch() {
+    check_csp_report_service_worker_dispatch(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatch() {
+    check_csp_report_service_worker_dispatch(true).await;
+}
+
+async fn check_csp_report_service_worker_dispatch(worker_report: bool) {
     async fn page() -> impl IntoResponse {
         (
             [
@@ -194,7 +204,11 @@ self.addEventListener("fetch", event => {
             listener,
             Router::new()
                 .route("/page", get(page))
-                .route("/worker.js", get(worker)),
+                .route("/worker.js", get(worker))
+                .route("/client-worker.js", get(|| async { (
+                    [("content-type","text/javascript"),("content-security-policy","connect-src 'none'; report-uri /csp-report")],
+                    "onmessage=async()=>{await fetch('/blocked-data').catch(()=>{});postMessage('blocked');};"
+                ) })),
         )
         .await
         .unwrap();
@@ -204,6 +218,7 @@ self.addEventListener("fetch", event => {
     let report_url = format!("http://{addr}/csp-report");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -243,14 +258,16 @@ self.addEventListener("fetch", event => {
   (async () => {
     await navigator.serviceWorker.register("/worker.js", { scope: "/" });
     await navigator.serviceWorker.ready;
-    await fetch("/blocked-data").catch(() => {});
+    REPORT_SOURCE
     globalThis.__lm_csp_report_blocked = "done";
   })().catch(error => {
     globalThis.__lm_csp_report_continue_result =
       "error:" + String(error && error.message);
   });
   return "scheduled";
-})()"#
+})()"#.replace("REPORT_SOURCE", if worker_report {
+                "const worker=new Worker('/client-worker.js');globalThis.reportWorker=worker;worker.postMessage('start');"
+            } else {"await fetch('/blocked-data').catch(()=>{});"})
         }
     }))
     .await;
@@ -287,6 +304,16 @@ self.addEventListener("fetch", event => {
     )
     .await;
 
+    if worker_report {
+        let network_id = paused["params"]["networkId"].clone();
+        wait_until_scheduler_message(&mut ctx, "Worker report completed through SW", |event| {
+            event["method"] == "Network.loadingFinished"
+                && event["params"]["requestId"] == network_id
+        })
+        .await;
+        let session = ctx.worker_network_session_for_request(&network_id);
+        assert_ne!(session, "SID-1");
+    }
     server.abort();
 }
 
@@ -329,6 +356,7 @@ async fn csp_report_response_stage_take_body_as_stream_observes_report_body() {
     let report_url = format!("http://{addr}/csp-report");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -518,6 +546,7 @@ self.onmessage = async () => {
     let report_url = format!("http://{addr}/csp-report");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -679,6 +708,7 @@ globalThis.__lm_popup_csp_report_result = "pending";
     let report_url = format!("http://{addr}/csp-report");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &opener_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -837,6 +867,7 @@ async fn csp_report_request_stage_fail_request_records_network_failure() {
     let report_url = format!("http://{addr}/csp-report");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -961,6 +992,7 @@ async fn csp_report_request_stage_fulfill_request_records_synthetic_response() {
     let report_url = format!("http://{addr}/csp-report");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1117,6 +1149,7 @@ fetch('/worker-api-two')
     let api_two_url = format!("http://{addr}/worker-api-two");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1301,6 +1334,7 @@ fetch('/worker-api')
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1397,6 +1431,7 @@ xhr.send();
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1493,6 +1528,7 @@ xhr.send();
     let api_url = format!("http://{addr}/worker-api?aux-worker-xhr=1");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.with_fixture(|conn| {
         assert!({
             conn.browser_context
@@ -1598,6 +1634,7 @@ xhr.send('payload');
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1744,6 +1781,7 @@ xhr.send();
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1884,6 +1922,7 @@ fetch('/worker-api')
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2015,6 +2054,7 @@ fetch('/worker-api')
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2159,6 +2199,7 @@ onmessage = event => {
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2324,6 +2365,7 @@ fetch('/worker-auth')
     let api_url = format!("http://{addr}/worker-auth");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2486,6 +2528,7 @@ fetch('/worker-auth')
     let api_url = format!("http://{addr}/worker-auth");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2731,6 +2774,7 @@ fetch('/worker-auth')
     let api_url = format!("http://{addr}/worker-auth");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2933,6 +2977,7 @@ fetch('/worker-api')
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -3107,6 +3152,7 @@ fetch('/worker-api')
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -3244,6 +3290,7 @@ fetch('/worker-api')
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -3355,10 +3402,11 @@ fetch('/worker-api')
     )
     .await;
 
+    let network_session = ctx.worker_network_session_for_request(&json!(network_id));
     ctx.process_async(json!({
         "id": 37_506,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-1",
+        "sessionId": network_session,
         "params": { "requestId": network_id }
     }))
     .await;
@@ -3368,7 +3416,7 @@ fetch('/worker-api')
             "body": "worker-response-synthetic",
             "base64Encoded": false
         }),
-        Some("SID-1"),
+        Some(network_session.as_str()),
     );
 
     server.abort();
@@ -3417,6 +3465,7 @@ fetch('/worker-api')
     let api_url = format!("http://{addr}/worker-api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -3579,6 +3628,7 @@ postMessage(JSON.stringify({ error, status: xhr.status, text: xhr.responseText }
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({

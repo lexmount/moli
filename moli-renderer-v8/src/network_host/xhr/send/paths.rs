@@ -349,10 +349,10 @@ pub(super) fn spawn_network_xhr_fetch(
         host.append_live_turn_owner_action(controlled.prepare_initial_pause());
         runner.spawn(async move {
             use crate::network_host::controlled_xhr::{
-                ControlledXhrCompletion, ControlledXhrStream,
+                ControlledResourceStream, ControlledXhrCompletion,
             };
             let completed = controlled
-                .run_with_stream(Some(ControlledXhrStream::new(completion_tx.clone())))
+                .run_with_stream(Some(ControlledResourceStream::new(completion_tx.clone())))
                 .await;
             let event = match completed {
                 ControlledXhrCompletion::Buffered(completed) => {

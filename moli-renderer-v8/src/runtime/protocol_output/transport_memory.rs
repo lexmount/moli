@@ -410,6 +410,9 @@ fn shared_worker_event_transport_charge_bytes(
     event: &crate::runtime::RendererSharedWorkerTargetEvent,
 ) -> usize {
     match event {
+        crate::runtime::RendererSharedWorkerTargetEvent::Resource { event, .. } => {
+            resource_event_transport_charge_bytes(event)
+        }
         crate::runtime::RendererSharedWorkerTargetEvent::Created(info) => {
             string_charge(&info.url).saturating_add(string_charge(&info.name))
         }
@@ -536,6 +539,9 @@ fn dedicated_worker_event_transport_charge_bytes(
     event: &crate::runtime::RendererDedicatedWorkerTargetEvent,
 ) -> usize {
     match event {
+        crate::runtime::RendererDedicatedWorkerTargetEvent::Resource { event, .. } => {
+            resource_event_transport_charge_bytes(event)
+        }
         crate::runtime::RendererDedicatedWorkerTargetEvent::Created(info) => [
             info.request_url.as_str(),
             info.document_url.as_str(),
@@ -599,4 +605,15 @@ fn navigation_response_transport_charge_bytes(
                 .map(headers_charge)
                 .unwrap_or(0),
         )
+}
+
+fn resource_event_transport_charge_bytes(
+    event: &crate::network::ResourceInterceptionEvent,
+) -> usize {
+    use crate::network::ResourceInterceptionEvent as E;
+    match event {
+        E::Request { info, .. } => info.renderer_transport_charge_bytes(),
+        E::Continue { event, .. } => event.renderer_transport_charge_bytes(),
+        E::Network(item) => item.renderer_transport_charge_bytes(),
+    }
 }

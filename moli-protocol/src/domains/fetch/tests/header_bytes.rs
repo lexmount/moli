@@ -60,6 +60,7 @@ async fn check_intercepted_header_bytes(script: &str, override_headers: bool, re
     });
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     enable_runtime_async(&mut ctx, "SID-1", 70100).await;
     ctx.process_async(json!({"id": 70107, "sessionId": "SID-1", "method": "Network.enable"}))
         .await;
@@ -244,6 +245,7 @@ async fn check_response_header_bytes(continue_response: bool, binary: bool) {
     });
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     enable_runtime_async(&mut ctx, "SID-1", 70200).await;
     ctx.process_async(json!({
         "id": 70201, "sessionId": "SID-1", "method": "Fetch.enable",
@@ -456,6 +458,7 @@ async fn bidi_extra_header_bytes_reach_fetch_xhr_worker_and_navigation() {
     });
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     enable_runtime_async(&mut ctx, "SID-1", 70400).await;
     let outcome = ctx
         .execute_owned_automation_command_for_test(AutomationCommand::SetExtraHeaders(
@@ -541,6 +544,7 @@ async fn stylesheet_interception_aborts_before_transport_and_can_fulfill() {
     });
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     enable_runtime_async(&mut ctx, "SID-1", 70400).await;
     ctx.process_async(json!({"id":70401,"sessionId":"SID-1","method":"Fetch.enable","params":{"patterns":[{"urlPattern":"*/test.css","resourceType":"Stylesheet","requestStage":"Request"}]}})).await;
     ctx.expect_result(70401, json!({}), Some("SID-1"));

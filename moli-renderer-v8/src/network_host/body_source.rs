@@ -10,7 +10,6 @@ use crate::context_bootstrap::{
     close_stream, enqueue_byte_chunk, error_stream, readable_stream_error,
     readable_stream_has_pipe_owner,
 };
-use crate::protocol_types::SubresourceResponseBody;
 use crate::types::NetworkBodySourceId;
 use crate::util::{PendingPromiseResolver, get_private_value, set_private_value};
 use crate::web_api_interfaces;
@@ -38,7 +37,6 @@ const BODY_SOURCE_BLOB_SLOT: &str = "__lmNetworkBodySourceBlob";
 const BODY_SOURCE_KIND_STREAM: &str = "stream";
 const BODY_SOURCE_ORIGINAL_SLOT: &str = "__lmNetworkBodySourceOriginal";
 const BODY_SOURCE_KIND_REGISTRY_BYTES: &str = "registry-bytes";
-const BODY_SOURCE_KIND_SUBRESOURCE_BODY: &str = "subresource-body";
 const BODY_SOURCE_KIND_PENDING_STREAM: &str = "pending-stream";
 const FILTERED_RESPONSE_INTERNAL_BODY_SOURCE_SLOT: &str = "__lmFilteredResponseInternalBodySource";
 const FILTERED_RESPONSE_INTERNAL_BODY_STREAM_SLOT: &str = "__lmFilteredResponseInternalBodyStream";
@@ -122,12 +120,6 @@ enum NetworkBodySourceState {
         offset: usize,
         len: usize,
     },
-    // Reuses the protocol/CDP subresource carrier so worker fetch can hand large
-    // bodies to Web consumers without first rebuilding a single materialized Vec.
-    Subresource {
-        body: SubresourceResponseBody,
-        offset: usize,
-    },
 }
 
 impl NetworkBodySourceState {
@@ -171,7 +163,6 @@ impl NetworkBodySourceState {
                 Ok(bytes.get(*offset..).map(<[u8]>::to_vec).unwrap_or_default())
             }
             Self::File { path, offset, .. } => read_network_body_spool_remaining(path, *offset),
-            Self::Subresource { body, offset } => body.materialize_bytes_from(*offset),
         }
     }
 
@@ -196,7 +187,6 @@ impl NetworkBodySourceState {
                 file.read_to_end(&mut bytes)?;
                 Ok(bytes)
             }
-            Self::Subresource { body, offset } => body.materialize_bytes_from(*offset),
         }
     }
 
@@ -234,15 +224,6 @@ impl NetworkBodySourceState {
                 *offset = offset.saturating_add(read);
                 Ok(Some(chunk))
             }
-            Self::Subresource { body, offset } => {
-                let chunk = body.read_chunk(*offset, chunk_size)?;
-                if chunk.is_empty() {
-                    *offset = body.len();
-                    return Ok(None);
-                }
-                *offset = offset.saturating_add(chunk.len());
-                Ok(Some(chunk))
-            }
         }
     }
 
@@ -250,7 +231,6 @@ impl NetworkBodySourceState {
         match self {
             Self::Memory { bytes, offset } => *offset >= bytes.len(),
             Self::File { offset, len, .. } => *offset >= *len,
-            Self::Subresource { body, offset } => *offset >= body.len(),
         }
     }
 }
@@ -707,15 +687,6 @@ pub(in crate::network_host) fn set_filtered_response_internal_body_from_bytes<'s
     set_filtered_response_internal_body_source_object(scope, object, source);
 }
 
-pub(in crate::network_host) fn set_filtered_response_internal_body_from_subresource_body<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    body: SubresourceResponseBody,
-) {
-    let source = network_body_source_object_from_subresource_body(scope, Some(object), body);
-    set_filtered_response_internal_body_source_object(scope, object, source);
-}
-
 fn set_network_body_registry_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -742,39 +713,12 @@ pub(in crate::network_host) fn network_body_source_object_from_bytes<'s>(
     source
 }
 
-pub(in crate::network_host) fn network_body_source_object_from_subresource_body<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: Option<v8::Local<'s, v8::Object>>,
-    body: SubresourceResponseBody,
-) -> v8::Local<'s, v8::Object> {
-    let id = register_network_body_subresource_body(body);
-    let source = RegisteredNetworkBodySourceDeclaration::new(
-        BODY_SOURCE_KIND_SUBRESOURCE_BODY,
-        v8::BigInt::new_from_u64(scope, id),
-        owner,
-    )
-    .bind(scope)
-    .expect("subresource network body source declaration should bind");
-    track_registry_body_source_lifetime(scope, source, id);
-    source
-}
-
 pub(in crate::network_host) fn network_body_stream_from_response_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     body: moli_fetch::ResponseBody,
 ) -> Option<v8::Local<'s, v8::Object>> {
     set_network_body_response_body(scope, object, body)
-}
-
-pub(in crate::network_host) fn network_body_stream_from_subresource_body<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    body: SubresourceResponseBody,
-) -> v8::Local<'s, v8::Object> {
-    let source = network_body_source_object_from_subresource_body(scope, Some(object), body);
-    set_network_body_source_object(scope, object, source);
-    new_readable_stream_from_source(scope, source)
 }
 
 pub(crate) fn pending_network_body_stream<'s>(
@@ -1255,16 +1199,7 @@ fn try_network_body_bytes_from_storage<'s>(
                 try_clone_remaining_network_body_bytes(id)
             };
         }
-        Some(BODY_SOURCE_KIND_SUBRESOURCE_BODY) => {
-            let Some(id) = registry_body_source_id(scope, object) else {
-                return Ok(None);
-            };
-            return if consume_registry_body {
-                try_take_remaining_network_body_bytes(id)
-            } else {
-                try_clone_remaining_network_body_bytes(id)
-            };
-        }
+
         Some(kind) if kind != BODY_SOURCE_KIND_BYTES => return Ok(None),
         _ => {}
     }
@@ -1810,15 +1745,6 @@ fn register_network_body_bytes(bytes: Vec<u8>) -> NetworkBodySourceId {
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .insert(id, NetworkBodySourceState::new(id, bytes));
-    id
-}
-
-fn register_network_body_subresource_body(body: SubresourceResponseBody) -> NetworkBodySourceId {
-    let id = new_network_body_source_id();
-    NETWORK_BODY_SOURCES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .insert(id, NetworkBodySourceState::Subresource { body, offset: 0 });
     id
 }
 
@@ -2441,22 +2367,6 @@ fn call_controller_method<'s>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn network_body_source_subresource_reads_through_fallible_source() {
-        let body = SubresourceResponseBody::from_bytes(b"hello world".to_vec());
-        let id = register_network_body_subresource_body(body);
-
-        assert_eq!(
-            try_clone_remaining_network_body_bytes(id).unwrap().unwrap(),
-            b"hello world"
-        );
-        assert_eq!(
-            try_take_next_network_body_chunk(id).unwrap().unwrap(),
-            b"hello world"
-        );
-        assert!(!network_body_source_has_remaining(id));
-    }
 
     #[test]
     fn network_body_source_file_read_errors_are_not_silent_empty_bodies() {

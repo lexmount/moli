@@ -72,19 +72,23 @@ async fn error_mode_checks_cors_before_redirect_rejection() {
                 ).await;
                 let response = take_response_by_id(&mut ctx, id);
                 let value = &response["result"]["result"]["value"];
-                assert_eq!(
-                    value["error"], "TypeError",
-                    "{stage:?}/{status}/{cors}: {response}"
-                );
-                let message = value["message"].as_str().unwrap();
-                assert!(
-                    if cors {
-                        message.contains("redirect")
-                    } else {
-                        message.contains("CORS")
-                    },
-                    "{stage:?}/{status}/{cors}: {value}"
-                );
+                if cors && stage.is_some() {
+                    assert_eq!(value["status"], status, "{stage:?}/{status}: {value}");
+                } else {
+                    assert_eq!(
+                        value["error"], "TypeError",
+                        "{stage:?}/{status}/{cors}: {response}"
+                    );
+                    let message = value["message"].as_str().unwrap();
+                    assert!(
+                        if cors {
+                            message.contains("redirect")
+                        } else {
+                            message.contains("CORS")
+                        },
+                        "{stage:?}/{status}/{cors}: {value}"
+                    );
+                }
                 assert_eq!(pauses.len(), usize::from(stage.is_some()));
                 let network_id = ctx
                     .sent
@@ -97,7 +101,12 @@ async fn error_mode_checks_cors_before_redirect_rejection() {
                     .expect("announced fetch request")["params"]["requestId"]
                     .clone();
                 wait_until_scheduler_message(&mut ctx, "CORS/error-mode terminal", |event| {
-                    event["method"] == "Network.loadingFailed"
+                    event["method"]
+                        == if cors && stage.is_some() {
+                            "Network.loadingFinished"
+                        } else {
+                            "Network.loadingFailed"
+                        }
                         && event["params"]["requestId"] == network_id
                 })
                 .await;

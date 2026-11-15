@@ -1363,6 +1363,7 @@ impl TargetSubresourcePlanOutput {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetSubresourceRequestStartedOutput {
+    redirect: Option<Box<moli_core::page::NavigationRedirect>>,
     delivery_order_index: usize,
     index: usize,
     loader_id: String,
@@ -1387,6 +1388,7 @@ impl TargetSubresourceRequestStartedOutput {
         request: &SubresourceRequestStarted,
     ) -> Self {
         Self {
+            redirect: request.redirect().cloned().map(Box::new),
             delivery_order_index,
             index,
             loader_id: loader_id.to_owned(),
@@ -1404,6 +1406,9 @@ impl TargetSubresourceRequestStartedOutput {
         }
     }
 
+    pub(crate) fn redirect(&self) -> Option<&moli_core::page::NavigationRedirect> {
+        self.redirect.as_deref()
+    }
     pub(crate) fn delivery_order_index(&self) -> usize {
         self.delivery_order_index
     }

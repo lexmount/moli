@@ -583,7 +583,13 @@ impl ServiceWorkerRuntimeService {
             self.complete_fetch_with_failure(job, message);
             return;
         }
-        if is_redirect_status(response.head.status)
+        if job.response_delivery == super::super::state::ServiceWorkerFetchResponseDelivery::Client
+            && is_redirect_status(response.head.status)
+            && response
+                .head
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("location"))
             && job.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
         {
             self.complete_fetch_with_network_failure(
@@ -593,7 +599,8 @@ impl ServiceWorkerRuntimeService {
             );
             return;
         }
-        if is_redirect_status(response.head.status)
+        if job.response_delivery == super::super::state::ServiceWorkerFetchResponseDelivery::Client
+            && is_redirect_status(response.head.status)
             && job.request.redirect_mode() == moli_fetch::RequestRedirectMode::Follow
         {
             match service_worker_redirect_target(&job, &response) {
@@ -1156,6 +1163,7 @@ mod tests {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                response_delivery: Default::default(),
                 initial_redirect_count: 0,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
@@ -2030,6 +2038,7 @@ mod tests {
         let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         let request_url = url("https://example.test/app/post");
         let mut job = ServiceWorkerFetchJob {
+            response_delivery: Default::default(),
             initial_redirect_count: 0,
             request: {
                 let origin = moli_url::WebOrigin::from_url(&request_url);

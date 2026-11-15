@@ -52,6 +52,21 @@ pub(super) fn shared_worker_target_lifecycle_outputs_for_events(
     let mut outputs = TargetPreparedOutputs::default();
     for event in events {
         match event {
+            RendererSharedWorkerTargetEvent::Resource { instance_id, event } => {
+                if let Some(target_id) = conn
+                    .browser_context_by_id(&browser_context_id)
+                    .and_then(|context| {
+                        context.shared_worker_target_id_for_renderer_instance(instance_id)
+                    })
+                    .map(str::to_owned)
+                {
+                    outputs.push(WorkerTargetLifecycleOutput::Resource {
+                        browser_context_id: browser_context_id.clone(),
+                        target_id,
+                        event,
+                    });
+                }
+            }
             RendererSharedWorkerTargetEvent::Created(info) => {
                 let owner_target_id =
                     conn.browser_context_by_id(&browser_context_id)
@@ -174,6 +189,19 @@ pub(super) fn dedicated_worker_target_lifecycle_outputs_for_events(
     let mut outputs = TargetPreparedOutputs::default();
     for event in events {
         match event {
+            RendererDedicatedWorkerTargetEvent::Resource { instance_id, event } => {
+                if let Some(target_id) = conn
+                    .browser_context_by_id(&browser_context_id)
+                    .and_then(|context| context.dedicated_worker_targets.get(&instance_id))
+                    .map(|target| target.target_id.clone())
+                {
+                    outputs.push(WorkerTargetLifecycleOutput::Resource {
+                        browser_context_id: browser_context_id.clone(),
+                        target_id,
+                        event,
+                    });
+                }
+            }
             RendererDedicatedWorkerTargetEvent::Created(info) => {
                 outputs.extend(register_dedicated_worker_target(
                     conn,

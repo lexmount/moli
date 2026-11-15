@@ -277,6 +277,31 @@ impl ServiceWorkerRuntimeService {
         dispatch: ServiceWorkerFetchDispatch,
         native_request: moli_fetch::Request,
     ) -> bool {
+        self.dispatch_fetch_with_delivery(
+            dispatch,
+            native_request,
+            super::super::state::ServiceWorkerFetchResponseDelivery::Client,
+        )
+    }
+
+    pub(crate) fn dispatch_controlled_fetch_hop(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+        native_request: moli_fetch::Request,
+    ) -> bool {
+        self.dispatch_fetch_with_delivery(
+            dispatch,
+            native_request,
+            super::super::state::ServiceWorkerFetchResponseDelivery::LoaderHop,
+        )
+    }
+
+    fn dispatch_fetch_with_delivery(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+        native_request: moli_fetch::Request,
+        response_delivery: super::super::state::ServiceWorkerFetchResponseDelivery,
+    ) -> bool {
         let request = dispatch.request.clone();
         // Synthetic redirects advance this retained request before a network
         // fallback can bind the owner's cookie scope on its transport copy.
@@ -285,6 +310,7 @@ impl ServiceWorkerRuntimeService {
             .bind_browser_site_context(native_request);
         let initial_redirect_count = native_request.redirect_count();
         let fetch_job = ServiceWorkerFetchJob {
+            response_delivery,
             request: native_request,
             initial_redirect_count,
             internal_id: dispatch.internal_id,

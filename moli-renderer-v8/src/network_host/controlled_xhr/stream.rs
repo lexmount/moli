@@ -19,12 +19,12 @@ pub(crate) enum ControlledXhrCompletion {
 
 /// The transport sends native networking tasks; only their ordinary owner
 /// delivery can enter XHR callbacks. Body capture uses the existing disk pool.
-pub(crate) struct ControlledXhrStream {
+pub(crate) struct DocumentResourceStream {
     completion: RendererResourceCompletionSender,
     pub(super) body_source_id: Option<NetworkBodySourceId>,
 }
 
-impl ControlledXhrStream {
+impl DocumentResourceStream {
     pub(crate) fn new(completion: RendererResourceCompletionSender) -> Self {
         Self {
             completion,
@@ -74,5 +74,49 @@ impl ControlledXhrStream {
                 },
             ))
             .map_err(|_| "XHR stream delivery owner is closed".to_owned())
+    }
+}
+
+pub(crate) enum ControlledResourceStream {
+    Document(DocumentResourceStream),
+    WorkerFetch(super::fetch::ControlledFetchStream),
+}
+
+impl ControlledResourceStream {
+    pub(super) fn policy_violations(
+        &self,
+        violations: Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    ) {
+        if let Self::WorkerFetch(stream) = self {
+            stream.policy_violations(violations);
+        }
+    }
+
+    pub(crate) fn new(completion: RendererResourceCompletionSender) -> Self {
+        Self::Document(DocumentResourceStream::new(completion))
+    }
+    pub(super) fn body_source_id(&self) -> Option<NetworkBodySourceId> {
+        match self {
+            Self::Document(stream) => stream.body_source_id,
+            Self::WorkerFetch(stream) => stream.body_source_id,
+        }
+    }
+    pub(super) fn start(
+        &mut self,
+        info: &PendingSubresourceFetchInfo,
+        head: ResponseHead,
+        headers: Option<Vec<(String, String)>>,
+        body: crate::network::ResourceInterceptionBody,
+    ) -> Result<(), String> {
+        match self {
+            Self::Document(stream) => stream.start(info, head, headers, body),
+            Self::WorkerFetch(stream) => stream.start(info, head, headers, body),
+        }
+    }
+    pub(super) fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        match self {
+            Self::Document(stream) => stream.chunk(bytes),
+            Self::WorkerFetch(stream) => stream.chunk(bytes),
+        }
     }
 }

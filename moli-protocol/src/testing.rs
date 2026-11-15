@@ -44,6 +44,8 @@ const TEST_SCHEDULER_INPUT_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct TestContext {
     pub state: crate::ProtocolStateOwner,
     pub sent: Vec<Value>,
+    #[cfg(test)]
+    worker_network_observer: Option<TestWorkerNetworkObserver>,
     pending_runtime_deferred_replies: VecDeque<PendingTestRuntimeDeferredReply>,
     pending_protocol_scheduler_work: VecDeque<ProtocolSchedulerWork>,
     pending_owned_protocol_work:
@@ -202,6 +204,8 @@ impl TestContext {
                 ready = &mut wait => return ready,
                 turn = Box::pin(self.wait_for_one_test_scheduler_turn()) => {
                     assert!(matches!(turn, TestSchedulerTurnOutcome::Processed(_)), "owned wait lost scheduler inputs");
+                    #[cfg(test)]
+                    Box::pin(self.service_test_worker_observers()).await;
                 }
             }
         }
@@ -816,6 +820,8 @@ impl TestContext {
         Self {
             state: crate::ProtocolStateOwner::new(conn),
             sent: Vec::new(),
+            #[cfg(test)]
+            worker_network_observer: None,
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
             pending_owned_protocol_work: FuturesUnordered::new(),
@@ -1053,6 +1059,8 @@ impl TestContext {
         {
             Box::pin(self.wait_for_test_command_response(command_id, response_start)).await;
         }
+        #[cfg(test)]
+        Box::pin(self.service_test_worker_observers()).await;
     }
 
     /// Navigate as a CDP client that subscribes to Page notifications.
@@ -2178,6 +2186,12 @@ impl TestContext {
     }
 
     async fn wait_for_one_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
+        let result = Box::pin(self.wait_for_one_test_scheduler_turn_unobserved()).await;
+        Box::pin(self.service_test_worker_observers()).await;
+        result
+    }
+
+    async fn wait_for_one_test_scheduler_turn_unobserved(&mut self) -> TestSchedulerTurnOutcome {
         let ready = Box::pin(self.run_one_ready_test_scheduler_turn()).await;
         if matches!(ready, TestSchedulerTurnOutcome::Processed(_)) {
             return ready;
@@ -2752,6 +2766,7 @@ impl TestContext {
         let scheduler_events = self.with_fixture(|conn| conn.take_scheduler_events());
         Box::pin(self.route_test_scheduler_causal_batch(Vec::new(), scheduler_events)).await;
         let _ = Box::pin(self.run_one_ready_test_scheduler_turn()).await;
+        Box::pin(self.service_test_worker_observers()).await;
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
@@ -3098,6 +3113,8 @@ mod tests {
         let mut ctx = TestContext {
             state: crate::ProtocolStateOwner::new(conn),
             sent: Vec::new(),
+            #[cfg(test)]
+            worker_network_observer: None,
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
             pending_owned_protocol_work: FuturesUnordered::new(),
@@ -3152,5 +3169,168 @@ mod tests {
                 RendererOutputStreamControl::Opened { stream }
             ) if stream == second_stream
         ));
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestWorkerNetworkObserver {
+    sessions: std::collections::HashSet<String>,
+    shared_sessions: Vec<String>,
+    requests: std::collections::HashMap<String, String>,
+    shared_fetch: Option<(Value, usize)>,
+    servicing: bool,
+}
+#[cfg(test)]
+impl TestContext {
+    pub(crate) async fn observe_worker_network_for_test(
+        &mut self,
+        shared_fetch: Option<(Value, usize)>,
+    ) {
+        self.worker_network_observer = Some(TestWorkerNetworkObserver {
+            shared_fetch,
+            ..Default::default()
+        });
+        self.process_async(serde_json::json!({"id":90_000_000,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true,"filter":[{"type":"worker","exclude":false},{"type":"shared_worker","exclude":false},{"exclude":true}]}})).await;
+        self.expect_result(90_000_000, serde_json::json!({}), None);
+        self.process_async(serde_json::json!({"id":90_000_006,"sessionId":"SID-1","method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true,"filter":[{"type":"worker","exclude":false},{"exclude":true}]}})).await;
+        self.expect_result(90_000_006, serde_json::json!({}), Some("SID-1"));
+    }
+    pub(crate) fn worker_network_session_for_request(&self, id: &Value) -> String {
+        self.worker_network_observer
+            .as_ref()
+            .and_then(|observer| observer.requests.get(id.as_str()?))
+            .cloned()
+            .expect("request must have been announced by the actual Worker Network session")
+    }
+    pub(crate) async fn shared_worker_fetch_sessions_for_test(&mut self) -> Vec<String> {
+        tokio::time::timeout(TEST_SCHEDULER_INPUT_TIMEOUT, async {
+            loop {
+                Box::pin(self.service_test_worker_observers()).await;
+                if !self
+                    .worker_network_observer
+                    .as_ref()
+                    .unwrap()
+                    .shared_sessions
+                    .is_empty()
+                {
+                    break;
+                }
+                Box::pin(self.wait_for_one_test_scheduler_turn()).await;
+            }
+        })
+        .await
+        .expect("SharedWorker target attaches and its observer is configured");
+        self.worker_network_observer
+            .as_ref()
+            .unwrap()
+            .shared_sessions
+            .clone()
+    }
+    async fn service_test_worker_observers(&mut self) {
+        let Some(observer) = &mut self.worker_network_observer else {
+            return;
+        };
+        if observer.servicing {
+            return;
+        }
+        observer.servicing = true;
+        loop {
+            let next = self
+                .sent
+                .iter()
+                .find(|message| {
+                    message["method"] == "Target.attachedToTarget"
+                        && matches!(
+                            message["params"]["targetInfo"]["type"].as_str(),
+                            Some("worker" | "shared_worker")
+                        )
+                        && message["params"]["sessionId"].as_str().is_some_and(|id| {
+                            !self
+                                .worker_network_observer
+                                .as_ref()
+                                .unwrap()
+                                .sessions
+                                .contains(id)
+                        })
+                })
+                .cloned();
+            let Some(next) = next else {
+                break;
+            };
+            let session = next["params"]["sessionId"].as_str().unwrap().to_owned();
+            let shared = next["params"]["targetInfo"]["type"] == "shared_worker";
+            self.worker_network_observer
+                .as_mut()
+                .unwrap()
+                .sessions
+                .insert(session.clone());
+            self.process_async(
+                serde_json::json!({"id":90_000_001,"method":"Network.enable","sessionId":session}),
+            )
+            .await;
+            self.expect_result(90_000_001, serde_json::json!({}), Some(session.as_str()));
+            if shared {
+                self.worker_network_observer
+                    .as_mut()
+                    .unwrap()
+                    .shared_sessions
+                    .push(session.clone());
+                if let Some((patterns, count)) = self
+                    .worker_network_observer
+                    .as_ref()
+                    .unwrap()
+                    .shared_fetch
+                    .clone()
+                {
+                    self.process_async(serde_json::json!({"id":90_000_002,"method":"Fetch.enable","sessionId":session,"params":{"patterns":patterns}})).await;
+                    self.expect_result(90_000_002, serde_json::json!({}), Some(session.as_str()));
+                    for _ in 1..count {
+                        self.process_async(serde_json::json!({"id":90_000_003,"method":"Target.attachToTarget","params":{"targetId":next["params"]["targetInfo"]["targetId"],"flatten":true}})).await;
+                        let response = self
+                            .sent
+                            .iter()
+                            .find(|message| message["id"] == 90_000_003)
+                            .cloned()
+                            .expect("second Worker session attaches");
+                        let peer = response["result"]["sessionId"].as_str().unwrap().to_owned();
+                        self.worker_network_observer
+                            .as_mut()
+                            .unwrap()
+                            .sessions
+                            .insert(peer.clone());
+                        self.worker_network_observer
+                            .as_mut()
+                            .unwrap()
+                            .shared_sessions
+                            .push(peer.clone());
+                        self.sent.retain(|message| message["id"] != 90_000_003);
+                        self.process_async(serde_json::json!({"id":90_000_004,"method":"Fetch.enable","sessionId":peer,"params":{"patterns":patterns}})).await;
+                        self.expect_result(90_000_004, serde_json::json!({}), Some(peer.as_str()));
+                    }
+                }
+            }
+            self.process_async(serde_json::json!({"id":90_000_005,"method":"Runtime.runIfWaitingForDebugger","sessionId":session})).await;
+            self.expect_result(90_000_005, serde_json::json!({}), Some(session.as_str()));
+        }
+        let observer = self.worker_network_observer.as_mut().unwrap();
+        for message in &self.sent {
+            if message["method"] == "Network.requestWillBeSent"
+                && message["sessionId"]
+                    .as_str()
+                    .is_some_and(|id| observer.sessions.contains(id))
+            {
+                assert!(
+                    message["params"].get("frameId").is_none(),
+                    "Worker request has no frameId: {message}"
+                );
+                assert_eq!(message["params"]["loaderId"], "");
+                observer.requests.insert(
+                    message["params"]["requestId"].as_str().unwrap().to_owned(),
+                    message["sessionId"].as_str().unwrap().to_owned(),
+                );
+            }
+        }
+        observer.servicing = false;
     }
 }

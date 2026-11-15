@@ -17,7 +17,7 @@ pub(super) enum SubresourceResponseInterception {
 pub(crate) struct PreparedSubresourceAutoContinue {
     pending: PendingResourceCommand,
     correlation: PreparedSubresourceCorrelation,
-    binding: TargetRootDocumentProtocolAttachmentIdentity,
+    binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
 }
 
 impl PreparedSubresourceAutoContinue {
@@ -29,21 +29,24 @@ impl PreparedSubresourceAutoContinue {
         handle_auth_requests: bool,
         response: SubresourceResponseInterception,
     ) -> Option<Self> {
-        let target = request.document_command_target()?.clone();
-        let document = target.document();
-        let binding = conn.target_root_document_output_identity_for_owner(owner, document)?;
+        let binding = if let Some(target) = request.document_command_target() {
+            Some(conn.target_root_document_output_identity_for_owner(owner, target.document())?)
+        } else if request.residence.native_pause().is_some() {
+            None
+        } else {
+            return None;
+        };
         let intercept_response = !matches!(response, SubresourceResponseInterception::None);
         let internal_id = request.internal_id;
-        let page_owner = request.page_owner()?.clone();
+        let residence = request.residence.clone();
         // The renderer may publish a continuation before its command reply is
         // consumed. Freeze its original correlation before native dispatch.
         let correlation = PreparedSubresourceCorrelation::prepare_automatic(
             conn, owner, request_id, request, response,
         )?;
-        let pending = conn.start_subresource_document_command(
+        let pending = conn.start_subresource_command(
             owner,
-            &page_owner,
-            Some(&target),
+            &residence,
             moli_core::RendererPageCommand::ContinuePendingSubresourceFetch {
                 internal_id,
                 url: None,
@@ -91,7 +94,7 @@ impl std::fmt::Debug for PreparedSubresourceAutoContinue {
 
 pub(crate) struct SubresourceAutoContinueCompletion {
     correlation: PreparedSubresourceCorrelation,
-    binding: TargetRootDocumentProtocolAttachmentIdentity,
+    binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
 }
 
 impl SubresourceAutoContinueCompletion {
@@ -100,7 +103,11 @@ impl SubresourceAutoContinueCompletion {
         conn: &mut CdpConnection,
         completed: Result<CompletedResourceCommand>,
     ) {
-        if !conn.target_root_document_output_identity_is_current(&self.binding) {
+        if self
+            .binding
+            .as_ref()
+            .is_some_and(|binding| !conn.target_root_document_output_identity_is_current(binding))
+        {
             self.correlation.rollback(conn);
             return;
         }

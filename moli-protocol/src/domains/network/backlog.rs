@@ -469,7 +469,7 @@ fn emit_staged_subresource_request_started(
             event_session_ids,
         );
     }
-    if !request_was_announced_by_fetch_pause {
+    if !request_was_announced_by_fetch_pause || output.redirect().is_some() {
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
                 out,
@@ -485,12 +485,42 @@ fn emit_staged_subresource_request_started(
                 output.request_headers(),
                 resource_type,
                 output.request_initiator_type(),
-                None,
-                false,
+                output.redirect().map(|redirect| {
+                    (
+                        &redirect.from_url,
+                        redirect.status,
+                        redirect.headers.as_slice(),
+                        redirect.from_cache,
+                        redirect.negotiated_http_version,
+                    )
+                }),
+                output
+                    .redirect()
+                    .is_some_and(|redirect| !redirect.cookie_set_reports.is_empty()),
                 output.request_cookie_report(),
                 &[],
             );
         }
+    }
+    if let Some(redirect) = output.redirect() {
+        for session in event_session_ids {
+            emit_redirect_response_received_extra_info(
+                out,
+                session.as_deref(),
+                request_id,
+                &redirect.headers,
+                redirect.status,
+                &redirect.cookie_set_reports,
+            );
+        }
+        if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+            slot.record_fetch_pause_announced_redirect(request_id);
+        }
+    }
+    if conn.worker_resource_identity_for_owner(owner).is_some()
+        && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
+    {
+        slot.record_fetch_pause_announced_request_id(request_id.to_owned());
     }
     out.len() > initial_output_len
 }
@@ -763,7 +793,11 @@ pub(crate) fn emit_prepared_renderer_network_live_background_events(
     prepared: &mut TargetNetworkBacklogPreparedDelivery,
 ) {
     let Some((frame_id, snapshot)) = (|| {
-        let frame_id = conn.target_owner_identity_for_owner(owner)?.1?;
+        let frame_id = if conn.worker_resource_identity_for_owner(owner).is_some() {
+            String::new()
+        } else {
+            conn.target_owner_identity_for_owner(owner)?.1?
+        };
         let snapshot = conn
             .runtime_session_owner_slot_mut_for_owner(owner)?
             .pending_network_backlog_delivery_snapshot_from_backlog(prepared)?;

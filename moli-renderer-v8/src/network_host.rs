@@ -37,12 +37,10 @@ use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 use crate::network::ResourceRequestClient;
 
 pub(crate) use self::async_fetch::{
-    browser_request_needs_manual_preflight_redirects, collect_image_response_into_parkable,
-    fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
+    collect_image_response_into_parkable,
     fetch_browser_subresource_with_preflight_and_network_metadata,
-    fetch_browser_subresource_with_preflight_headers,
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata,
-    fetch_intercepted_window_hop, spawn_async_subresource_fetch,
+    fetch_browser_subresource_with_preflight_headers, fetch_intercepted_window_hop,
+    spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
@@ -61,10 +59,9 @@ pub(in crate::network_host) use self::body_source::{
     consume_network_body_value_from_object,
     consume_network_body_value_from_object_with_chunk_callback, network_body_source_from_object,
     network_body_source_object_from_bytes, network_body_stream_from_response_body,
-    network_body_stream_from_subresource_body, set_filtered_response_internal_body_from_bytes,
+    set_filtered_response_internal_body_from_bytes,
     set_filtered_response_internal_body_from_pending_stream,
-    set_filtered_response_internal_body_from_response_body,
-    set_filtered_response_internal_body_from_subresource_body, set_network_body_owned_bytes,
+    set_filtered_response_internal_body_from_response_body, set_network_body_owned_bytes,
     take_network_body_bytes_from_object, try_network_body_bytes_from_object,
 };
 pub(crate) use self::body_source::{
@@ -160,7 +157,6 @@ pub(crate) use self::response::{
     MaterializedResponseHead, build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_metadata,
     build_fetch_response_object_from_stream_for_request_mode_with_metadata,
-    build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
     cors_preflight_request_headers, filter_cors_exposed_response_headers,

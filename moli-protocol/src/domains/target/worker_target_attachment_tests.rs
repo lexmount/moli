@@ -24,6 +24,7 @@ const INSTANCE_ID: u64 = 701;
 
 fn renderer_info(instance_id: u64) -> RendererSharedWorkerTargetInfo {
     RendererSharedWorkerTargetInfo {
+        interception_policy: None,
         owner_local_host_id: RendererOwnerLocalHostId::new_for_testing(17),
         instance_id: SharedWorkerInstanceId::from_u64(instance_id),
         url: "https://worker.test/shared.js".to_owned(),

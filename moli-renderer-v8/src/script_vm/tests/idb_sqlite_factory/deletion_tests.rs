@@ -28,7 +28,12 @@ async fn idb_sqlite_bucket_delete_clears_storage_and_invalidates_retained_object
             tx.onabort = () => resolve('abort');
             tx.oncomplete = () => resolve('unexpected-commit');
         });
-        tx.objectStore('records').put({blob:new Blob(['discarded'])}).onerror = event => event.preventDefault();
+        const store = tx.objectStore('records');
+        store.put({blob:new Blob(['discarded'])}).onerror = event => event.preventDefault();
+        // Deletion is asynchronous. Keep this transaction active until bucket
+        // retirement aborts it, rather than racing its normal auto-commit.
+        const keepActive = () => { store.get(1).onsuccess = keepActive; };
+        keepActive();
         await Promise.all([navigator.storageBuckets.delete('remove'),navigator.storageBuckets.delete('remove')]);
         let closed = false, stale = false;
         try { db.transaction('records'); } catch (error) { closed = error.name === 'InvalidStateError'; }

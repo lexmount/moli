@@ -58,9 +58,7 @@ async fn service_worker_synthetic_redirect_without_location_preserves_client_mod
     for stream in [false, true] {
         for status in [200, 301, 302, 303, 307, 308] {
             for redirect in ["error", "manual", "follow"] {
-                let expected = if status != 200 && redirect == "error" {
-                    serde_json::json!({"error":"TypeError"})
-                } else if status != 200 && redirect == "manual" {
+                let expected = if status != 200 && redirect == "manual" {
                     serde_json::json!({"type":"opaqueredirect","status":0,"bodyNull":true,
                         "header":null,"body":"","cloneType":"opaqueredirect","cloneBody":""})
                 } else {

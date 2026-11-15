@@ -66,6 +66,8 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                 page_vm.page_id,
             ),
         );
+        let (output_tx, mut output_rx) = crate::runtime::renderer_output_transport_channel();
+        output_journal.bind_transport(output_tx);
         page_vm
             .vm_mut()
             .bind_renderer_output_journal_for_test(output_journal.clone());
@@ -109,12 +111,18 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                     page_vm.vm_mut().take_network_output().is_empty(),
                     "DedicatedWorker main scripts are not complete Page subresources"
                 );
-                let publication = output_journal
-                    .settle()
-                    .expect("DedicatedWorker target events should settle as Page output");
+                output_journal.publish_pending();
+                let mut records = Vec::new();
+                while let Ok(message) = output_rx.try_recv() {
+                    if let crate::runtime::RendererOutputTransportMessage::Publication(
+                        publication,
+                    ) = message
+                    {
+                        records.extend(publication.into_records());
+                    }
+                }
                 anyhow::Ok(
-                    publication
-                        .into_records()
+                    records
                         .into_iter()
                         .filter_map(|record| match record.into_parts().1 {
                             RendererOutputItem::OwnerAction(

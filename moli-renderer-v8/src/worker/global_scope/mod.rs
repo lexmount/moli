@@ -15,7 +15,6 @@ use std::sync::{
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{
-    RendererSyntheticResponseBody,
     broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     content_security_policy::ContentSecurityPolicyReportingEndpoints,
     message_port_runtime::SharedMessagePortRegistry,
@@ -43,8 +42,7 @@ use url::Url;
 use super::{
     decode_data_url_script_source,
     handle::{
-        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerPendingFetchContinue,
-        WorkerPendingSubresourceFetch, WorkerPendingXhrContinue, WorkerToParentMessage,
+        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerToParentMessage,
         WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
     },
 };
@@ -56,33 +54,27 @@ use crate::context_bootstrap::{
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::xhr_has_upload_listeners;
 use crate::network_host::{
-    ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
-    FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
-    XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT, XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT,
-    XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
-    XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
-    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, begin_xhr_send,
-    browser_request_needs_manual_preflight_redirects,
-    build_fetch_response_object_from_subresource_body_for_request_mode,
+    BLOCKED_BY_CLIENT_ERROR_TEXT, FetchResponseSecurityViolation, HeadersGuard,
+    PreparedXhrSendBody, XHR_ABORTED_SLOT, XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT,
+    XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT,
+    XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
+    append_default_body_content_type, apply_xhr_failure, apply_xhr_response,
+    apply_xhr_response_body_source, apply_xhr_timeout, begin_xhr_send,
     close_pending_network_body_stream, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
     dispatch_xhr_upload_complete, enqueue_pending_network_body_chunk,
-    error_pending_network_body_stream_with_reason, extract_subresource_auth_challenge,
-    fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata,
-    filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
-    local_url_response_result, parse_fetch_init, request_object_credentials_mode,
-    resolve_context_url, set_xhr_state_number, throw_synchronous_xhr_failure,
-    validate_fetch_response_security_policy,
+    error_pending_network_body_stream_with_reason, filter_cors_exposed_response_headers,
+    filter_headers_for_guard, local_url_response_result, parse_fetch_init,
+    request_object_credentials_mode, resolve_context_url, set_xhr_state_number,
+    throw_synchronous_xhr_failure, validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
     xhr_ensure_send_allowed, xhr_state_bool_property, xhr_state_number_property,
     xhr_state_string_property,
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
-    PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-    PendingSubresourceResponseInfo, SubresourceInterceptionClasses, SubresourceNetworkRecord,
+    PendingSubresourceFetchInfo, SubresourceInterceptionClasses, SubresourceNetworkRecord,
     SubresourceNetworkRequestHandle, SubresourceResourceType, SubresourceResponseBody,
-    SubresourceResponseBodyWriter, WebSocketFrameDirection, WebSocketFrameOpcode,
+    WebSocketFrameDirection, WebSocketFrameOpcode,
 };
 use crate::queue_microtask::worker_queue_microtask_callback;
 use crate::runtime::{
@@ -138,10 +130,6 @@ pub(crate) use self::service_worker_api::{
 };
 
 use content_security_policy::*;
-pub(in crate::worker) use content_security_policy::{
-    continue_pending_worker_csp_report, fail_pending_worker_csp_report,
-    fulfill_pending_worker_csp_report,
-};
 pub(crate) use fetch::*;
 use import_scripts::*;
 use timers::*;
@@ -204,14 +192,14 @@ pub(crate) use nested_workers::{
     NestedWorkerContext, forget_nested_worker_context, reserve_nested_worker_context,
 };
 pub(super) use network_state::{
-    PausedWorkerSubresourceResponse, PendingWorkerCspReport, PendingWorkerFetch,
-    PendingWorkerFetchNetworkRecord, PendingWorkerXhr, WorkerFetchCompletion, WorkerFetchEvent,
-    WorkerFetchResponse, WorkerFetchStreamingChunk, WorkerFetchStreamingFinished,
-    WorkerFetchStreamingStarted, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrResponse,
+    PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion,
+};
+pub(crate) use network_state::{
+    WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse, WorkerFetchStreamingChunk,
+    WorkerFetchStreamingFinished, WorkerFetchStreamingStarted,
 };
 use network_state::{
-    WorkerFetchResponseParts, merge_worker_request_headers, next_fetch_id, next_websocket_id,
-    next_xhr_id, worker_url_blocked,
+    merge_worker_request_headers, next_fetch_id, next_websocket_id, next_xhr_id, worker_url_blocked,
 };
 pub(crate) use origin::worker_global_origin;
 use origin::{WorkerGlobalOriginDeclaration, WorkerGlobalOriginPrototypeDeclaration};

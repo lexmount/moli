@@ -1528,7 +1528,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                 ("GET", 101), ("GET", 103), ("GET", 204), ("GET", 205), ("GET", 304),
             ] {
                 for opaque in [false, true] {
-                    for source in ["response", "bytes", "subresource", "stream", "preload"] {
+                    for source in ["response", "bytes", "stream", "preload"] {
                         let request = FetchResponseRequest {
                             method,
                             mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
@@ -1557,10 +1557,6 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                                 scope, request, head,
                                 moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
                                 metadata,
-                            ),
-                            "subresource" => crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode(
-                                scope, request, head,
-                                crate::protocol_types::SubresourceResponseBody::from_bytes(b"discard me".to_vec()), metadata,
                             ),
                             "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                                 scope, &document_url, request, head, id,

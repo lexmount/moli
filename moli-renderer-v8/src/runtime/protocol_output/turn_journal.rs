@@ -355,11 +355,19 @@ impl RendererTurnOutputJournal {
     /// have no enclosing Page turn, so this operation is their atomic
     /// append/settle/admit boundary.
     pub(crate) fn publish_record(&self, record: RendererOutputRecord) {
-        let mut state = self.state.lock();
         assert!(
-            !state.closed,
+            self.try_publish_record(record),
             "renderer output cannot be published after stream closure"
         );
+    }
+
+    /// Asynchronous resource completion can race retirement of its observer.
+    /// The same stream lock admits the record or observes terminal retirement.
+    pub(crate) fn try_publish_record(&self, record: RendererOutputRecord) -> bool {
+        let mut state = self.state.lock();
+        if state.closed {
+            return false;
+        }
         let cursor = Self::reserve_cursor_locked(&mut state);
         let publication = RendererOutputPublication::new(cursor, vec![record]);
         if let Some(transport) = state.transport.as_ref() {
@@ -372,6 +380,7 @@ impl RendererTurnOutputJournal {
             // browser context binds its protocol transport.
             state.deferred_publications.push(publication);
         }
+        true
     }
 
     /// Binds the browser-context protocol transport to a stream that may have

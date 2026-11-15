@@ -68,7 +68,6 @@ fn finish_loading_with_runtime_service(
                         );
                         return;
                     }
-                    host.publish_created_target_event();
                     host.start_parent_message_pump();
                     for client_id in host.connect_pending_clients(clients) {
                         runtime_service.remove_client(client_id);

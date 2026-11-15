@@ -14,7 +14,7 @@ pub(super) async fn command(ctx: &mut TestContext, id: u64, method: &str, params
     response
 }
 
-async fn session_command(
+pub(super) async fn session_command(
     ctx: &mut TestContext,
     session: &str,
     id: u64,
@@ -345,7 +345,7 @@ async fn fulfilled_window_fetch_redirect_modes_and_missing_location() {
         .await;
         let expected = if mode == "manual" {
             json!({"status":0,"type":"opaqueredirect","body":"","redirected":false})
-        } else if mode == "error" {
+        } else if mode == "error" && location {
             json!({"error":"TypeError"})
         } else {
             json!({"status":302,"type":"basic","body":"noloc","redirected":false})
@@ -653,7 +653,9 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         assert_eq!(*observed.lock(), expected_requests, "{stage:?}/{index}");
         let value = &result["result"]["result"]["value"];
         if !cors_allowed
-            || (status == 302 && (mode == "error" || (mode == "follow" && location.is_some())))
+            || (status == 302
+                && ((mode == "error" && (stage.is_none() || location.is_some()))
+                    || (mode == "follow" && location.is_some())))
         {
             assert_eq!(value, &json!({"error":"TypeError"}), "{stage:?}/{index}");
         } else if status == 302 && mode == "manual" {

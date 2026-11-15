@@ -202,6 +202,12 @@ impl ResourceRequestClient {
         client
     }
 
+    pub(crate) fn fork_for_shared_worker_target(&self) -> Self {
+        let mut client = self.fork_with_isolated_page_network_policy();
+        client.browser_site_context = self.browser_site_context.clone();
+        client
+    }
+
     /// Materializes a text response at callers that require a buffered body.
     ///
     /// New renderer resource loads should prefer `fetch_text_stream()` or

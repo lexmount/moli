@@ -15,7 +15,7 @@ use super::{
 
 impl RendererSharedWorkerHost {
     pub(super) fn start_running(
-        &self,
+        self: &Arc<Self>,
         script: SharedWorkerLoadedScript,
         params: SharedWorkerLaunchParams,
     ) -> bool {
@@ -34,11 +34,32 @@ impl RendererSharedWorkerHost {
                 .unwrap_or(execution_policy.policy_context)
         };
         let reserved_service_worker_client_id = params.reserved_service_worker_client_id;
+        let request_client = launch_context
+            .request_client
+            .fork_for_shared_worker_target();
+        let policy =
+            crate::network::ResourceInterceptionPolicy(request_client.page_network_policy());
+        let weak_host = Arc::downgrade(self);
+        let interception = crate::network::interception_output::ResourceInterceptionContext::worker(
+            None,
+            move |event| {
+                let Some(host) = weak_host.upgrade() else {
+                    return false;
+                };
+                let state = host.state.lock();
+                if !matches!(*state, RendererSharedWorkerHostState::Running { .. }) {
+                    return false;
+                }
+                host.publish_resource_event(event);
+                true
+            },
+        );
         let options = WorkerSpawnOptions::new_with_request_client(
             script_source,
             script_url.clone(),
-            launch_context.request_client,
+            request_client,
         )
+        .with_interception_context(Some(interception))
         .with_script_kind(execution_policy.script_kind)
         .with_module_static_import_initiator_url(
             execution_policy.module_static_import_initiator_url,
@@ -58,6 +79,11 @@ impl RendererSharedWorkerHost {
         .with_network_policy(execution_policy.network_policy)
         .with_policy_context(policy_context)
         .with_worker_context_runtime(execution_policy.worker_context_runtime.clone())
+        .with_pause_evaluation_until_debugger(
+            execution_policy
+                .worker_context_runtime
+                .shared_worker_pause_on_start_for_devtools(),
+        )
         .with_global_kind(WorkerGlobalKind::Shared {
             name: name.clone(),
             storage_key: params.key.storage_key().clone(),
@@ -76,16 +102,16 @@ impl RendererSharedWorkerHost {
         } else {
             options
         };
-        let mut handle = spawn_worker_with_options(options);
-        let tx = handle.tx.clone();
-        let parent_rx = handle.take_receiver();
         let mut state = self.state.lock();
         if !matches!(*state, RendererSharedWorkerHostState::Loading { .. }) {
             drop(state);
-            handle.terminate_and_join();
             return false;
         }
         self.set_current_script_url(script_url);
+        self.publish_created_target_event(Some(policy));
+        let mut handle = spawn_worker_with_options(options);
+        let tx = handle.tx.clone();
+        let parent_rx = handle.take_receiver();
         *state = RendererSharedWorkerHostState::Running {
             tx,
             handle: Some(handle),

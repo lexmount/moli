@@ -11,6 +11,24 @@ use crate::domains::target::{
 };
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_worker_resource(
+        self,
+        browser_context_id: String,
+        target_id: String,
+        event: moli_core::network::ResourceInterceptionEvent,
+    ) -> Option<(
+        Vec<crate::conn::BackgroundProtocolEvent>,
+        Vec<crate::domains::fetch::PreparedSubresourceAutoContinue>,
+        Vec<crate::domains::activity::PreparedSubresourceContinueWait>,
+    )> {
+        crate::domains::target::prepare_worker_resource(
+            self.connection,
+            browser_context_id,
+            target_id,
+            event,
+        )
+    }
+
     pub(crate) fn project_worker_target_event(
         self,
         event: WorkerTargetLifecycleOutput,

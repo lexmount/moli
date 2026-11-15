@@ -131,6 +131,7 @@ async fn verify_request_budgets(kind: RequestKind) {
     });
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     ctx.process_async(json!({ "id": 2997, "method": "Network.enable", "sessionId": "SID-1" }))
         .await;
     ctx.expect_result(2997, json!({}), Some("SID-1"));

@@ -41,6 +41,9 @@ pub(crate) struct SharedWorkerTargetState {
     pub(crate) renderer_owner_local_host_id: RendererOwnerLocalHostId,
     pub(crate) renderer_instance_id: SharedWorkerInstanceId,
     pub(crate) target_id: String,
+    pub(crate) runtime_slot: super::TargetRuntimeSlot,
+    pub(crate) fetch_owner: super::TargetFetchOwner,
+    pub(crate) interception_policy: Option<moli_core::network::ResourceInterceptionPolicy>,
     owner_target_id: Option<String>,
     sessions: BTreeMap<String, SharedWorkerTargetSessionState>,
     pub(crate) url: String,
@@ -74,6 +77,9 @@ impl SharedWorkerTargetState {
         name: String,
     ) -> Self {
         Self {
+            runtime_slot: Default::default(),
+            fetch_owner: Default::default(),
+            interception_policy: None,
             renderer_owner_local_host_id,
             renderer_instance_id,
             target_id,
@@ -307,6 +313,8 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn detach_session(&mut self, session_id: &str) -> Option<String> {
+        self.runtime_slot
+            .remove_attached_network_session(session_id);
         self.sessions
             .remove(session_id)
             .map(|_| session_id.to_owned())
@@ -373,6 +381,12 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn set_network_enabled(&mut self, session_id: &str, enabled: bool) -> bool {
+        if enabled {
+            self.runtime_slot.enable_attached_network_events(session_id);
+        } else {
+            self.runtime_slot
+                .disable_attached_network_events(session_id);
+        }
         let Some(state) = self.session_state_mut(session_id) else {
             return false;
         };
