@@ -190,6 +190,7 @@ pub(in crate::table) fn compute_grid_inline_min_max(
     constraints: &[TableColumnConstraint],
     undistributable_space: f32,
     layout_mode: TableLayoutMode,
+    allow_column_percentages: bool,
 ) -> TableGridInlineMinMax {
     let mut min = 0.0f32;
     let mut max = 0.0f32;
@@ -221,7 +222,7 @@ pub(in crate::table) fn compute_grid_inline_min_max(
     }
 
     percent_sum = percent_sum.clamp(0.0, 1.0);
-    if percent_sum > 0.0 {
+    if percent_sum > 0.0 && allow_column_percentages {
         if non_percent_max_sum > 0.0 {
             let size_from_percent_and_fixed = if percent_sum >= 1.0 {
                 TABLE_MAX_INLINE_SIZE
@@ -752,14 +753,14 @@ mod tests {
         ];
 
         assert_eq!(
-            compute_grid_inline_min_max(&constraints, 12.0, TableLayoutMode::Automatic),
+            compute_grid_inline_min_max(&constraints, 12.0, TableLayoutMode::Automatic, true),
             TableGridInlineMinMax {
                 min: 72.0,
                 max: 172.0,
             },
         );
         assert_eq!(
-            compute_grid_inline_min_max(&constraints, 12.0, TableLayoutMode::Fixed),
+            compute_grid_inline_min_max(&constraints, 12.0, TableLayoutMode::Fixed, true),
             TableGridInlineMinMax {
                 min: 102.0,
                 max: 172.0,
@@ -772,11 +773,20 @@ mod tests {
         let constraints = [automatic(0.0, 50.0), percentage(0.0, 0.0, 1.0, 0.0)];
 
         assert_eq!(
-            compute_grid_inline_min_max(&constraints, 5.0, TableLayoutMode::Automatic),
+            compute_grid_inline_min_max(&constraints, 5.0, TableLayoutMode::Automatic, true),
             TableGridInlineMinMax {
                 min: 5.0,
                 max: TABLE_MAX_INLINE_SIZE + 5.0,
             },
+        );
+    }
+
+    #[test]
+    fn intrinsic_grid_max_without_percentage_dependency_stays_finite() {
+        let constraints = [percentage(4.0, 4.0, 1.0, 0.0), automatic(4.0, 4.0)];
+        assert_eq!(
+            compute_grid_inline_min_max(&constraints, 0.0, TableLayoutMode::Automatic, false),
+            TableGridInlineMinMax { min: 8.0, max: 8.0 },
         );
     }
 
