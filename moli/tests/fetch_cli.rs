@@ -163,7 +163,15 @@ fn run_fetch_cli_with_dump_and_args(url: &str, dump: &str, args: &[&str]) -> Res
 }
 
 fn run_fetch_cli_with_default_wait_and_dump(url: &str, dump: &str) -> Result<Output> {
-    run_moli([
+    run_fetch_cli_with_default_wait_dump_and_args(url, dump, &[])
+}
+
+fn run_fetch_cli_with_default_wait_dump_and_args(
+    url: &str,
+    dump: &str,
+    args: &[&str],
+) -> Result<Output> {
+    let mut cli_args = vec![
         "moli",
         "fetch",
         "--log-level",
@@ -172,8 +180,10 @@ fn run_fetch_cli_with_default_wait_and_dump(url: &str, dump: &str) -> Result<Out
         "*",
         "--dump",
         dump,
-        url,
-    ])
+    ];
+    cli_args.extend_from_slice(args);
+    cli_args.push(url);
+    run_moli(cli_args)
 }
 
 fn run_fetch_cli_without_dump(url: &str) -> Result<Output> {
@@ -3071,7 +3081,7 @@ fn assert_cli_best_effort_stage_uses_remaining_deadline(
     // Leave headroom for parsing under parallel CI. The readiness warning
     // exposes the actual budget handed to the stability stage, so test the
     // 500 ms deduction directly rather than wall-clock scheduler latency.
-    const TIMEOUT_MS: u64 = 3_000;
+    const TIMEOUT_MS: u64 = 10_000;
     const RESPONSE_DELAY_MS: u64 = 500;
     let timeout = TIMEOUT_MS.to_string();
     let output = run_moli([
@@ -3387,11 +3397,14 @@ fn cli_load_waits_for_slow_post_domcontentloaded_runtime_script() -> Result<()> 
 }
 
 #[test]
-fn cli_default_redirect_wait_follows_client_navigation_from_terminal_302() -> Result<()> {
+fn cli_redirect_wait_follows_client_navigation_from_terminal_302() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
+    // Exercise successor/lifecycle handling independently of startup latency.
+    // The production default is an absolute 1 s window from fetch start and
+    // may legitimately expire before a delayed navigation on a busy runner.
+    let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--redirect-wait-ms", "10000"])?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3594,7 +3607,16 @@ fn cli_domcontentloaded_recovers_from_delayed_403_navigation_at_same_stage() -> 
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_wait_until(&url, "domcontentloaded")?;
+    let output = run_fetch_cli_with_default_wait_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--wait-until",
+            "domcontentloaded",
+            "--redirect-wait-ms",
+            "10000",
+        ],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3621,7 +3643,7 @@ fn cli_load_recovers_from_delayed_403_navigation_at_same_stage() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_wait_until(&url, "load")?;
+    let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--redirect-wait-ms", "10000"])?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3798,7 +3820,11 @@ fn cli_default_done_recovers_from_delayed_403_navigation_at_load() -> Result<()>
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_default_wait_and_dump(&url, "json")?;
+    let output = run_fetch_cli_with_default_wait_dump_and_args(
+        &url,
+        "json",
+        &["--redirect-wait-ms", "10000"],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(

@@ -862,6 +862,16 @@ mod tests {
     }
 
     #[test]
+    fn fetch_defaults_keep_the_done_stage_and_one_second_redirect_window() {
+        let cli = Cli::parse_from(["moli", "fetch", "https://example.test/"]);
+        let Commands::Fetch(args) = cli.command else {
+            panic!("expected fetch command");
+        };
+        assert!(matches!(args.wait_until, FetchWaitUntil::Done));
+        assert_eq!(args.redirect_wait_ms, 1_000);
+    }
+
+    #[test]
     fn parses_redirect_wait_ms_with_explicit_fetch_command() {
         let args = normalize_args_for_compat([
             "moli",
