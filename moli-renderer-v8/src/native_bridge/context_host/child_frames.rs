@@ -31,6 +31,7 @@ use url::Url;
 
 mod classic_scripts;
 mod discovery;
+mod embedded_csp;
 mod local_history;
 mod lookup;
 mod module_scripts;
@@ -39,6 +40,7 @@ mod registry;
 mod request_scope;
 mod stylesheets;
 mod target_snapshot;
+pub(in crate::native_bridge::context_host) use embedded_csp::EmbeddedContentCspAdmission;
 pub(in crate::native_bridge::context_host) use target_snapshot::ChildNavigationTargetSnapshot;
 
 pub(in crate::native_bridge::context_host) use classic_scripts::ChildParserClassicScriptCandidate;

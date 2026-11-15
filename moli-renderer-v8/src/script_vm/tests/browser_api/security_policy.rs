@@ -1,5 +1,6 @@
 use super::*;
 
+mod embedded_content;
 mod iframe_navigation;
 mod inline_tasks;
 mod parser_positions;

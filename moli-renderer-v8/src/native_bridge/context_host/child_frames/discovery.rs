@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_CHILD_BROWSING_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ChildFrameOwnerElementKind {
+pub(super) enum ChildFrameOwnerElementKind {
     Iframe,
     Frame,
     Embed,
@@ -16,7 +16,7 @@ enum ChildFrameOwnerElementKind {
 }
 
 impl ChildFrameOwnerElementKind {
-    fn navigation_attribute(self) -> &'static str {
+    pub(super) fn navigation_attribute(self) -> &'static str {
         match self {
             Self::Iframe | Self::Frame | Self::Embed => "src",
             Self::Object => "data",
@@ -152,7 +152,7 @@ impl PageScriptHost {
         self.child_frame_owner_element_kind(handle) == Some(ChildFrameOwnerElementKind::Object)
     }
 
-    fn child_frame_owner_element_kind(
+    pub(super) fn child_frame_owner_element_kind(
         &self,
         handle: DomHandle,
     ) -> Option<ChildFrameOwnerElementKind> {
@@ -207,6 +207,13 @@ impl PageScriptHost {
         handle: DomHandle,
         attribute_name: &str,
     ) {
+        if matches!(
+            self.child_frame_owner_element_kind(handle),
+            Some(ChildFrameOwnerElementKind::Object | ChildFrameOwnerElementKind::Embed)
+        ) && matches!(attribute_name, "data" | "src" | "type")
+        {
+            self.embedded_content_csp_admissions.remove(&handle);
+        }
         if self.child_browsing_context_host_is_object_element(handle)
             && ["data", "type"]
                 .into_iter()
@@ -277,10 +284,18 @@ impl PageScriptHost {
             .unwrap_or_else(|_| Url::parse("about:blank").expect("static about:blank should parse"))
     }
 
-    fn resolve_child_frame_owner_attribute_url(&self, handle: DomHandle, raw: &str) -> Url {
+    pub(super) fn parse_child_frame_owner_attribute_url(
+        &self,
+        handle: DomHandle,
+        raw: &str,
+    ) -> Option<Url> {
         let base = self.document_base_url_for_child_context(handle);
-        parse_url_with_document_query_encoding(self, handle, &base, raw)
-            .unwrap_or_else(|_| Url::parse("about:blank").expect("static about:blank should parse"))
+        parse_url_with_document_query_encoding(self, handle, &base, raw).ok()
+    }
+
+    fn resolve_child_frame_owner_attribute_url(&self, handle: DomHandle, raw: &str) -> Url {
+        self.parse_child_frame_owner_attribute_url(handle, raw)
+            .unwrap_or_else(|| Url::parse("about:blank").expect("static about:blank should parse"))
     }
 
     pub(in crate::native_bridge::context_host) fn child_browsing_context_bootstrap_for_handle(
@@ -289,6 +304,9 @@ impl PageScriptHost {
     ) -> Option<ChildBrowsingContextBootstrap> {
         let kind = self.child_frame_owner_element_kind(handle)?;
         if !self.child_browsing_context_host_is_active(handle) {
+            return None;
+        }
+        if self.embedded_content_request_is_csp_blocked(handle) {
             return None;
         }
         let owner_dispatch_scope = self
@@ -340,7 +358,7 @@ impl PageScriptHost {
         Some(bootstrap)
     }
 
-    fn embedded_content_is_inside_media_element(&self, handle: DomHandle) -> bool {
+    pub(super) fn embedded_content_is_inside_media_element(&self, handle: DomHandle) -> bool {
         let mut current = self.dom_host().parent_node(handle);
         while let Some(ancestor) = current {
             if self.dom_host().is_html_element_named(ancestor, "audio")

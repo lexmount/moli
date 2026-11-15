@@ -14,6 +14,31 @@ fn request_url(raw: &str) -> Url {
 }
 
 #[test]
+fn object_requests_use_object_src_and_default_src_without_frame_or_image_fallbacks() {
+    let kind = ContentSecurityPolicyResourceKind::DocumentObject;
+    for (policy, expected) in [
+        ("object-src 'self'; frame-src 'none'; img-src 'none'", true),
+        ("object-src 'none'; frame-src *; img-src *", false),
+        ("default-src 'none'; frame-src *; img-src *", false),
+        ("default-src 'none'; object-src 'self'", true),
+        ("child-src 'none'; frame-src 'none'; img-src 'none'", true),
+    ] {
+        let policy = ContentSecurityPolicy::from(policy);
+        let violation = content_security_policy_url_violation_with_redirect_status(
+            &[policy],
+            &protected_url(),
+            &request_url("https://app.test/object.html"),
+            kind,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        );
+        assert_eq!(violation.is_none(), expected);
+        if let Some(violation) = violation {
+            assert_eq!(violation.effective_directive, "object-src");
+        }
+    }
+}
+
+#[test]
 fn inherited_policy_self_origin_is_independent_of_document_url() {
     let policy =
         ContentSecurityPolicy::from("connect-src 'self'").with_self_origin(&protected_url());
@@ -1684,6 +1709,7 @@ fn exact_host_port_wildcards_apply_across_resource_kinds() {
         ContentSecurityPolicyResourceKind::DocumentImage,
         ContentSecurityPolicyResourceKind::DocumentManifest,
         ContentSecurityPolicyResourceKind::DocumentMedia,
+        ContentSecurityPolicyResourceKind::DocumentObject,
         ContentSecurityPolicyResourceKind::DocumentScriptElement,
         ContentSecurityPolicyResourceKind::DocumentStyleElement,
         ContentSecurityPolicyResourceKind::WorkerConnect,

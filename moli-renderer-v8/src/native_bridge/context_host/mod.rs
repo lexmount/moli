@@ -997,6 +997,7 @@ pub(crate) struct PageScriptHost {
     // resource selection is invalidated; ordinary context discovery must not
     // recreate its nested browsing context in the meantime.
     object_fallback_bootstraps: HashMap<DomHandle, ChildBrowsingContextBootstrap>,
+    embedded_content_csp_admissions: HashMap<DomHandle, child_frames::EmbeddedContentCspAdmission>,
     frame_owner_store: FrameOwnerStore,
     inert_document_execution_contexts:
         Option<Box<document_execution_context::InertDocumentExecutionContexts>>,

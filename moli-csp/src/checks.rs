@@ -1422,6 +1422,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
+            Self::DocumentObject => OBJECT_SRC,
             Self::DocumentPrefetch => DEFAULT_SRC,
             Self::DocumentScriptElement | Self::WorkerDynamicModuleImport | Self::WorkerScript => {
                 SCRIPT_SRC_ELEM
@@ -1441,6 +1442,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],
             Self::DocumentManifest => &[MANIFEST_SRC, DEFAULT_SRC],
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
+            Self::DocumentObject => &[OBJECT_SRC, DEFAULT_SRC],
             Self::DocumentPrefetch => &[DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],

@@ -441,6 +441,7 @@ impl PageScriptHost {
             observers: ObserverStore::default(),
             child_browsing_contexts: IndexMap::new(),
             object_fallback_bootstraps: HashMap::new(),
+            embedded_content_csp_admissions: HashMap::new(),
             frame_owner_store,
             inert_document_execution_contexts: None,
             frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore::default(),

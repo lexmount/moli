@@ -54,13 +54,15 @@ impl PageScriptHost {
         let mut creation_kind = child_document_creation_kind_for_bootstrap(&bootstrap);
         if let Some(request_url) = child_document_frame_csp_request_url(&bootstrap) {
             if let Some(violation) =
-                self.frame_navigation_csp_report_only_violation(handle, request_url)
+                self.frame_navigation_csp_report_only_violation(handle, request_url, initiator)
             {
                 self.dispatch_frame_navigation_csp_violation_event_best_effort(
                     scope, handle, &violation,
                 );
             }
-            if let Some(violation) = self.frame_navigation_csp_violation(handle, request_url) {
+            if let Some(violation) =
+                self.frame_navigation_csp_violation(handle, request_url, initiator)
+            {
                 self.dispatch_frame_navigation_csp_violation_event_best_effort(
                     scope, handle, &violation,
                 );

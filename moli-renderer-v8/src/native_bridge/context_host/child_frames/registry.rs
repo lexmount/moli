@@ -178,6 +178,7 @@ impl PageScriptHost {
         {
             Self::drop_child_browsing_context_subtree_with_window_realm(scope, self, handle);
         }
+        self.refresh_embedded_content_csp_admission(scope, handle);
         match self.child_browsing_context_bootstrap_for_handle(handle) {
             Some(attribute_bootstrap) => {
                 self.object_fallback_bootstraps.remove(&handle);
@@ -950,6 +951,7 @@ impl PageScriptHost {
             // Mark the whole batch before the first callback: a handler for A
             // can reattach B before B reaches its own cancellation boundary.
             for handle in handles {
+                host.embedded_content_csp_admissions.remove(&handle);
                 let Some(entry) = host.child_browsing_contexts.get_mut(&handle) else {
                     continue;
                 };
@@ -1067,6 +1069,7 @@ impl PageScriptHost {
     fn drop_child_browsing_context_handles(&mut self, handles: Vec<DomHandle>) {
         for handle in handles {
             self.object_fallback_bootstraps.remove(&handle);
+            self.embedded_content_csp_admissions.remove(&handle);
             let document_handle_before_drop = self.child_browsing_context_document_handle(handle);
             let frame_id = self
                 .child_browsing_contexts
