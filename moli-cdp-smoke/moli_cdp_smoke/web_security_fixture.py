@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from .config import REPO_ROOT
+
 
 READ = """async function read(url, api='fetch', init={}) {
   try {
@@ -36,7 +38,8 @@ READ = """async function read(url, api='fetch', init={}) {
 
 
 class WebSecurityFixture:
-    def __init__(self) -> None:
+    def __init__(self, image: bytes) -> None:
+        self._image = image
         self._lock = threading.Lock()
         self._requests: dict[str, list[dict[str, Any]]] = {}
 
@@ -74,6 +77,18 @@ class WebSecurityFixture:
             extra['Cross-Origin-Resource-Policy'] = 'same-origin'
         elif route == 'orb':
             mime, payload = 'application/json', '{"secret":"payload"}'
+        elif route == 'requests':
+            mime, payload = 'application/json', json.dumps(self.requests(query['for'][0]))
+        elif route == 'image':
+            mime, payload = 'image/png', self._image
+        elif route == 'font':
+            mime, payload = 'font/woff2', (REPO_ROOT / 'moli-layout/tests/fixtures/moli-ahem.woff2').read_bytes()
+        elif route == 'style':
+            mime, payload = 'text/css', 'body { --security-probe: loaded; }'
+        elif route == 'track':
+            mime, payload = 'text/vtt', 'WEBVTT\n\n00:00.000 --> 00:01.000\nprobe\n'
+        elif route == 'timing':
+            payload = '123456789'
         elif route in ('page', 'csp'):
             mime, payload = 'text/html', '<!doctype html><title>web security</title><main>payload</main>'
             if route == 'csp':
@@ -95,20 +110,31 @@ class WebSecurityFixture:
             dependency = query['dependency'][0]
             if query.get('kind', ['static'])[0] == 'static':
                 payload = f"import {{value}} from {json.dumps(dependency)};onmessage=()=>{{postMessage(value);close();}};"
+                if query.get('workerKind') == ['shared']:
+                    payload = f"import {{value}} from {json.dumps(dependency)};onconnect=({{ports:[p]}})=>{{p.postMessage(value);p.close();close();}};"
+                elif query.get('workerKind') == ['service']:
+                    payload = f"import {{value}} from {json.dumps(dependency)};oninstall=()=>skipWaiting();onactivate=e=>e.waitUntil(clients.claim());onmessage=e=>e.ports[0].postMessage(value);"
             else:
                 payload = f"onmessage=async()=>{{try{{postMessage((await import({json.dumps(dependency)})).value)}}catch(e){{postMessage({{error:e.name}})}}close();}};"
         elif route == 'sw.js':
             mime = 'text/javascript'
             payload = """oninstall=e=>e.waitUntil(skipWaiting());
               onactivate=e=>e.waitUntil(clients.claim());
-              onfetch=e=>{if(new URL(e.request.url).searchParams.get('sw')==='synthetic')
-                e.respondWith(new Response('synthetic',{headers:{'x-secret':'synthetic'}}));};"""
+              onfetch=e=>{const q=new URL(e.request.url).searchParams;
+                if(q.get('sw')==='synthetic') e.respondWith(new Response('synthetic',{headers:{'x-secret':'synthetic'}}));
+                if(q.get('sw')==='redirect') e.respondWith(Response.redirect(q.get('to')));};"""
+        elif route == 'nested-parent.js':
+            mime = 'text/javascript'
+            child = json.dumps(query['child'][0])
+            payload = f"onmessage=()=>{{const worker=new Worker({child});worker.onmessage=e=>{{postMessage({{parentOrigin:self.origin,parentScriptOrigin:location.origin,child:e.data}});worker.terminate();close();}};worker.onerror=e=>{{e.preventDefault();postMessage({{error:'ChildWorkerError'}});close();}};}};"
+        elif route == 'nested-child.js':
+            mime, payload = 'text/javascript', "postMessage({origin:self.origin,scriptOrigin:location.origin});close();"
         if query.get('cors') == ['1']:
             extra.update({'Access-Control-Allow-Origin':headers.get('origin','*'),
                           'Access-Control-Allow-Credentials':'true',
                           'Access-Control-Allow-Methods':'GET, PUT',
                           'Access-Control-Allow-Headers':'x-author'})
-        data = payload.encode()
+        data = payload if isinstance(payload, bytes) else payload.encode()
         handler.send_response(status)
         for name,value in {'Content-Type':mime,'Content-Length':str(len(data)),
                            'Cache-Control':cache,**extra}.items():

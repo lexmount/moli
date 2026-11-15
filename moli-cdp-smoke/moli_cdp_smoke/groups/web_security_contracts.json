@@ -974,6 +974,105 @@
     "popup": {
       "error": "SecurityError"
     },
+    "origin-form": {
+      "result": "submitted",
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "POST",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "probe=value"
+        }
+      ]
+    },
+    "origin-style": {
+      "result": "error",
+      "requests": [
+        {
+          "path": "/web-security/style",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "origin-image": {
+      "result": "error",
+      "requests": [
+        {
+          "path": "/web-security/image",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "origin-font": {
+      "result": "NetworkError",
+      "requests": [
+        {
+          "path": "/web-security/font",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "nested-worker": {
+      "result": {
+        "error": "SecurityError"
+      },
+      "parentRequests": [],
+      "childRequests": []
+    },
+    "module-shared-static": {
+      "result": "module",
+      "requests": [
+        {
+          "path": "/web-security/module.js",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "sharedworker"
+        }
+      ]
+    },
+    "module-service-static": {
+      "result": "module",
+      "requests": [
+        {
+          "path": "/web-security/module.js",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "serviceworker"
+        }
+      ]
+    },
+    "text-track": {
+      "result": {
+        "readyState": 3,
+        "cues": 0
+      },
+      "requests": []
+    },
+    "resource-timing": [
+      309,
+      9,
+      9
+    ],
     "remote-frame": {
       "source": {
         "origin": "{remote-source}",
@@ -1059,6 +1158,12 @@
       "requests": []
     },
     "sw-synthetic-same-origin": {
+      "result": {
+        "error": "TypeError"
+      },
+      "requests": []
+    },
+    "sw-redirect-same-origin": {
       "result": {
         "error": "TypeError"
       },
@@ -2268,6 +2373,139 @@
       "body": "payload",
       "origin": "{target}"
     },
+    "origin-form": {
+      "result": "submitted",
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "POST",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "probe=value"
+        }
+      ]
+    },
+    "origin-style": {
+      "result": "load",
+      "requests": [
+        {
+          "path": "/web-security/style",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "origin-image": {
+      "result": "load",
+      "requests": [
+        {
+          "path": "/web-security/image",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "origin-font": {
+      "result": "load",
+      "requests": [
+        {
+          "path": "/web-security/font",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "nested-worker": {
+      "result": {
+        "parentOrigin": "{source}",
+        "parentScriptOrigin": "{target}",
+        "child": {
+          "origin": "{source}",
+          "scriptOrigin": "{source}"
+        }
+      },
+      "parentRequests": [
+        {
+          "path": "/web-security/nested-parent.js",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ],
+      "childRequests": [
+        {
+          "path": "/web-security/nested-child.js",
+          "method": "GET",
+          "origin": null,
+          "cookie": {
+            "target_cookie": "present"
+          },
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "module-shared-static": {
+      "result": "module",
+      "requests": [
+        {
+          "path": "/web-security/module.js",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "sharedworker"
+        }
+      ]
+    },
+    "module-service-static": {
+      "result": "module",
+      "requests": [
+        {
+          "path": "/web-security/module.js",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "serviceworker"
+        }
+      ]
+    },
+    "text-track": {
+      "result": {
+        "readyState": 2,
+        "cues": 1
+      },
+      "requests": [
+        {
+          "path": "/web-security/track",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "resource-timing": [
+      0,
+      0,
+      0
+    ],
     "remote-frame": {
       "source": {
         "origin": "{remote-source}",
@@ -2387,6 +2625,28 @@
         "cookie": null
       },
       "requests": []
+    },
+    "sw-redirect-same-origin": {
+      "result": {
+        "mode": "same-origin",
+        "type": "basic",
+        "status": 200,
+        "redirected": true,
+        "body": "payload",
+        "clone": "payload",
+        "secret": "visible",
+        "cookie": null
+      },
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
     }
   }
 }

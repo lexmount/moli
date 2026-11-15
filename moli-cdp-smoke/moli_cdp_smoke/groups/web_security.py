@@ -18,6 +18,7 @@ from ..diagnostics import new_cdp_session
 from ..fixture import FixtureServer
 from ..serve import BrowserProcess, start_browser, stop_browser, wait_for_browser_endpoint
 from ..web_security_fixture import READ
+from .web_security_loaders import observe_loaders
 
 
 ORACLE_VERSION = '156.0.8078.73'
@@ -206,6 +207,8 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
             finally:
                 await popup.close()
 
+            observed.update(await observe_loaders(page,context,source,peer,mode))
+
             # Distinct registrable domains exercise default Site Isolation.
             remote_source = source.replace('127.0.0.1','one.test')
             remote_target = source.replace('127.0.0.1','two.test')
@@ -224,6 +227,10 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
             for request_mode in ('cors','no-cors','same-origin'):
                 for sw in ('fallback','synthetic'):
                     await case('sw-'+sw+'-'+request_mode,init={'mode':request_mode},sw=sw)
+            key = mode+'-sw-redirect-same-origin'
+            destination = url(target,'echo',key)
+            result = await read(page,url(source,'echo',key,sw='redirect',to=destination),init={'mode':'same-origin'})
+            observed['sw-redirect-same-origin'] = {'result':result,'requests':peer.web_security.requests(key)}
         finally:
             await context.close()
             await browser.close()
@@ -314,6 +321,8 @@ def compare_mode(observed: dict[str, Any], oracle: dict[str, Any], disabled: boo
         expected['sandbox-frame']['target']['urlOrigin'] = 'null'
         differences['sandbox-frame'] = 'Existing sandbox Location.origin uses the document opaque origin.'
         if disabled:
+            expected['resource-timing'] = [309,9,9]
+            differences['resource-timing'] = 'Moli retains network byte sizes authorized by TAO; the pinned disabled Chromium loader reports zero sizes.'
             for name,origin in [('sandbox-frame','null'),('remote-frame','{remote-target}')]:
                 expected[name]['access'] = {'body':'payload','origin':origin}
                 differences[name] = (differences.get(name,'') +
@@ -329,6 +338,8 @@ def compare_mode(observed: dict[str, Any], oracle: dict[str, Any], disabled: boo
                 differences[name] = 'Existing default Worker constructor reports cross-origin startup failure asynchronously.'
             expected['sw-synthetic-no-cors']['result'] = {'error':'TypeError'}
             differences['sw-synthetic-no-cors'] = 'Existing default Service Worker body security rechecks synthetic no-cors text.'
+            expected['nested-worker']['result'] = {'error':'WorkerError'}
+            differences['nested-worker'] = 'Existing default Worker constructor reports cross-origin startup failure asynchronously.'
     assert_equal(sorted(observed),sorted(expected),'web-security case coverage')
     for name,value in expected.items():
         assert_equal(observed[name],value,f'web-security {"disabled" if disabled else "default"}/{name}')
