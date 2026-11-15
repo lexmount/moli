@@ -9,6 +9,7 @@ mod budget;
 mod color;
 #[cfg(test)]
 mod color_tests;
+mod ico;
 mod jpeg;
 mod orientation;
 #[cfg(test)]
@@ -22,6 +23,7 @@ pub use budget::{MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES};
 pub use color::{
     ColorDecodeError, ColorManagedRasterImage, RasterColorPrecision, UnconvertedRasterPixels,
 };
+pub use ico::IcoDecodeError;
 pub use jpeg::{EncodedJpeg, JpegDecodeError, JpegEncodeError, decode_jpeg, encode_jpeg};
 pub use png::{
     EncodedPng, PngDecodeError, PngEncodeError, PngEncodeOptions, decode_png, encode_png,
@@ -31,6 +33,7 @@ pub use raster::{
     ColorProfileConversion, DecodedRasterImage, RasterDecodeError, RasterImageFormat,
     RasterImageMetadata, decode_raster_image, decode_raster_image_with_color_conversion,
     decode_raster_image_with_metadata, probe_raster_image, raster_image_dimensions,
+    supports_image_mime_essence,
 };
 pub use rgba::{RgbaImage, RgbaImageError};
 pub use svg::{
