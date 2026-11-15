@@ -70,6 +70,8 @@ pub struct RendererPendingDownloadResponse {
 pub enum RendererDownloadBody {
     Buffered(Vec<u8>),
     Network(crate::network::ResourceInterceptionBody),
+    /// Retained immutable backing; the download task reads bounded chunks.
+    Blob(moli_file_api::BlobData),
 }
 
 impl From<Vec<u8>> for RendererDownloadBody {
@@ -82,7 +84,8 @@ impl RendererDownloadBody {
     pub(crate) fn transport_charge_bytes(&self) -> usize {
         match self {
             Self::Buffered(body) => body.capacity(),
-            Self::Network(_) => 0,
+            // These handles retain external backing, not inline message bytes.
+            Self::Network(_) | Self::Blob(_) => 0,
         }
     }
 

@@ -3275,6 +3275,7 @@ dependencies = [
  "moli-css-parse",
  "moli-encoding",
  "moli-fetch",
+ "moli-file-api",
  "moli-header-field",
  "moli-image",
  "moli-indexeddb",

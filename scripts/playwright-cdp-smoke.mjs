@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { checkFulfilledRedirectRouting } from './playwright-cdp-smoke-redirect-routing.mjs';
+import { checkBlobDownloadDelivery } from './playwright-cdp-smoke-blob-downloads.mjs';
 import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1539,6 +1540,10 @@ async function runSmoke({ chromium, endpoint, fixture }) {
     const downloadPath = await download.path();
     assertEqual(readFileSync(downloadPath, 'utf8'), 'download contents', 'download artifact contents');
     record(results, 'download_event_and_artifact');
+
+    for (const name of await checkBlobDownloadDelivery(browser, page, tempDir, fixture)) {
+      record(results, name);
+    }
 
     await page.goto(`${fixture}/download-page`, { waitUntil: 'load', timeout: 10_000 });
     const [slowDownload] = await Promise.all([

@@ -1,5 +1,6 @@
 use super::*;
 
+mod blob_download;
 mod dialog;
 mod event_activation;
 mod named_lookup;

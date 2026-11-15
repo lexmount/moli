@@ -290,6 +290,25 @@ where
         Some((bytes.read_blocking().ok()?, mime_type))
     }
 
+    /// Retain an authorized URL's immutable backing without reading its bytes.
+    /// The snapshot survives URL revocation and creator retirement.
+    pub fn object_url_data_with_access_key(
+        &self,
+        url: &str,
+        access_key: &AccessKey,
+    ) -> Option<(BlobData, String)>
+    where
+        AccessKey: Eq,
+    {
+        let url = url.split_once('#').map_or(url, |(url, _)| url);
+        let object_urls = self.object_urls.lock();
+        let state = object_urls.get(url)?;
+        if state.access_key.as_ref() != Some(access_key) {
+            return None;
+        }
+        self.object_url_blob_data(state.blob_id)
+    }
+
     /// Atomically capture the Blob backing and the URL creator's access key.
     /// Fragments are excluded from lookup; the snapshot survives revocation.
     pub fn object_url_entry(&self, url: &str) -> Option<ObjectUrlEntry<AccessKey>>
@@ -443,6 +462,61 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authorized_object_url_data_is_lazy_and_survives_store_retirement() {
+        #[derive(Debug)]
+        struct Source(std::sync::atomic::AtomicUsize);
+        impl crate::BlobSource for Source {
+            fn read(&self, range: std::ops::Range<usize>, complete: crate::BlobReadCompletion) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                complete(Ok(b"payload"[range].to_vec()));
+            }
+        }
+        let source = Arc::new(Source(std::sync::atomic::AtomicUsize::new(0)));
+        let store = BlobStore::<u64, u64, String>::default();
+        let blob = store.create_blob_from_data(
+            Some(1),
+            Some(2),
+            BlobData::from_source(source.clone(), 7),
+            "text/plain".to_owned(),
+        );
+        let key = "authorized".to_owned();
+        let url = store
+            .create_object_url_with_access_key(Some(1), blob, "null", Some(key.clone()))
+            .unwrap();
+        let unkeyed = store.create_object_url(Some(1), blob, "null").unwrap();
+        assert!(
+            store
+                .object_url_data_with_access_key(&url, &"foreign".to_owned())
+                .is_none()
+        );
+        assert!(
+            store
+                .object_url_data_with_access_key(&unkeyed, &key)
+                .is_none()
+        );
+        assert!(
+            store
+                .object_url_data_with_access_key(&format!("{url}?query"), &key)
+                .is_none()
+        );
+        let (data, mime) = store
+            .object_url_data_with_access_key(&format!("{url}#fragment"), &key)
+            .unwrap();
+        assert_eq!(mime, "text/plain");
+        assert_eq!(
+            source.0.load(Ordering::SeqCst),
+            0,
+            "admission must not read backing"
+        );
+        store.release_blob_wrapper_ref(blob);
+        store.retire_owner_resources(1);
+        assert_eq!(store.live_blob_count(), 0);
+        assert!(store.object_url_data_with_access_key(&url, &key).is_none());
+        assert_eq!(data.read_blocking().unwrap(), b"payload");
+        assert_eq!(source.0.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn shared_blob_backing_is_installed_without_copy_and_outlives_wrapper_release() {

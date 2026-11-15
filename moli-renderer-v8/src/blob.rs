@@ -468,6 +468,31 @@ pub(super) fn revoke_object_url(
     );
 }
 
+pub(crate) fn object_url_download_data(
+    host: &mut crate::native_bridge::PageScriptHost,
+    handle: crate::document_runtime::DomHandle,
+    url: &str,
+) -> Option<(BlobData, String)> {
+    use crate::native_bridge::OwnerDispatchScope;
+
+    // The link's Document owns the request, even when click() is called from
+    // another realm. Never authorize through the ambient JS context.
+    let context = match host.owner_dispatch_scope_for_node(handle)? {
+        OwnerDispatchScope::Top => host.top_document_storage_context(),
+        OwnerDispatchScope::Child(handle) => {
+            host.storage_context_for_child_browsing_context(handle)?
+        }
+        OwnerDispatchScope::LightweightPopup(id) => {
+            host.storage_context_for_lightweight_popup(id)?
+        }
+    };
+    let key = ObjectUrlAccessKey {
+        partition: host.browser_context_runtime().storage_partition_identity(),
+        storage_key: context.storage_key().clone(),
+    };
+    blob_store().object_url_data_with_access_key(url, &key)
+}
+
 pub(super) fn object_url_body_and_type(url: &str) -> Option<(String, String)> {
     blob_store().object_url_body_and_type(url)
 }
