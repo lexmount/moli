@@ -972,6 +972,7 @@ fn build_service_worker_container<'s>(
         .unwrap_or(OwnerDispatchScope::Top);
     service_worker_object_set_owner_scope(scope, service_worker, owner);
     install_initial_service_worker_ready_promise(scope, service_worker);
+    crate::worker::retain_worker_service_worker_container(scope, service_worker);
     Ok(service_worker)
 }
 

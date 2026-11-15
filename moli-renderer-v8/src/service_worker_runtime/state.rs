@@ -930,7 +930,16 @@ impl ServiceWorkerClientEndpoint {
                     .is_ok()
             }
             Self::ReservedPage { .. } | Self::PendingWorker => false,
-            Self::Worker(sender) => sender.send(WorkerMessage::Post(payload)).is_ok(),
+            Self::Worker(sender) => sender
+                .send(WorkerMessage::ServiceWorkerClientMessage(Box::new(
+                    crate::types::ServiceWorkerClientMessageData {
+                        source_version_id,
+                        source_script_url,
+                        source_state,
+                        payload,
+                    },
+                )))
+                .is_ok(),
         }
     }
 
@@ -1158,5 +1167,30 @@ mod target_run_identity_tests {
             panic!("the later worker host should publish one fresh exact run");
         };
         assert_ne!(stopped_run, restarted_run);
+    }
+}
+
+#[cfg(test)]
+mod worker_client_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn worker_client_messages_preserve_their_service_worker_sender_metadata() {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let endpoint = ServiceWorkerClientEndpoint::Worker(sender);
+        let version = ServiceWorkerVersionId::from_u64_for_test(42);
+        let url = Url::parse("https://worker-client-message.test/sender.js").unwrap();
+        let mut payload = crate::structured_clone::V8StructuredClonePayload::default();
+        payload.base.wire_bytes = vec![1, 2, 3];
+        assert!(endpoint.send_client_message(None, version, url.clone(), "activating", payload));
+        let WorkerMessage::ServiceWorkerClientMessage(message) = receiver.try_recv().unwrap()
+        else {
+            panic!("ServiceWorker messages must not enter the parent message channel");
+        };
+        assert_eq!(message.source_version_id, version);
+        assert_eq!(message.source_script_url, url);
+        assert_eq!(message.source_state, "activating");
+        assert_eq!(message.payload.base.wire_bytes, [1, 2, 3]);
+        assert!(receiver.try_recv().is_err());
     }
 }

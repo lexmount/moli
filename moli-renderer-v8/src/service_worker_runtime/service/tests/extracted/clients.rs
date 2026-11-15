@@ -3182,3 +3182,102 @@ fn notification_action_navigate_routes_to_page_owner_without_click_event() {
     let version = state.versions.get(&version_id).unwrap();
     assert_eq!(version.in_flight_event_count, 0);
 }
+
+fn serialized_client_roundtrip_string(value: &str) -> V8StructuredClonePayload {
+    use std::pin::pin;
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let value = v8::String::new(scope, value).unwrap();
+    crate::context_bootstrap::structured_serialize_value(scope, value.into()).unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn worker_client_message_source_matches_controller_and_replies_with_native_identity() {
+    crate::ensure_v8_for_test();
+    let service = new_service_worker_runtime_service();
+    let version_id = ServiceWorkerVersionId(42);
+    insert_registered_version(
+        &service,
+        ServiceWorkerRegistrationId(1),
+        version_id,
+        url("https://worker-client-roundtrip.test/sender.js"),
+        url("https://worker-client-roundtrip.test/"),
+        [],
+    );
+    // Hold replies at native startup admission so the test needs no network.
+    {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        version.running_state = ServiceWorkerVersionRunningState::Starting {
+            host: RendererServiceWorkerHost::new_loading(&version.run_owner()),
+        };
+    }
+    let script = r#"
+        const container = navigator.serviceWorker;
+        const controller = container.controller;
+        if (!controller) throw Error('missing native controller');
+        controller.__moliServiceWorkerVersionId = '9001';
+        container.addEventListener('message', event => {
+            if (event.source !== controller || event.source !== container.controller)
+                throw Error('sender/controller identity');
+            event.source.postMessage('native-reply');
+            console.log('replied');
+        });
+        console.log('ready');
+    "#;
+    let mut worker = crate::worker::spawn_worker_with_options(
+        crate::worker::WorkerSpawnOptions::new_with_request_client(
+            script.to_owned(),
+            "https://worker-client-roundtrip.test/client.js".into(),
+            service.request_client(),
+        )
+        .with_worker_context_runtime(service.browser_context_runtime().worker_context_runtime())
+        .with_service_worker_runtime(service.clone()),
+    );
+    let ready = tokio::time::timeout(Duration::from_secs(5), worker.recv()).await;
+    if !matches!(&ready, Ok(Some(crate::worker::WorkerToParentMessage::Console(message))) if message.message == "log: ready")
+    {
+        worker.terminate_and_join();
+        panic!("Worker client should initialize its controller: {ready:?}");
+    }
+    let client_id = service
+        .inner
+        .state
+        .lock()
+        .live_clients
+        .values()
+        .find(|client| client.client_type == ServiceWorkerClientType::DedicatedWorker)
+        .expect("Worker should register its actual client")
+        .id;
+    service.finish_client_message(ServiceWorkerClientMessage {
+        source_version_id: version_id,
+        target_client_id: client_id,
+        payload: serialized_client_roundtrip_string("native-ping"),
+    });
+    let result = tokio::time::timeout(Duration::from_secs(5), worker.recv()).await;
+    worker.terminate_and_join();
+    assert!(
+        matches!(&result, Ok(Some(crate::worker::WorkerToParentMessage::Console(message))) if message.message == "log: replied"),
+        "{result:?}"
+    );
+    let mut state = service.inner.state.lock();
+    let version = state.versions.get_mut(&version_id).unwrap();
+    let ServiceWorkerPendingStartEvent::Message(reply) = version
+        .pending_start_events
+        .pop_front()
+        .expect("native reply should queue a ServiceWorker message")
+    else {
+        panic!("reply should enter the ServiceWorker message source");
+    };
+    assert_eq!(reply.source_client_id, Some(client_id));
+    assert_eq!(
+        reply.source_client_url,
+        Some(url("https://worker-client-roundtrip.test/client.js"))
+    );
+    assert_eq!(reply.source_origin, "https://worker-client-roundtrip.test");
+    assert!(reply.source_worker.is_none());
+    assert!(version.pending_start_events.is_empty());
+}

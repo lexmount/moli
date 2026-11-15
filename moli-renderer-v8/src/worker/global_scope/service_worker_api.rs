@@ -199,6 +199,46 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     Ok(worker)
 }
 
+pub(crate) fn worker_service_worker_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    version_id: ServiceWorkerVersionId,
+    script_url: &Url,
+    lifecycle_state: &'static str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_worker_state(scope)?;
+    build_worker_service_worker_object(scope, version_id, script_url, lifecycle_state).ok()
+}
+
+fn build_worker_service_worker_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    version_id: ServiceWorkerVersionId,
+    script_url: &Url,
+    lifecycle_state: &'static str,
+) -> Result<v8::Local<'s, v8::Object>> {
+    let worker = crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance(
+        scope,
+        "ServiceWorker",
+    )?;
+    ServiceWorkerGlobalServiceWorkerDeclaration {
+        onstatechange: (),
+        onerror: (),
+        script_url: script_url.as_str().to_owned(),
+        state: lifecycle_state.to_owned(),
+        post_message: (),
+    }
+    .initialize(scope, worker)
+    .map_err(|error| anyhow!("failed to initialize worker ServiceWorker object: {error:?}"))?;
+    let version_id_value = v8::BigInt::new_from_u64(scope, version_id.as_u64());
+    set_private_value(
+        scope,
+        worker,
+        SERVICE_WORKER_VERSION_ID_SLOT,
+        version_id_value.into(),
+    );
+    initialize_simple_event_target(scope, worker);
+    Ok(worker)
+}
+
 pub(super) fn service_worker_registration_unregister_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
@@ -1574,6 +1614,20 @@ pub(super) fn service_worker_worker_post_message_callback<'s>(
     let Some(target_version_id) = service_worker_version_id_from_object(scope, args.this()) else {
         return;
     };
+    if get_worker_state(scope)
+        .is_some_and(|state| state.borrow().service_worker_client_id.is_some())
+    {
+        let transfer_arg = (args.length() > 1).then(|| args.get(1));
+        if let Some(payload) = crate::context_bootstrap::structured_serialize_value_for_post_message(
+            scope,
+            args.get(0),
+            transfer_arg,
+            "ServiceWorker",
+        ) {
+            dispatch_service_worker_message_from_worker_client(scope, target_version_id, payload);
+        }
+        return;
+    }
     let Some((source_version_id, parent_tx)) = service_worker_runtime_message_identity(scope)
     else {
         return;
