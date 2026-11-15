@@ -55,7 +55,6 @@ html/browsers/browsing-the-web/unloading-documents/prompt-and-unload-script-clos
 html/browsers/history/the-history-interface/joint_session_history/002.html
 html/browsers/history/the-history-interface/traverse_the_history_1.html
 html/browsers/history/the-history-interface/traverse_the_history_write_after_load_1.html
-html/browsers/history/the-location-interface/location_replace_session_history.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
 html/browsers/the-window-object/open-close/close_pagehide.html
@@ -87,6 +86,7 @@ html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
 html/semantics/embedded-content/the-object-element/object-events.html
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
+html/semantics/tabular-data/processing-model-1/span-limits.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
 infrastructure/channels/test_call.html
 infrastructure/channels/test_postMessage.html
