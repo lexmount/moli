@@ -1,0 +1,12 @@
+[package]
+license.workspace = true
+name = "moli-audio-metadata"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ogg = "=0.9.2"
+thiserror = "2.0.17"
+
+[lints]
+workspace = true
