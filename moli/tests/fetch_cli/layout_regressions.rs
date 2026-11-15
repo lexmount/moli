@@ -36,6 +36,30 @@ fn run_layout(html: &str, expression: &str, fonts: bool) -> Result<Value> {
 }
 
 #[test]
+fn extreme_svg_arc_layout_terminates_without_a_screenshot() -> Result<()> {
+    // Publishing layout used to expand this one arc into millions of cubics,
+    // then drain them with quadratic buffer shifts. The external process limit
+    // also bounds the test if the CLI's readiness timeout cannot interrupt it.
+    for doctype in ["<!doctype html>", ""] {
+        let control = run_layout(
+            &format!("{doctype}<svg width=300 height=300></svg>"),
+            "document.body.offsetHeight",
+            false,
+        )?;
+        let value = run_layout(
+            &format!(
+                "{doctype}<svg width=300 height=300><path d=\"M0 0 A 743 -417 0 1 1 7 1e38\"/></svg>"
+            ),
+            "({bodyHeight:document.body.offsetHeight,svgHeight:document.querySelector('svg').getBoundingClientRect().height})",
+            false,
+        )?;
+        assert_eq!(value["bodyHeight"], control, "{doctype}");
+        assert_eq!(value["svgHeight"], 300);
+    }
+    Ok(())
+}
+
+#[test]
 fn fractional_grid_track_limits_terminate_with_a_finite_item_width() -> Result<()> {
     // This formerly loops in track growth even after the CLI's own timeout.
     // The subprocess deadline also bounds this regression if the loop returns.
