@@ -119,7 +119,7 @@ jobs:
 
   nextest:
     name: Nextest
-    runs-on: [self-hosted, moli-ci]
+    runs-on: [self-hosted, moli-nextest]
     container:
       image: rust:1.96.1-bookworm
       # Docker seeds new named volumes from the pinned image. Keep toolchains
