@@ -1,7 +1,7 @@
 use super::value::{attr_current_value, attr_owner_document_object, attr_owner_element_object};
 use super::*;
 use crate::custom_elements;
-use crate::native_bridge::document::attributes::nullable_state_string as attr_state_nullable_string;
+use crate::native_bridge::document::attributes::attribute_node::nullable_state_string as attr_state_nullable_string;
 use crate::native_bridge::element::{
     set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
@@ -132,7 +132,9 @@ pub(super) fn attr_instance_value_getter<'a>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = attr_current_value(scope, args.holder());
-    set_string_return_value(scope, &mut rv, &value);
+    let value = crate::util::v8_string_from_utf16_units(scope, &value.utf16_units())
+        .unwrap_or_else(|| v8::String::empty(scope));
+    rv.set(value.into());
 }
 
 pub(super) fn attr_instance_value_setter<'a>(

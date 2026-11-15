@@ -1,5 +1,6 @@
 use super::*;
-use attribute_node::nullable_state_string;
+
+pub(in crate::native_bridge) use attr_object::AttrReference;
 
 mod attr_object;
 mod attribute_node;
