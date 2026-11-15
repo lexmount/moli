@@ -60,6 +60,8 @@ class WebSecurityFixture:
         status, mime, payload = 200, 'text/plain', 'payload'
         extra = {'X-Secret':'visible', 'Set-Cookie':'hidden=1; Path=/; SameSite=Lax'}
         cache = 'public, max-age=3600' if query.get('cache') == ['1'] else 'no-store'
+        if query.get('cache') == ['1']:
+            extra.pop('Set-Cookie')
         route = parsed.path.removeprefix('/web-security/')
         if route == 'redirect':
             status = int(query.get('status', ['302'])[0])
@@ -75,7 +77,7 @@ class WebSecurityFixture:
                 extra['Content-Security-Policy'] = "connect-src 'self'"
         elif route == 'worker.js':
             mime = 'text/javascript'
-            payload = READ + "\nonmessage=async e=>{postMessage(await read(...e.data));close();};"
+            payload = READ + "\nonmessage=async e=>{const result=await read(...e.data);postMessage(e.data[2]?.probeOrigin?{...result,workerOrigin:self.origin,scriptOrigin:location.origin}:result);close();};"
         elif route == 'shared.js':
             mime = 'text/javascript'
             payload = READ + "\nonconnect=e=>{const p=e.ports[0];p.onmessage=async e=>{p.postMessage(await read(...e.data));p.close();close();};p.start();};"
