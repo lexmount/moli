@@ -1532,7 +1532,13 @@ fn child_document_load_request(
             request.body,
             request.request_headers,
         )
-        .ok(),
+        .ok()
+        .map(|native_request| {
+            native_request
+                .with_request_origin(request.initiator.origin())
+                .with_initiator_url(request.initiator.url())
+                .with_subresource_request_metadata(request.initiator.request_metadata())
+        }),
         ChildBrowsingContextBootstrap::AboutBlank
         | ChildBrowsingContextBootstrap::Srcdoc { .. } => None,
     }

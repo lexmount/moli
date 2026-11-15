@@ -9,7 +9,7 @@ use crate::native_bridge::element::{
     NodePublicEventDispatchOutcome, TextEditInputType, activate_handle_via_keyboard,
     dispatch_beforeinput,
 };
-use crate::runtime::RendererInputDispatchOutcome;
+use crate::runtime::{RendererInputDispatchOutcome, RendererNavigationInitiator};
 use crate::util::v8_string;
 use moli_dom::forms::normalize_form_submission_newlines;
 use moli_encoding::{
@@ -547,11 +547,25 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     };
     // A parsed/detached Document has no browsing context to navigate. Resolve
     // that from the native document, independently of the form's wrapper kind.
-    if source_document
-        .is_none_or(|document| !unsafe { &*runtime_ptr }.document_has_browsing_context(document))
-    {
-        return false;
-    }
+    let initiator = {
+        let runtime = unsafe { &*runtime_ptr };
+        let Some(document) =
+            source_document.filter(|&document| runtime.document_has_browsing_context(document))
+        else {
+            return false;
+        };
+        RendererNavigationInitiator::new(
+            runtime.document_url_for_handle(document),
+            moli_url::WebOrigin::from_serialized(
+                &runtime
+                    .document_security_origin(document)
+                    .ascii_serialization(),
+            ),
+            crate::context_bootstrap::document_referrer_policy_for_native_document(
+                runtime, document,
+            ),
+        )
+    };
     let source_popup = source_document.and_then(|document| {
         unsafe { &*runtime_ptr }.lightweight_popup_id_for_document_handle(document)
     });
@@ -659,6 +673,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                         target_name,
                         source_document,
                         ChildBrowsingContextNavigationRequest {
+                            initiator,
                             url: resolved_url,
                             method: "POST".to_owned(),
                             body: Some(body),
@@ -712,6 +727,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                         body,
                         content_type,
                         &form_data_entries,
+                        initiator,
                     );
                 }
                 submit_post_form_to_top_level_browsing_context(
@@ -724,6 +740,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                     content_type,
                     &form_data_entries,
                     user_initiated,
+                    initiator,
                 )
             }
         },
@@ -956,6 +973,7 @@ fn submit_post_form_to_top_level_browsing_context(
     content_type: String,
     form_data_entries: &[(String, v8::Global<v8::Value>)],
     user_initiated: bool,
+    initiator: RendererNavigationInitiator,
 ) -> bool {
     let Some(window) = browsing_context_window_for_dispatch_scope(
         scope,
@@ -991,6 +1009,7 @@ fn submit_post_form_to_top_level_browsing_context(
         None,
         moli_fetch::BrowserNavigationRequestKind::Navigate,
     );
+    unsafe { &mut *runtime_ptr }.set_pending_location_navigation_source(initiator, None);
     crate::context_bootstrap::web_mcp::bind_root_navigation(
         unsafe { &mut *runtime_ptr },
         form_handle,
@@ -1008,6 +1027,7 @@ fn submit_post_form_to_child_browsing_context(
     body: bytes::Bytes,
     content_type: String,
     form_data_entries: &[(String, v8::Global<v8::Value>)],
+    initiator: RendererNavigationInitiator,
 ) -> bool {
     let Some(child_handle) = ({
         let runtime = unsafe { &mut *runtime_ptr };
@@ -1046,6 +1066,7 @@ fn submit_post_form_to_child_browsing_context(
         scope,
         child_handle,
         ChildBrowsingContextNavigationRequest {
+            initiator,
             url: resolved_url,
             method: "POST".to_owned(),
             body: Some(body),

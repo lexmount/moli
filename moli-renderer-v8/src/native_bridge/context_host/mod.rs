@@ -1193,6 +1193,7 @@ impl LayoutMetricTrace {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChildBrowsingContextNavigationRequest {
+    pub(crate) initiator: crate::runtime::RendererNavigationInitiator,
     pub(crate) url: Url,
     pub(crate) method: String,
     pub(crate) body: Option<bytes::Bytes>,

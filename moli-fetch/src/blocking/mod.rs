@@ -1152,6 +1152,9 @@ mod tests {
             BrowserRequestMetadata::ServiceWorker,
             BrowserRequestMetadata::Fetch,
             BrowserRequestMetadata::Xhr,
+            BrowserRequestMetadata::EventSource,
+            BrowserRequestMetadata::Audio,
+            BrowserRequestMetadata::Video,
         ] {
             let request = Request::new("GET", "https://resource.test/item", None, Vec::new())
                 .unwrap()
@@ -1161,7 +1164,11 @@ mod tests {
             let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
             let expected = (!matches!(
                 metadata,
-                BrowserRequestMetadata::Fetch | BrowserRequestMetadata::Xhr
+                BrowserRequestMetadata::Fetch
+                    | BrowserRequestMetadata::Xhr
+                    | BrowserRequestMetadata::EventSource
+                    | BrowserRequestMetadata::Audio
+                    | BrowserRequestMetadata::Video
             ))
             .then_some("https://page.test");
             assert_eq!(
@@ -1177,6 +1184,109 @@ mod tests {
         let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
         assert_eq!(
             header_value(&headers, "origin").as_deref(),
+            Some("https://page.test")
+        );
+    }
+
+    #[test]
+    fn disabled_web_security_makes_resource_origin_opaque_on_cross_origin_redirect() {
+        let source = url("https://page.test/style.css");
+        for disabled in [false, true] {
+            let mut config = FetchConfig::default();
+            config.set_web_security_disabled(disabled);
+            for (target, expected) in [
+                (source.join("other.css").unwrap(), None),
+                (
+                    url("https://other.test/style.css"),
+                    Some(if disabled {
+                        "null"
+                    } else {
+                        "https://page.test"
+                    }),
+                ),
+            ] {
+                let mut request = Request::new("GET", source.as_str(), None, Vec::new())
+                    .unwrap()
+                    .with_request_origin(moli_url::WebOrigin::from_url(&source))
+                    .with_request_mode(RequestMode::Cors)
+                    .with_browser_request_metadata(BrowserRequestMetadata::Style);
+                request
+                    .follow_redirect_with_web_security(redirect(&source, &target), disabled)
+                    .unwrap();
+                let headers = outgoing_request_headers_for_url(&config, &request, &target, None);
+                assert_eq!(header_value(&headers, "origin").as_deref(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn form_origin_applies_referrer_policy_in_network_and_interception_headers() {
+        let source = url("https://page.test/form");
+        let origin = moli_url::WebOrigin::from_url(&source);
+        // Expected Origin for a same-origin, cross-origin, and downgraded POST.
+        let cases = [
+            ("no-referrer", ["null", "null", "null"]),
+            ("same-origin", ["https://page.test", "null", "null"]),
+            (
+                "strict-origin",
+                ["https://page.test", "https://page.test", "null"],
+            ),
+            (
+                "strict-origin-when-cross-origin",
+                ["https://page.test", "https://page.test", "null"],
+            ),
+            (
+                "no-referrer-when-downgrade",
+                ["https://page.test", "https://page.test", "null"],
+            ),
+            ("origin", ["https://page.test"; 3]),
+            ("origin-when-cross-origin", ["https://page.test"; 3]),
+            ("unsafe-url", ["https://page.test"; 3]),
+        ];
+        for disabled in [false, true] {
+            let mut config = FetchConfig::default();
+            config.set_web_security_disabled(disabled);
+            for (policy, expected) in cases {
+                for (target, expected) in [
+                    ("https://page.test/submit", expected[0]),
+                    ("https://other.test/submit", expected[1]),
+                    ("http://other.test/submit", expected[2]),
+                ] {
+                    let request = Request::new("POST", target, None, Vec::new())
+                        .unwrap()
+                        .with_request_origin(origin.clone())
+                        .with_initiator_url(&source)
+                        .with_top_level_navigation_cookie_context()
+                        .with_subresource_request_metadata(crate::SubresourceRequestMetadata {
+                            document_referrer_policy: Some(policy.to_owned()),
+                            ..Default::default()
+                        });
+                    for headers in [
+                        outgoing_request_headers_for_url(&config, &request, &request.url, None),
+                        request
+                            .interception_request_headers_with_web_security(disabled)
+                            .to_byte_strings(),
+                    ] {
+                        assert_eq!(
+                            header_value(&headers, "origin").as_deref(),
+                            Some(expected),
+                            "{policy}, {target}, disabled={disabled}"
+                        );
+                    }
+                }
+            }
+        }
+        // CORS explicitly shares the source origin, regardless of referrer policy.
+        let request = Request::new("POST", "https://other.test/submit", None, Vec::new())
+            .unwrap()
+            .with_request_origin(origin)
+            .with_request_mode(RequestMode::Cors)
+            .with_subresource_request_metadata(crate::SubresourceRequestMetadata {
+                referrer_policy: Some("no-referrer".to_owned()),
+                ..Default::default()
+            });
+        assert_eq!(
+            request.origin_header_value(&request.url, false).as_deref(),
             Some("https://page.test")
         );
     }
