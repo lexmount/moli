@@ -501,73 +501,89 @@ fn adopt_live_node_as_detached_with_parent<'s>(
             }
             define_detached_attribute_maps_for_live_element(scope, state, node)?;
             define_detached_state(scope, node, state);
-            // Generic HTMLElement proxies forward property access to their
-            // target. Install reflected element accessors before proxying so
-            // custom-element constructors that later receive the proxy through
-            // the construction stack can still read/write id, style, and the
-            // other own detached element surface.
-            let uses_native_form_bindings =
-                local_name == "form" && raw_namespace_uri.as_deref() == Some(XHTML_NS);
-            // Native form templates already keep interface members on prototypes.
-            // Rebinding must preserve the user's own properties on the existing object.
-            if !uses_native_form_bindings {
-                install_detached_element_instance_properties(scope, node);
-                remove_detached_element_instance_selector_matching_methods(scope, node);
-            }
-            if document_kind == "html"
-                && raw_namespace_uri
-                    .as_deref()
-                    .is_none_or(|namespace| namespace == XHTML_NS)
-                && raw_prefix.as_deref().is_none_or(str::is_empty)
-                && html_element_constructor_name(&local_name) == Some("HTMLElement")
-                && projection == DetachedNodeProjection::ImportSubtree
-                && let Some(proxy) = generic_html_element_proxy(scope, node)
-            {
-                node = proxy;
-            }
-            let preserve_custom_element_identity =
-                native_handle.is_some_and(|(runtime_ptr, handle)| {
-                    crate::custom_elements::preserves_custom_element_identity(runtime_ptr, handle)
-                });
-            // Native wrappers already carry the interface selected from their
-            // namespace and local name. An XML owner Document does not turn
-            // SVG, MathML or XHTML elements into generic Elements.
-            let preserve_native_element_interface = native_snapshot.is_some();
-            if document_kind != "html"
-                && !preserve_native_element_interface
-                && !preserve_custom_element_identity
-            {
-                crate::detached_dom_surface::set_object_prototype(scope, node, "Element");
-                set_string_tag(scope, node, "Element");
-            }
-            copy_detached_element_bridge_members(scope, node);
-            if document_kind == "html" && matches!(local_name.as_str(), "a" | "area") {
-                install_detached_anchor_instance_properties(scope, node);
-            }
-            if document_kind == "html" && local_name == "a" {
-                install_detached_text_replacement_instance_properties(scope, node);
-            }
-            if document_kind == "html" && local_name == "option" {
-                install_detached_option_instance_properties(scope, node);
-            }
-            if document_kind == "html" && local_name == "iframe" {
-                install_detached_iframe_instance_properties(scope, node);
-            }
-            if document_kind == "html"
-                && matches!(
-                    local_name.as_str(),
-                    "button" | "fieldset" | "input" | "object" | "output" | "select" | "textarea"
-                )
-            {
-                install_detached_form_associated_instance_properties(scope, node);
-                install_detached_form_control_instance_properties(scope, node);
-            }
-            if document_kind == "html" && local_name == "select" {
-                install_detached_select_instance_properties(scope, node);
-                if projection == DetachedNodeProjection::ImportSubtree
-                    && let Some(proxy) = select_html_element_proxy(scope, node)
+            // A native view only attaches internal state and pairing. Reading
+            // a relationship must preserve the existing object's own members.
+            if projection != DetachedNodeProjection::NativeView {
+                // Generic HTMLElement proxies forward property access to their
+                // target. Install reflected element accessors before proxying so
+                // custom-element constructors that later receive the proxy through
+                // the construction stack can still read/write id, style, and the
+                // other own detached element surface.
+                let uses_native_form_bindings =
+                    local_name == "form" && raw_namespace_uri.as_deref() == Some(XHTML_NS);
+                // Native form templates already keep interface members on prototypes.
+                // Rebinding must preserve the user's own properties on the existing object.
+                if !uses_native_form_bindings {
+                    install_detached_element_instance_properties(scope, node);
+                    remove_detached_element_instance_selector_matching_methods(scope, node);
+                }
+                if document_kind == "html"
+                    && raw_namespace_uri
+                        .as_deref()
+                        .is_none_or(|namespace| namespace == XHTML_NS)
+                    && raw_prefix.as_deref().is_none_or(str::is_empty)
+                    && html_element_constructor_name(&local_name) == Some("HTMLElement")
+                    && projection == DetachedNodeProjection::ImportSubtree
+                    && let Some(proxy) = generic_html_element_proxy(scope, node)
                 {
                     node = proxy;
+                }
+                let preserve_custom_element_identity =
+                    native_handle.is_some_and(|(runtime_ptr, handle)| {
+                        crate::custom_elements::preserves_custom_element_identity(
+                            runtime_ptr,
+                            handle,
+                        )
+                    });
+                // Native wrappers already carry the interface selected from their
+                // namespace and local name. An XML owner Document does not turn
+                // SVG, MathML or XHTML elements into generic Elements.
+                let preserve_native_element_interface = native_snapshot.is_some();
+                if document_kind != "html"
+                    && !preserve_native_element_interface
+                    && !preserve_custom_element_identity
+                {
+                    crate::detached_dom_surface::set_object_prototype(scope, node, "Element");
+                    set_string_tag(scope, node, "Element");
+                }
+                copy_detached_element_bridge_members(scope, node);
+                if document_kind == "html" && matches!(local_name.as_str(), "a" | "area") {
+                    install_detached_anchor_instance_properties(scope, node);
+                }
+                if document_kind == "html" && local_name == "a" {
+                    install_detached_text_replacement_instance_properties(scope, node);
+                }
+                if document_kind == "html" && local_name == "option" {
+                    install_detached_option_instance_properties(scope, node);
+                }
+                if document_kind == "html" && local_name == "iframe" {
+                    install_detached_iframe_instance_properties(scope, node);
+                }
+                if document_kind == "html"
+                    && matches!(
+                        local_name.as_str(),
+                        "button"
+                            | "fieldset"
+                            | "input"
+                            | "object"
+                            | "output"
+                            | "select"
+                            | "textarea"
+                    )
+                {
+                    install_detached_form_associated_instance_properties(scope, node);
+                    install_detached_form_control_instance_properties(scope, node);
+                }
+                if document_kind == "html" && local_name == "select" {
+                    install_detached_select_instance_properties(scope, node);
+                    if projection == DetachedNodeProjection::ImportSubtree
+                        && let Some(proxy) = select_html_element_proxy(scope, node)
+                    {
+                        if let Some((_, handle)) = native_handle {
+                            define_detached_native_handle(scope, proxy, handle);
+                        }
+                        node = proxy;
+                    }
                 }
             }
         }
@@ -590,10 +606,12 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 );
             }
             define_detached_state(scope, node, state);
-            if node_type == 7 {
-                install_detached_processing_instruction_instance_properties(scope, node);
-            } else {
-                install_detached_character_data_instance_properties(scope, node);
+            if projection != DetachedNodeProjection::NativeView {
+                if node_type == 7 {
+                    install_detached_processing_instruction_instance_properties(scope, node);
+                } else {
+                    install_detached_character_data_instance_properties(scope, node);
+                }
             }
         }
         10 => {
@@ -617,11 +635,15 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 );
             }
             define_detached_state(scope, node, state);
-            install_detached_document_type_instance_properties(scope, node);
+            if projection != DetachedNodeProjection::NativeView {
+                install_detached_document_type_instance_properties(scope, node);
+            }
         }
         11 => {
             define_detached_state(scope, node, state);
-            install_detached_node_core_instance_properties(scope, node);
+            if projection != DetachedNodeProjection::NativeView {
+                install_detached_node_core_instance_properties(scope, node);
+            }
         }
         _ => return None,
     }
