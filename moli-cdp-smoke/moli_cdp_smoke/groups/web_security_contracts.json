@@ -826,7 +826,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "worker"
         }
       ]
     },
@@ -841,7 +842,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "script"
         }
       ]
     },
@@ -856,7 +858,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "script"
         }
       ]
     },
@@ -871,7 +874,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "script"
         }
       ]
     },
@@ -2092,7 +2096,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "worker"
         }
       ]
     },
@@ -2105,7 +2110,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "script"
         }
       ]
     },
@@ -2118,7 +2124,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "script"
         }
       ]
     },
@@ -2131,7 +2138,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "script"
         }
       ]
     },

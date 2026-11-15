@@ -52,11 +52,14 @@ class WebSecurityFixture:
         cookies = dict(part.strip().split('=', 1) for part in headers.get('cookie','').split(';') if '=' in part)
         if case:
             with self._lock:
-                self._requests.setdefault(case, []).append({
+                observed = {
                     'path':parsed.path, 'method':handler.command, 'origin':headers.get('origin'),
                     'cookie':cookies, 'author':headers.get('x-author'),
                     'body':body.decode('utf-8'),
-                })
+                }
+                if parsed.path == '/web-security/module.js':
+                    observed['destination'] = headers.get('sec-fetch-dest')
+                self._requests.setdefault(case, []).append(observed)
         status, mime, payload = 200, 'text/plain', 'payload'
         extra = {'X-Secret':'visible', 'Set-Cookie':'hidden=1; Path=/; SameSite=Lax'}
         cache = 'public, max-age=3600' if query.get('cache') == ['1'] else 'no-store'
