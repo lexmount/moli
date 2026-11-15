@@ -44,8 +44,9 @@ pub use resource::{
 };
 pub use response_policy::{
     ScriptResponseMimeError, check_script_response_mime, computed_response_mime_type,
-    determine_nosniff, should_opaque_response_be_blocked_by_orb,
-    should_opaque_response_be_blocked_by_orb_with_body, should_response_be_blocked_due_to_nosniff,
+    determine_nosniff, navigation_response_mime_type_from_headers,
+    should_opaque_response_be_blocked_by_orb, should_opaque_response_be_blocked_by_orb_with_body,
+    should_response_be_blocked_due_to_nosniff,
     should_script_like_response_be_blocked_due_to_mime_type,
 };
 pub use sniffing::{
