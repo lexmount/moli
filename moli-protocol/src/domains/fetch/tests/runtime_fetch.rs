@@ -2,6 +2,7 @@ use super::*;
 mod intercepted_headers;
 mod native_xhr;
 mod navigation_disable;
+mod worker_redirect_modes;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsAddNetworkInterceptCommand,
     DevToolsContinueInterceptedRequestCommand, DevToolsContinueInterceptedResponseCommand,
