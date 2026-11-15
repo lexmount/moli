@@ -100,6 +100,8 @@ impl ProtocolServer {
             control.clone(),
         )?;
         let endpoint = state.cdp_owner_registry.shared_owner()?;
+        #[cfg(feature = "ace-protocol")]
+        self.notify_runtime_ready(&state);
         let result = run_pipe(input, output, endpoint, control.clone()).await;
         control.request(InstanceCommand::Shutdown);
         // Like `serve_listener`: stop the CDP owner, then flush storage and

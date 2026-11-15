@@ -58,3 +58,65 @@ async fn listener_bind_failure_never_publishes_a_runtime() {
     assert!(error.to_string().contains("failed to bind protocol server"));
     assert_eq!(notifications.load(Ordering::SeqCst), 0);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pipe_readiness_precedes_commands_and_revokes_handle_on_eof() {
+    use tokio::io::AsyncWriteExt;
+
+    let (ready, mut handles) = mpsc::unbounded_channel();
+    for _ in 0..2 {
+        let ready = ready.clone();
+        let server =
+            ProtocolServer::new(ServerConfig::default()).with_runtime_ready(move |browser| {
+                ready.send(browser).expect("runtime receiver");
+            });
+        let (mut input, server_input) = tokio::net::UnixStream::pair().unwrap();
+        let (server_output, output) = tokio::net::UnixStream::pair().unwrap();
+        let task = tokio::spawn(async move {
+            server
+                .serve_pipe(
+                    server_input.into_std().unwrap().into(),
+                    server_output.into_std().unwrap().into(),
+                )
+                .await
+        });
+        // Keep both client endpoints open without sending a CDP command: an
+        // embedder must receive a usable runtime before it can drive the pipe.
+        let browser = match timeout(Duration::from_secs(5), handles.recv()).await {
+            Ok(Some(browser)) => browser,
+            _ => {
+                input.shutdown().await.unwrap();
+                timeout(Duration::from_secs(7), task)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                panic!("pipe must report runtime readiness before the first CDP command");
+            }
+        };
+        assert!(
+            !timeout(Duration::from_secs(5), browser.targets())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            handles.try_recv().is_err(),
+            "one notification per invocation"
+        );
+        input.shutdown().await.unwrap();
+        timeout(Duration::from_secs(7), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(browser.targets().await.unwrap_err().code, 404);
+        assert!(
+            handles.try_recv().is_err(),
+            "no extra notification on shutdown"
+        );
+        drop(output);
+    }
+}

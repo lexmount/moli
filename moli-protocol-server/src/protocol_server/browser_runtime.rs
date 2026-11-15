@@ -22,7 +22,7 @@ impl fmt::Debug for RuntimeReadyCallback {
 
 impl ProtocolServer {
     /// Notify the embedder once per serving invocation, after browser state and
-    /// the protocol listener are initialized. The callback must return promptly;
+    /// the protocol transport are initialized. The callback must return promptly;
     /// the embedder owns any additional services and their supervision.
     pub fn with_runtime_ready(
         mut self,
