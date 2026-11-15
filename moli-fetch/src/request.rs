@@ -1171,8 +1171,8 @@ impl Request {
 
     pub(crate) fn origin_header_value(&self, request_url: &Url, disabled: bool) -> Option<String> {
         // Resource loaders set their CORS Origin before the network loader.
-        // Fetch/XHR rely on the network CORS loader; form navigation also
-        // supplies Origin independently of that loader.
+        // Fetch/XHR, EventSource and media rely on the network CORS loader;
+        // form navigation supplies Origin independently of that loader.
         let renderer_cors_origin = self.request_mode == RequestMode::Cors
             && self.browser_request_metadata.is_some_and(|metadata| {
                 !matches!(
@@ -1180,12 +1180,14 @@ impl Request {
                     BrowserRequestMetadata::Fetch
                         | BrowserRequestMetadata::Xhr
                         | BrowserRequestMetadata::EventSource
+                        | BrowserRequestMetadata::Audio
+                        | BrowserRequestMetadata::Video
                 )
             });
         if disabled && self.request_mode != RequestMode::Navigate && !renderer_cors_origin {
             return None;
         }
-        self.request_origin()?;
+        let origin = self.request_origin()?;
         if !matches!(request_url.scheme(), "http" | "https") {
             return None;
         }
@@ -1195,6 +1197,34 @@ impl Request {
             && (self.request_mode != RequestMode::Cors || !self.has_cross_origin_url(request_url))
         {
             return None;
+        }
+        // Unsafe non-CORS requests (including form submissions) must not
+        // disclose an origin that their referrer policy suppresses.
+        if self.request_mode != RequestMode::Cors {
+            let suppress_origin = match self.effective_referrer_policy() {
+                "no-referrer" => true,
+                "same-origin" => !origin.same_origin_url(request_url),
+                "no-referrer-when-downgrade"
+                | "strict-origin"
+                | "strict-origin-when-cross-origin" => {
+                    origin.ascii_serialization().starts_with("https://")
+                        && request_url.scheme() != "https"
+                }
+                _ => false,
+            };
+            if suppress_origin {
+                return Some("null".to_owned());
+            }
+        }
+        // With the CORS loader bypassed, Chromium's ordinary network redirect
+        // path makes a carried Origin opaque on the first cross-origin hop.
+        if disabled
+            && self
+                .redirect_chain
+                .iter()
+                .any(|redirect| !same_origin(&redirect.from_url, &redirect.to_url))
+        {
+            return Some("null".to_owned());
         }
         Some(self.serialized_origin())
     }

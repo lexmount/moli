@@ -36,11 +36,18 @@ fn configure_child_document_navigation_request(
     initiator_url: &Url,
     browser_context: &moli_cookie_jar::BrowserCookieFacadeContext,
 ) -> moli_fetch::Request {
-    request
+    let request = request
         .with_browser_site_context(browser_context.clone())
-        .with_subframe_navigation_cookie_context()
-        .with_initiator_url(initiator_url)
-        .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+        .with_subframe_navigation_cookie_context();
+    // Form requests already captured the submitting Document's origin and
+    // referrer policy; the iframe owner's URL must not overwrite them.
+    if request.request_origin().is_some() {
+        request
+    } else {
+        request
+            .with_initiator_url(initiator_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+    }
 }
 
 #[derive(Debug, Clone)]
