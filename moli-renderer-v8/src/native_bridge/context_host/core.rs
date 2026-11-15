@@ -453,6 +453,7 @@ impl PageScriptHost {
                 crate::page_task_queue::RendererPageWindowMessageTaskId::from_raw(1),
             indexed_db_context_tasks: IndexedDbContextState::default(),
             window_execution_contexts: HashMap::new(),
+            window_xhr_lifecycle_observers: HashMap::new(),
             current_window_message_source: None,
             pending_active_child_window_restore: None,
             pending_active_lightweight_popup_restore: None,
