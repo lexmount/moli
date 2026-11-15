@@ -134,6 +134,15 @@ pub(crate) fn next_redirect_url_from_parts(
     final_url
         .join(&location)
         .or_else(|_| Url::parse(&location))
+        .map(|mut next_url| {
+            // Fetch's Location URL inherits a missing fragment, but an explicit
+            // empty fragment suppresses inheritance. Shared by sync/async HTTP
+            // transport and cached redirect handling.
+            if next_url.fragment().is_none() {
+                next_url.set_fragment(final_url.fragment());
+            }
+            next_url
+        })
         .map(Some)
         .with_context(|| {
             anyhow!(
@@ -183,6 +192,29 @@ pub(crate) fn next_followed_redirect_url_from_parts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redirect_locations_inherit_only_missing_fragments() -> Result<()> {
+        let initial = Url::parse("https://example.test/start#anchor")?;
+        for (location, expected) in [
+            ("/next", "https://example.test/next#anchor"),
+            ("/next#", "https://example.test/next#"),
+            ("/next#own", "https://example.test/next#own"),
+            ("https://other.test/next", "https://other.test/next#anchor"),
+            (
+                "/next%23encoded",
+                "https://example.test/next%23encoded#anchor",
+            ),
+        ] {
+            let headers = vec![("location".to_owned(), location.as_bytes().to_vec())];
+            let next = next_redirect_url_from_parts(&initial, 302, &headers, 0)?.unwrap();
+            assert_eq!(next.as_str(), expected);
+            let headers = vec![("location".to_owned(), b"/last".to_vec())];
+            let last = next_redirect_url_from_parts(&next, 307, &headers, 1)?.unwrap();
+            assert_eq!(last.fragment(), next.fragment());
+        }
+        Ok(())
+    }
 
     #[test]
     fn cache_key_includes_browser_partition_context() -> Result<()> {

@@ -590,10 +590,7 @@ fn xhr_response_mime_essence(
 }
 
 fn xhr_response_url(head: &moli_fetch::ResponseHead) -> &url::Url {
-    head.redirect_chain
-        .last()
-        .map(|redirect| &redirect.to_url)
-        .unwrap_or(&head.final_url)
+    &head.final_url
 }
 
 fn parse_xhr_response_document<'s>(
