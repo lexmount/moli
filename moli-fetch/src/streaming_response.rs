@@ -1,4 +1,4 @@
-use std::{any::Any, fmt};
+use std::{any::Any, collections::VecDeque, fmt};
 
 use anyhow::{Result, anyhow};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
@@ -167,6 +167,19 @@ impl Drop for StreamingHtmlResponse {
     }
 }
 
+#[derive(Debug, Default)]
+struct NavigationBodyState {
+    buffered_chunks: VecDeque<Vec<u8>>,
+    mime_type: Option<String>,
+}
+
+#[derive(Debug)]
+enum RawResponseCompletion {
+    Pending(oneshot::Receiver<Result<()>>),
+    Succeeded,
+    Failed(String),
+}
+
 #[derive(Debug)]
 pub struct StreamingRawResponse {
     pub final_url: Url,
@@ -182,8 +195,9 @@ pub struct StreamingRawResponse {
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
     body_chunks: mpsc::UnboundedReceiver<Vec<u8>>,
+    navigation: Option<Box<NavigationBodyState>>,
     cancel_handle: FetchCancelHandle,
-    completion: Option<oneshot::Receiver<Result<()>>>,
+    completion: RawResponseCompletion,
     lifetime_lease: Option<StreamingResponseLifetimeLease>,
 }
 
@@ -214,8 +228,9 @@ impl StreamingRawResponse {
             negotiated_http_version: None,
             network_request_extra_info: None,
             body_chunks,
+            navigation: None,
             cancel_handle,
-            completion: Some(completion),
+            completion: RawResponseCompletion::Pending(completion),
             lifetime_lease: None,
         }
     }
@@ -240,8 +255,9 @@ impl StreamingRawResponse {
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
             body_chunks,
+            navigation: None,
             cancel_handle,
-            completion: Some(completion),
+            completion: RawResponseCompletion::Pending(completion),
             lifetime_lease: None,
         }
     }
@@ -260,7 +276,59 @@ impl StreamingRawResponse {
     }
 
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
-        self.body_chunks.recv().await
+        let buffered = self
+            .navigation
+            .as_mut()
+            .and_then(|navigation| navigation.buffered_chunks.pop_front());
+        match buffered {
+            Some(chunk) => Some(chunk),
+            None => self.body_chunks.recv().await,
+        }
+    }
+
+    /// Resolve navigation MIME without consuming bytes from the eventual body.
+    /// Header overrides belong to the navigation owner. Dropping a pending
+    /// sniff future leaves all already-read chunks and cancellation authority
+    /// on this response, so it can still be consumed or retired normally.
+    pub async fn sniff_navigation_mime_type(
+        &mut self,
+        headers: &[(String, Vec<u8>)],
+    ) -> Result<String> {
+        let mut sniffer =
+            moli_web_mime::NavigationMimeSniffer::new(self.final_url.scheme(), headers);
+        let navigation = self.navigation.get_or_insert_with(Default::default);
+        navigation.mime_type = None;
+        for chunk in &navigation.buffered_chunks {
+            sniffer.push(chunk);
+        }
+        let (mime_type, eof) = loop {
+            if let Some(mime) = sniffer.mime_type() {
+                break (mime.to_owned(), false);
+            }
+            match self.body_chunks.recv().await {
+                Some(chunk) => {
+                    sniffer.push(&chunk);
+                    if !chunk.is_empty() {
+                        navigation.buffered_chunks.push_back(chunk);
+                    }
+                }
+                None => break (sniffer.finish().to_owned(), true),
+            }
+        };
+        if eof {
+            self.finish_transfer().await?;
+        }
+        self.navigation
+            .as_mut()
+            .expect("navigation state was initialized")
+            .mime_type = Some(mime_type.clone());
+        Ok(mime_type)
+    }
+
+    pub fn navigation_mime_type(&self) -> Option<&str> {
+        self.navigation
+            .as_ref()
+            .and_then(|navigation| navigation.mime_type.as_deref())
     }
 
     pub fn with_network_request_extra_info(
@@ -284,6 +352,13 @@ impl StreamingRawResponse {
 
     pub fn try_next_chunk(&mut self) -> Option<Vec<u8>> {
         // See StreamingHtmlResponse::try_next_chunk.
+        if let Some(chunk) = self
+            .navigation
+            .as_mut()
+            .and_then(|navigation| navigation.buffered_chunks.pop_front())
+        {
+            return Some(chunk);
+        }
         self.body_chunks.try_recv().ok()
     }
 
@@ -295,26 +370,42 @@ impl StreamingRawResponse {
     /// a streaming consumer distinguish an open, temporarily empty body from
     /// an already exhausted one without waiting.
     pub fn body_chunk_stream_is_exhausted(&self) -> bool {
-        self.body_chunks.is_closed() && self.body_chunks.is_empty()
+        self.navigation
+            .as_ref()
+            .is_none_or(|navigation| navigation.buffered_chunks.is_empty())
+            && self.body_chunks.is_closed()
+            && self.body_chunks.is_empty()
     }
 
     pub async fn finish(&mut self) -> Result<()> {
-        while self.body_chunks.recv().await.is_some() {}
-        let completion = self
-            .completion
-            .as_mut()
-            .expect("streaming raw completion should only be awaited once")
-            .await;
-        // See StreamingHtmlResponse::finish: taking the receiver before the
-        // await would make a cancelled finish future look completed to Drop.
-        self.completion = None;
-        // The exact transport runtime only has to remain alive until its
-        // terminal result is known. Releasing it here lets an outer owner reap
-        // a replaced runtime even when the caller retains this response value.
-        // A cancelled finish future never reaches this point, so Drop remains
-        // responsible for cancellation and lease release in that case.
+        while self.next_chunk().await.is_some() {}
+        self.finish_transfer().await
+    }
+
+    async fn finish_transfer(&mut self) -> Result<()> {
+        let result = match &mut self.completion {
+            RawResponseCompletion::Pending(receiver) => receiver
+                .await
+                .map_err(|_| anyhow!("streaming raw completion channel closed"))
+                .and_then(|result| result),
+            RawResponseCompletion::Succeeded => return Ok(()),
+            RawResponseCompletion::Failed(reason) => return Err(anyhow!(reason.clone())),
+        };
+        // Keep the receiver in Pending across the await: a cancelled future
+        // must leave Drop able to cancel and release the exact runtime lease.
         self.lifetime_lease = None;
-        completion.map_err(|_| anyhow!("streaming raw completion channel closed"))?
+        match result {
+            Ok(()) => {
+                self.completion = RawResponseCompletion::Succeeded;
+                Ok(())
+            }
+            Err(error) => {
+                // Return the original error the first time. A repeated finish
+                // or sniff must keep failing instead of manufacturing success.
+                self.completion = RawResponseCompletion::Failed(error.to_string());
+                Err(error)
+            }
+        }
     }
 
     pub fn head(&self) -> ResponseHead {
@@ -362,7 +453,7 @@ impl StreamingRawResponse {
 
 impl Drop for StreamingRawResponse {
     fn drop(&mut self) {
-        if self.completion.is_some() {
+        if matches!(self.completion, RawResponseCompletion::Pending(_)) {
             self.cancel_handle.cancel();
         }
         // Release the exact transport owner before dropping the completion
@@ -509,5 +600,109 @@ mod tests {
             dropped_before_completion_closed.load(Ordering::SeqCst),
             "the exact transport owner must be released before completion receiver closure is observable"
         );
+    }
+    #[tokio::test]
+    async fn navigation_sniff_replays_split_signature_chunks_exactly_once() {
+        let (body_tx, body_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let mut response = StreamingRawResponse::new_with_head(
+            sample_response_head(),
+            body_rx,
+            FetchCancelHandle::new(),
+            completion_rx,
+        );
+        let first = b"\x89PNG\r\n\x1a".to_vec();
+        body_tx.send(first.clone()).unwrap();
+        let mut sniff = Box::pin(response.sniff_navigation_mime_type(&[]));
+        std::future::poll_fn(|cx| {
+            assert!(sniff.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        body_tx.send(b"\n".to_vec()).unwrap();
+        assert_eq!(sniff.await.unwrap(), "image/png");
+        assert!(!response.body_chunk_stream_is_exhausted());
+        assert_eq!(response.next_chunk().await, Some(first));
+        assert_eq!(response.try_next_chunk(), Some(b"\n".to_vec()));
+        body_tx.send(b"tail".to_vec()).unwrap();
+        drop(body_tx);
+        completion_tx.send(Ok(())).unwrap();
+        assert_eq!(response.next_chunk().await, Some(b"tail".to_vec()));
+        assert_eq!(response.next_chunk().await, None);
+        response.finish().await.unwrap();
+        assert_eq!(response.head().headers, sample_response_head().headers);
+        assert_eq!(response.navigation_mime_type(), Some("image/png"));
+    }
+
+    #[tokio::test]
+    async fn cancelling_navigation_sniff_retains_bytes_and_transfer_cancellation() {
+        let (body_tx, body_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let cancel = FetchCancelHandle::new();
+        let mut response = StreamingRawResponse::new_with_head(
+            sample_response_head(),
+            body_rx,
+            cancel.clone(),
+            completion_rx,
+        );
+        body_tx.send(b"GIF89".to_vec()).unwrap();
+        let mut sniff = Box::pin(response.sniff_navigation_mime_type(&[]));
+        std::future::poll_fn(|cx| {
+            assert!(sniff.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(sniff);
+        assert_eq!(response.try_next_chunk(), Some(b"GIF89".to_vec()));
+        assert!(!cancel.is_cancelled());
+        drop(response);
+        assert!(cancel.is_cancelled());
+        assert!(completion_tx.send(Ok(())).is_err());
+    }
+
+    #[tokio::test]
+    async fn navigation_sniff_preserves_short_eof_bytes_and_transfer_errors() {
+        for fails in [false, true] {
+            let (body_tx, body_rx) = mpsc::unbounded_channel();
+            let (completion_tx, completion_rx) = oneshot::channel();
+            let mut response = StreamingRawResponse::new_with_head(
+                sample_response_head(),
+                body_rx,
+                FetchCancelHandle::new(),
+                completion_rx,
+            );
+            body_tx.send(b"short text".to_vec()).unwrap();
+            drop(body_tx);
+            completion_tx
+                .send(if fails {
+                    Err(anyhow!("sniff transfer failed"))
+                } else {
+                    Ok(())
+                })
+                .unwrap();
+            let result = response.sniff_navigation_mime_type(&[]).await;
+            if fails {
+                assert_eq!(result.unwrap_err().to_string(), "sniff transfer failed");
+                assert_eq!(
+                    response
+                        .sniff_navigation_mime_type(&[])
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    "sniff transfer failed"
+                );
+                assert_eq!(
+                    response.finish().await.unwrap_err().to_string(),
+                    "sniff transfer failed"
+                );
+                assert_eq!(response.navigation_mime_type(), None);
+            } else {
+                assert_eq!(result.unwrap(), "text/plain");
+                assert!(!response.body_chunk_stream_is_exhausted());
+                assert_eq!(response.next_chunk().await, Some(b"short text".to_vec()));
+                response.finish().await.unwrap();
+                assert!(response.body_chunk_stream_is_exhausted());
+            }
+        }
     }
 }
