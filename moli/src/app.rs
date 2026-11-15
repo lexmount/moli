@@ -44,10 +44,49 @@ pub async fn run_cli<W: Write>(stdout: &mut W, cli: Cli) -> Result<()> {
     run_cli_with_config(cli, config, stdout).await
 }
 
+/// Runs a command without claiming process-global file descriptors.
+/// On Unix, pipe mode requires `run_cli_with_config_and_pipe` instead.
 pub async fn run_cli_with_config<W: Write>(
+    cli: Cli,
+    config: AppConfig,
+    stdout: &mut W,
+) -> Result<()> {
+    #[cfg(unix)]
+    anyhow::ensure!(
+        !matches!(&cli.command, Commands::Serve(args) if args.remote_debugging_pipe),
+        "--remote-debugging-pipe requires explicitly owned descriptors; use run_cli_with_config_and_pipe"
+    );
+    run_cli_with_transport(cli, config, stdout, ServeTransport::Tcp).await
+}
+
+/// Runs `serve --remote-debugging-pipe`, consuming the caller's pipe endpoints.
+/// The descriptors may have any numbers; they are closed when serving ends.
+#[cfg(unix)]
+pub async fn run_cli_with_config_and_pipe<W: Write>(
+    cli: Cli,
+    config: AppConfig,
+    stdout: &mut W,
+    input: std::os::fd::OwnedFd,
+    output: std::os::fd::OwnedFd,
+) -> Result<()> {
+    anyhow::ensure!(
+        matches!(&cli.command, Commands::Serve(args) if args.remote_debugging_pipe),
+        "pipe descriptors require serve --remote-debugging-pipe"
+    );
+    run_cli_with_transport(cli, config, stdout, ServeTransport::Pipe(input, output)).await
+}
+
+enum ServeTransport {
+    Tcp,
+    #[cfg(unix)]
+    Pipe(std::os::fd::OwnedFd, std::os::fd::OwnedFd),
+}
+
+async fn run_cli_with_transport<W: Write>(
     cli: Cli,
     mut config: AppConfig,
     stdout: &mut W,
+    transport: ServeTransport,
 ) -> Result<()> {
     match cli.command {
         Commands::Fetch(mut args) => {
@@ -274,18 +313,14 @@ pub async fn run_cli_with_config<W: Write>(
                 Arc::clone(&storage_partition),
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            #[cfg(unix)]
-            let result = if args.remote_debugging_pipe {
-                let (input, output) = take_inherited_pipe_descriptors()?;
-                server
+            let result = match transport {
+                #[cfg(unix)]
+                ServeTransport::Pipe(input, output) => server
                     .serve_pipe(input, output)
                     .await
-                    .context("protocol pipe failed")
-            } else {
-                server.serve().await.context("protocol server failed")
+                    .context("protocol pipe failed"),
+                ServeTransport::Tcp => server.serve().await.context("protocol server failed"),
             };
-            #[cfg(not(unix))]
-            let result = server.serve().await.context("protocol server failed");
             finalize_serve_cookies(&storage_partition, args.cookie_jar.as_deref(), stdout);
             result?;
         }
@@ -574,27 +609,6 @@ fn finalize_serve_cookies(
         Err(error) => tracing::warn!(error = %error, "failed to save cookie jar"),
         Ok(_) => {}
     }
-}
-
-/// Claims descriptors 3 and 4, which Chromium's pipe protocol makes the parent
-/// pass to the child, as the CDP input and output.
-#[cfg(unix)]
-fn take_inherited_pipe_descriptors() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
-    use std::os::fd::{FromRawFd, OwnedFd};
-
-    for fd in [3, 4] {
-        // SAFETY: `fstat` only writes to the zeroed buffer it is given.
-        let mut status: libc::stat = unsafe { std::mem::zeroed() };
-        let kind =
-            (unsafe { libc::fstat(fd, &mut status) } == 0).then_some(status.st_mode & libc::S_IFMT);
-        anyhow::ensure!(
-            matches!(kind, Some(libc::S_IFIFO | libc::S_IFSOCK)),
-            "--remote-debugging-pipe needs the parent to pass pipes as file descriptors 3 and 4"
-        );
-    }
-    // SAFETY: both descriptors are open pipes or sockets (checked above) and
-    // this runs once per process, so each gets exactly one owner.
-    Ok(unsafe { (OwnedFd::from_raw_fd(3), OwnedFd::from_raw_fd(4)) })
 }
 
 #[cfg(test)]

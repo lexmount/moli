@@ -17,6 +17,10 @@ use moli_browser_profile::BrowserProfilePaths;
 use moli_core::OptionalResourceFetchMask;
 use moli_fetch::{FetchConfig, WebBotAuthProfile};
 
+#[cfg(unix)]
+#[path = "cli/remote_debugging_pipe.rs"]
+mod remote_debugging_pipe;
+
 const RFC_9421_ED25519_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\n\
 MC4CAQAwBQYDK2VwBCIEIJ+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF\n\
 -----END PRIVATE KEY-----\n";
