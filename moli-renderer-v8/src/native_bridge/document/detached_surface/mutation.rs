@@ -1,5 +1,6 @@
 use super::*;
 use crate::custom_elements;
+use crate::native_bridge::node::convert_node_or_string_arguments;
 
 fn detached_insert_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -357,18 +358,6 @@ pub(in crate::native_bridge) fn bridge_detached_replace_children_callback<'a>(
     });
 }
 
-fn detached_fragment_from_child_mutation_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let mut values = Vec::new();
-    for index in 1..args.length() {
-        values.push(args.get(index));
-    }
-    build_fragment_from_values(scope, document, &values)
-}
-
 pub(in crate::native_bridge) fn bridge_detached_before_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     args: v8::FunctionCallbackArguments<'a>,
@@ -377,12 +366,17 @@ pub(in crate::native_bridge) fn bridge_detached_before_callback<'a>(
     let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
+    let values = (1..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    let Some(values) = convert_node_or_string_arguments(scope, &values) else {
+        return;
+    };
     let Some(parent) = detached_parent_node_object(scope, target) else {
         return;
     };
     let document = detached_owner_document_object(scope, target).unwrap_or(parent);
-    let Some(fragment) = detached_fragment_from_child_mutation_values(scope, document, &args)
-    else {
+    let Some(fragment) = build_fragment_from_values(scope, document, &values) else {
         return;
     };
     with_detached_tree_reaction_scope(scope, |scope| {
@@ -398,12 +392,17 @@ pub(in crate::native_bridge) fn bridge_detached_after_callback<'a>(
     let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
+    let values = (1..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    let Some(values) = convert_node_or_string_arguments(scope, &values) else {
+        return;
+    };
     let Some(parent) = detached_parent_node_object(scope, target) else {
         return;
     };
     let document = detached_owner_document_object(scope, target).unwrap_or(parent);
-    let Some(fragment) = detached_fragment_from_child_mutation_values(scope, document, &args)
-    else {
+    let Some(fragment) = build_fragment_from_values(scope, document, &values) else {
         return;
     };
     let reference = detached_sibling_object(scope, target, 1);
@@ -420,12 +419,17 @@ pub(in crate::native_bridge) fn bridge_detached_replace_with_callback<'a>(
     let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
+    let values = (1..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    let Some(values) = convert_node_or_string_arguments(scope, &values) else {
+        return;
+    };
     let Some(parent) = detached_parent_node_object(scope, target) else {
         return;
     };
     let document = detached_owner_document_object(scope, target).unwrap_or(parent);
-    let Some(fragment) = detached_fragment_from_child_mutation_values(scope, document, &args)
-    else {
+    let Some(fragment) = build_fragment_from_values(scope, document, &values) else {
         return;
     };
     with_detached_tree_reaction_scope(scope, |scope| {

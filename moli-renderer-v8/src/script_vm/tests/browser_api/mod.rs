@@ -130,3 +130,4 @@ mod xpath_result_bindings;
 mod native_input_realms;
 
 mod attr_node_native_dispatch;
+mod child_node_argument_conversion;

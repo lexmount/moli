@@ -1,4 +1,26 @@
 use super::*;
+use crate::util::{v8_string_from_utf16_units, v8_value_to_dom_string_u16};
+
+pub(in crate::native_bridge) fn convert_node_or_string_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    values: &[v8::Local<'s, v8::Value>],
+) -> Option<Vec<v8::Local<'s, v8::Value>>> {
+    // Web IDL converts the entire variadic list before the DOM algorithm can
+    // return for a parentless receiver, adopt nodes, or validate insertion.
+    values
+        .iter()
+        .map(|&value| {
+            if v8::Local::<v8::Object>::try_from(value)
+                .is_ok_and(|object| web_api_interfaces::Node::is_instance(scope, object))
+            {
+                Some(value)
+            } else {
+                let text = v8_value_to_dom_string_u16(scope, value, false)?;
+                v8_string_from_utf16_units(scope, text.as_slice()).map(Into::into)
+            }
+        })
+        .collect()
+}
 
 pub(super) fn value_to_inserted_handle(
     scope: &mut v8::PinScope<'_, '_>,
