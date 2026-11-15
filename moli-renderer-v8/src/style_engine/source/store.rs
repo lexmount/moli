@@ -254,6 +254,21 @@ impl StyloStylesheetSource {
         }
     }
 
+    pub(crate) fn keyframe_index(
+        &self,
+    ) -> Option<StdArc<crate::live_stylesheet::StylesheetKeyframeIndex>> {
+        let StyloStylesheetSourceContents::Live {
+            stylesheet,
+            contents_revision,
+            derived_state,
+            ..
+        } = &self.contents
+        else {
+            return None;
+        };
+        Some(derived_state.keyframe_index(*contents_revision, stylesheet))
+    }
+
     pub(crate) fn live_stylesheet_id(&self) -> Option<crate::live_stylesheet::StylesheetId> {
         match &self.contents {
             StyloStylesheetSourceContents::Text { .. } => None,

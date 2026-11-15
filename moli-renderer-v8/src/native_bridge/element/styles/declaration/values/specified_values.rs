@@ -32,7 +32,11 @@ impl ComputedStyleRead<'_> {
             resolution.computation.viewport(),
         ) {
             let rules = source_keyframe_rule_snapshots(&source, &names);
-            if keyframe_rule_snapshots_have_supported_animation_values(&rules, &names, 0) {
+            if keyframe_rule_snapshots_have_supported_animation_values(
+                rules.iter().map(std::sync::Arc::as_ref),
+                &names,
+                0,
+            ) {
                 return true;
             }
         }
@@ -149,7 +153,12 @@ fn active_css_animation_property_values_with_resolution(
         resolution.computation.viewport(),
     ) {
         let rules = source_keyframe_rule_snapshots(&source, &names);
-        if let Some(values) = keyframe_rule_snapshots_property_values(&rules, &names, property, 0) {
+        if let Some(values) = keyframe_rule_snapshots_property_values(
+            rules.iter().map(std::sync::Arc::as_ref),
+            &names,
+            property,
+            0,
+        ) {
             return Some(values);
         }
     }
@@ -230,65 +239,20 @@ fn ident_is_animation_shorthand_keyword(value: &str) -> bool {
     )
 }
 
-/// Installed stylesheets already own a parsed rule tree. Project only matching
-/// keyframes: serializing and reparsing the complete stylesheet for every
-/// animated element can block unrelated script and network tasks for many
-/// seconds on pages with loading skeletons (issue #1698).
+/// Installed stylesheets share a revision-scoped name index across observations.
+/// A document scan and each reentrant event's fresh validation can therefore
+/// query keyframes without traversing all unrelated rules again (issue #1698).
 fn source_keyframe_rule_snapshots(
     source: &StyloStylesheetSource,
     animation_names: &[String],
-) -> Vec<moli_css_parse::CssRuleSnapshot> {
-    let Some(stylesheet) = source.parsed_stylesheet() else {
-        return moli_css_parse::parse_stylesheet_rule_snapshots_with_stylo(
-            &source.serialized_css_text(),
-        );
-    };
-    let guard = stylesheet.shared_lock.read();
-    let contents = stylesheet.contents.read_with(&guard);
-    let mut snapshots = Vec::new();
-    collect_native_keyframe_rule_snapshots(
-        &contents.rules.read_with(&guard).0,
-        &guard,
-        animation_names,
-        0,
-        &mut snapshots,
-    );
-    snapshots
-}
-
-fn collect_native_keyframe_rule_snapshots(
-    rules: &[style::stylesheets::CssRule],
-    guard: &style::shared_lock::SharedRwLockReadGuard<'_>,
-    animation_names: &[String],
-    depth: usize,
-    snapshots: &mut Vec<moli_css_parse::CssRuleSnapshot>,
-) {
-    if depth > KEYFRAME_NESTING_DEPTH_LIMIT {
-        return;
+) -> Vec<std::sync::Arc<moli_css_parse::CssRuleSnapshot>> {
+    if let Some(index) = source.keyframe_index() {
+        return index.rule_snapshots(animation_names);
     }
-    for rule in rules {
-        match rule {
-            style::stylesheets::CssRule::Keyframes(keyframes)
-                if animation_names.iter().any(|name| {
-                    name.eq_ignore_ascii_case(keyframes.read_with(guard).name.as_atom())
-                }) =>
-            {
-                snapshots.push(moli_css_parse::css_rule_snapshot_from_native_with_stylo(
-                    rule, guard,
-                ));
-            }
-            style::stylesheets::CssRule::Media(_) | style::stylesheets::CssRule::Supports(_) => {
-                collect_native_keyframe_rule_snapshots(
-                    rule.children(guard),
-                    guard,
-                    animation_names,
-                    depth + 1,
-                    snapshots,
-                );
-            }
-            _ => {}
-        }
-    }
+    moli_css_parse::parse_stylesheet_rule_snapshots_with_stylo(&source.serialized_css_text())
+        .into_iter()
+        .map(std::sync::Arc::new)
+        .collect()
 }
 
 #[cfg(test)]
@@ -301,7 +265,7 @@ pub(super) fn keyframe_property_values(
     keyframe_rule_snapshots_property_values(&rules, animation_names, property, 0)
 }
 
-pub(super) const KEYFRAME_NESTING_DEPTH_LIMIT: usize = 32;
+pub(super) use crate::live_stylesheet::KEYFRAME_NESTING_DEPTH_LIMIT;
 
 #[cfg(test)]
 pub(super) fn keyframe_has_supported_animation_values(
@@ -312,8 +276,8 @@ pub(super) fn keyframe_has_supported_animation_values(
     keyframe_rule_snapshots_have_supported_animation_values(&rules, animation_names, 0)
 }
 
-fn keyframe_rule_snapshots_property_values(
-    rules: &[moli_css_parse::CssRuleSnapshot],
+fn keyframe_rule_snapshots_property_values<'a>(
+    rules: impl IntoIterator<Item = &'a moli_css_parse::CssRuleSnapshot>,
     animation_names: &[String],
     property: &str,
     depth: usize,
@@ -346,8 +310,8 @@ fn keyframe_rule_snapshots_property_values(
     None
 }
 
-fn keyframe_rule_snapshots_have_supported_animation_values(
-    rules: &[moli_css_parse::CssRuleSnapshot],
+fn keyframe_rule_snapshots_have_supported_animation_values<'a>(
+    rules: impl IntoIterator<Item = &'a moli_css_parse::CssRuleSnapshot>,
     animation_names: &[String],
     depth: usize,
 ) -> bool {
