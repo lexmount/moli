@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn data_transfer_refresh_preserves_live_lists_item_identity_and_removed_views() {
+    let mut vm = new_storage_html_test_vm("https://data-transfer-refresh.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const transfer = new DataTransfer(), items = transfer.items, files = transfer.files;
+        const file = new File(['body'], 'same.txt', {type:'text/plain'});
+        const views = Array.from({length:128}, () => items.add(file));
+        const string = items.add('original', 'text/plain'), types = transfer.types;
+        transfer.setData('text/plain', 'updated');
+        if (items !== transfer.items || files !== transfer.files || items[128] !== string ||
+            transfer.getData('text/plain') !== 'updated' || new Set(views).size !== views.length)
+            throw Error('list or record identity');
+        const check = expected => {
+            if (items.length !== expected.length+1 || files.length !== expected.length ||
+                expected.some((view,i) => items[i] !== view || files[i] !== file || view.getAsFile() !== file) ||
+                items[expected.length] !== string) throw Error('live order or file identity');
+        };
+        check(views);
+        items.remove(63);
+        const removed = views.splice(63,1)[0];
+        if (removed.kind !== '' || removed.type !== '' || removed.getAsFile() !== null)
+            throw Error('removed view stayed live');
+        check(views);
+        items.add(file);
+        const added = items[128];
+        if (views.includes(added) || added === removed || added.getAsFile() !== file)
+            throw Error('new record reused an old view');
+        items.remove(128);
+        check(views);
+        if (Array.from(types).join(',') !== 'text/plain,Files') throw Error('old type snapshot');
+        items.clear();
+        if (items.length || files.length || views.some(view => view.kind !== '') || string.kind !== '' ||
+            transfer.types.length || Array.from(types).join(',') !== 'text/plain,Files')
+            throw Error('clear or frozen snapshot');
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
 fn data_transfer_native_receivers_reject_forgery_before_conversion_in_the_callee_realm() {
     let mut vm = new_storage_html_test_vm("https://data-transfer-native-receivers.test/");
     let result = vm.eval(r#"
