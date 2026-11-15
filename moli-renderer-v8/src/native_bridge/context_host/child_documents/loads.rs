@@ -160,7 +160,7 @@ impl PageScriptHost {
             navigation_load,
             owner_request_id,
         );
-        let loader_id = self.allocate_child_document_loader_id();
+        let loader_id = self.ensure_child_navigation_loader_id(handle, navigation_load);
         let network_attribution =
             ChildDocumentLoadNetworkAttribution::new(frame_id, parent_frame_id, loader_id);
         self.note_child_frame_load_started_for_parent(handle);

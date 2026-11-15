@@ -116,7 +116,7 @@ impl PageScriptHost {
             }
             let snapshot =
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)?;
-            let loader_id = self.allocate_child_document_loader_id();
+            let loader_id = self.ensure_child_navigation_loader_id(handle, navigation_load);
             let window_commit = self.plan_child_document_window_commit(
                 handle,
                 &snapshot,
@@ -171,7 +171,7 @@ impl PageScriptHost {
         let result = if let Some(snapshot) = cached_snapshot {
             let snapshot =
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)?;
-            let loader_id = self.allocate_child_document_loader_id();
+            let loader_id = self.ensure_child_navigation_loader_id(handle, navigation_load);
             let window_commit = self.plan_child_document_window_commit(
                 handle,
                 &snapshot,

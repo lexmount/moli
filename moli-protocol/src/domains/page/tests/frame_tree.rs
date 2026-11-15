@@ -181,8 +181,12 @@ async fn initial_document_frame_tree_without_renderer_does_not_claim_the_destina
 async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
     let owner = ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
     let pending = ctx.with_fixture(|conn| {
-        conn.start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
-            .expect("loaded page should expose child-frame lifecycle work")
+        conn.start_child_frame_lifecycle_work_for_owner(
+            owner,
+            std::time::Duration::from_secs(2),
+            None,
+        )
+        .expect("loaded page should expose child-frame lifecycle work")
     });
     let completed = pending
         .wait()

@@ -48,6 +48,10 @@ pub(super) struct ChildBrowsingContextEntry {
     /// Native admission token of the navigation that committed this Document.
     /// A later pending or rejected navigation must not relabel its loader.
     current_document_navigation_id: Option<u64>,
+    pub(super) navigation_loader_id: Option<(
+        crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
+        crate::runtime::RendererChildFrameNavigation,
+    )>,
     name: Option<String>,
     id: Option<String>,
     attribute_bootstrap: ChildBrowsingContextBootstrap,
@@ -514,6 +518,11 @@ impl ChildBrowsingContextEntry {
         loader_id: String,
         navigation_id: Option<u64>,
     ) {
+        if let Some((_, navigation)) = &self.navigation_loader_id
+            && navigation.loader_id() == loader_id
+        {
+            navigation.commit();
+        }
         self.current_document_loader_id = Some(loader_id);
         self.current_document_navigation_id = navigation_id;
     }

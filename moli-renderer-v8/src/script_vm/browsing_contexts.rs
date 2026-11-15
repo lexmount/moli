@@ -5,24 +5,48 @@ impl ScriptVm {
         &mut self,
         frame_id: &str,
         url: &str,
-    ) -> Result<Option<u64>> {
+    ) -> Result<(
+        Option<u64>,
+        Option<crate::runtime::RendererChildFrameNavigation>,
+    )> {
         let Some(child_handle) = self
             ._context_host
             .borrow()
             .child_browsing_context_handle_by_frame_id(frame_id)
         else {
-            return Ok(None);
+            return Ok((None, None));
         };
         self.with_default_context_scope(|scope, host_ptr| {
             let host = unsafe { &mut *host_ptr };
-            Ok(host
-                .navigate_child_browsing_context_to_url(scope, child_handle, url)
-                .then(|| {
-                    host.current_child_navigation_load(child_handle)
-                        .map(|navigation| navigation.navigation_id().0)
-                })
-                .flatten())
+            if !host.navigate_child_browsing_context_to_url(scope, child_handle, url) {
+                return Ok((None, None));
+            }
+            let navigation_id = host
+                .current_child_navigation_load(child_handle)
+                .map(|navigation| navigation.navigation_id().0);
+            Ok((
+                navigation_id,
+                host.child_navigation_observation(child_handle),
+            ))
         })
+    }
+
+    pub(crate) fn child_frame_navigation_is_complete(
+        &self,
+        navigation: &crate::runtime::RendererChildFrameNavigation,
+    ) -> bool {
+        if navigation.outcome().is_some() {
+            return true;
+        }
+        let host = self._context_host.borrow();
+        let current = host
+            .child_browsing_context_handle_by_frame_id(navigation.frame_id())
+            .and_then(|handle| host.child_navigation_observation(handle));
+        if current.as_ref().map(|current| current.loader_id()) != Some(navigation.loader_id()) {
+            navigation.abort();
+            return true;
+        }
+        false
     }
 
     pub(crate) fn navigate_top_level_same_document_from_browser(

@@ -48,11 +48,19 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
         )
         .route(
             "/child",
-            get(|| async {
-                (
-                    [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
-                    "<!doctype html><script src=/hold.js></script><p>child</p>",
-                )
+            // CDP navigation replies at Document commit. Hold the Document
+            // response so these checks exercise an actual navigation wait.
+            get(move || {
+                let requested = Arc::clone(&requested_for_route);
+                let release = Arc::clone(&release_for_route);
+                async move {
+                    requested.notify_one();
+                    release.notified().await;
+                    (
+                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                        "<!doctype html><script src=/child.js></script><p>child</p>",
+                    )
+                }
             }),
         )
         .route(
@@ -65,18 +73,12 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
             }),
         )
         .route(
-            "/hold.js",
-            get(move || {
-                let requested = Arc::clone(&requested_for_route);
-                let release = Arc::clone(&release_for_route);
-                async move {
-                    requested.notify_one();
-                    release.notified().await;
-                    (
-                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
-                        "globalThis.childDone = true;",
-                    )
-                }
+            "/child.js",
+            get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
+                    "globalThis.childDone = true;",
+                )
             }),
         );
     let (fixture_addr, _fixture_server) =
@@ -170,7 +172,7 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
     .await;
     timeout(Duration::from_secs(10), requested.notified())
         .await
-        .expect("the child parser must reach its held script");
+        .expect("the child Document request must reach its held response");
     if let Some(request) = request_to_resume {
         observed.extend(
             timeout(
@@ -196,14 +198,14 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
         );
         timeout(Duration::from_secs(5), resumed.notified())
             .await
-            .unwrap_or_else(|error| panic!("same-Page HTTP work must resume before child script release: {error:?}; observed={observed:#?}"));
+            .unwrap_or_else(|error| panic!("same-Page HTTP work must resume before child Document release: {error:?}; observed={observed:#?}"));
     }
     let progress = timeout(
         Duration::from_secs(5),
         send_cdp_command(&mut peer, 1, "Target.getTargets", None, json!({})),
     )
     .await
-    .expect("an independent frontend must progress before child script release");
+    .expect("an independent frontend must progress before child Document release");
     assert!(
         progress
             .iter()
@@ -215,7 +217,7 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
             send_cdp_command(&mut socket, 9, "Browser.getVersion", None, json!({})),
         )
         .await
-        .expect("the source frontend must also progress before child script release"),
+        .expect("the source frontend must also progress before child Document release"),
     );
     assert!(
         !observed.iter().any(|message| message["id"] == 7),
@@ -243,7 +245,7 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
             )
             .await
             .expect(
-                "child completion and replacement must settle without releasing a retired script",
+                "child completion and replacement must settle without releasing a retired Document",
             ),
         );
     }
@@ -296,6 +298,22 @@ async fn verify_child_navigation_wait(replace_parent: bool) {
                 panic!("child commit must precede the navigation reply: {observed:#?}")
             });
         assert!(navigation < reply, "{observed:?}");
+        if !observed.iter().any(|message| {
+            message["method"] == "Page.frameStoppedLoading"
+                && message["params"]["frameId"] == child_id
+        }) {
+            observed.extend(
+                timeout(
+                    Duration::from_secs(5),
+                    recv_until_match(&mut socket, |message| {
+                        message["method"] == "Page.frameStoppedLoading"
+                            && message["params"]["frameId"] == child_id
+                    }),
+                )
+                .await
+                .expect("child scripts must complete after the navigation reply"),
+            );
+        }
         assert_eq!(cdp_runtime_evaluate_string(&mut socket, &session.session_id, 11,
             "JSON.stringify([frames[0].childDone, frames[0].document.querySelector('p').textContent])").await, r#"[true,"child"]"#);
     }

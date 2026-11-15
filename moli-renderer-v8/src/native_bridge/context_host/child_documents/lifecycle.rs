@@ -406,6 +406,12 @@ impl PageScriptHost {
         child_handle: DomHandle,
         expected: FrameDocumentNavigationLoadBinding,
     ) -> bool {
+        let navigation = self
+            .child_browsing_contexts
+            .get(&child_handle)
+            .and_then(|entry| entry.navigation_loader_id.as_ref())
+            .filter(|(binding, _)| *binding == expected)
+            .map(|(_, navigation)| navigation.clone());
         let Some(owner) = self
             .frame_owner_store
             .settle_current_child_navigation_load(child_handle, expected)
@@ -417,6 +423,9 @@ impl PageScriptHost {
             );
             return false;
         };
+        if let Some(navigation) = navigation {
+            navigation.abort();
+        }
         crate::context_bootstrap::web_mcp::cancel_child_navigation(self, child_handle);
         tracing::debug!(
             ?child_handle,

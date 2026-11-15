@@ -463,6 +463,9 @@ impl PageScriptHost {
         let entry = self.child_browsing_contexts.get_mut(&handle)?;
         entry.set_document_permissions_policy(permissions_policy);
         entry.set_pending_navigation(bootstrap, reflects_window_state);
+        // Reserve identity in the admission turn, before an async load or a
+        // later navigation can replace this command's pending document.
+        self.ensure_child_navigation_loader_id(handle, navigation);
         self.note_child_frame_load_started_for_parent(handle);
         Some(navigation)
     }

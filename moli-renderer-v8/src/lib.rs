@@ -248,6 +248,7 @@ pub use runtime::{
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
     RendererCaptureScreenshotRequest, RendererCapturedDocumentEnvironment,
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCdpCall,
+    RendererChildFrameNavigation, RendererChildFrameNavigationOutcome,
     RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererContentStripOptions,
     RendererCountEntry, RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
     RendererDevToolsAgentToken, RendererDevToolsMainCommandEnvelope, RendererDocumentBoxModel,

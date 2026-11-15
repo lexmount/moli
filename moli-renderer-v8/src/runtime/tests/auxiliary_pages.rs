@@ -92,6 +92,7 @@ async fn nested_srcdoc_popup_requests_use_the_ancestor_document_referrer_url() {
     .unwrap();
     page.run_async_command(
         RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort {
+            navigation: None,
             timeout_ms: 2_000,
             loader: loader.clone(),
         },

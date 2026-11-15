@@ -99,7 +99,7 @@ impl PageVm {
             RendererPageCommand::NavigateChildFrame { frame_id, url } => self
                 .vm_mut()
                 .navigate_child_browsing_context_frame_to_url(&frame_id, &url)
-                .map(RendererPageReply::OptionalU64),
+                .map(|(navigation_id, navigation)| RendererPageReply::ChildFrameNavigation { navigation_id, navigation }),
             RendererPageCommand::NavigateTopLevelSameDocument { url, replace_current } => self
                 .vm_mut()
                 .navigate_top_level_same_document_from_browser(&url, replace_current)

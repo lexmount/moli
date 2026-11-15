@@ -2069,7 +2069,7 @@ impl NavigationEngine {
         timeout: std::time::Duration,
     ) -> Result<PendingPageCommand> {
         let loader = self.ensure_resource_request_client_clone(cookie_store)?;
-        page.start_complete_child_frame_lifecycle_work_best_effort(&loader, timeout)
+        page.start_complete_child_frame_lifecycle_work_best_effort(&loader, timeout, None)
     }
 
     pub fn start_page_child_frame_lifecycle_work_with_storage_best_effort(
@@ -2082,6 +2082,21 @@ impl NavigationEngine {
             storage.into_cookie_store(),
             page,
             timeout,
+        )
+    }
+
+    pub fn start_page_child_frame_navigation_completion_with_storage(
+        &mut self,
+        storage: NavigationResourceStorageHandles,
+        page: &Page,
+        timeout: std::time::Duration,
+        navigation: crate::page::RendererChildFrameNavigation,
+    ) -> Result<PendingPageCommand> {
+        let loader = self.ensure_resource_request_client_clone(storage.into_cookie_store())?;
+        page.start_complete_child_frame_lifecycle_work_best_effort(
+            &loader,
+            timeout,
+            Some(navigation),
         )
     }
 

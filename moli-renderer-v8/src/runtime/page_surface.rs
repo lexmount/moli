@@ -29,6 +29,11 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+mod child_frame_navigation;
+pub use child_frame_navigation::{
+    RendererChildFrameNavigation, RendererChildFrameNavigationOutcome,
+};
+
 mod auxiliary_document_response;
 pub(crate) use auxiliary_document_response::AuxiliaryDocumentResponseReceiver;
 pub use auxiliary_document_response::RendererAuxiliaryDocumentResponse;
@@ -5019,6 +5024,7 @@ pub enum RendererPageCommand {
     CompleteChildFrameLifecycleWorkBestEffort {
         timeout_ms: u64,
         loader: ResourceRequestClient,
+        navigation: Option<RendererChildFrameNavigation>,
     },
     SetDocumentContent {
         frame_id: String,
@@ -6298,6 +6304,10 @@ impl RendererRuntimeEvaluationResult {
 }
 
 pub enum RendererPageReply {
+    ChildFrameNavigation {
+        navigation_id: Option<u64>,
+        navigation: Option<RendererChildFrameNavigation>,
+    },
     WebMcp(std::result::Result<Option<u64>, moli_page_types::RendererWebMcpError>),
     NativeCommandReady(Box<RendererNativeCommandReadyResponse>),
     NativeCommandPublished,

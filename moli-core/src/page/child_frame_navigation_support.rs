@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use super::{CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnOutput};
+use super::{
+    CompletedPageCommand, Page, PendingPageCommand, RendererChildFrameNavigation,
+    RendererCommandTurnOutput,
+};
 use crate::renderer::{RendererPageCommand, RendererPageReply};
 
 impl Page {
@@ -49,13 +52,30 @@ impl Page {
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<(Option<u64>, RendererCommandTurnOutput)> {
+        let (navigation_id, _, output) =
+            self.finish_child_frame_navigation_with_identity_command_turn(completion)?;
+        Ok((navigation_id, output))
+    }
+
+    pub fn finish_child_frame_navigation_with_identity_command_turn(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<(
+        Option<u64>,
+        Option<RendererChildFrameNavigation>,
+        RendererCommandTurnOutput,
+    )> {
         let output = self.finish_page_command_turn(completion);
-        let RendererPageReply::OptionalU64(completed) = output.completion().reply() else {
+        let RendererPageReply::ChildFrameNavigation {
+            navigation_id,
+            navigation,
+        } = output.completion().reply()
+        else {
             anyhow::bail!(
-                "child frame navigation page command expected a navigation generation, got {}",
+                "child frame navigation expected its admitted identity, got {}",
                 Self::page_reply_kind(output.completion().reply())
             );
         };
-        Ok((*completed, output))
+        Ok((*navigation_id, navigation.clone(), output))
     }
 }

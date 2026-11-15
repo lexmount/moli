@@ -1227,9 +1227,15 @@ impl RendererOwnerHandle {
                 token,
                 deadline,
                 capture_policy,
+                navigation,
             } => {
-                self.wait_live_page_child_frame_lifecycle_turn(token, deadline, capture_policy)
-                    .await
+                self.wait_live_page_child_frame_lifecycle_turn(
+                    token,
+                    deadline,
+                    capture_policy,
+                    navigation,
+                )
+                .await
             }
             RenderRuntimeTurn::ClaimLivePageTopLevelNavigationHandoff { token, handoff } => {
                 self.claim_top_level_navigation_handoff(token, handoff)

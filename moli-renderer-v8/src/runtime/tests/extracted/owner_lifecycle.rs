@@ -168,6 +168,7 @@ async fn child_frame_lifecycle_observer_fences_load_published_while_waiting() {
     let mut observer = Box::pin(
         page.enqueue_protocol_command(
             RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort {
+                navigation: None,
                 timeout_ms: 5_000,
                 loader: loader.clone(),
             },
@@ -250,6 +251,7 @@ async fn child_frame_lifecycle_best_effort_observes_autonomous_page_turns() {
     let (reply, _) = page
         .run_async_command(
             RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort {
+                navigation: None,
                 timeout_ms: 2_000,
                 loader: loader.clone(),
             },

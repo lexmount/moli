@@ -486,6 +486,7 @@ impl Page {
             }
             RendererPageReply::AppManifestLoadPreparation(_) => "an app manifest load preparation",
             RendererPageReply::ChildFrameTreeSnapshots(_) => "child frame tree snapshots",
+            RendererPageReply::ChildFrameNavigation { .. } => "a child frame navigation reply",
             RendererPageReply::ChildFrameNavigationIdentitySnapshot(_) => {
                 "a child frame navigation identity snapshot"
             }
