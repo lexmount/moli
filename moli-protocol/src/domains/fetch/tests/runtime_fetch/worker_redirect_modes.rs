@@ -44,6 +44,7 @@ async fn fulfilled_worker_redirect_modes_are_checked_after_response_security() {
     });
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("{origin}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     enable_runtime_async(&mut ctx, "SID-1", 53_000).await;
     command(&mut ctx, 53_001, "Network.enable", json!({})).await;
     let ready = command(&mut ctx, 53_002, "Runtime.evaluate", json!({
@@ -134,7 +135,8 @@ async fn fulfilled_worker_redirect_modes_are_checked_after_response_security() {
             )
             .await;
             let value = &response["result"]["result"]["value"];
-            let failure = (status != 200 && redirect == "error") || (foreign && mode == "cors");
+            let failure =
+                (foreign && mode == "cors") || (!fulfill && redirect == "error" && status != 200);
             if failure {
                 assert_eq!(
                     value["error"], "TypeError",

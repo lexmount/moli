@@ -73,13 +73,11 @@ use runtime_inspector::WorkerRuntimeInspector;
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
     WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
-    close_worker_owned_message_ports, continue_pending_worker_csp_report,
-    continue_pending_worker_fetch, continue_pending_worker_fetch_response,
-    continue_pending_worker_xhr, continue_pending_worker_xhr_response,
-    dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
-    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
-    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
-    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
+    close_worker_owned_message_ports, dispatch_nested_worker_event,
+    dispatch_worker_csp_violation_event, dispatch_worker_websocket_event,
+    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
+    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
+    drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -87,12 +85,7 @@ use super::global_scope::{
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
     drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
     drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
-    drain_worker_xhr_completion, fail_pending_worker_csp_report, fail_pending_worker_fetch,
-    fail_pending_worker_fetch_auth, fail_pending_worker_fetch_response, fail_pending_worker_xhr,
-    fail_pending_worker_xhr_auth, fail_pending_worker_xhr_response,
-    fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
-    fulfill_pending_worker_fetch_response, fulfill_pending_worker_xhr,
-    fulfill_pending_worker_xhr_response, install_worker_global_scope,
+    drain_worker_xhr_completion, install_worker_global_scope,
     prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
 use super::handle::{
@@ -224,6 +217,8 @@ pub(crate) struct WorkerTestHandle {
     handle: Option<WorkerHandle>,
     request_client: ResourceRequestClient,
     _request_client_owner: Option<ResourceRequestClientOwner>,
+    native_pauses:
+        Arc<Mutex<std::collections::HashMap<u64, crate::network::ResourceInterceptionPause>>>,
 }
 
 #[cfg(test)]
@@ -1243,8 +1238,76 @@ fn worker_test_request_client() -> ResourceRequestClientOwner {
 pub(crate) fn spawn_test_worker_with_options(mut options: WorkerSpawnOptions) -> WorkerTestHandle {
     let request_client_owner = options.test_request_client_owner.take();
     let request_client = options.request_client.clone();
-    let handle = spawn_worker_with_options(options);
+    let (tx, rx) = mpsc::unbounded_channel();
+    let pauses = Arc::new(Mutex::new(std::collections::HashMap::<
+        u64,
+        crate::network::ResourceInterceptionPause,
+    >::new()));
+    let native_pauses = pauses.clone();
+    let output = tx.clone();
+    let report = Mutex::new(crate::types::ScriptExecutionReport::default());
+    let partition = options.network_policy.network_partition_key.clone();
+    options.interception_context = Some(
+        crate::network::interception_output::ResourceInterceptionContext::worker(
+            None,
+            move |event| {
+                use crate::network::ResourceInterceptionEvent as E;
+                match event {
+                    E::Network(item) => {
+                        for record in
+                            super::resource_output::record_output(&mut report.lock(), *item)
+                        {
+                            let _ = output.send(WorkerToParentMessage::SubresourceNetwork(record));
+                        }
+                    }
+                    E::Request { info, pause } => {
+                        let id = info.internal_id;
+                        pauses.lock().insert(id, pause);
+                        let _ = output.send(WorkerToParentMessage::PendingSubresourceFetch(
+                            crate::worker::WorkerPendingSubresourceFetch {
+                                fetch_id: id,
+                                network_partition_key: partition.clone(),
+                                info: *info,
+                            },
+                        ));
+                    }
+                    E::Continue { event, pause } => {
+                        let id = match event.as_ref() {
+                            crate::types::PendingSubresourceContinueEvent::Completed {
+                                internal_id,
+                            } => *internal_id,
+                            crate::types::PendingSubresourceContinueEvent::ResponsePaused(info) => {
+                                info.internal_id
+                            }
+                            crate::types::PendingSubresourceContinueEvent::AuthRequired(info) => {
+                                info.internal_id
+                            }
+                        };
+                        if let Some(pause) = pause {
+                            pauses.lock().insert(id, pause);
+                        } else {
+                            pauses.lock().remove(&id);
+                            return true;
+                        }
+                        let _ = output.send(WorkerToParentMessage::SubresourceContinue(*event));
+                    }
+                }
+                true
+            },
+        ),
+    );
+    let mut handle = spawn_worker_with_options(options);
+    let mut parent = handle.take_receiver().unwrap();
+    tokio::spawn(async move {
+        while let Some(message) = parent.recv().await {
+            if tx.send(message).is_err() {
+                break;
+            }
+        }
+    });
+    handle.replace_test_receiver(rx);
     WorkerTestHandle {
+        native_pauses,
         handle: Some(handle),
         request_client,
         _request_client_owner: request_client_owner,
@@ -1484,12 +1547,18 @@ async fn worker_main(
     let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
     let resource_task_runner = crate::network::RendererResourceTaskRunner::from_current_tokio()
         .expect("Worker owner loop must expose its resource task runner");
+    let interception_context = Some(
+        interception_context
+            .map(|context| context.fork_worker_observer())
+            .unwrap_or_else(|| super::resource_output::unobserved(parent_tx.clone())),
+    );
     let loader = resource_loader_for_worker_context(
         request_client,
         &network_policy,
         &global_kind,
         resource_task_runner,
     );
+    loader.set_interception_context(interception_context.clone());
 
     // ── Create worker-level V8 isolate ─────────────────────────────────────
     let worker_indexed_db_manager = indexed_db_manager.clone();
@@ -1634,7 +1703,6 @@ async fn worker_main(
         xhr_completion_tx,
         pending_xhrs: std::collections::HashMap::new(),
         next_xhr_id: 0,
-        pending_csp_reports: std::collections::HashMap::new(),
         abort: Rc::new(RefCell::new(super::abort::WorkerAbortStore::default())),
         worker_context_runtime,
         service_worker_runtime,
@@ -2782,151 +2850,6 @@ async fn worker_main(
                     .request_client()
                     .set_blocked_url_patterns(&patterns_for_loader);
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetch(request))) => {
-                continue_pending_worker_fetch(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingXhr(request))) => {
-                continue_pending_worker_xhr(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingCspReport(request))) => {
-                continue_pending_worker_csp_report(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetchResponse {
-                request,
-                response_code,
-                response_headers,
-            })) => {
-                continue_pending_worker_fetch_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingXhrResponse {
-                request,
-                response_code,
-                response_headers,
-            })) => {
-                continue_pending_worker_xhr_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetch {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhr {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingCspReport {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_csp_report(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetchAuth {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch_auth(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhrAuth {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr_auth(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetchResponse {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch_response(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhrResponse {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr_response(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingFetch {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_fetch(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingXhr {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_xhr(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingCspReport {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_csp_report(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingFetchResponse {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_fetch_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingXhrResponse {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_xhr_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
             WorkerLoopWake::Message(Some(WorkerMessage::Terminate)) => {
                 trace!(url = %script_url, "worker terminated by parent");
                 break;
@@ -3573,6 +3496,8 @@ fn evaluate_classic_worker_bootstrap_script(
     }
 }
 
+#[cfg(test)]
+mod test_resource_driver;
 #[cfg(test)]
 mod tests;
 

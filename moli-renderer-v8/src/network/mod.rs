@@ -60,5 +60,6 @@ pub(crate) mod interception_control;
 pub use interception_body::ResourceInterceptionBody;
 pub(crate) mod interception_output;
 pub use interception_control::{ResourceInterceptionPause, ResourceInterceptionReply};
+pub use interception_output::{ResourceInterceptionEvent, ResourceInterceptionPolicy};
 
 pub(crate) mod synchronous_load;

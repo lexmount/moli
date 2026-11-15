@@ -498,7 +498,6 @@ self.addEventListener("notificationclick", event => {
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -658,7 +657,6 @@ self.addEventListener("notificationclose", event => {
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -862,12 +860,9 @@ async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_c
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
+    let msg = recv_post_json(&mut handle).await;
     assert_eq!(
-        expect_post_json(msg),
+        msg,
         r#"{"readyState":0,"status":0,"responseURL":"","events":["abort","loadend:4:0"]}"#
     );
     server.abort();
@@ -923,12 +918,9 @@ async fn worker_xmlhttprequest_timeout_cancels_inflight_request_and_ignores_late
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
+    let msg = recv_post_json(&mut handle).await;
     assert_eq!(
-        expect_post_json(msg),
+        msg,
         r#"{"readyState":4,"status":0,"statusText":"","responseText":"","responseURL":"","contentType":null,"allHeaders":"","events":["readystatechange:1","readystatechange:4","timeout","loadend:4:0"]}"#
     );
     server.abort();

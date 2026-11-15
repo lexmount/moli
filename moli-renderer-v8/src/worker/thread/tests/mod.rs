@@ -47,7 +47,7 @@ use crate::network::ResourceRequestClient;
 use crate::protocol_types::{
     PendingSubresourceContinueEvent, SubresourceAuthCredentials, SubresourceAuthScheme,
     SubresourceAuthTarget, SubresourceNetworkOutcome, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceResourceType,
+    SubresourceResourceType,
 };
 use crate::runtime::{
     ServiceWorkerEventId, ServiceWorkerFetchCompletion, ServiceWorkerFetchEvent,
@@ -350,7 +350,6 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
             WorkerToParentMessage::Post(payload) => return stringify_payload(&payload),
             WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -412,7 +411,6 @@ async fn dispatch_service_worker_lifecycle_event_for_test(
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -508,7 +506,6 @@ async fn dispatch_service_worker_fetch_event_with_request_for_test(
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -594,7 +591,6 @@ async fn dispatch_service_worker_message_event_object_for_test(
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -657,7 +653,6 @@ async fn dispatch_service_worker_notification_event_for_test(
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -726,7 +721,6 @@ async fn dispatch_service_worker_push_event_for_test(
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -797,7 +791,6 @@ async fn dispatch_service_worker_sync_event_for_test(
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -869,7 +862,6 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -910,21 +902,13 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
     }
 }
 
-fn owner_assigned_request_handle(internal_id: u64) -> SubresourceNetworkRequestHandle {
-    SubresourceNetworkRequestHandle::new(10_000 + internal_id)
-}
-
 fn pending_worker_fetch_continue(
-    fetch_id: u32,
-    internal_id: u64,
+    fetch_id: u64,
     info: &crate::protocol_types::PendingSubresourceFetchInfo,
     intercept_response: bool,
 ) -> WorkerPendingFetchContinue {
     WorkerPendingFetchContinue {
-        redirect_headers: None,
         fetch_id,
-        internal_id,
-        network_request_handle: Some(owner_assigned_request_handle(internal_id)),
         url: info.url.clone(),
         method: info.method.clone(),
         body: info.request_body_bytes.clone(),
@@ -936,16 +920,12 @@ fn pending_worker_fetch_continue(
 }
 
 fn pending_worker_xhr_continue(
-    xhr_id: u32,
-    internal_id: u64,
+    xhr_id: u64,
     info: &crate::protocol_types::PendingSubresourceFetchInfo,
     intercept_response: bool,
 ) -> WorkerPendingXhrContinue {
     WorkerPendingXhrContinue {
-        redirect_headers: None,
         xhr_id,
-        internal_id,
-        network_request_handle: Some(owner_assigned_request_handle(internal_id)),
         url: info.url.clone(),
         method: info.method.clone(),
         body: info.request_body_bytes.clone(),
@@ -1086,7 +1066,7 @@ async fn spawn_connection_drop_http_server(path: &'static str) -> (String, JoinH
 
 async fn spawn_redirect_loop_http_server(path: &'static str) -> (String, JoinHandle<()>) {
     // Keep each hop CORS-eligible so the test reaches the redirect limit.
-    const REDIRECT_LOOP_REQUESTS: usize = 11;
+    const REDIRECT_LOOP_REQUESTS: usize = 21;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind worker redirect-loop http server");

@@ -38,6 +38,7 @@ fn fixture() -> (ProtocolStateOwner, [RendererOutputStreamIdentity; 2]) {
 
 fn created(instance: u64) -> RendererSharedWorkerTargetEvent {
     RendererSharedWorkerTargetEvent::Created(RendererSharedWorkerTargetInfo {
+        interception_policy: None,
         owner_local_host_id: moli_core::RendererOwnerLocalHostId::new_for_testing(9),
         instance_id: SharedWorkerInstanceId::from_u64(instance),
         url: "https://fixture.invalid/worker.js".into(),

@@ -12,5 +12,6 @@ pub use moli_renderer_v8::network::{
 };
 
 pub use moli_renderer_v8::network::{
-    ResourceInterceptionBody, ResourceInterceptionPause, ResourceInterceptionReply,
+    ResourceInterceptionBody, ResourceInterceptionEvent, ResourceInterceptionPause,
+    ResourceInterceptionPolicy, ResourceInterceptionReply,
 };

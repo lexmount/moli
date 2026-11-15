@@ -30,10 +30,6 @@ impl ResourceLoadId {
                 .expect("resource load id exhausted"),
         )
     }
-
-    fn as_u64(self) -> u64 {
-        self.0
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -475,10 +471,6 @@ impl ResourceLoadLease {
             .try_restart()
     }
 
-    pub(crate) fn id_for_diagnostics(&self) -> u64 {
-        self.registration.id.as_u64()
-    }
-
     pub(crate) fn registry_id(&self) -> u64 {
         self.registration
             .lifecycle
@@ -510,14 +502,6 @@ impl ResourceLoadLease {
             .page_network_policy()
             .snapshot()
             .network_offline()
-    }
-
-    pub(crate) fn blocks_url(&self, url: &url::Url) -> bool {
-        self.registration
-            .request_client
-            .page_network_policy()
-            .snapshot()
-            .blocks_url(url)
     }
 
     pub(crate) fn attach_cancel_handle(&self, cancel_handle: FetchCancelHandle) {

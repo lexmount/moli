@@ -91,6 +91,12 @@ impl super::PageDocumentCommandTarget {
         }
     }
 
+    pub fn observes_worker_network(&self) -> bool {
+        self.network_pause
+            .as_ref()
+            .is_some_and(ResourceInterceptionPause::observes_worker_network)
+    }
+
     pub fn has_native_network_pause(&self) -> bool {
         self.network_pause.is_some()
     }

@@ -736,6 +736,7 @@ fn pending_unregistration_waits_for_active_fetch_to_complete_before_delete() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                response_delivery: Default::default(),
                 initial_redirect_count: 0,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
@@ -1204,6 +1205,7 @@ fn restart_start_failure_rejects_pending_fetch_job() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                response_delivery: Default::default(),
                 initial_redirect_count: 0,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
@@ -2294,6 +2296,7 @@ fn empty_fetch_handler_pending_start_fetch_falls_back_after_worker_start() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                response_delivery: Default::default(),
                 initial_redirect_count: 0,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
@@ -2423,6 +2426,7 @@ fn fetch_completion_schedules_idle_timeout_for_running_active_worker() {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                response_delivery: Default::default(),
                 initial_redirect_count: 0,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
@@ -2654,6 +2658,7 @@ fn active_fetch_completion_queues_waiting_activation_after_controllees_are_gone(
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                response_delivery: Default::default(),
                 initial_redirect_count: 0,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
@@ -2848,6 +2853,7 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    response_delivery: Default::default(),
                     initial_redirect_count: 0,
                     request: {
                         let origin = moli_url::WebOrigin::from_url(&document_url);

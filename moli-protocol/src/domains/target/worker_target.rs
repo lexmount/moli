@@ -53,6 +53,8 @@ use serde_json::Value;
 
 use super::events;
 
+mod resource_loading;
+pub(crate) use resource_loading::prepare as prepare_worker_resource;
 mod lifecycle_projection;
 use lifecycle_projection::*;
 mod dedicated_worker;
@@ -98,6 +100,11 @@ pub(in crate::domains) struct TargetPreparedOutputs {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum WorkerTargetLifecycleOutput {
+    Resource {
+        browser_context_id: String,
+        target_id: String,
+        event: moli_core::network::ResourceInterceptionEvent,
+    },
     DedicatedWorkerEvents {
         browser_context_id: String,
         renderer_instance_id: u64,

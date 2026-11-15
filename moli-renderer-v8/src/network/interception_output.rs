@@ -8,10 +8,17 @@ use crate::{
     types::AsyncSubresourceFetchEvent,
 };
 
+mod worker;
+pub(crate) use worker::WorkerInterceptionOutput;
+pub use worker::{ResourceInterceptionEvent, ResourceInterceptionPolicy};
+
 #[derive(Clone, Debug)]
-pub(crate) struct ResourceInterceptionContext {
-    pub(crate) source_document: crate::runtime::RendererDocumentLifecycleIdentity,
-    pub(crate) output: InterceptionOutput,
+pub(crate) enum ResourceInterceptionContext {
+    Document {
+        source_document: crate::runtime::RendererDocumentLifecycleIdentity,
+        output: InterceptionOutput,
+    },
+    Worker(Arc<WorkerInterceptionOutput>),
 }
 
 /// Native network facts normally join the Document's networking task source.
@@ -27,6 +34,7 @@ struct InterceptionOutputInner {
     journal: RendererTurnOutputJournal,
     completion: RendererResourceCompletionSender,
     state: Mutex<InterceptionOutputState>,
+    closed_notify: tokio::sync::Notify,
 }
 
 #[derive(Debug, Default)]
@@ -73,23 +81,13 @@ impl InterceptionOutput {
                 journal,
                 completion,
                 state: Mutex::new(InterceptionOutputState::default()),
+                closed_notify: tokio::sync::Notify::new(),
             }),
         }
     }
 
     pub(crate) fn publish(&self, action: RendererOwnerAction) -> bool {
         self.publish_record(PendingRendererOutputRecord::owner_action(None, action))
-    }
-
-    pub(crate) fn record_subresource_network(
-        &self,
-        source_document: crate::runtime::RendererDocumentLifecycleIdentity,
-        record: crate::types::SubresourceNetworkRecord,
-    ) -> bool {
-        self.publish_network(
-            source_document,
-            moli_page_types::ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
-        )
     }
 
     pub(crate) fn publish_network(
@@ -147,6 +145,23 @@ impl InterceptionOutput {
         let mut state = self.inner.state.lock();
         state.closed = true;
         state.pending.clear();
+        self.inner.closed_notify.notify_waiters();
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.inner.state.lock().closed
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        loop {
+            let notified = self.inner.closed_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_closed() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Called on the selected networking task, after earlier Page output.

@@ -45,7 +45,16 @@ async fn binary_request_round_trip(
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/echo");
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    let mut sessions = vec!["SID-1"];
+    ctx.observe_worker_network_for_test(if matches!(scope, RequestScope::SharedWorker) {
+        Some((
+            json!([{"urlPattern":"*/echo","requestStage":"Request"}]),
+            if chained { 2 } else { 1 },
+        ))
+    } else {
+        None
+    })
+    .await;
+    let mut sessions = vec!["SID-1".to_owned()];
     if chained {
         ctx.with_fixture(|conn| {
             assert!({
@@ -55,7 +64,7 @@ async fn binary_request_round_trip(
                     .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
             })
         });
-        sessions.push("SID-2");
+        sessions.push("SID-2".to_owned());
     }
     ctx.sent.clear();
     let mut id = 1;
@@ -114,6 +123,15 @@ async fn binary_request_round_trip(
     let response = take_response_by_id(&mut ctx, id);
     assert_eq!(response["result"]["result"]["value"], "scheduled");
     id += 1;
+    if matches!(scope, RequestScope::SharedWorker) {
+        wait_until_scheduler_message(&mut ctx, "SharedWorker attached", |event| {
+            event["method"] == "Target.attachedToTarget"
+                && event["params"]["targetInfo"]["type"] == "shared_worker"
+        })
+        .await;
+        sessions = ctx.shared_worker_fetch_sessions_for_test().await;
+        assert_eq!(sessions.len(), if chained { 2 } else { 1 });
+    }
     let mut network_id = Value::Null;
     for (index, session) in sessions.iter().enumerate() {
         let paused = runtime_fetch::wait_for_request_paused_on_session(
@@ -130,13 +148,18 @@ async fn binary_request_round_trip(
             "paused request must not reach the server"
         );
         if inspect_paused_body {
+            let network_session = if matches!(scope, RequestScope::Window) {
+                session.clone()
+            } else {
+                ctx.worker_network_session_for_request(&network_id)
+            };
             ctx.process_async(json!({"id":id,"method":"Network.getRequestPostData",
-                "sessionId":session,"params":{"requestId":network_id}}))
+                "sessionId":network_session,"params":{"requestId":network_id}}))
                 .await;
             ctx.expect_result(
                 id,
                 json!({"postData":BASE64_STANDARD.encode(BODY),"base64Encoded":true}),
-                Some(session),
+                Some(network_session.as_str()),
             );
             id += 1;
         }
@@ -187,8 +210,13 @@ async fn binary_request_round_trip(
     let response = take_response_by_id(&mut ctx, id);
     assert_eq!(response["result"]["result"]["value"], json!(expected));
     id += 1;
+    let network_session = if matches!(scope, RequestScope::Window) {
+        "SID-1".to_owned()
+    } else {
+        ctx.worker_network_session_for_request(&network_id)
+    };
     ctx.process_async(
-        json!({"id":id,"method":"Network.getRequestPostData","sessionId":"SID-1",
+        json!({"id":id,"method":"Network.getRequestPostData","sessionId":network_session,
         "params":{"requestId":network_id}}),
     )
     .await;
@@ -204,7 +232,7 @@ async fn binary_request_round_trip(
         ctx.expect_result(
             id,
             json!({"postData":body,"base64Encoded":base64_encoded}),
-            Some("SID-1"),
+            Some(network_session.as_str()),
         );
     }
     server.abort();

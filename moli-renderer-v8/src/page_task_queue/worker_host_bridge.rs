@@ -51,12 +51,17 @@ impl RendererPageWorkerHostBridgeOwner {
 }
 
 pub(crate) fn is_worker_host_bridge_message(message: &WorkerToParentMessage) -> bool {
+    #[cfg(test)]
+    if matches!(
+        message,
+        WorkerToParentMessage::PendingSubresourceFetch(_)
+            | WorkerToParentMessage::SubresourceContinue(_)
+    ) {
+        return true;
+    }
     matches!(
         message,
         WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -267,10 +272,11 @@ mod tests {
             sender
                 .send(WorkerRuntimeEvent::Message {
                     worker_id,
-                    message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                        fetch_id,
-                        error_text: "closed".to_owned(),
-                    }),
+                    message: Box::new(WorkerToParentMessage::SubresourceContinue(
+                        crate::types::PendingSubresourceContinueEvent::Completed {
+                            internal_id: fetch_id,
+                        },
+                    )),
                 })
                 .expect("DedicatedWorker host record should send");
         }
@@ -287,10 +293,7 @@ mod tests {
                 } if queued_worker_id == worker_id
                     && matches!(
                         message.as_ref(),
-                        WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                            fetch_id,
-                            ..
-                        } if *fetch_id == expected_fetch_id
+                        WorkerToParentMessage::SubresourceContinue(crate::types::PendingSubresourceContinueEvent::Completed { internal_id }) if *internal_id == expected_fetch_id
                     )
             ));
         }
@@ -311,10 +314,9 @@ mod tests {
         sender
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id,
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 99,
-                    error_text: "blocked".to_owned(),
-                }),
+                message: Box::new(WorkerToParentMessage::SubresourceContinue(
+                    crate::types::PendingSubresourceContinueEvent::Completed { internal_id: 99 },
+                )),
             })
             .expect("SharedWorker host record should send");
 

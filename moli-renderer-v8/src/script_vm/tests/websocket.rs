@@ -505,6 +505,7 @@ fn loading_worker_terminate_blocks_late_script_loaded_transition() {
                 crate::worker::WorkerScriptSource::text(
                     "postMessage('late'); self.close();".to_owned(),
                 ),
+                None,
                 crate::worker::WorkerScriptKind::Classic,
                 true,
                 None,

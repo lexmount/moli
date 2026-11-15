@@ -65,8 +65,7 @@ fn pending_auth(
         .expect("test request should belong to an installed Page")
         .clone();
     PendingSubresourceFetchAuthRequest {
-        command_target: None,
-        page_owner,
+        residence: crate::conn::PendingSubresourceFetchResidence::Page(page_owner),
         owner_session_id: pending.owner_session_id,
         action_session_id: pending.action_session_id,
         owner_kind: pending.owner_kind,
@@ -103,8 +102,7 @@ fn pending_response(
         .expect("test request should belong to an installed Page")
         .clone();
     PendingSubresourceFetchResponseRequest {
-        command_target: None,
-        page_owner,
+        residence: crate::conn::PendingSubresourceFetchResidence::Page(page_owner),
         owner_session_id: pending.owner_session_id,
         action_session_id: pending.action_session_id,
         owner_kind: pending.owner_kind,
@@ -376,7 +374,7 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
         assert!(
             conn.claim_subresource_continue_request_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1"),
-                &page_owner,
+                Some(&page_owner),
                 74,
                 false,
             )
@@ -387,7 +385,7 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
     let claimed = ctx.with_fixture(|conn| {
         conn.claim_subresource_continue_request_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            &page_owner,
+            Some(&page_owner),
             74,
             true,
         )
@@ -401,7 +399,7 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
         assert!(
             conn.claim_subresource_continue_request_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1"),
-                &page_owner,
+                Some(&page_owner),
                 74,
                 true,
             )
@@ -431,7 +429,7 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
         assert!(
             conn.claim_subresource_continue_request_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1"),
-                &page_owner,
+                Some(&page_owner),
                 75,
                 true,
             )
@@ -490,7 +488,7 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
         assert!(
             conn.claim_subresource_continue_request_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1"),
-                &replacement_owner,
+                Some(&replacement_owner),
                 76,
                 false,
             )
@@ -502,7 +500,7 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
         assert!(
             conn.claim_subresource_continue_request_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1"),
-                &replacement_owner,
+                Some(&replacement_owner),
                 77,
                 true,
             )
@@ -519,7 +517,7 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
     let ClaimedSubresourceContinueRequest::InFlight(in_flight) = ctx.with_fixture(|conn| {
         conn.claim_subresource_continue_request_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            &retired_owner,
+            Some(&retired_owner),
             76,
             false,
         )
@@ -535,7 +533,7 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
     let ClaimedSubresourceContinueRequest::PendingCompletion(pending) = ctx.with_fixture(|conn| {
         conn.claim_subresource_continue_request_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            &retired_owner,
+            Some(&retired_owner),
             77,
             true,
         )
@@ -679,7 +677,10 @@ async fn continue_with_auth_registers_retry_correlation_before_renderer_completi
     });
     ctx.with_fixture(|conn| {
         let mut pending = pending_auth(&page_owner, 62);
-        pending.command_target = Some(command_target(conn, &page_owner));
+        pending.residence = crate::conn::PendingSubresourceFetchResidence::Document {
+            page_owner: page_owner.clone(),
+            command_target: command_target(conn, &page_owner),
+        };
         assert!({
             conn.register_pending_subresource_fetch_auth_request_for_session_owner(
                 Some("SID-1"),

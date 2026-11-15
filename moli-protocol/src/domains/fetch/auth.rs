@@ -246,12 +246,8 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     }
                     DevToolsAuthChallengeAction::ProvideCredentials => unreachable!(),
                 };
-                let pending_page = conn.start_subresource_document_command(
-                    owner,
-                    &pending.page_owner,
-                    pending.command_target.as_ref(),
-                    native,
-                );
+                let pending_page =
+                    conn.start_subresource_command(owner, &pending.residence, native);
                 let pending_page = match pending_page {
                     Ok(pending_page) => pending_page,
                     Err(error) => {
@@ -329,10 +325,9 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         )));
                     }
                 };
-                let pending_page = conn.start_subresource_document_command(
+                let pending_page = conn.start_subresource_command(
                     owner,
-                    &pending.page_owner,
-                    pending.command_target.as_ref(),
+                    &pending.residence,
                     RendererPageCommand::ContinuePendingSubresourceAuth {
                         internal_id: pending.internal_id,
                         auth,
@@ -453,13 +448,7 @@ pub(super) fn continued_subresource_request(
     pending: &PendingSubresourceFetchAuthRequest,
 ) -> PendingSubresourceFetchRequest {
     PendingSubresourceFetchRequest {
-        residence: match pending.command_target.clone() {
-            Some(command_target) => crate::conn::PendingSubresourceFetchResidence::Document {
-                page_owner: pending.page_owner.clone(),
-                command_target,
-            },
-            None => crate::conn::PendingSubresourceFetchResidence::Page(pending.page_owner.clone()),
-        },
+        residence: pending.residence.clone(),
         owner_session_id: pending.owner_session_id.clone(),
         action_session_id: pending.action_session_id.clone(),
         owner_kind: pending.owner_kind,

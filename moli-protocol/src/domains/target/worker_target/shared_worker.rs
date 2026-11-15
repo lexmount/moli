@@ -30,14 +30,16 @@ pub(super) fn register_shared_worker_target(
         let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
             return outputs;
         };
-        context.insert_shared_worker_target(SharedWorkerTargetState::new(
+        let mut state = SharedWorkerTargetState::new(
             info.owner_local_host_id,
             info.instance_id,
             target_id.clone(),
             owner_target_id,
             info.url,
             info.name,
-        ));
+        );
+        state.interception_policy = info.interception_policy;
+        context.insert_shared_worker_target(state);
         let snapshot = context.devtools_target_info(&target_id);
         debug_assert!(snapshot.is_some());
         snapshot

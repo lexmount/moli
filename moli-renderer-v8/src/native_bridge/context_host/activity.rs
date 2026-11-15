@@ -544,7 +544,7 @@ impl PageScriptHost {
         &mut self,
     ) -> Option<crate::network::interception_output::ResourceInterceptionContext> {
         Some(
-            crate::network::interception_output::ResourceInterceptionContext {
+            crate::network::interception_output::ResourceInterceptionContext::Document {
                 source_document: self.root_document_lifecycle_identity()?,
                 output: self.native_interception_output()?,
             },

@@ -806,9 +806,30 @@ impl<'a> TargetSessionOwnerMut<'a> {
         f(&mut self.target_mut().owner_state)
     }
 
+    fn resource_fetch_owner(&self) -> &crate::conn::state::TargetFetchOwner {
+        if let Some(target) = self.browser_context.worker_resource_target(&self.target_id) {
+            &target.fetch_owner
+        } else {
+            &self.target().fetch_owner
+        }
+    }
+    fn resource_fetch_owner_mut(&mut self) -> &mut crate::conn::state::TargetFetchOwner {
+        if self
+            .browser_context
+            .worker_resource_target(&self.target_id)
+            .is_some()
+        {
+            &mut self
+                .browser_context
+                .worker_resource_target_mut(&self.target_id)
+                .unwrap()
+                .fetch_owner
+        } else {
+            &mut self.target_mut().fetch_owner
+        }
+    }
     pub(super) fn subresource_response_is_paused(&self, request_id: &str) -> bool {
-        self.target()
-            .fetch_owner
+        self.resource_fetch_owner()
             .subresource_response_is_paused(request_id)
     }
 
@@ -859,14 +880,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
         &mut self,
         session_id: Option<&str>,
     ) -> FetchDisableStateWithSubresourceConfig {
-        let target = self.target_mut();
-        let previous_subresource_config = target.fetch_owner.subresource_interception_config();
-        let removed = target.fetch_owner.remove_fetch_session(session_id);
-        let subresource_config = target.fetch_owner.subresource_interception_config();
+        let fetch = self.resource_fetch_owner_mut();
+        let previous_subresource_config = fetch.subresource_interception_config();
+        let removed = fetch.remove_fetch_session(session_id);
+        let subresource_config = fetch.subresource_interception_config();
         let pending = if removed {
-            target
-                .fetch_owner
-                .drain_pending_requests_for_disable_session(session_id)
+            fetch.drain_pending_requests_for_disable_session(session_id)
         } else {
             DrainedFetchRequests::default()
         };
@@ -877,16 +896,16 @@ impl<'a> TargetSessionOwnerMut<'a> {
     pub(super) fn disable_target_fetch_and_drain_pending_state(
         &mut self,
     ) -> FetchDisableStateWithSubresourceConfig {
-        let target = self.target_mut();
-        let previous = target.fetch_owner.subresource_interception_config();
-        target.fetch_owner.reset_config();
-        let config = target.fetch_owner.subresource_interception_config();
-        let pending = target.fetch_owner.drain_pending_requests();
+        let fetch = self.resource_fetch_owner_mut();
+        let previous = fetch.subresource_interception_config();
+        fetch.reset_config();
+        let config = fetch.subresource_interception_config();
+        let pending = fetch.drain_pending_requests();
         (pending, config, previous != config)
     }
 
     pub(super) fn drain_fetch_pending_state(&mut self) -> DrainedFetchRequests {
-        self.target_mut().fetch_owner.drain_pending_requests()
+        self.resource_fetch_owner_mut().drain_pending_requests()
     }
 
     fn take_crashed_page(&mut self) -> Option<Page> {
@@ -929,6 +948,17 @@ impl<'a> TargetSessionOwnerMut<'a> {
     }
 
     pub(super) fn runtime_slot_mut(&mut self) -> &mut TargetRuntimeSlot {
+        if self
+            .browser_context
+            .worker_resource_target(&self.target_id)
+            .is_some()
+        {
+            return &mut self
+                .browser_context
+                .worker_resource_target_mut(&self.target_id)
+                .unwrap()
+                .runtime_slot;
+        }
         &mut self.target_mut().runtime_slot
     }
 
@@ -1654,6 +1684,14 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<TargetFetchConfig> {
+        if let Some((context, target)) = self.worker_resource_identity_for_owner(owner) {
+            return Some(
+                self.browser_context_by_id(&context)?
+                    .worker_resource_target(&target)?
+                    .fetch_owner
+                    .config_snapshot(),
+            );
+        }
         Some(
             self.target_session_owner_ref_for_owner(owner)?
                 .aggregate_fetch_config(),
@@ -2413,6 +2451,14 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Option<&mut TargetRuntimeSlot> {
+        if let Some((context, target)) = self.worker_resource_identity_for_owner(owner) {
+            return Some(
+                &mut self
+                    .browser_context_by_id_mut(&context)?
+                    .worker_resource_target_mut(&target)?
+                    .runtime_slot,
+            );
+        }
         let renderer_inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let slot = self
@@ -2436,6 +2482,14 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<&TargetRuntimeSlot> {
+        if let Some((context, target)) = self.worker_resource_identity_for_owner(owner) {
+            return Some(
+                &self
+                    .browser_context_by_id(&context)?
+                    .worker_resource_target(&target)?
+                    .runtime_slot,
+            );
+        }
         self.target_session_owner_ref_for_owner(owner)
             .map(|owner| owner.runtime_slot())
     }
@@ -2452,6 +2506,9 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<String> {
+        if self.worker_resource_identity_for_owner(owner).is_some() {
+            return None;
+        }
         self.target_session_owner_ref_for_owner(owner)?
             .primary_session_id()
     }

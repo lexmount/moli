@@ -15,10 +15,10 @@ use moli_shared_worker::SharedWorkerInstanceId;
 use super::ScriptVm;
 use crate::{
     native_bridge::PageScriptHost,
-    types::{DedicatedWorkerId, PendingSubresourceContinueEvent, SubresourceResourceType},
+    types::DedicatedWorkerId,
     worker::{
-        WorkerPendingSubresourceFetch, WorkerRuntimeEvent, WorkerToParentMessage,
-        WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
+        WorkerRuntimeEvent, WorkerToParentMessage, WorkerWebSocketFrameEvent,
+        WorkerWebSocketLifecycleEvent,
     },
 };
 
@@ -55,123 +55,6 @@ enum WorkerHostRecordOwner {
 }
 
 impl WorkerHostRecordOwner {
-    fn record_pending_fetch(
-        self,
-        scope: &mut v8::PinScope<'_, '_>,
-        context_host: &Rc<RefCell<PageScriptHost>>,
-        pending: WorkerPendingSubresourceFetch,
-    ) {
-        let context = v8::Global::new(scope, scope.get_current_context());
-        match (self, pending.info.resource_type) {
-            (Self::Dedicated(worker_id), SubresourceResourceType::Xhr) => {
-                context_host
-                    .borrow_mut()
-                    .record_pending_worker_subresource_xhr(
-                        context,
-                        worker_id,
-                        pending.fetch_id,
-                        pending.load,
-                        pending.credentials_mode,
-                        pending.network_partition_key,
-                        pending.info,
-                    );
-            }
-            (Self::Dedicated(worker_id), SubresourceResourceType::CspReport) => {
-                context_host
-                    .borrow_mut()
-                    .record_pending_worker_subresource_csp_report(
-                        context,
-                        worker_id,
-                        pending.fetch_id,
-                        pending.load,
-                        pending.credentials_mode,
-                        pending.request_mode,
-                        pending.network_partition_key,
-                        pending.info,
-                    );
-            }
-            (Self::Dedicated(worker_id), _) => {
-                context_host
-                    .borrow_mut()
-                    .record_pending_worker_subresource_fetch(
-                        context,
-                        worker_id,
-                        pending.fetch_id,
-                        pending.load,
-                        pending.credentials_mode,
-                        pending.request_mode,
-                        pending.network_partition_key,
-                        pending.info,
-                    );
-            }
-            (Self::Shared(instance_id), SubresourceResourceType::Xhr) => {
-                context_host
-                    .borrow_mut()
-                    .record_pending_shared_worker_subresource_xhr(
-                        context,
-                        instance_id,
-                        pending.fetch_id,
-                        pending.load,
-                        pending.credentials_mode,
-                        pending.network_partition_key,
-                        pending.info,
-                    );
-            }
-            (Self::Shared(instance_id), SubresourceResourceType::CspReport) => {
-                context_host
-                    .borrow_mut()
-                    .record_pending_shared_worker_subresource_csp_report(
-                        context,
-                        instance_id,
-                        pending.fetch_id,
-                        pending.load,
-                        pending.credentials_mode,
-                        pending.request_mode,
-                        pending.network_partition_key,
-                        pending.info,
-                    );
-            }
-            (Self::Shared(instance_id), _) => {
-                context_host
-                    .borrow_mut()
-                    .record_pending_shared_worker_subresource_fetch(
-                        context,
-                        instance_id,
-                        pending.fetch_id,
-                        pending.load,
-                        pending.credentials_mode,
-                        pending.request_mode,
-                        pending.network_partition_key,
-                        pending.info,
-                    );
-            }
-        }
-    }
-
-    fn cancel_pending_fetch(
-        self,
-        context_host: &Rc<RefCell<PageScriptHost>>,
-        fetch_id: u32,
-        error_text: String,
-    ) {
-        match self {
-            Self::Dedicated(worker_id) => {
-                context_host
-                    .borrow_mut()
-                    .cancel_pending_worker_subresource_fetch(worker_id, fetch_id, error_text);
-            }
-            Self::Shared(instance_id) => {
-                context_host
-                    .borrow_mut()
-                    .cancel_pending_shared_worker_subresource_fetch(
-                        instance_id,
-                        fetch_id,
-                        error_text,
-                    );
-            }
-        }
-    }
-
     fn encoded_websocket_id(self, local_socket_id: u64) -> u64 {
         match self {
             Self::Dedicated(worker_id) => {
@@ -400,41 +283,19 @@ impl ScriptVm {
     }
 
     fn apply_worker_host_bridge_record_in_scope(
-        scope: &mut v8::PinScope<'_, '_>,
+        _scope: &mut v8::PinScope<'_, '_>,
         context_host: &Rc<RefCell<PageScriptHost>>,
         owner: WorkerHostRecordOwner,
         message: WorkerToParentMessage,
     ) -> Result<()> {
         match message {
+            #[cfg(test)]
+            WorkerToParentMessage::PendingSubresourceFetch(_)
+            | WorkerToParentMessage::SubresourceContinue(_) => {}
             WorkerToParentMessage::SubresourceNetwork(record) => {
                 context_host.borrow_mut().record_subresource_network(record);
             }
-            WorkerToParentMessage::PendingSubresourceFetch(pending) => {
-                owner.record_pending_fetch(scope, context_host, pending);
-            }
-            WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                fetch_id,
-                error_text,
-            } => {
-                owner.cancel_pending_fetch(context_host, fetch_id, error_text);
-            }
-            WorkerToParentMessage::SubresourceContinue(event) => match event {
-                PendingSubresourceContinueEvent::ResponsePaused(info) => {
-                    context_host
-                        .borrow_mut()
-                        .record_worker_subresource_response_pause(info);
-                }
-                PendingSubresourceContinueEvent::AuthRequired(info) => {
-                    context_host
-                        .borrow_mut()
-                        .record_worker_subresource_auth_pause(info);
-                }
-                PendingSubresourceContinueEvent::Completed { internal_id } => {
-                    context_host
-                        .borrow_mut()
-                        .record_worker_subresource_completed(internal_id);
-                }
-            },
+
             WorkerToParentMessage::WebSocketSubresource(record) => {
                 let Some(local_socket_id) = record.websocket_socket_id() else {
                     return Ok(());

@@ -495,6 +495,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
     bc.attach_active_session("SID-1");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
+    ctx.observe_worker_network_for_test(None).await;
     ctx.process_async(json!({
         "id": 28_101,
         "method": "Network.enable",
@@ -579,7 +580,10 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(
+        failed["sessionId"],
+        ctx.worker_network_session_for_request(&failed["params"]["requestId"])
+    );
     assert_eq!(failed["params"]["type"], "Fetch");
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
     let request_id = failed["params"]["requestId"]
@@ -639,6 +643,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     bc.attach_active_session("SID-1");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
+    ctx.observe_worker_network_for_test(None).await;
     ctx.process_async(json!({
         "id": 28_102,
         "method": "Network.enable",
@@ -724,7 +729,10 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(
+        failed["sessionId"],
+        ctx.worker_network_session_for_request(&failed["params"]["requestId"])
+    );
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
     let request_id = failed["params"]["requestId"]
@@ -779,6 +787,7 @@ async fn set_blocked_urls_worker_websocket_emits_dedicated_failure_events() {
     bc.attach_active_session("SID-1");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
+    ctx.observe_worker_network_for_test(None).await;
     ctx.process_async(json!({
         "id": 28_103,
         "method": "Network.enable",
@@ -902,6 +911,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
         .enable_primary_network_events();
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
+    ctx.observe_worker_network_for_test(None).await;
     ctx.process_async(json!({
         "id": 2821,
         "method": "Page.navigate",
@@ -974,7 +984,10 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(
+        failed["sessionId"],
+        ctx.worker_network_session_for_request(&failed["params"]["requestId"])
+    );
     assert_eq!(failed["params"]["type"], "Fetch");
     assert_eq!(failed["params"]["errorText"], "Network emulation offline");
     ctx.process_async(json!({
@@ -1018,6 +1031,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
         .enable_primary_network_events();
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
+    ctx.observe_worker_network_for_test(None).await;
     ctx.process_async(json!({
         "id": 2826,
         "method": "Page.navigate",
@@ -1091,7 +1105,10 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(
+        failed["sessionId"],
+        ctx.worker_network_session_for_request(&failed["params"]["requestId"])
+    );
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "Network emulation offline");
     ctx.process_async(json!({

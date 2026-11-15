@@ -261,7 +261,6 @@ async fn service_worker_fetch_handler_throw_without_respond_with_still_falls_bac
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -440,7 +439,6 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -1207,7 +1205,6 @@ async fn service_worker_fetch_event_request_signal_aborts_with_parent_reason() {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
@@ -1426,7 +1423,6 @@ async fn service_worker_fetch_respond_with_keeps_response_when_handler_throws_af
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)

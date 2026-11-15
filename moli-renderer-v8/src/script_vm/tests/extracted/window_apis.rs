@@ -313,7 +313,6 @@ fn window_fetch_retirement_covers_every_host_stage() {
         PendingWindowFetchTestStage::Streaming,
         PendingWindowFetchTestStage::Auth,
         PendingWindowFetchTestStage::Response,
-        PendingWindowFetchTestStage::ServiceWorkerInFlight,
     ];
     let mut ordinary = Vec::new();
     let mut keepalive = Vec::new();

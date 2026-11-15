@@ -410,7 +410,12 @@ impl CdpConnection {
             return target.network_enabled(session_id);
         }
         if let Some(session_id) = session_id
-            && let Some(target) = self.dedicated_worker_target_for_session(Some(session_id))
+            && let Some(target) = self
+                .shared_worker_target_for_session(Some(session_id))
+                .or_else(|| {
+                    self.dedicated_worker_target_for_session(Some(session_id))
+                        .map(|target| &target.inner)
+                })
         {
             return target.network_enabled(session_id);
         }
@@ -535,6 +540,11 @@ impl CdpConnection {
         }
         if let Some(session_id) = owner.session_id()
             && let Some(target) = self.dedicated_worker_target_for_session_mut(Some(session_id))
+        {
+            return target.set_network_enabled(session_id, enabled);
+        }
+        if let Some(session_id) = owner.session_id()
+            && let Some(target) = self.shared_worker_target_for_session_mut(Some(session_id))
         {
             return target.set_network_enabled(session_id, enabled);
         }

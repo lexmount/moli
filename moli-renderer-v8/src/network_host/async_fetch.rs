@@ -421,18 +421,15 @@ pub(crate) fn next_redirect_url(
         })
 }
 
-pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+#[cfg(test)]
+async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
     loader: &ResourceRequestClient,
     request: Request,
-    cancel_handle: Option<FetchCancelHandle>,
-    preflight_request_headers: Vec<(String, String)>,
+    cancel: Option<FetchCancelHandle>,
+    headers: Vec<(String, String)>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-        loader,
-        request,
-        cancel_handle,
-        preflight_request_headers,
-        None,
+        loader, request, cancel, headers, None,
     )
     .await
 }

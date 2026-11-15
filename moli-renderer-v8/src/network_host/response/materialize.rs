@@ -135,26 +135,6 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with
     finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream, filter)
 }
 
-pub(crate) fn build_fetch_response_object_from_subresource_body_for_request_mode<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    request: FetchResponseRequest<'_>,
-    head: moli_fetch::ResponseHead,
-    body: crate::protocol_types::SubresourceResponseBody,
-    metadata: FetchResponseMetadata,
-) -> v8::Local<'s, v8::Object> {
-    let filter = metadata.response_type;
-    let obj = build_fetch_response_object_head(scope, &head, &metadata, None);
-    let body_stream = if request.has_null_body(head.status) {
-        None
-    } else if filtered_response_exposes_body(filter) {
-        Some(network_body_stream_from_subresource_body(scope, obj, body))
-    } else {
-        set_filtered_response_internal_body_from_subresource_body(scope, obj, body);
-        None
-    };
-    finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream, filter)
-}
-
 #[cfg(test)]
 pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,

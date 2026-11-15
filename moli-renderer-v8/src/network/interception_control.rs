@@ -21,6 +21,7 @@ pub(crate) enum InterceptionPhase {
 #[derive(Clone, Debug)]
 pub struct ResourceInterceptionPause {
     internal_id: u64,
+    worker_network: bool,
     phase: InterceptionPhase,
     target_policy: crate::network::PageNetworkPolicy,
     request_redirect: Option<Arc<moli_fetch::RedirectInfo>>,
@@ -78,6 +79,7 @@ impl ResourceInterceptionPause {
         (
             Self {
                 internal_id,
+                worker_network: false,
                 phase,
                 target_policy,
                 request_redirect: None,
@@ -97,6 +99,13 @@ impl ResourceInterceptionPause {
         self
     }
 
+    pub(crate) fn with_worker_network(mut self, worker: bool) -> Self {
+        self.worker_network = worker;
+        self
+    }
+    pub fn observes_worker_network(&self) -> bool {
+        self.worker_network
+    }
     pub fn request_redirect(&self) -> Option<&moli_fetch::RedirectInfo> {
         self.request_redirect.as_deref()
     }

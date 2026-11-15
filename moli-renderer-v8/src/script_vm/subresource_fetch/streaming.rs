@@ -882,13 +882,7 @@ impl ScriptVm {
                     PendingSubresourceContinuation::Beacon
                     | PendingSubresourceContinuation::CspReport { .. }
                     | PendingSubresourceContinuation::WebSocket(_)
-                    | PendingSubresourceContinuation::ChildDocument(_)
-                    | PendingSubresourceContinuation::WorkerFetch { .. }
-                    | PendingSubresourceContinuation::WorkerXhr { .. }
-                    | PendingSubresourceContinuation::WorkerCspReport { .. }
-                    | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                    | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                    | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                    | PendingSubresourceContinuation::ChildDocument(_) => {}
                 }
                 defer_subresource_owner_async_scope(
                     &self._context_host,
@@ -1164,13 +1158,7 @@ impl ScriptVm {
                 | PendingSubresourceContinuation::CspReport { .. }
                 | PendingSubresourceContinuation::Xhr { .. }
                 | PendingSubresourceContinuation::WebSocket(_)
-                | PendingSubresourceContinuation::ChildDocument(_)
-                | PendingSubresourceContinuation::WorkerFetch { .. }
-                | PendingSubresourceContinuation::WorkerXhr { .. }
-                | PendingSubresourceContinuation::WorkerCspReport { .. }
-                | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                | PendingSubresourceContinuation::ChildDocument(_) => {}
             }
 
             let pending_owner = pending.execution_context.dispatch_scope();

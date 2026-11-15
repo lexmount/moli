@@ -36,10 +36,7 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 7,
-                    error_text: "canceled".to_owned(),
-                }),
+                message: Box::new(worker_host_bridge_network_probe(7)),
             })
             .expect("SharedWorker host record should enter the stable Networking source");
         let task = page_vm
@@ -109,10 +106,7 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 8,
-                    error_text: "canceled-again".to_owned(),
-                }),
+                message: Box::new(worker_host_bridge_network_probe(8)),
             })
             .expect("a second host record should enter the same stable source");
         assert!(
@@ -152,10 +146,7 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::Message {
                 worker_id,
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 9,
-                    error_text: "dedicated-canceled".to_owned(),
-                }),
+                message: Box::new(worker_host_bridge_network_probe(9)),
             })
             .expect("a DedicatedWorker host record should enter the stable source");
         assert!(
@@ -497,4 +488,17 @@ Promise.resolve().then(() => {
             server.await.expect("replacement server should finish");
         },
     );
+}
+
+fn worker_host_bridge_network_probe(id: u64) -> WorkerToParentMessage {
+    WorkerToParentMessage::SubresourceNetwork(crate::types::SubresourceNetworkRecord::failure(
+        None,
+        Url::parse("https://worker-host-bridge.test/").unwrap(),
+        Url::parse(&format!("https://worker-host-bridge.test/probe/{id}")).unwrap(),
+        "GET".to_owned(),
+        Default::default(),
+        None,
+        crate::types::SubresourceResourceType::Fetch,
+        "net::ERR_ABORTED".to_owned(),
+    ))
 }

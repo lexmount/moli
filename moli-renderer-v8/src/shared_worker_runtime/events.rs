@@ -18,6 +18,9 @@ impl RendererSharedWorkerHost {
         script_url: &str,
     ) {
         match message {
+            #[cfg(test)]
+            WorkerToParentMessage::PendingSubresourceFetch(_)
+            | WorkerToParentMessage::SubresourceContinue(_) => {}
             WorkerToParentMessage::Error {
                 message,
                 filename,
@@ -147,9 +150,6 @@ impl RendererSharedWorkerHost {
                 self.send_host_bridge_message(message, script_url);
             }
             WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)

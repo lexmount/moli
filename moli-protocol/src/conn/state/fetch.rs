@@ -752,7 +752,7 @@ impl TargetFetchState {
     /// owner mismatch a non-consuming observation.
     pub(crate) fn claim_subresource_continue_request(
         &mut self,
-        expected_page_owner: &super::TargetPageResidenceIdentity,
+        expected_page_owner: Option<&super::TargetPageResidenceIdentity>,
         internal_id: u64,
         session_id: Option<&str>,
         allow_pending_completion: bool,
@@ -763,7 +763,8 @@ impl TargetFetchState {
             for (request_id, _) in self
                 .pending_subresource_fetch_auths
                 .extract_if(|_, pending| {
-                    pending.internal_id == internal_id && &pending.page_owner == expected_page_owner
+                    pending.internal_id == internal_id
+                        && pending.residence.page_owner() == expected_page_owner
                 })
             {
                 self.pending_fetch_request_ids.remove(&request_id);
@@ -772,7 +773,7 @@ impl TargetFetchState {
                 self.pending_subresource_fetch_responses
                     .extract_if(|_, pending| {
                         pending.internal_id == internal_id
-                            && &pending.page_owner == expected_page_owner
+                            && pending.residence.page_owner() == expected_page_owner
                     })
             {
                 self.pending_fetch_request_ids.remove(&request_id);
@@ -782,7 +783,7 @@ impl TargetFetchState {
             .in_flight_subresource_fetches
             .get(&internal_id)
             .and_then(|in_flight| in_flight.pending.page_owner())
-            == Some(expected_page_owner);
+            == expected_page_owner;
         if in_flight_matches {
             return self
                 .in_flight_subresource_fetches
@@ -799,8 +800,8 @@ impl TargetFetchState {
                 .find_map(|(request_id, pending)| {
                     (pending.internal_id == internal_id
                         && Self::pending_action_matches(pending, session_id)
-                        && pending.page_owner() == Some(expected_page_owner))
-                    .then(|| request_id.clone())
+                        && pending.page_owner() == expected_page_owner)
+                        .then(|| request_id.clone())
                 })?;
         self.take_pending_subresource_fetch_request(&request_id, session_id)
             .map(ClaimedSubresourceContinueRequest::PendingCompletion)
@@ -2137,7 +2138,7 @@ impl TargetFetchOwner {
 
     pub(crate) fn claim_subresource_continue_request(
         &mut self,
-        expected_page_owner: &super::TargetPageResidenceIdentity,
+        expected_page_owner: Option<&super::TargetPageResidenceIdentity>,
         internal_id: u64,
         session_id: Option<&str>,
         allow_pending_completion: bool,
@@ -2479,8 +2480,7 @@ mod tests {
         owner_kind: PendingSubresourceFetchOwnerKind,
     ) -> PendingSubresourceFetchAuthRequest {
         PendingSubresourceFetchAuthRequest {
-            command_target: None,
-            page_owner: test_page_owner(),
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(test_page_owner()),
             owner_session_id: owner_session_id.map(str::to_owned),
             action_session_id: owner_session_id.map(str::to_owned),
             owner_kind,
@@ -2524,8 +2524,7 @@ mod tests {
         owner_kind: PendingSubresourceFetchOwnerKind,
     ) -> PendingSubresourceFetchResponseRequest {
         PendingSubresourceFetchResponseRequest {
-            command_target: None,
-            page_owner: test_page_owner(),
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(test_page_owner()),
             owner_session_id: owner_session_id.map(str::to_owned),
             action_session_id: owner_session_id.map(str::to_owned),
             owner_kind,
@@ -2626,10 +2625,10 @@ mod tests {
             ("other-request", 8, &page, "SID-A"),
         ] {
             let mut auth = pending_subresource_auth(internal_id, Some(session));
-            auth.page_owner = page.clone();
+            auth.residence = crate::conn::PendingSubresourceFetchResidence::Page(page.clone());
             fetch.register_pending_subresource_fetch_auth_request(format!("AUTH-{name}"), auth);
             let mut response = pending_subresource_response(internal_id, Some(session));
-            response.page_owner = page.clone();
+            response.residence = crate::conn::PendingSubresourceFetchResidence::Page(page.clone());
             fetch.register_pending_subresource_fetch_response_request(
                 format!("RESP-{name}"),
                 response,
@@ -2638,14 +2637,14 @@ mod tests {
 
         assert!(
             fetch
-                .claim_subresource_continue_request(&page, 7, Some("SID-A"), false)
+                .claim_subresource_continue_request(Some(&page), 7, Some("SID-A"), false)
                 .is_none()
         );
         assert_eq!(fetch.pending_fetch_request_ids.len(), 8);
         assert_eq!(fetch.pending_subresource_fetch_auths.len(), 4);
         assert_eq!(fetch.pending_subresource_fetch_responses.len(), 4);
 
-        let _ = fetch.claim_subresource_continue_request(&page, 7, Some("SID-A"), true);
+        let _ = fetch.claim_subresource_continue_request(Some(&page), 7, Some("SID-A"), true);
         assert_eq!(fetch.pending_subresource_fetch_auths.len(), 2);
         assert_eq!(fetch.pending_subresource_fetch_responses.len(), 2);
         assert_eq!(
@@ -2670,10 +2669,11 @@ mod tests {
             );
         }
 
-        let _ = fetch.claim_subresource_continue_request(&page, 7, Some("SID-A"), true);
+        let _ = fetch.claim_subresource_continue_request(Some(&page), 7, Some("SID-A"), true);
         assert_eq!(fetch.pending_fetch_request_ids.len(), 4);
-        let _ = fetch.claim_subresource_continue_request(&replacement, 7, Some("SID-A"), true);
-        let _ = fetch.claim_subresource_continue_request(&page, 8, Some("SID-A"), true);
+        let _ =
+            fetch.claim_subresource_continue_request(Some(&replacement), 7, Some("SID-A"), true);
+        let _ = fetch.claim_subresource_continue_request(Some(&page), 8, Some("SID-A"), true);
         assert!(fetch.is_empty());
     }
 

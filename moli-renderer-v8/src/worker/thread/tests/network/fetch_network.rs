@@ -36,12 +36,9 @@ async fn worker_fetch_uses_worker_script_base_url_and_resolves_response_text() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
+    let msg = recv_post_json(&mut handle).await;
     assert_eq!(
-        expect_post_json(msg),
+        msg,
         format!(
             r#"{{"ok":true,"status":200,"url":"{base_url}/assets/data.txt","text":"hello from worker fetch"}}"#
         )
@@ -96,25 +93,13 @@ async fn worker_fetch_resolves_response_before_delayed_body() {
         loader,
     );
 
-    let headers = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for headers-first worker fetch")
-        .expect("worker channel closed");
-    assert_eq!(
-        expect_post_json(headers),
-        r#"{"phase":"headers","status":200}"#
-    );
+    let headers = recv_post_json(&mut handle).await;
+    assert_eq!(headers, r#"{"phase":"headers","status":200}"#);
     release_body_tx
         .send(())
         .expect("delayed body receiver should still be waiting");
-    let body = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for delayed worker fetch body")
-        .expect("worker channel closed");
-    assert_eq!(
-        expect_post_json(body),
-        r#"{"phase":"body","text":"hello world"}"#
-    );
+    let body = recv_post_json(&mut handle).await;
+    assert_eq!(body, r#"{"phase":"body","text":"hello world"}"#);
     server
         .await
         .expect("delayed worker fetch server should finish");
@@ -160,11 +145,8 @@ async fn worker_fetch_streams_spooled_response_body_chunks() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    let payload = expect_post_json(msg);
+    let msg = recv_post_json(&mut handle).await;
+    let payload = msg;
     let payload = serde_json::from_str::<serde_json::Value>(&payload)
         .expect("worker fetch stream result should be JSON");
     assert_eq!(payload["status"], 200);
@@ -233,11 +215,8 @@ async fn worker_fetch_applies_network_policy_extra_http_headers() {
         },
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    assert_eq!(expect_post_json(msg), r#""works-worker""#);
+    let msg = recv_post_json(&mut handle).await;
+    assert_eq!(msg, r#""works-worker""#);
     server.await.expect("worker header server should finish");
 }
 
@@ -280,7 +259,7 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker fetch pause, got {pending:?}");
     };
-    assert!(pending.info.network_request_handle.is_none());
+    assert!(pending.info.network_request_handle.is_some());
     assert_eq!(pending.info.resource_type, SubresourceResourceType::Fetch);
     assert_eq!(
         pending.info.url.as_str(),
@@ -291,7 +270,7 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
         Some("credentialless-worker-fetch")
     );
 
-    let request = pending_worker_fetch_continue(pending.fetch_id, 17, &pending.info, false);
+    let request = pending_worker_fetch_continue(pending.fetch_id, &pending.info, false);
     handle.fulfill_pending_fetch(
         request,
         202,
@@ -362,22 +341,24 @@ async fn worker_subresource_request_handles_are_owner_unique() {
     };
 
     assert!(
-        first_pending.info.network_request_handle.is_none(),
-        "worker pause should not allocate a local request handle"
+        first_pending.info.network_request_handle.is_some(),
+        "native Worker pause already owns its globally unique handle"
     );
     assert!(
-        second_pending.info.network_request_handle.is_none(),
-        "worker pause should not allocate a local request handle"
+        second_pending.info.network_request_handle.is_some(),
+        "native Worker pause already owns its globally unique handle"
     );
 
     let first_request =
-        pending_worker_fetch_continue(first_pending.fetch_id, 101, &first_pending.info, false);
+        pending_worker_fetch_continue(first_pending.fetch_id, &first_pending.info, false);
     let second_request =
-        pending_worker_fetch_continue(second_pending.fetch_id, 202, &second_pending.info, false);
-    let first_handle = first_request
+        pending_worker_fetch_continue(second_pending.fetch_id, &second_pending.info, false);
+    let first_handle = first_pending
+        .info
         .network_request_handle
         .expect("first owner-assigned worker fetch handle");
-    let second_handle = second_request
+    let second_handle = second_pending
+        .info
         .network_request_handle
         .expect("second owner-assigned worker fetch handle");
     assert_ne!(
@@ -486,7 +467,7 @@ async fn worker_fetch_continue_request_resolves_response_before_delayed_body() {
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected continued worker fetch pause, got {pending:?}");
     };
-    let request = pending_worker_fetch_continue(pending.fetch_id, 61, &pending.info, false);
+    let request = pending_worker_fetch_continue(pending.fetch_id, &pending.info, false);
     handle.continue_pending_fetch(request);
 
     assert_eq!(
@@ -549,7 +530,7 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker fetch pause, got {pending:?}");
     };
-    let request = pending_worker_fetch_continue(pending.fetch_id, 23, &pending.info, true);
+    let request = pending_worker_fetch_continue(pending.fetch_id, &pending.info, true);
     handle.continue_pending_fetch(request.clone());
 
     let response_pause = timeout(TIMEOUT, handle.recv())
@@ -562,10 +543,15 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
     else {
         panic!("expected worker response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 23);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(info.response_status, 200);
     assert_eq!(
-        info.response_body.try_bytes().unwrap().as_ref(),
+        handle
+            .native_response_body(info.internal_id)
+            .await
+            .materialize_bytes()
+            .unwrap()
+            .as_slice(),
         b"origin-worker-body"
     );
 
@@ -638,7 +624,7 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected large worker fetch pause, got {pending:?}");
     };
-    let request = pending_worker_fetch_continue(pending.fetch_id, 71, &pending.info, true);
+    let request = pending_worker_fetch_continue(pending.fetch_id, &pending.info, true);
     handle.continue_pending_fetch(request.clone());
 
     let response_pause = timeout(TIMEOUT, handle.recv())
@@ -651,9 +637,11 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
     else {
         panic!("expected large worker fetch response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 71);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(
-        info.response_body
+        handle
+            .native_response_body(info.internal_id)
+            .await
             .read_chunk(expected_len - 1, 1)
             .expect("spooled body tail should be readable"),
         b"x"
@@ -709,7 +697,7 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker fetch auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_fetch_continue(pending.fetch_id, 47, &pending.info, false);
+    let mut request = pending_worker_fetch_continue(pending.fetch_id, &pending.info, false);
     request.handle_auth_requests = true;
     handle.continue_pending_fetch(request.clone());
 
@@ -723,7 +711,7 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
     else {
         panic!("expected worker fetch auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 47);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(info.resource_type, SubresourceResourceType::Fetch);
     assert_eq!(info.challenge.source, "Server");
     assert_eq!(info.challenge.scheme, "basic");
@@ -731,7 +719,7 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
     assert!(!info.intercept_response);
     assert_initial_worker_auth_network_headers(info.network_request_headers.as_deref());
 
-    let expected_request_handle = Some(owner_assigned_request_handle(47));
+    let expected_request_handle = pending.info.network_request_handle;
     request.auth = Some(server_basic_auth_credentials());
     handle.continue_pending_fetch(request);
 
@@ -796,7 +784,7 @@ async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker fetch auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_fetch_continue(pending.fetch_id, 53, &pending.info, false);
+    let mut request = pending_worker_fetch_continue(pending.fetch_id, &pending.info, false);
     request.handle_auth_requests = true;
     handle.continue_pending_fetch(request.clone());
 
@@ -810,10 +798,10 @@ async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge
     else {
         panic!("expected worker fetch auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 53);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(info.challenge.realm, "worker-fetch-area");
 
-    let expected_request_handle = Some(owner_assigned_request_handle(53));
+    let expected_request_handle = pending.info.network_request_handle;
     handle.fail_pending_fetch_auth(request, "worker fetch auth aborted".to_owned());
 
     let network = timeout(TIMEOUT, handle.recv())
@@ -1978,7 +1966,7 @@ async fn worker_fetch_redirect_loop_rejects_and_reports_subresource_failure() {
 #[tokio::test]
 async fn worker_fetch_cross_origin_redirect_without_cors_rejects_and_reports_failure() {
     ensure_v8();
-    let (source_base_url, _, source_server, target_server) =
+    let (source_base_url, target_base_url, source_server, target_server) =
         spawn_cross_origin_redirect_without_cors_http_servers(
             "/worker-fetch-cors-redirect-deny",
             "/worker-fetch-cors-denied-target",
@@ -2035,7 +2023,10 @@ async fn worker_fetch_cross_origin_redirect_without_cors_rejects_and_reports_fai
         .await
         .expect("worker CORS redirect target server should finish");
     let record = network.expect("worker fetch CORS redirect should record network failure");
-    assert_eq!(record.url().as_str(), url);
+    assert_eq!(
+        record.url().as_str(),
+        format!("{target_base_url}/worker-fetch-cors-denied-target")
+    );
     assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
     let SubresourceNetworkOutcome::Failure { error_text } = record.outcome() else {
         panic!("expected CORS network failure, got {:?}", record.outcome());
@@ -2116,11 +2107,13 @@ async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
     source_server
         .await
         .expect("worker CSP redirect source server should finish");
-    target_server
-        .await
-        .expect("worker CSP redirect target server should finish");
+    assert!(
+        !target_server.is_finished(),
+        "CSP refuses the redirected transport before dispatch"
+    );
+    target_server.abort();
     let record = network.expect("worker fetch CSP redirect should record network failure");
-    assert_eq!(record.url().as_str(), url);
+    assert_eq!(record.url().path(), "/worker-fetch-csp-target");
     assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
     assert!(matches!(
         record.outcome(),
@@ -2133,6 +2126,53 @@ async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
             r#"{{"name":"TypeError","isTypeError":true,"hasCspMessage":true,"events":[{{"blockedURI":"{url}","effectiveDirective":"connect-src","disposition":"enforce"}}]}}"#
         )
     );
+}
+
+#[tokio::test]
+async fn worker_fetch_redirect_reports_csp_once_before_response_delivery() {
+    ensure_v8();
+    let (source_url, _, source_server, target_server) =
+        spawn_cross_origin_redirect_with_cors_http_servers(
+            "/report-redirect",
+            "/report-target",
+            "reported-body",
+        )
+        .await;
+    let url = format!("{source_url}/report-redirect");
+    let literal = serde_json::to_string(&url).unwrap();
+    let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            format!(
+                r#"
+            (async () => {{
+                const violations = [];
+                addEventListener("securitypolicyviolation", event => violations.push({{
+                    blockedURI: event.blockedURI,
+                    disposition: event.disposition,
+                }}));
+                const response = await fetch({literal});
+                const text = await response.text();
+                postMessage({{ text, violations }});
+                close();
+            }})();
+        "#
+            ),
+            format!("{source_url}/worker/main.js"),
+        )
+        .with_request_client(loader)
+        .with_content_security_report_only_policies(vec!["connect-src 'self'".into()]),
+    );
+    let post: serde_json::Value = serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+    assert_eq!(
+        post,
+        serde_json::json!({
+            "text": "reported-body",
+            "violations": [{"blockedURI": url, "disposition": "report"}],
+        })
+    );
+    source_server.await.unwrap();
+    target_server.await.unwrap();
 }
 
 #[tokio::test]
@@ -2246,17 +2286,26 @@ async fn worker_fetch_projects_cache_modes_to_native_wire_requests() {
         spawn_worker_with_request_client(script, format!("http://{address}/worker.js"), loader);
     let mut result = None;
     let mut miss = None;
-    for _ in 0..2 {
+    while result.is_none() || miss.is_none() {
         match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
             WorkerToParentMessage::Post(payload) => result = Some(stringify_payload(&payload)),
-            WorkerToParentMessage::SubresourceNetwork(record) => miss = Some(record),
+            WorkerToParentMessage::SubresourceNetwork(record) => {
+                if record.url().path() == "/wire/miss" {
+                    miss = Some(record);
+                } else {
+                    assert!(matches!(
+                        record.outcome(),
+                        SubresourceNetworkOutcome::Success { .. }
+                    ));
+                }
+            }
             other => panic!("unexpected Worker cache result: {other:?}"),
         }
     }
     assert_eq!(result.as_deref(), Some("\"passed\""));
     let miss = miss.expect("cache-only rejection must retain its network diagnostic");
     assert_eq!(miss.url().path(), "/wire/miss");
-    assert_eq!(miss.request_handle(), None);
+    assert!(miss.request_handle().is_some());
     assert!(matches!(
         miss.outcome(),
         SubresourceNetworkOutcome::Failure { error_text }
@@ -2383,4 +2432,142 @@ async fn worker_fetch_resource_timing_overflow_can_clear_and_refill_its_own_buff
         result,
         serde_json::json!({"firstCount":1,"trusted":true,"remaining":["/second"]})
     );
+}
+
+#[tokio::test]
+async fn worker_fetch_and_xhr_cancel_only_their_own_native_request() {
+    ensure_v8();
+    let mut handle = spawn_worker_with_request_client(
+        r#"
+        let xhr;
+        onmessage = event => {
+            if (event.data === 'abort') { xhr.abort(); return; }
+            fetch('/fetch').then(r => r.text()).then(text => postMessage({fetch:text}));
+            xhr = new XMLHttpRequest();
+            xhr.open('GET', '/xhr');
+            xhr.onabort = () => postMessage({xhr:'aborted'});
+            xhr.send();
+        };
+        "#
+        .into(),
+        "http://example.test/worker.js".into(),
+        ResourceRequestClient::new(&FetchConfig::default()).unwrap(),
+    );
+    handle.set_fetch_subresource_interception(
+        SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch).union(
+            SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Xhr),
+        ),
+    );
+    handle.post_message(serialize_test_string("start"));
+    let mut pauses = Vec::new();
+    while pauses.len() != 2 {
+        if let WorkerToParentMessage::PendingSubresourceFetch(pause) =
+            timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap()
+        {
+            pauses.push(pause);
+        }
+    }
+    let fetch = pauses
+        .iter()
+        .find(|p| p.info.resource_type == SubresourceResourceType::Fetch)
+        .unwrap();
+    let xhr = pauses
+        .iter()
+        .find(|p| p.info.resource_type == SubresourceResourceType::Xhr)
+        .unwrap();
+    assert_ne!(fetch.info.internal_id, xhr.info.internal_id);
+    assert_ne!(
+        fetch.info.network_request_handle,
+        xhr.info.network_request_handle
+    );
+    handle.post_message(serialize_test_string("abort"));
+    let mut xhr_post = false;
+    let mut xhr_terminal = false;
+    while !xhr_post || !xhr_terminal {
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::Post(payload) => {
+                assert_eq!(stringify_payload(&payload), r#"{"xhr":"aborted"}"#);
+                xhr_post = true;
+            }
+            WorkerToParentMessage::SubresourceNetwork(record) => {
+                assert_eq!(record.request_handle(), xhr.info.network_request_handle);
+                assert!(
+                    matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text } if error_text == "net::ERR_ABORTED")
+                );
+                xhr_terminal = true;
+            }
+            WorkerToParentMessage::SubresourceContinue(_) => {}
+            other => panic!("unexpected cancellation output: {other:?}"),
+        }
+    }
+    let request = pending_worker_fetch_continue(fetch.fetch_id, &fetch.info, false);
+    handle.fulfill_pending_fetch(
+        request,
+        200,
+        vec![("content-type".into(), b"text/plain".to_vec())],
+        RendererSyntheticResponseBody::from_bytes(b"fetch survives".to_vec()),
+    );
+    let mut fetch_post = false;
+    let mut fetch_terminal = false;
+    while !fetch_post || !fetch_terminal {
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::Post(payload) => {
+                assert_eq!(stringify_payload(&payload), r#"{"fetch":"fetch survives"}"#);
+                fetch_post = true;
+            }
+            WorkerToParentMessage::SubresourceNetwork(record) => {
+                assert_eq!(record.request_handle(), fetch.info.network_request_handle);
+                assert!(matches!(
+                    record.outcome(),
+                    SubresourceNetworkOutcome::Success { .. }
+                ));
+                fetch_terminal = true;
+            }
+            WorkerToParentMessage::SubresourceContinue(_) => {}
+            other => panic!("unexpected fetch output: {other:?}"),
+        }
+    }
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn worker_keepalive_continues_when_its_interceptor_and_js_owner_close() {
+    ensure_v8();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_http_request_head(&mut socket).await.unwrap();
+        assert!(request.starts_with("GET /keepalive HTTP/1.1\r\n"));
+        entered_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .await
+            .unwrap();
+    });
+    let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let mut handle = spawn_worker_with_request_client(
+        r#"onmessage=event=>{if(event.data==='close'){close();return;}fetch('/keepalive',{keepalive:true});};"#.into(),
+        format!("http://{addr}/worker.js"),
+        loader.handle(),
+    );
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
+    handle.post_message(serialize_test_string("start"));
+    let WorkerToParentMessage::PendingSubresourceFetch(_) =
+        timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap()
+    else {
+        panic!("keepalive must first be paused");
+    };
+    handle.post_message(serialize_test_string("close"));
+    // A disappearing target releases its interceptor; no Page/Worker command
+    // is needed to settle the native decision port. The keepalive lease stays.
+    timeout(TIMEOUT, entered_rx).await.unwrap().unwrap();
+    handle.terminate_and_join();
+    release_tx.send(()).unwrap();
+    timeout(TIMEOUT, server).await.unwrap().unwrap();
 }

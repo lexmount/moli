@@ -16,8 +16,27 @@ use super::host::RendererSharedWorkerHost;
 use super::host::SharedWorkerRuntimeResponsePublicationState;
 
 impl RendererSharedWorkerHost {
-    pub(super) fn publish_created_target_event(&self) {
-        self.publish_target_event(RendererSharedWorkerTargetEvent::Created(self.target_info()));
+    pub(super) fn publish_resource_event(&self, event: crate::network::ResourceInterceptionEvent) {
+        let record = PendingRendererOutputRecord::owner_action(
+            None,
+            RendererOwnerAction::SharedWorkerTargetLifecycle(
+                RendererSharedWorkerTargetEvent::Resource {
+                    instance_id: self.instance_id(),
+                    event,
+                },
+            ),
+        )
+        .resolve()
+        .expect("native Worker resource has a source identity");
+        self.target_output().try_publish_record(record);
+    }
+    pub(super) fn publish_created_target_event(
+        &self,
+        policy: Option<crate::network::ResourceInterceptionPolicy>,
+    ) {
+        self.publish_target_event(RendererSharedWorkerTargetEvent::Created(
+            self.target_info(policy),
+        ));
     }
 
     pub(super) fn publish_destroyed_target_event(self: &Arc<Self>) {
@@ -187,8 +206,12 @@ impl RendererSharedWorkerHost {
         self.runtime_service().is_running_host(self)
     }
 
-    fn target_info(&self) -> RendererSharedWorkerTargetInfo {
+    fn target_info(
+        &self,
+        interception_policy: Option<crate::network::ResourceInterceptionPolicy>,
+    ) -> RendererSharedWorkerTargetInfo {
         RendererSharedWorkerTargetInfo {
+            interception_policy,
             owner_local_host_id: self.owner_local_host_id(),
             instance_id: self.instance_id(),
             url: self.current_script_url(),
@@ -275,7 +298,7 @@ mod tests {
         let host =
             test_support::loading_host_with_runtime_service(instance_id, &key, &runtime_service);
 
-        host.publish_created_target_event();
+        host.publish_created_target_event(None);
         let (tx, mut rx) = crate::runtime::renderer_output_transport_channel();
         runtime_service.bind_target_output_transport(tx);
 
@@ -315,7 +338,7 @@ mod tests {
         let (tx, mut rx) = crate::runtime::renderer_output_transport_channel();
         runtime_service.bind_target_output_transport(tx);
 
-        host.publish_created_target_event();
+        host.publish_created_target_event(None);
         host.publish_destroyed_target_event();
 
         assert!(matches!(

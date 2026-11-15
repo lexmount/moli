@@ -1,13 +1,13 @@
-use super::fulfilled_redirects::command;
+use super::fulfilled_redirects::{command, session_command};
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dedicated_worker_abort_before_request_delivery_finishes_original_network_request() {
+async fn dedicated_worker_network_progress_is_independent_of_response_delivery() {
     check_worker_abort_before_request_delivery(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn shared_worker_abort_before_request_delivery_finishes_original_network_request() {
+async fn shared_worker_network_progress_is_independent_of_response_delivery() {
     check_worker_abort_before_request_delivery(true).await;
 }
 
@@ -16,6 +16,8 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let barrier = Arc::new(tokio::sync::Mutex::new(Some((entered_tx, release_rx))));
+        let (transport_entered_tx, transport_entered_rx) = tokio::sync::oneshot::channel();
+        let transport_entered = Arc::new(tokio::sync::Mutex::new(Some(transport_entered_tx)));
         let hits = Arc::new(AtomicUsize::new(0));
         let server_hits = hits.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -40,9 +42,8 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
                                     fetch('/race', {signal:controller.signal})
                                         .then(response => reply({status:response.status}),
                                             error => reply({error:error.name}));
-                                    // Keep this JS task running while the parent queues
-                                    // fulfill/continue. Abort before returning to the
-                                    // Worker loop that can consume that queued command.
+                                    // Hold JS delivery, while the native loader can
+                                    // process fulfill/continue without this task.
                                     importScripts('/barrier.js');
                                     controller.abort();
                                 }
@@ -72,9 +73,11 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
                         "/race",
                         get(move || {
                             let hits = server_hits.clone();
+                            let entered = transport_entered.clone();
                             async move {
                                 hits.fetch_add(1, Ordering::SeqCst);
-                                "unexpected network dispatch"
+                                entered.lock().await.take().unwrap().send(()).unwrap();
+                                std::future::pending::<&'static str>().await
                             }
                         }),
                     ),
@@ -84,6 +87,9 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
         });
         let mut ctx = TestContext::new();
         with_loaded_http_document(&mut ctx, &format!("{origin}/page"), "SID-1", "TID-1").await;
+        let patterns = json!([{"urlPattern":"*/race","resourceType":"Fetch"}]);
+        ctx.observe_worker_network_for_test(shared.then(|| (patterns.clone(), 1)))
+            .await;
         enable_runtime_async(&mut ctx, "SID-1", 54_000).await;
         command(&mut ctx, 54_001, "Network.enable", json!({})).await;
         command(
@@ -110,9 +116,25 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
                 if shared {"deliveryWorker.port"} else {"deliveryWorker"},
                 if shared {"deliveryPort.start()"} else {"void 0"})
         })).await;
-        let paused =
-            wait_for_request_paused(&mut ctx, &format!("{origin}/race"), "Worker delivery pause")
-                .await;
+        let session = if shared {
+            // The startup observer installs the SharedWorker's own interceptor.
+            wait_until_scheduler_message(&mut ctx, "SharedWorker startup", |event| {
+                event["method"] == "Target.attachedToTarget"
+                    && event["params"]["targetInfo"]["type"] == "shared_worker"
+            })
+            .await;
+            ctx.shared_worker_fetch_sessions_for_test().await[0].clone()
+        } else {
+            "SID-1".to_owned()
+        };
+        let paused = wait_for_request_paused_on_session(
+            &mut ctx,
+            &session,
+            &format!("{origin}/race"),
+            None,
+            "Worker delivery pause",
+        )
+        .await;
         // A classic script import blocks this Worker task without sharing the
         // Fetch interception class. Release it only after the command is queued.
         tokio::time::timeout(
@@ -127,8 +149,9 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
             params["responseCode"] = json!(200);
             params["body"] = json!("Ym9keQ==");
         }
-        command(
+        session_command(
             &mut ctx,
+            &session,
             54_004,
             if fulfill {
                 "Fetch.fulfillRequest"
@@ -139,15 +162,22 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
         )
         .await;
         let network_id = &paused["params"]["networkId"];
-        assert!(
-            !ctx.sent.iter().any(|event| {
-                matches!(
-                    event["method"].as_str(),
-                    Some("Network.loadingFinished" | "Network.loadingFailed")
-                ) && &event["params"]["requestId"] == network_id
-            }),
-            "response delivery must still be queued at the Worker"
-        );
+        if fulfill {
+            // Completion is visible before the Worker has returned from JS.
+            wait_until_scheduler_message(&mut ctx, "fulfilled native Worker load", |event| {
+                event["method"] == "Network.loadingFinished"
+                    && &event["params"]["requestId"] == network_id
+            })
+            .await;
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                ctx.drive_owned_wait(transport_entered_rx),
+            )
+            .await
+            .expect("native transport starts while Worker JS is blocked")
+            .unwrap();
+        }
         release_tx.send(()).unwrap();
         let drained = command(&mut ctx, 54_005, "Runtime.evaluate", json!({
             "expression":"deliveryPort.postMessage('probe');Promise.all([deliveryOutcome,deliveryDrained])",
@@ -179,9 +209,21 @@ async fn check_worker_abort_before_request_delivery(shared: bool) {
             1,
             "shared={shared}, fulfill={fulfill}: {terminals:?}"
         );
-        assert_eq!(terminals[0]["method"], "Network.loadingFailed");
-        assert_eq!(terminals[0]["params"]["errorText"], "net::ERR_ABORTED");
-        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            terminals[0]["method"],
+            if fulfill {
+                "Network.loadingFinished"
+            } else {
+                "Network.loadingFailed"
+            }
+        );
+        if !fulfill {
+            assert_eq!(terminals[0]["params"]["errorText"], "net::ERR_ABORTED");
+        }
+        let observer = ctx.worker_network_session_for_request(network_id);
+        assert_eq!(terminals[0]["sessionId"], observer);
+        assert_ne!(observer, "SID-1");
+        assert_eq!(hits.load(Ordering::SeqCst), usize::from(!fulfill));
         command(&mut ctx, 54_006, "Runtime.evaluate", json!({
             "expression":if shared {"deliveryPort.close();'closed'"} else {"deliveryWorker.terminate();'terminated'"}
         })).await;

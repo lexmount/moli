@@ -162,6 +162,7 @@ impl RendererProducerRegistrar {
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerContextRuntime {
     debugger_enabled: bool,
+    shared_worker_pause_on_start: Arc<AtomicBool>,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     storage_partition_identity: RendererStoragePartitionIdentity,
@@ -209,6 +210,7 @@ struct RendererBrowserContextRuntimeInner {
     next_dedicated_worker_instance_id: AtomicU64,
     dedicated_worker_devtools_targets: Mutex<HashMap<u64, DedicatedWorkerDevToolsTarget>>,
     dedicated_worker_pause_on_start_for_devtools: AtomicBool,
+    shared_worker_pause_on_start_for_devtools: Arc<AtomicBool>,
     javascript_dialog_handler_enabled: AtomicBool,
     browser_owns_auxiliary_document_responses: AtomicBool,
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
@@ -613,6 +615,7 @@ impl RendererBrowserContextRuntime {
                 next_dedicated_worker_instance_id: AtomicU64::default(),
                 dedicated_worker_devtools_targets: Mutex::new(HashMap::new()),
                 dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
+                shared_worker_pause_on_start_for_devtools: Arc::new(AtomicBool::new(false)),
                 javascript_dialog_handler_enabled: AtomicBool::new(false),
                 browser_owns_auxiliary_document_responses: AtomicBool::new(false),
                 renderer_output_transport_tx,
@@ -780,6 +783,10 @@ impl RendererBrowserContextRuntime {
     pub(crate) fn worker_context_runtime(&self) -> RendererWorkerContextRuntime {
         RendererWorkerContextRuntime {
             debugger_enabled: self.inner.debugger_enabled,
+            shared_worker_pause_on_start: self
+                .inner
+                .shared_worker_pause_on_start_for_devtools
+                .clone(),
             message_port_registry: self.message_port_registry(),
             broadcast_channel_registry: self.broadcast_channel_registry(),
             storage_partition_identity: self.storage_partition_identity(),
@@ -1043,6 +1050,7 @@ impl RendererWorkerContextRuntime {
     ) -> Self {
         Self {
             debugger_enabled,
+            shared_worker_pause_on_start: Arc::new(AtomicBool::new(false)),
             message_port_registry,
             broadcast_channel_registry,
             storage_partition_identity,
@@ -1055,6 +1063,9 @@ impl RendererWorkerContextRuntime {
         self.message_port_registry.clone()
     }
 
+    pub(crate) fn shared_worker_pause_on_start_for_devtools(&self) -> bool {
+        self.shared_worker_pause_on_start.load(Ordering::Acquire)
+    }
     pub(crate) fn debugger_enabled(&self) -> bool {
         self.debugger_enabled
     }

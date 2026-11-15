@@ -3,7 +3,7 @@ use std::sync::Arc;
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::{
-    host::{RendererSharedWorkerHost, SharedRendererSharedWorkerHost},
+    host::SharedRendererSharedWorkerHost,
     service::{SharedWorkerRuntimeService, WeakSharedWorkerRuntimeService},
 };
 
@@ -13,24 +13,6 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
     ) -> Option<SharedRendererSharedWorkerHost> {
         self.running_matching_host(instance_id)
-    }
-
-    pub(super) fn route_running_host(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        route: impl FnOnce(&RendererSharedWorkerHost) -> bool,
-    ) -> bool {
-        let Some(host) = self.running_host_for_route(instance_id) else {
-            return false;
-        };
-        route(&host)
-    }
-
-    fn running_host_for_route(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> Option<SharedRendererSharedWorkerHost> {
-        self.running_host_for_instance(instance_id)
     }
 }
 
