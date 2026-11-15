@@ -1476,6 +1476,35 @@ async fn worker_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
 }
 
 #[tokio::test]
+async fn worker_fetch_manual_redirect_rejects_invalid_network_location() {
+    ensure_v8();
+    for location in ["http://[", "http://%GG/", "http://example.test:abc/"] {
+        let (base_url, server) =
+            spawn_single_redirect_http_server("/invalid-manual", location).await;
+        let url = format!("{base_url}/invalid-manual");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut handle = spawn_worker_with_request_client(
+            format!(
+                r#"
+            fetch({url:?}, {{redirect:'manual'}}).then(
+                response => postMessage({{type:response.type, status:response.status}}),
+                error => postMessage({{name:error.name, isTypeError:error instanceof TypeError}})
+            ).finally(() => close());
+        "#
+            ),
+            format!("{base_url}/worker/main.js"),
+            loader,
+        );
+        let result = recv_post_json(&mut handle).await;
+        server.await.unwrap();
+        assert_eq!(
+            result, r#"{"name":"TypeError","isTypeError":true}"#,
+            "{location}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn worker_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")

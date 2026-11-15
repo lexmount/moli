@@ -522,12 +522,12 @@ async fn fulfilled_manual_redirect_does_not_parse_location_but_still_checks_cors
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn ordinary_manual_preflight_redirect_does_not_parse_location() {
+async fn ordinary_manual_preflight_redirect_validates_network_location() {
     check_manual_preflight_redirect(None).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn intercepted_manual_preflight_redirect_does_not_parse_location() {
+async fn intercepted_manual_preflight_redirect_validates_network_location() {
     for stage in ["Request", "Response"] {
         check_manual_preflight_redirect(Some(stage)).await;
     }
@@ -549,7 +549,18 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         ("follow", 302, true, Some("http://[")),
         ("error", 302, true, Some("http://[")),
         ("manual", 302, false, Some("http://[")),
+        ("manual", 302, true, Some("http://%GG/")),
+        ("manual", 302, true, Some("http://example.test:abc/")),
         ("manual", 302, true, None),
+        ("manual", 302, true, Some("")),
+        ("manual", 302, true, Some("/not-followed")),
+        (
+            "manual",
+            302,
+            true,
+            Some("http://user:pass@example.test/not-followed"),
+        ),
+        ("manual", 302, true, Some("http://127.0.0.1:9/not-followed")),
         ("manual", 200, true, Some("http://[")),
     ];
     let observed = Arc::new(Mutex::new(Vec::new()));
@@ -614,13 +625,21 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         command(&mut ctx, 60_000, "Fetch.disable", json!({})).await;
     }
     let mut expected_requests = Vec::new();
-    for (index, (mode, status, cors_allowed, _)) in cases.into_iter().enumerate() {
+    for (index, (mode, status, cors_allowed, location)) in cases.into_iter().enumerate() {
+        let invalid_redirect = status == 302
+            && matches!(
+                location,
+                Some("http://[" | "http://%GG/" | "http://example.test:abc/")
+            );
         let id = 60_010 + index as u64 * 10;
         let source = format!("{cross_origin}/{index}");
         command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
             "globalThis.manualPreflightResult=fetch({source:?},{{method:'PUT',headers:{{'X-Probe':'yes'}},redirect:{mode:?}}}).then(async r=>({{status:r.status,type:r.type,url:r.url,headers:[...r.headers],body:await r.text(),redirected:r.redirected}})).catch(e=>({{error:e.name}}));'started'"
         )})).await;
-        if let Some(stage) = stage {
+        if let Some(stage) = stage
+            && !(stage == "Response" && invalid_redirect)
+        {
+            // Invalid network redirects fail before a response head exists.
             let pause =
                 wait_for_request_paused(&mut ctx, &source, "preflight redirect pause").await;
             assert_eq!(
@@ -651,7 +670,7 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         expected_requests.extend([(index, "OPTIONS".to_owned()), (index, "PUT".to_owned())]);
         assert_eq!(*observed.lock(), expected_requests, "{stage:?}/{index}");
         let value = &result["result"]["result"]["value"];
-        if !cors_allowed || mode != "manual" {
+        if !cors_allowed || mode != "manual" || invalid_redirect {
             assert_eq!(value, &json!({"error":"TypeError"}), "{stage:?}/{index}");
         } else if status == 302 {
             assert_eq!(

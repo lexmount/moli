@@ -536,6 +536,14 @@ impl StreamingResponseCollector {
             self.callback_error = Some(error);
             return false;
         }
+        // Reject malformed redirects before publishing a head or committing
+        // response progress, including when no redirect will be followed.
+        if let Err(error) =
+            next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
+        {
+            self.callback_error = Some(error.to_string());
+            return false;
+        }
         let declared_body_length = identity_encoded_content_length(&self.headers);
         self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
         // Create the cache writer only after final response headers prove the
@@ -955,17 +963,20 @@ impl RawStreamingResponseCollector {
             self.callback_error = Some(error);
             return false;
         }
+        let is_redirect_response =
+            match next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0) {
+                Ok(target) => target.is_some(),
+                Err(error) => {
+                    self.callback_error = Some(error.to_string());
+                    return false;
+                }
+            };
         let declared_body_length = identity_encoded_content_length(&self.headers);
         self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
         if declared_body_length == Some(0) {
             self.response_progress.commit();
         }
         self.maybe_create_cache_body_writer();
-        let is_redirect_response =
-            next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
-                .ok()
-                .flatten()
-                .is_some();
         self.maybe_emit_start(is_redirect_response);
         if self.started && (response_body_ends_at_headers(self.status) || is_redirect_response) {
             // Manual redirects expose their head with an empty body. Stop the
