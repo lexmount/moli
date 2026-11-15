@@ -76,3 +76,15 @@ limits return `None` before entering V8; invalid syntax retains the pending
 exception. `moli-v8-test-util/tests/regexp_bindings.rs` covers bounded rejection,
 normal matches, invalid limits and invalid syntax. Keep this local bridge when
 refreshing the vendored bindings.
+
+
+## Context-specific SharedArrayBuffer constructor hooks
+
+Moli exposes V8's `SetSharedArrayBufferConstructorEnabledCallback` and
+`InstallConditionalFeatures` through `shared_array_buffer_ext.cc`. These hooks
+let the embedder select constructor exposure from a Context's native policy
+when `--enable-sharedarraybuffer-per-context` is enabled. They preserve the
+shared-memory intrinsic and do not remove or overwrite existing globals.
+`moli-v8-test-util/tests/shared_array_buffer_bindings.rs` covers denied, unbound,
+and enabled contexts, requested-context authority, and idempotent installation.
+Keep the bridge when refreshing the vendored bindings.
