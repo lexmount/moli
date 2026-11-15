@@ -239,32 +239,30 @@ impl ScriptVm {
                 if !continued {
                     bail!(target.unavailable_message());
                 }
-                if intercept_response || handle_auth_requests {
-                    self._context_host
-                        .borrow_mut()
-                        .record_in_flight_worker_subresource_fetch(
-                            crate::types::InFlightWorkerSubresourceFetchState {
-                                pending: PendingSubresourceFetchState {
-                                    dispatch,
-                                    redirect_headers: redirect_headers.clone(),
-                                    request_origin,
-                                    info,
-                                    load,
-                                    execution_context,
-                                    credentials_mode,
-                                    request_mode,
-                                    network_partition_key: network_partition_key.clone(),
-                                    policy_context,
-                                    continuation: target.continuation(),
-                                    deferred_request_started,
-                                },
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
+                self._context_host
+                    .borrow_mut()
+                    .record_in_flight_worker_subresource_fetch(
+                        crate::types::InFlightWorkerSubresourceFetchState {
+                            pending: PendingSubresourceFetchState {
+                                dispatch,
+                                redirect_headers,
+                                request_origin,
+                                info,
+                                load,
+                                execution_context,
+                                credentials_mode,
+                                request_mode,
+                                network_partition_key,
+                                policy_context,
+                                continuation: target.continuation(),
+                                deferred_request_started,
                             },
-                        );
-                }
+                            request_url,
+                            request_method,
+                            request_headers,
+                            request_body,
+                        },
+                    );
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(
                     PendingSubresourceContinueOutcome::Started,
                 ));
@@ -1278,6 +1276,44 @@ impl ScriptVm {
                 response_body,
             );
         }
+        if let Some(target) = WorkerOwnedFetchTarget::from_continuation(&pending.continuation) {
+            let in_flight = crate::types::InFlightWorkerSubresourceFetchState {
+                request_url: pending.info.url.clone(),
+                request_method: pending.info.method.clone(),
+                request_headers: pending.info.request_headers.clone(),
+                request_body: pending.info.request_body.clone(),
+                pending,
+            };
+            let info = &in_flight.pending.info;
+            let fulfilled = self.fulfill_worker_owned_fetch(
+                target,
+                crate::worker::WorkerPendingFetchContinue {
+                    redirect_headers: None,
+                    fetch_id: target.fetch_id(),
+                    internal_id,
+                    network_request_handle: info.network_request_handle,
+                    url: info.url.clone(),
+                    method: info.method.clone(),
+                    body: info.request_body_bytes.clone(),
+                    headers: info.request_headers.clone(),
+                    intercept_response: false,
+                    handle_auth_requests: false,
+                    auth: None,
+                },
+                response_code,
+                response_headers,
+                response_body,
+            );
+            if !fulfilled {
+                bail!(target.unavailable_message());
+            }
+            // Retain the original identity until the Worker reports its result.
+            // It may abort before consuming the queued fulfillment command.
+            self._context_host
+                .borrow_mut()
+                .record_in_flight_worker_subresource_fetch(in_flight);
+            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
+        }
         let PendingSubresourceFetchState {
             dispatch,
             redirect_headers: _,
@@ -1345,36 +1381,6 @@ impl ScriptVm {
                     )
                     .map_err(|error| anyhow!(error))?;
                 let _ = response_body;
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerFetch { .. }
-            | PendingSubresourceContinuation::SharedWorkerFetch { .. }) => {
-                let target = WorkerOwnedFetchTarget::from_continuation(&continuation)
-                    .expect("fetch continuation target");
-                // The Worker validates the final response and publishes its
-                // terminal using this request's original network handle.
-                let fulfilled = self.fulfill_worker_owned_fetch(
-                    target,
-                    crate::worker::WorkerPendingFetchContinue {
-                        redirect_headers: None,
-                        fetch_id: target.fetch_id(),
-                        internal_id,
-                        network_request_handle: info.network_request_handle,
-                        url: info.url,
-                        method: info.method,
-                        body: info.request_body_bytes,
-                        headers: info.request_headers,
-                        intercept_response: false,
-                        handle_auth_requests: false,
-                        auth: None,
-                    },
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-                if !fulfilled {
-                    bail!(target.unavailable_message());
-                }
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
             continuation @ (PendingSubresourceContinuation::WorkerXhr { .. }

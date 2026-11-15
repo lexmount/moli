@@ -1888,8 +1888,15 @@ impl PageScriptHost {
         fetch_id: u32,
         error_text: String,
     ) -> bool {
-        let Some(internal_id) = self.pending_subresource_fetches.iter().find_map(
-            |(internal_id, pending)| match &pending.continuation {
+        let Some(internal_id) = self
+            .pending_subresource_fetches
+            .iter()
+            .chain(
+                self.in_flight_worker_subresource_fetches
+                    .iter()
+                    .map(|(internal_id, state)| (internal_id, &state.pending)),
+            )
+            .find_map(|(internal_id, pending)| match &pending.continuation {
                 PendingSubresourceContinuation::WorkerFetch {
                     worker_id: pending_worker_id,
                     fetch_id: pending_fetch_id,
@@ -1909,11 +1916,19 @@ impl PageScriptHost {
                     Some(*internal_id)
                 }
                 _ => None,
-            },
-        ) else {
+            })
+        else {
             return false;
         };
-        let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) else {
+        let Some(pending) = self
+            .pending_subresource_fetches
+            .remove(&internal_id)
+            .or_else(|| {
+                self.in_flight_worker_subresource_fetches
+                    .remove(&internal_id)
+                    .map(|state| state.pending)
+            })
+        else {
             return false;
         };
         #[cfg(test)]
@@ -1932,8 +1947,15 @@ impl PageScriptHost {
         fetch_id: u32,
         error_text: String,
     ) -> bool {
-        let Some(internal_id) = self.pending_subresource_fetches.iter().find_map(
-            |(internal_id, pending)| match &pending.continuation {
+        let Some(internal_id) = self
+            .pending_subresource_fetches
+            .iter()
+            .chain(
+                self.in_flight_worker_subresource_fetches
+                    .iter()
+                    .map(|(internal_id, state)| (internal_id, &state.pending)),
+            )
+            .find_map(|(internal_id, pending)| match &pending.continuation {
                 PendingSubresourceContinuation::SharedWorkerFetch {
                     instance_id: pending_instance_id,
                     fetch_id: pending_fetch_id,
@@ -1953,11 +1975,19 @@ impl PageScriptHost {
                     Some(*internal_id)
                 }
                 _ => None,
-            },
-        ) else {
+            })
+        else {
             return false;
         };
-        let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) else {
+        let Some(pending) = self
+            .pending_subresource_fetches
+            .remove(&internal_id)
+            .or_else(|| {
+                self.in_flight_worker_subresource_fetches
+                    .remove(&internal_id)
+                    .map(|state| state.pending)
+            })
+        else {
             return false;
         };
         #[cfg(test)]
