@@ -148,17 +148,27 @@ impl Connector {
             !addresses.is_empty(),
             "WebTransport DNS returned no addresses"
         );
-        let tls = self
-            .inner
-            .tls
-            .get_or_try_init(|| async {
-                let config = config.tls.clone();
-                tokio::task::spawn_blocking(move || crate::tls::configure(&config))
-                    .await
-                    .context("WebTransport TLS configuration task failed")?
-            })
-            .await?;
-        let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls.clone())?;
+        let tls = if options.server_certificate_hashes.is_empty() {
+            self.inner
+                .tls
+                .get_or_try_init(|| async {
+                    let config = config.tls.clone();
+                    tokio::task::spawn_blocking(move || crate::tls::configure(&config))
+                        .await
+                        .context("WebTransport TLS configuration task failed")?
+                })
+                .await?
+                .clone()
+        } else {
+            // A session's explicit pins must never populate the browser's
+            // cached Web PKI verifier or fall back to its configured CA file.
+            let config = config.tls.clone();
+            let hashes = options.server_certificate_hashes;
+            tokio::task::spawn_blocking(move || crate::tls::configure_with_hashes(&config, hashes))
+                .await
+                .context("WebTransport certificate hash configuration task failed")??
+        };
+        let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)?;
         let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
         let mut transport = quinn::TransportConfig::default();
         match options.congestion_control {
@@ -205,6 +215,15 @@ impl Connector {
             let (endpoint, connection) = match result {
                 Ok(connection) => connection,
                 Err(error) => {
+                    // A peer answered with a terminal TLS failure. Do not
+                    // hide a rejected certificate behind another address's
+                    // idle timeout or retry it as a connectivity failure.
+                    if let Some(quinn::ConnectionError::TransportError(transport)) =
+                        error.downcast_ref::<quinn::ConnectionError>()
+                        && (0x100..0x200).contains(&u64::from(transport.code))
+                    {
+                        return Err(error);
+                    }
                     last_error = Some(error);
                     continue;
                 }
