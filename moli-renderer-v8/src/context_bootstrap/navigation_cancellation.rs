@@ -28,6 +28,12 @@ pub(crate) fn inform_about_canceled_navigation_for_window<'s>(
     reason: NavigationCancellationReason,
 ) {
     let owner = runtime_window_owner(scope, window);
+    if matches!(reason, NavigationCancellationReason::WindowStop)
+        && let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        unsafe { &mut *host_ptr }.cancel_pending_lightweight_popup_navigation(popup_id);
+    }
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return;
     };
@@ -42,6 +48,6 @@ pub(crate) fn inform_about_canceled_navigation_for_window<'s>(
     if runtime_window_is_global(scope, owner)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
-        unsafe { &mut *host_ptr }.clear_pending_location_navigation();
+        unsafe { &mut *host_ptr }.cancel_pending_location_navigation();
     }
 }
