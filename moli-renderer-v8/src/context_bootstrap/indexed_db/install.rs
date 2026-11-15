@@ -30,6 +30,7 @@ use anyhow::{Result, anyhow};
 // cursor and schema-handle factories enter their native owner realm themselves.
 
 mod constructors;
+mod event_handlers;
 mod state;
 
 pub(in crate::context_bootstrap) use self::constructors::install_indexed_db_template_bindings;
