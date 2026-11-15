@@ -19,7 +19,7 @@ from ..fixture import FixtureServer
 from ..serve import BrowserProcess, start_browser, stop_browser, wait_for_browser_endpoint
 from ..web_security_fixture import READ
 from .web_security_loaders import observe_loaders
-from .web_security_service_workers import observe_service_workers
+from .web_security_service_workers import observe_stylesheet_redirect
 
 
 ORACLE_VERSION = '156.0.8078.73'
@@ -209,6 +209,7 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
                 await popup.close()
 
             observed.update(await observe_loaders(page,context,source,peer,mode))
+            observed.update(await observe_stylesheet_redirect(page,context,source,peer,mode,service_worker=False))
 
             # Distinct registrable domains exercise default Site Isolation.
             remote_source = source.replace('127.0.0.1','one.test')
@@ -232,7 +233,7 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
             destination = url(target,'echo',key)
             result = await read(page,url(source,'echo',key,sw='redirect',to=destination),init={'mode':'same-origin'})
             observed['sw-redirect-same-origin'] = {'result':result,'requests':peer.web_security.requests(key)}
-            observed.update(await observe_service_workers(page,context,source,peer,mode))
+            observed.update(await observe_stylesheet_redirect(page,context,source,peer,mode,service_worker=True))
         finally:
             await context.close()
             await browser.close()

@@ -1152,6 +1152,20 @@
       9,
       9
     ],
+    "style-redirect": {
+      "result": "loaded",
+      "requests": [
+        {
+          "path": "/web-security/style",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "style"
+        }
+      ]
+    },
     "remote-frame": {
       "source": {
         "origin": "{remote-source}",
@@ -2678,6 +2692,20 @@
       0,
       0
     ],
+    "style-redirect": {
+      "result": "loaded",
+      "requests": [
+        {
+          "path": "/web-security/style",
+          "method": "GET",
+          "origin": "null",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "style"
+        }
+      ]
+    },
     "remote-frame": {
       "source": {
         "origin": "{remote-source}",
