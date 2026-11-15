@@ -996,7 +996,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "style"
         }
       ]
     },
@@ -1023,6 +1024,84 @@
           "cookie": {},
           "author": null,
           "body": ""
+        }
+      ]
+    },
+    "form-no-referrer-top": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "form-no-referrer-iframe": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "form-same-origin-top": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "form-same-origin-iframe": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "origin-audio": {
+      "result": "load",
+      "requests": [
+        {
+          "path": "/web-security/audio",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "audio",
+          "mode": "cors"
+        }
+      ]
+    },
+    "origin-video": {
+      "result": "load",
+      "requests": [
+        {
+          "path": "/web-security/video",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "video",
+          "mode": "cors"
         }
       ]
     },
@@ -1168,6 +1247,20 @@
         "error": "TypeError"
       },
       "requests": []
+    },
+    "sw-style-redirect": {
+      "result": "loaded",
+      "requests": [
+        {
+          "path": "/web-security/style",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "style"
+        }
+      ]
     }
   },
   "disabled": {
@@ -2395,7 +2488,8 @@
           "origin": "{source}",
           "cookie": {},
           "author": null,
-          "body": ""
+          "body": "",
+          "destination": "style"
         }
       ]
     },
@@ -2422,6 +2516,84 @@
           "cookie": {},
           "author": null,
           "body": ""
+        }
+      ]
+    },
+    "form-no-referrer-top": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "form-no-referrer-iframe": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "form-same-origin-top": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "form-same-origin-iframe": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": ""
+      }
+    ],
+    "origin-audio": {
+      "result": "load",
+      "requests": [
+        {
+          "path": "/web-security/audio",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "audio",
+          "mode": "cors"
+        }
+      ]
+    },
+    "origin-video": {
+      "result": "load",
+      "requests": [
+        {
+          "path": "/web-security/video",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "video",
+          "mode": "cors"
         }
       ]
     },
@@ -2645,6 +2817,20 @@
           "cookie": {},
           "author": null,
           "body": ""
+        }
+      ]
+    },
+    "sw-style-redirect": {
+      "result": "loaded",
+      "requests": [
+        {
+          "path": "/web-security/style",
+          "method": "GET",
+          "origin": "null",
+          "cookie": {},
+          "author": null,
+          "body": "",
+          "destination": "style"
         }
       ]
     }

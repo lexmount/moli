@@ -46,6 +46,37 @@ async def observe_loaders(page: Any, context: Any, source: str, peer: FixtureSer
             }''', [kind, destination])
         observed['origin-' + kind] = {'result': result, 'requests': peer.web_security.requests(key)}
 
+    for policy in ('no-referrer', 'same-origin'):
+        for framed in (False, True):
+            await context.clear_cookies()
+            key = f'{mode}-form-{policy}-' + ('iframe' if framed else 'top')
+            await page.goto(resource(source, 'page', key + '-page', policy=policy), wait_until='load')
+            if framed:
+                await page.evaluate('''()=>new Promise(resolve=>{
+                  const frame=document.createElement('iframe');frame.name='formTarget';
+                  frame.onload=resolve;document.body.append(frame);
+                })''')
+            async with page.expect_event('framenavigated', predicate=lambda frame:
+                    frame.name == 'formTarget' if framed else frame == page.main_frame):
+                await page.evaluate('''([url,framed])=>{
+                  const form=document.createElement('form');form.method='POST';form.action=url;
+                  if(framed)form.target='formTarget';document.body.append(form);form.submit();
+                }''', [resource(target, 'echo', key), framed])
+            observed[key.removeprefix(mode + '-')] = peer.web_security.requests(key)
+    await page.goto(source + '/web-security/page', wait_until='load')
+
+    for kind in ('audio', 'video'):
+        await context.clear_cookies()
+        key = mode + '-origin-' + kind
+        result = await page.evaluate('''([kind,url])=>new Promise((resolve,reject)=>{
+          const media=document.createElement(kind);media.crossOrigin='anonymous';media.preload='metadata';
+          const timer=setTimeout(()=>reject(Error('media did not complete')),8000);
+          const finish=value=>{clearTimeout(timer);media.remove();resolve(value);};
+          media.onloadedmetadata=()=>finish('load');media.onerror=()=>finish('error');
+          media.src=url;document.body.append(media);
+        })''', [kind, resource(target, kind, key, cors=1)])
+        observed['origin-' + kind] = {'result': result, 'requests': peer.web_security.requests(key)}
+
     await context.clear_cookies()
     await context.add_cookies([{'name': 'target_cookie', 'value': 'present', 'url': source}])
     key = mode + '-nested-worker'
