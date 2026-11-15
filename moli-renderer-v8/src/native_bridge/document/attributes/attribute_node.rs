@@ -87,23 +87,6 @@ pub(in crate::native_bridge) fn detached_get_attribute_node_ns_method_callback<'
     }
 }
 
-pub(in crate::native_bridge::document) fn bridge_set_attribute_node_for_live_element_callback<
-    'a,
->(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(element) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_null();
-        return;
-    };
-    match live_set_attribute_node(scope, element, args.get(1)) {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
-}
-
 pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
@@ -178,80 +161,6 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
         old.map(Into::into)
             .unwrap_or_else(|| v8::null(scope).into()),
     )
-}
-
-pub(in crate::native_bridge) fn detached_set_attribute_node_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, args.this()) {
-        let mut handled = false;
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if let Some(value) = detached_native_set_attribute_node(scope, args.this(), args.get(0))
-            {
-                rv.set(value);
-                handled = true;
-            }
-        });
-        if handled {
-            return;
-        }
-    }
-    if let Some(value) = detached_native_set_attribute_node(scope, args.this(), args.get(0)) {
-        rv.set(value);
-        return;
-    }
-    match detached_method_forward(scope, args, "__setAttributeNodeForLiveElement") {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
-}
-
-pub(in crate::native_bridge) fn detached_remove_attribute_node_method_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, args.this()) {
-        let mut handled = false;
-        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if let Some(value) =
-                detached_native_remove_attribute_node(scope, args.this(), args.get(0))
-            {
-                rv.set(value);
-                handled = true;
-            }
-        });
-        if handled {
-            return;
-        }
-    }
-    if let Some(value) = detached_native_remove_attribute_node(scope, args.this(), args.get(0)) {
-        rv.set(value);
-        return;
-    }
-    match detached_method_forward(scope, args, "__removeAttributeNodeForLiveElement") {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
-}
-
-pub(in crate::native_bridge::document) fn bridge_remove_attribute_node_for_live_element_callback<
-    'a,
->(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(element) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_null();
-        return;
-    };
-    match live_remove_attribute_node(scope, element, args.get(1)) {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
 }
 
 pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
@@ -948,4 +857,36 @@ pub(in crate::native_bridge::document) fn detached_create_attribute_ns_method_ca
         Some(attr) => rv.set(attr.into()),
         None => rv.set_null(),
     }
+}
+
+pub(in crate::native_bridge) fn set_attribute_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    element: v8::Local<'s, v8::Object>,
+    attr: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
+    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
+    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
+        return live_set_attribute_node(scope, element, attr);
+    }
+    let result = custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        detached_native_set_attribute_node(scope, element, attr)
+    });
+    result.or_else(|| live_set_attribute_node(scope, element, attr))
+}
+
+pub(in crate::native_bridge) fn remove_attribute_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    element: v8::Local<'s, v8::Object>,
+    attr: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = moli_webapi_declare::web_api_object_target(scope, element)?;
+    let (runtime_ptr, _) = node_runtime_and_handle_from_object_or_detached(scope, backing).ok()?;
+    if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
+        return live_remove_attribute_node(scope, element, attr);
+    }
+    let result = custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        detached_native_remove_attribute_node(scope, element, attr)
+    });
+    result.or_else(|| live_remove_attribute_node(scope, element, attr))
 }

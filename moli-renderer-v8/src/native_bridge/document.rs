@@ -112,7 +112,6 @@ use attributes::{
 };
 pub(in crate::native_bridge) use attributes::{
     detached_get_attribute_node_method_callback, detached_get_attribute_node_ns_method_callback,
-    detached_remove_attribute_node_method_callback, detached_set_attribute_node_method_callback,
 };
 use attributes::{
     live_attr_cache_object, namespace_attr_cache_key, new_document_attr_object,
@@ -1637,3 +1636,5 @@ pub(super) fn is_html_document(runtime: &PageScriptHost, handle: DomHandle) -> b
         .and_then(Node::as_document)
         .is_some_and(|document| document.is_html_document())
 }
+
+pub(in crate::native_bridge) use attributes::{remove_attribute_node, set_attribute_node};
