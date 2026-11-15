@@ -36,9 +36,9 @@ use super::{
     diagnostics::ServiceWorkerMainScriptUpdateCheckDiagnostics,
     errors::ServiceWorkerRegistrationError,
     events::{
-        ServiceWorkerDirectFetchResult, ServiceWorkerFetchRequestMetadata,
-        ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent, ServiceWorkerNotificationEvent,
-        ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
+        ServiceWorkerDirectFetchResult, ServiceWorkerFetchCompletion,
+        ServiceWorkerFetchRequestMetadata, ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent,
+        ServiceWorkerNotificationEvent, ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
         ServiceWorkerPushSubscriptionSnapshot, ServiceWorkerRequestDestination,
         ServiceWorkerSyncEvent,
     },
@@ -65,8 +65,8 @@ use super::{
     snapshots::ServiceWorkerRegistrationSnapshot,
     target_output_streams::ServiceWorkerTargetOutputStreams,
     version::{
-        ServiceWorkerIdleTimeout, ServiceWorkerVersion, ServiceWorkerVersionLifecycleState,
-        ServiceWorkerVersionRunningState,
+        ServiceWorkerIdleTimeout, ServiceWorkerPendingStartEvent, ServiceWorkerVersion,
+        ServiceWorkerVersionLifecycleState, ServiceWorkerVersionRunningState,
     },
 };
 
@@ -682,6 +682,12 @@ impl ServiceWorkerRuntimeState {
 pub(super) enum LifecycleProgress {
     Dispatch((SharedRendererServiceWorkerHost, ServiceWorkerLifecycleEvent)),
     TerminateHost(SharedRendererServiceWorkerHost),
+    FailReplacedWorkerEvents(
+        Box<(
+            Vec<ServiceWorkerPendingStartEvent>,
+            Vec<ServiceWorkerFetchCompletion>,
+        )>,
+    ),
     ScheduleIdleTimeout(ServiceWorkerIdleTimeout),
     ReadyCompleted(Box<(ServiceWorkerReadyJob, ServiceWorkerRegistrationSnapshot)>),
     RegisterCompleted(

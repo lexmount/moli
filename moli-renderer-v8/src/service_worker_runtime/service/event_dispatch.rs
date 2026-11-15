@@ -677,7 +677,11 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&version_id) else {
                 return false;
             };
-            if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
+            if !matches!(
+                version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            ) {
                 return false;
             }
             let event_id =
@@ -734,7 +738,11 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return false;
             };
-            if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
+            if !matches!(
+                version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            ) {
                 return false;
             }
             let owner = version.run_owner();
@@ -819,7 +827,11 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return false;
             };
-            if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
+            if !matches!(
+                version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            ) {
                 return false;
             }
             if !sync_record.is_idle() {
@@ -975,7 +987,11 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return false;
             };
-            if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
+            if !matches!(
+                version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            ) {
                 return false;
             }
             let owner = version.run_owner();
@@ -1298,7 +1314,11 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&version_id) else {
                 return false;
             };
-            if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
+            if !matches!(
+                version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            ) {
                 return false;
             }
             let event_id =
@@ -1356,7 +1376,11 @@ impl ServiceWorkerRuntimeService {
             let Some(active_version) = state.versions.get(&active_version_id) else {
                 return false;
             };
-            if active_version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
+            if !matches!(
+                active_version.lifecycle_state,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            ) {
                 return false;
             }
             let target_client = registration

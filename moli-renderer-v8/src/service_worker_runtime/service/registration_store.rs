@@ -191,7 +191,6 @@ impl ServiceWorkerRuntimeService {
                 run: RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );

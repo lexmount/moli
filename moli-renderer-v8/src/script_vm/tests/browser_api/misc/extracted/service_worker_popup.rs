@@ -77,7 +77,7 @@ async fn navigator_service_worker_intercepts_popup_csp_report_destination() {
               });
               (async () => {
                 await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
+                await __moliTestActivatedServiceWorker();
                 window.open("popup.html");
               })().catch((error) => {
                 globalThis.__serviceWorkerPopupCspReportProbe =
@@ -183,7 +183,7 @@ async fn navigator_service_worker_popup_post_message_uses_popup_source_url() {
             const registration = await navigator.serviceWorker.register("worker.js", {
               scope: "./"
             });
-            await navigator.serviceWorker.ready;
+            await __moliTestActivatedServiceWorker();
             const popup = open("popup.html", "sw-source-popup");
             if (!popup) {
               globalThis.__serviceWorkerPopupSourceProbe = "open-null";
@@ -291,6 +291,15 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
               scope: "./"
             });
             await navigator.serviceWorker.ready;
+            {
+              // ready may resolve while activate (and its claim) is still pending.
+              const active = (await navigator.serviceWorker.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
             globalThis.__serviceWorkerOpenWindowProbe = registration.active.state;
           })().catch(error => {
             globalThis.__serviceWorkerOpenWindowProbe = "error:" + String(error);
@@ -455,6 +464,15 @@ async fn service_worker_popup_client_survives_javascript_reopen() {
               scope: "./"
             });
             await navigator.serviceWorker.ready;
+            {
+              // ready may resolve while activate (and its claim) is still pending.
+              const active = (await navigator.serviceWorker.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
             globalThis.__serviceWorkerPopupReopenProbe = registration.active.state;
           })().catch(error => {
             globalThis.__serviceWorkerPopupReopenProbe = "error:" + String(error);
@@ -732,6 +750,15 @@ async fn service_worker_clients_open_window_about_blank_request_creates_no_popup
               scope: "./"
             });
             await navigator.serviceWorker.ready;
+            {
+              // ready may resolve while activate (and its claim) is still pending.
+              const active = (await navigator.serviceWorker.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
             globalThis.__serviceWorkerOpenWindowAboutBlankProbe = registration.active.state;
           })().catch(error => {
             globalThis.__serviceWorkerOpenWindowAboutBlankProbe = "error:" + String(error);
@@ -816,6 +843,15 @@ async fn service_worker_clients_open_window_cross_origin_result_stays_null() {
               scope: "./"
             });
             await navigator.serviceWorker.ready;
+            {
+              // ready may resolve while activate (and its claim) is still pending.
+              const active = (await navigator.serviceWorker.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
             globalThis.__serviceWorkerOpenWindowCrossOriginProbe = registration.active.state;
           })().catch(error => {
             globalThis.__serviceWorkerOpenWindowCrossOriginProbe = "error:" + String(error);
@@ -942,6 +978,15 @@ async fn navigator_service_worker_notification_action_navigate_records_popup_act
             };
             const registration = await sw.register("worker.js", { scope: "./" });
             await sw.ready;
+            {
+              // The browser-owned click request requires a fully activated worker.
+              const active = (await sw.ready).active;
+              if (active.state !== "activated") {
+                await new Promise(resolve => active.addEventListener("statechange", () => {
+                  if (active.state === "activated") resolve();
+                }));
+              }
+            }
             await registration.showNotification("navigate", {
               actions: [
                 { action: "reply", title: "Reply", navigate: "about:blank" }
@@ -975,9 +1020,16 @@ async fn navigator_service_worker_notification_action_navigate_records_popup_act
         )
     );
 
-    drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
-
-    let popups = vm.take_pending_popup_activations();
+    // Earlier controller notifications can still precede the click request.
+    // Advance the production FIFO until its observable popup result arrives.
+    let mut popups = Vec::new();
+    for _ in 0..64 {
+        drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
+        popups = vm.take_pending_popup_activations();
+        if !popups.is_empty() {
+            break;
+        }
+    }
     assert_eq!(popups.len(), 1);
     assert!(popups[0].popup_id().is_some());
     assert_eq!(popups[0].url(), "about:blank");

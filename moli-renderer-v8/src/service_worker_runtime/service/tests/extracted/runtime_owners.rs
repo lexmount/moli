@@ -343,7 +343,6 @@ fn idle_timeout_is_ignored_after_new_event_invalidates_timeout_token() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -420,7 +419,6 @@ fn stopped_waiting_activation_queues_lifecycle_event_and_starts_worker() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -447,7 +445,6 @@ fn stopped_waiting_activation_queues_lifecycle_event_and_starts_worker() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: true,
-                clients_claim_requested: false,
                 last_start_error: Some("previous idle stop".to_owned()),
             },
         );
@@ -478,9 +475,13 @@ fn stopped_waiting_activation_queues_lifecycle_event_and_starts_worker() {
         )),
         "activation start should refresh target status to activating: {activation_start_events:?}"
     );
-    let ServiceWorkerLifecycleStart::Start(launch) = start else {
-        panic!("expected stopped waiting activation to start worker");
-    };
+    let launch = start
+        .into_iter()
+        .find_map(|progress| match progress {
+            LifecycleProgress::StartWorker(launch) => Some(launch),
+            _ => None,
+        })
+        .expect("expected stopped waiting activation to start worker");
     assert_eq!(launch.params.registration_id, registration_id);
     assert_eq!(launch.params.run_owner.version_id(), waiting_version_id);
     let restarted_run = launch.params.run_owner.cloned_run_identity();
@@ -492,8 +493,8 @@ fn stopped_waiting_activation_queues_lifecycle_event_and_starts_worker() {
 
     let state = service.inner.state.lock();
     let registration = state.registrations.get(&registration_id).unwrap();
-    assert_eq!(registration.active_version_id, Some(active_version_id));
-    assert_eq!(registration.waiting_version_id, Some(waiting_version_id));
+    assert_eq!(registration.active_version_id, Some(waiting_version_id));
+    assert_eq!(registration.waiting_version_id, None);
     let waiting = state.versions.get(&waiting_version_id).unwrap();
     assert_eq!(
         waiting.lifecycle_state,
@@ -573,7 +574,6 @@ fn stale_start_completion_does_not_dispatch_pending_lifecycle_activation() {
                 run: RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -606,7 +606,6 @@ fn stale_start_completion_does_not_dispatch_pending_lifecycle_activation() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: true,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -700,12 +699,31 @@ fn activating_new_worker_destroys_replaced_active_target() {
                 run: waiting_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: true,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
     }
 
+    publish_activating_version_for_test(&service, registration_id, waiting_version_id);
+    {
+        let state = service.inner.state.lock();
+        assert_eq!(
+            state
+                .registrations
+                .get(&registration_id)
+                .unwrap()
+                .active_version_id,
+            Some(waiting_version_id)
+        );
+        assert_eq!(
+            state
+                .versions
+                .get(&active_version_id)
+                .unwrap()
+                .lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Redundant
+        );
+    }
     service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
         event_id: ServiceWorkerEventId(2),
         owner: test_run_owner(waiting_version_id, &waiting_run),

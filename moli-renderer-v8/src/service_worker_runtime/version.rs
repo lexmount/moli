@@ -62,13 +62,13 @@ pub(super) struct ServiceWorkerVersion {
     pub(super) launch_config: ServiceWorkerVersionLaunchConfig,
     pub(super) lifecycle_state: ServiceWorkerVersionLifecycleState,
     pub(super) running_state: ServiceWorkerVersionRunningState,
+    /// Events waiting for worker bootstrap or for activate to finish.
     pub(super) pending_start_events: VecDeque<ServiceWorkerPendingStartEvent>,
     pub(super) pending_activation_fetch_events: VecDeque<ServiceWorkerFetchEvent>,
     pub(super) in_flight_event_count: usize,
     pub(super) run: RendererServiceWorkerRunIdentity,
     pub(super) idle_timeout_token: Option<ServiceWorkerIdleTimeoutToken>,
     pub(super) skip_waiting_requested: bool,
-    pub(super) clients_claim_requested: bool,
     pub(super) last_start_error: Option<String>,
 }
 

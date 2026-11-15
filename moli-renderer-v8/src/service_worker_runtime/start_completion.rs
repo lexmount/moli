@@ -160,7 +160,8 @@ enum ServiceWorkerRuntimeCompletionKind {
     },
     ClientsClaimRequested {
         registration_id: ServiceWorkerRegistrationId,
-        version_id: ServiceWorkerVersionId,
+        owner: ServiceWorkerRunOwner,
+        request_id: u64,
     },
 }
 
@@ -586,13 +587,15 @@ impl ServiceWorkerRuntimeCompletion {
     pub(super) fn clients_claim_requested(
         runtime_service: WeakServiceWorkerRuntimeService,
         registration_id: ServiceWorkerRegistrationId,
-        version_id: ServiceWorkerVersionId,
+        owner: ServiceWorkerRunOwner,
+        request_id: u64,
     ) -> Self {
         Self {
             runtime_service,
             kind: ServiceWorkerRuntimeCompletionKind::ClientsClaimRequested {
                 registration_id,
-                version_id,
+                owner,
+                request_id,
             },
         }
     }
@@ -817,10 +820,13 @@ impl ServiceWorkerRuntimeCompletion {
                 .finish_worker_skip_waiting_requested(registration_id, version_id),
             ServiceWorkerRuntimeCompletionKind::ClientsClaimRequested {
                 registration_id,
-                version_id,
-            } => self
-                .runtime_service
-                .finish_worker_clients_claim_requested(registration_id, version_id),
+                owner,
+                request_id,
+            } => self.runtime_service.finish_clients_claim_requested(
+                registration_id,
+                owner,
+                request_id,
+            ),
         }
     }
 }
@@ -1079,11 +1085,13 @@ impl fmt::Debug for ServiceWorkerRuntimeCompletion {
                 .finish(),
             ServiceWorkerRuntimeCompletionKind::ClientsClaimRequested {
                 registration_id,
-                version_id,
+                owner,
+                request_id,
             } => f
                 .debug_struct("ServiceWorkerRuntimeCompletion::ClientsClaimRequested")
                 .field("registration_id", registration_id)
-                .field("version_id", version_id)
+                .field("owner", owner)
+                .field("request_id", request_id)
                 .finish(),
         }
     }

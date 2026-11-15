@@ -287,6 +287,95 @@ fn local_worker_client_inherits_parent_controller_and_keeps_creation_url() {
     );
 }
 #[test]
+fn clients_claim_is_applied_during_pending_activation() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let page_url = url("https://example.test/app/page.html");
+    let client_id = register_client_for_test(&service, page_url.clone());
+    let expected = insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [],
+    );
+    {
+        let mut state = service.inner.state.lock();
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        registration.active_version_id = None;
+        registration.waiting_version_id = Some(version_id);
+        state.versions.get_mut(&version_id).unwrap().lifecycle_state =
+            ServiceWorkerVersionLifecycleState::Installed;
+        let activation =
+            service.try_activate_waiting_version_locked(&mut state, registration_id, version_id);
+        assert!(activation.is_some());
+        let registration = state.registrations.get(&registration_id).unwrap();
+        assert_eq!(registration.active_version_id, Some(version_id));
+        assert_eq!(registration.waiting_version_id, None);
+        assert_eq!(
+            state.versions.get(&version_id).unwrap().lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Activating
+        );
+    }
+    service.finish_worker_clients_claim_requested(registration_id, version_id);
+    assert_eq!(
+        service.matching_controller_for_client(client_id),
+        Some(expected)
+    );
+}
+
+#[test]
+fn clients_claim_request_requires_current_run_and_active_lifecycle_state() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let page_url = url("https://example.test/app/page.html");
+    let client_id = register_client_for_test(&service, page_url);
+    let expected = insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [],
+    );
+    let owner = {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        let owner = version.run_owner();
+        version.running_state = ServiceWorkerVersionRunningState::Running {
+            host: RendererServiceWorkerHost::new_running_without_handle_for_test(&owner),
+        };
+        owner
+    };
+    service.finish_clients_claim_requested(
+        registration_id,
+        ServiceWorkerRunOwner::fresh(version_id),
+        1,
+    );
+    assert_eq!(service.matching_controller_for_client(client_id), None);
+    {
+        let mut state = service.inner.state.lock();
+        state.versions.get_mut(&version_id).unwrap().lifecycle_state =
+            ServiceWorkerVersionLifecycleState::Installing;
+    }
+    service.finish_clients_claim_requested(registration_id, owner.clone(), 2);
+    assert_eq!(service.matching_controller_for_client(client_id), None);
+    {
+        let mut state = service.inner.state.lock();
+        state.versions.get_mut(&version_id).unwrap().lifecycle_state =
+            ServiceWorkerVersionLifecycleState::Activated;
+    }
+    service.finish_clients_claim_requested(registration_id, owner, 3);
+    assert_eq!(
+        service.matching_controller_for_client(client_id),
+        Some(expected)
+    );
+}
+
+#[test]
 fn clients_claim_controls_live_scope_clients_only_for_active_version() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
@@ -1524,7 +1613,6 @@ fn client_query_requires_exact_active_controller_version() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2336,7 +2424,6 @@ fn unregister_last_controlled_client_queues_waiting_activation() {
                 run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2363,7 +2450,6 @@ fn unregister_last_controlled_client_queues_waiting_activation() {
                 run: waiting_run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -2376,8 +2462,8 @@ fn unregister_last_controlled_client_queues_waiting_activation() {
     assert!(!state.live_clients.contains_key(&client_id));
     let registration = state.registrations.get(&registration_id).unwrap();
     assert!(registration.controlled_client_ids.is_empty());
-    assert_eq!(registration.active_version_id, Some(active_version_id));
-    assert_eq!(registration.waiting_version_id, Some(waiting_version_id));
+    assert_eq!(registration.active_version_id, Some(waiting_version_id));
+    assert_eq!(registration.waiting_version_id, None);
     let waiting = state.versions.get(&waiting_version_id).unwrap();
     assert_eq!(
         waiting.lifecycle_state,
@@ -3044,7 +3130,6 @@ fn message_completion_releases_event_accounting_and_can_idle_stop() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
@@ -3120,7 +3205,6 @@ fn notification_action_navigate_routes_to_page_owner_without_click_event() {
                 run: run.clone(),
                 idle_timeout_token: None,
                 skip_waiting_requested: false,
-                clients_claim_requested: false,
                 last_start_error: None,
             },
         );
