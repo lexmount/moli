@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use url::Url;
 
+mod cross_origin_isolation;
+use cross_origin_isolation::CrossOriginIsolationPermission;
+
 /// Policy-controlled features that currently have observable renderer behavior.
 ///
 /// Keep the declared tools allowlist alongside effective permissions: a
@@ -9,7 +12,8 @@ use url::Url;
 pub(crate) struct DocumentPermissionsPolicy {
     gamepad: bool,
     tools: bool,
-    tools_allowlist: Option<ToolsAllowlist>,
+    tools_allowlist: Option<OriginAllowlist>,
+    cross_origin_isolation: CrossOriginIsolationPermission,
 }
 
 impl Default for DocumentPermissionsPolicy {
@@ -18,11 +22,16 @@ impl Default for DocumentPermissionsPolicy {
             gamepad: true,
             tools: true,
             tools_allowlist: None,
+            cross_origin_isolation: CrossOriginIsolationPermission::default(),
         }
     }
 }
 
 impl DocumentPermissionsPolicy {
+    pub(crate) fn cross_origin_isolated_enabled(&self) -> bool {
+        self.cross_origin_isolation.enabled()
+    }
+
     pub(crate) const fn gamepad_enabled(&self) -> bool {
         self.gamepad
     }
@@ -36,6 +45,9 @@ impl DocumentPermissionsPolicy {
             gamepad: self.gamepad && other.gamepad,
             tools: self.tools && other.tools,
             tools_allowlist: other.tools_allowlist.clone(),
+            cross_origin_isolation: self
+                .cross_origin_isolation
+                .intersect(&other.cross_origin_isolation),
         }
     }
 
@@ -52,11 +64,16 @@ impl DocumentPermissionsPolicy {
                 let Some((feature, allowlist)) = directive.split_once('=') else {
                     continue;
                 };
+                if feature.trim().eq_ignore_ascii_case("cross-origin-isolated") {
+                    policy
+                        .cross_origin_isolation
+                        .declare(allowlist, document_url);
+                }
                 if feature.trim().eq_ignore_ascii_case("gamepad") {
                     policy.gamepad = response_allowlist_allows_document(allowlist, document_url);
                 }
                 if feature.trim().eq_ignore_ascii_case("tools") {
-                    policy.tools_allowlist = response_tools_allowlist(allowlist);
+                    policy.tools_allowlist = response_origin_allowlist(allowlist);
                     policy.tools =
                         policy.tools_allows_origin(&document_url.origin(), &document_url.origin());
                 }
@@ -96,12 +113,19 @@ impl DocumentPermissionsPolicy {
                 && self.tools_allows_origin(child_origin, parent_origin)
                 && tools,
             tools_allowlist: None,
+            cross_origin_isolation: self.cross_origin_isolation.delegated_to_child(
+                parent_origin,
+                child_origin,
+                source_origin,
+                allow_attribute,
+            ),
         }
     }
 
     pub(crate) fn for_document_origin(&self, origin: &url::Origin) -> Self {
         Self {
             tools: self.tools && self.tools_allows_origin(origin, origin),
+            cross_origin_isolation: self.cross_origin_isolation.for_document_origin(origin),
             ..self.clone()
         }
     }
@@ -114,12 +138,12 @@ impl DocumentPermissionsPolicy {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ToolsAllowlist {
+struct OriginAllowlist {
     matches_self: bool,
     origins: Arc<[url::Origin]>,
 }
 
-fn response_tools_allowlist(value: &str) -> Option<ToolsAllowlist> {
+fn response_origin_allowlist(value: &str) -> Option<OriginAllowlist> {
     let value = value.trim();
     if value == "*" {
         return None;
@@ -128,7 +152,7 @@ fn response_tools_allowlist(value: &str) -> Option<ToolsAllowlist> {
         .strip_prefix('(')
         .and_then(|value| value.strip_suffix(')'))
     else {
-        return Some(ToolsAllowlist {
+        return Some(OriginAllowlist {
             matches_self: false,
             origins: Arc::from([]),
         });
@@ -147,7 +171,7 @@ fn response_tools_allowlist(value: &str) -> Option<ToolsAllowlist> {
             origins.push(url.origin());
         }
     }
-    Some(ToolsAllowlist {
+    Some(OriginAllowlist {
         matches_self,
         origins: origins.into(),
     })
