@@ -38,8 +38,9 @@ READ = """async function read(url, api='fetch', init={}) {
 
 
 class WebSecurityFixture:
-    def __init__(self, image: bytes) -> None:
+    def __init__(self, image: bytes, media: bytes) -> None:
         self._image = image
+        self._media = media
         self._lock = threading.Lock()
         self._requests: dict[str, list[dict[str, Any]]] = {}
 
@@ -60,8 +61,11 @@ class WebSecurityFixture:
                     'cookie':cookies, 'author':headers.get('x-author'),
                     'body':body.decode('utf-8'),
                 }
-                if parsed.path == '/web-security/module.js':
+                if parsed.path in ('/web-security/module.js', '/web-security/style',
+                                   '/web-security/audio', '/web-security/video'):
                     observed['destination'] = headers.get('sec-fetch-dest')
+                if parsed.path in ('/web-security/audio', '/web-security/video'):
+                    observed['mode'] = headers.get('sec-fetch-mode')
                 self._requests.setdefault(case, []).append(observed)
         status, mime, payload = 200, 'text/plain', 'payload'
         extra = {'X-Secret':'visible', 'Set-Cookie':'hidden=1; Path=/; SameSite=Lax'}
@@ -81,6 +85,8 @@ class WebSecurityFixture:
             mime, payload = 'application/json', json.dumps(self.requests(query['for'][0]))
         elif route == 'image':
             mime, payload = 'image/png', self._image
+        elif route in ('audio', 'video'):
+            mime, payload = 'audio/wav', self._media
         elif route == 'font':
             mime, payload = 'font/woff2', (REPO_ROOT / 'moli-layout/tests/fixtures/moli-ahem.woff2').read_bytes()
         elif route == 'style':
@@ -91,6 +97,8 @@ class WebSecurityFixture:
             payload = '123456789'
         elif route in ('page', 'csp'):
             mime, payload = 'text/html', '<!doctype html><title>web security</title><main>payload</main>'
+            if 'policy' in query:
+                extra['Referrer-Policy'] = query['policy'][0]
             if route == 'csp':
                 extra['Content-Security-Policy'] = "connect-src 'self'"
         elif route == 'worker.js':

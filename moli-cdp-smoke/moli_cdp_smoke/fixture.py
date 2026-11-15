@@ -507,7 +507,7 @@ class ProxyAuthFixtureServer:
 
 class FixtureServer:
     def __init__(self) -> None:
-        self.web_security = WebSecurityFixture(TRANSPARENT_PNG)
+        self.web_security = WebSecurityFixture(TRANSPARENT_PNG, FETCH_MEDIA_WAV)
         self.profile_requests: dict[str, dict[str, Any]] = {}
         self.navigation_redirect_requests: dict[str, list[dict[str, Any]]] = {}
         self._counter_lock = threading.Lock()

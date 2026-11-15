@@ -19,6 +19,7 @@ from ..fixture import FixtureServer
 from ..serve import BrowserProcess, start_browser, stop_browser, wait_for_browser_endpoint
 from ..web_security_fixture import READ
 from .web_security_loaders import observe_loaders
+from .web_security_service_workers import observe_service_workers
 
 
 ORACLE_VERSION = '156.0.8078.73'
@@ -231,6 +232,7 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
             destination = url(target,'echo',key)
             result = await read(page,url(source,'echo',key,sw='redirect',to=destination),init={'mode':'same-origin'})
             observed['sw-redirect-same-origin'] = {'result':result,'requests':peer.web_security.requests(key)}
+            observed.update(await observe_service_workers(page,context,source,peer,mode))
         finally:
             await context.close()
             await browser.close()
