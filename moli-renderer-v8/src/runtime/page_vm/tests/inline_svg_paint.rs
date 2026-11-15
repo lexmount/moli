@@ -100,6 +100,68 @@ async fn inline_svg_negative_intrinsic_lengths_respect_css_viewport_sizes() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_svg_ranges_use_shaped_source_cells() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/svg-text-ranges.html")?,
+        );
+        page_vm.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>html,body{margin:0}svg{display:block}text{font:20px monospace}</style>';
+            document.body.innerHTML = `<svg width="600" height="400">
+                <text id="plain" x="20" y="40">MMMM</text>
+                <text id="scaled" x="20" y="50" transform="matrix(2,0,0,2,7,11)">MMMM</text>
+                <text id="rotated" x="20" y="150" rotate="45">MMMM</text>
+                <text id="nested" x="20" y="220">MM<tspan>MM</tspan></text>
+                <text id="adjacent" x="20" y="280">MMMM</text>
+                <text id="spaces" x="20" y="340">   MMMM   </text>
+            </svg>`;
+            document.getElementById('adjacent').firstChild.splitText(2);
+            'installed'
+        "#)?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(600, 400, 1.0))?.unwrap();
+        let parsed = crate::layout_renderer::svg_parse_count();
+        let observed = page_vm.vm_mut().eval(r#"(() => {
+            const close = (actual, expected) => {
+                if (Math.abs(actual - expected) > 0.02) throw new Error(`${actual} != ${expected}`);
+            };
+            const rangeRect = (node, start, end) => {
+                const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end);
+                return range.getBoundingClientRect();
+            };
+            for (const id of ['plain','scaled','rotated']) {
+                const element = document.getElementById(id);
+                const full = element.getBoundingClientRect();
+                const selected = rangeRect(element.firstChild, 0, 4);
+                if (selected.width <= 0 || selected.height <= 0) throw new Error(`empty ${id}`);
+                for (const key of ['x','y','width','height']) close(selected[key], full[key]);
+                const part = rangeRect(element.firstChild, 1, 3);
+                if (part.width <= 0 || part.width >= full.width) throw new Error(`partial ${id}`);
+            }
+            for (const id of ['plain','scaled','adjacent','nested','spaces']) {
+                const element = document.getElementById(id);
+                const full = element.getBoundingClientRect();
+                const node = element.firstChild;
+                const start = id === 'spaces' ? 3 : 0;
+                const firstHalf = rangeRect(node, start, start + 2);
+                close(firstHalf.x, full.x); close(firstHalf.width, full.width / 2);
+                close(firstHalf.height, full.height);
+                if (id === 'adjacent' || id === 'nested') {
+                    const second = id === 'adjacent' ? node.nextSibling : element.lastChild.firstChild;
+                    const secondHalf = rangeRect(second, 0, 2);
+                    close(secondHalf.x, firstHalf.right); close(secondHalf.width, firstHalf.width);
+                }
+            }
+            return true;
+        })()"#)?;
+        assert_eq!(observed, "true");
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed, "Range and Element reads must share the same frozen SVG scene");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("SVG ranges must retain shaped metrics, source offsets and transforms");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inline_svg_zoom_preserves_font_and_stroke_user_units() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

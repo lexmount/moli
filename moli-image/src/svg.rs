@@ -22,10 +22,21 @@ pub struct SvgObjectGeometry {
     pub transform: [f32; 6],
 }
 
+/// A shaped cell mapped to UTF-16 offsets in an original XML text node.
+#[derive(Clone, Debug)]
+pub struct SvgTextGeometry {
+    pub text_index: usize,
+    pub utf16_range: std::ops::Range<usize>,
+    pub rtl: bool,
+    pub bounds: [f32; 4],
+    pub transform: [f32; 6],
+}
+
 /// Paint and source geometry produced by one bounded inline SVG parse.
 pub struct SvgScene {
     pub image: SvgImage,
     pub objects: Vec<SvgObjectGeometry>,
+    pub text: Vec<SvgTextGeometry>,
 }
 
 /// Maximum encoded SVG body admitted to the static image decoder.
@@ -391,19 +402,37 @@ pub fn decode_inline_svg_scene(
         ..Default::default()
     };
     let mut tree = usvg::Tree::from_xmltree(&xml, &options)?;
-    let objects = tree
-        .take_object_geometry()
-        .into_iter()
-        .filter_map(|geometry| {
-            let rect = geometry.bounding_box;
-            let t = geometry.transform;
-            Some(SvgObjectGeometry {
-                element_index: *sources.get(&geometry.source)?,
-                bounds: [rect.x(), rect.y(), rect.width(), rect.height()],
-                transform: [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty],
-            })
-        })
-        .collect();
+    let text_sources = xml
+        .descendants()
+        .filter(|node| node.is_text())
+        .enumerate()
+        .map(|(index, node)| (node.id(), index))
+        .collect::<HashMap<_, _>>();
+    let mut objects = Vec::new();
+    let mut text = Vec::new();
+    for geometry in tree.take_object_geometry() {
+        let rect = geometry.bounding_box;
+        let t = geometry.transform;
+        let bounds = [rect.x(), rect.y(), rect.width(), rect.height()];
+        let transform = [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty];
+        if let Some(range) = geometry.text_range {
+            if let Some(&text_index) = text_sources.get(&geometry.source) {
+                text.push(SvgTextGeometry {
+                    text_index,
+                    utf16_range: range.start..range.end,
+                    rtl: range.rtl,
+                    bounds,
+                    transform,
+                });
+            }
+        } else if let Some(&element_index) = sources.get(&geometry.source) {
+            objects.push(SvgObjectGeometry {
+                element_index,
+                bounds,
+                transform,
+            });
+        }
+    }
     let metadata = SvgImageMetadata {
         intrinsic_width: Some(viewport.0),
         intrinsic_height: Some(viewport.1),
@@ -419,6 +448,7 @@ pub fn decode_inline_svg_scene(
             fonts: SvgFonts::clone(fonts),
         },
         objects,
+        text,
     })
 }
 

@@ -63,7 +63,7 @@ pub use layout_tree::{
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
     LayoutQueryBatch, LayoutRect, LayoutResizeObserverBox, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
     LayoutResolvedGridTrackList, LayoutResolvedGridTracks, LayoutScrollContainerMetrics,
-    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D,
+    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTextGeometryRange, LayoutTransform2D,
     LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
     MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES, ScrollProjectionRefresh,
 };
@@ -104,7 +104,7 @@ pub use source::{
     LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink, LayoutImageResource,
     LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
     LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutSvgContent,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutSvgObject, LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
     ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, html_display_contents_is_none,
 };
 pub use style::{

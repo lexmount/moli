@@ -669,7 +669,14 @@ pub trait LayoutSource {
 /// Geometry and paint sampled from the same inline SVG input.
 pub struct LayoutSvgContent<N> {
     pub image: Option<LayoutImageResource>,
-    pub objects: Vec<(N, crate::LayoutQuad)>,
+    pub objects: Vec<LayoutSvgObject<N>>,
+}
+
+/// Numeric source geometry sampled with the SVG paint resource.
+pub struct LayoutSvgObject<N> {
+    pub source: N,
+    pub quad: crate::LayoutQuad,
+    pub text_range: Option<crate::LayoutTextGeometryRange>,
 }
 
 /// One element's primary style and the pseudo styles eagerly cascaded with it.
