@@ -48,7 +48,10 @@ impl StylesheetFetchOptions {
         Self(Arc::new(StylesheetFetchOptionsData {
             cross_origin: normalize_cross_origin(cross_origin),
             referrer_policy: normalize_token(referrer_policy),
-            integrity: normalize_preserved_value(integrity),
+            // Fetch exposes the original string even when it contains only spaces.
+            integrity: integrity
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             nonce: normalize_preserved_value(nonce),
             charset: normalize_token(charset),
             fetch_priority: normalize_token(fetch_priority),
