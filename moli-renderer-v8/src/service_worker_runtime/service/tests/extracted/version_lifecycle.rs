@@ -1319,6 +1319,7 @@ fn activate_completion_does_not_clear_newer_installing_version() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: installing_script_url.clone(),
@@ -1433,6 +1434,7 @@ fn activate_completion_does_not_clear_newer_waiting_version() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: waiting_script_url.clone(),
@@ -1657,6 +1659,7 @@ fn update_install_waits_when_existing_active_version_has_not_been_skipped() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: installing_script_url.clone(),
@@ -1829,6 +1832,7 @@ fn force_update_install_skips_waiting_even_with_active_controllee() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: installing_script_url.clone(),
@@ -1938,6 +1942,7 @@ fn update_install_activates_when_existing_active_has_no_controllees() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: installing_script_url.clone(),
@@ -2043,6 +2048,7 @@ fn activate_completion_queues_service_worker_target_activated_version_update() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -2149,6 +2155,7 @@ fn skip_waiting_update_activation_replaces_previous_active_version() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: waiting_script_url.clone(),

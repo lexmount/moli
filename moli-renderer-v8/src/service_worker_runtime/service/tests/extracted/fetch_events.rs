@@ -719,6 +719,7 @@ fn pending_unregistration_waits_for_active_fetch_to_complete_before_delete() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1187,6 +1188,7 @@ fn restart_start_failure_rejects_pending_fetch_job() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -1949,6 +1951,7 @@ fn no_fetch_handler_controlled_fetch_falls_back_without_dispatching_event() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -2406,6 +2409,7 @@ fn fetch_completion_schedules_idle_timeout_for_running_active_worker() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -2637,6 +2641,7 @@ fn active_fetch_completion_queues_waiting_activation_after_controllees_are_gone(
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: waiting_script_url.clone(),
@@ -2826,6 +2831,7 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: waiting_script_url.clone(),
