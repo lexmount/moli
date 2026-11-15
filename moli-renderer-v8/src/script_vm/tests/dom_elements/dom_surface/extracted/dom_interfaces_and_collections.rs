@@ -1336,7 +1336,7 @@ fn tag_name_live_collections_track_create_clone_import_and_adopt_identities() {
     );
 }
 #[test]
-fn attr_to_string_method_matches_declared_surface() {
+fn attr_to_string_inherits_object_stringifier() {
     let mut vm = new_storage_test_vm("https://attr-to-string-declared-surface.test/");
 
     let result = vm
@@ -1345,8 +1345,9 @@ fn attr_to_string_method_matches_declared_surface() {
 (() => {
   const attr = document.createAttribute("data-value");
   attr.value = "one";
-  const descriptor = Object.getOwnPropertyDescriptor(Attr.prototype, "toString");
+  const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, "toString");
   return JSON.stringify({
+    inherited: attr.toString === Object.prototype.toString,
     descriptor: [
       typeof descriptor.value,
       descriptor.value.name,
@@ -1364,11 +1365,11 @@ fn attr_to_string_method_matches_declared_surface() {
 })()
 "#,
         )
-        .expect("Attr.prototype.toString descriptor probe should evaluate");
+        .expect("Attr inherited toString descriptor probe should evaluate");
 
     assert_eq!(
         result,
-        r#"{"descriptor":["function","toString",0,false,true,true],"enumerableKeys":false,"ownNamesInclude":true,"attrString":"[object Attr]","objectString":"[object Attr]","fakeReceiverString":"[object Attr]"}"#
+        r#"{"inherited":true,"descriptor":["function","toString",0,false,true,true],"enumerableKeys":false,"ownNamesInclude":false,"attrString":"[object Attr]","objectString":"[object Attr]","fakeReceiverString":"[object Object]"}"#
     );
 }
 #[test]
