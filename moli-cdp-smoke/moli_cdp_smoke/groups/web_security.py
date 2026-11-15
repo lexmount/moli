@@ -289,10 +289,13 @@ async def run_web_security_group(endpoint: str, fixture: str, results: list[dict
     peer = FixtureServer()
     peer.start()
     try:
-        defaults = await observe_mode(endpoint,fixture,peer,results,False)
         disabled_process = await start_browser(extra_args=browser_args(fixture,True))
         try:
-            enabled = await observe_mode(await wait_for_browser_endpoint(disabled_process),fixture,peer,results,True)
+            disabled_endpoint = await wait_for_browser_endpoint(disabled_process)
+            defaults, enabled = await asyncio.gather(
+                observe_mode(endpoint,fixture,peer,results,False),
+                observe_mode(disabled_endpoint,fixture,peer,results,True),
+            )
         finally:
             await stop_browser(disabled_process)
         expected = json.loads(CONTRACTS.read_text())
