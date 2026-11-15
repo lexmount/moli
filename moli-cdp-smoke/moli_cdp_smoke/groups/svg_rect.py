@@ -10,6 +10,28 @@ from ..diagnostics import new_cdp_session
 from ..png_image import decode_png
 
 
+async def _check_svg_viewport_sizes(page: Any, results: list[dict[str, Any]]) -> None:
+    fixture = (REPO_ROOT / "moli-renderer-v8/tests/fixtures/inline-svg-viewport-sizes.js").read_text()
+    metadata = await page.evaluate(f"{fixture}\ninstallSvgViewportSizes()")
+    await page.set_viewport_size({"width": metadata["width"], "height": metadata["height"]})
+    session = await new_cdp_session(page.context, page)
+    try:
+        response = await session.send("Page.captureScreenshot", {"format": "png"})
+        image = decode_png(base64.b64decode(response["data"]))
+        for case in metadata["cases"]:
+            name, top, size = case["name"], case["top"], case["size"]
+            observed = await page.evaluate("name => readSvgViewportSize(name)", name)
+            assert_equal(observed, [0, top, *size], name + " viewport")
+            color = (255, 0, 0, 255) if all(size) else (255, 255, 255, 255)
+            assert_equal(image.pixel(10, top + 10), color, name + " paint")
+            record_contract(results, "svg/viewport_sizes/" + name, observed=observed,
+                            contract="Negative SVG intrinsic lengths are zero; CSS and viewBox sizing determine the used viewport and paint.",
+                            source="Chromium 145.0.7632.6 executable comparison (2026-11-15)",
+                            commands=["Runtime.evaluate", "Page.captureScreenshot"])
+    finally:
+        await session.detach()
+
+
 async def _check_svg_scene_inputs(page: Any, results: list[dict[str, Any]], kind: str) -> None:
     fixture = (REPO_ROOT / "moli-renderer-v8/tests/fixtures/inline-svg-scene-inputs.js").read_text()
     metadata = await page.evaluate(f"{fixture}\ninstallSvgSceneInputs('{kind}')")
@@ -175,5 +197,6 @@ async def run_svg_rect_group(
         await _check_inline_svg(page, results)
         await _check_svg_scene_inputs(page, results, "template")
         await _check_svg_scene_inputs(page, results, "units")
+        await _check_svg_viewport_sizes(page, results)
     finally:
         await context.close()

@@ -32,8 +32,8 @@ const SERIALIZED_SOURCE_FIXED_INJECTION_RESERVE: usize = 512;
 
 pub(super) fn replaced_metrics(element: &Element) -> ReplacedMetrics {
     let metadata = moli_image::svg_image_metadata_from_root_attributes(
-        element.attribute("width"),
-        element.attribute("height"),
+        element.attribute("width").map(intrinsic_size_attribute),
+        element.attribute("height").map(intrinsic_size_attribute),
         element.attribute("viewBox"),
     );
     ReplacedMetrics {
@@ -42,6 +42,22 @@ pub(super) fn replaced_metrics(element: &Element) -> ReplacedMetrics {
         attribute_width: None,
         attribute_height: None,
         intrinsic_ratio: metadata.intrinsic_ratio,
+    }
+}
+
+fn intrinsic_size_attribute(value: &str) -> &str {
+    // Negative intrinsic lengths are zero, not a missing natural dimension
+    // that can fall back to 300x150. Keep this in natural sizing so author CSS
+    // (including min-width/height) still determines the final scene viewport.
+    // Percentages have no intrinsic length and retain their existing fallback.
+    if moli_svg::parse_length(value).is_some_and(|length| {
+        length.value.is_finite()
+            && length.value < 0.0
+            && length.unit != moli_svg::SvgLengthUnit::Percentage
+    }) {
+        "0"
+    } else {
+        value
     }
 }
 
