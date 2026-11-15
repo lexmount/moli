@@ -611,6 +611,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
 fn start_worker_module_graph_fetch(
     request: WorkerModuleGraphFetchRequest,
     loader: WorkerResourceLoader,
+    worker_destination: moli_fetch::BrowserRequestMetadata,
     worker_origin: moli_url::WebOrigin,
     outside_origin: Option<moli_url::WebOrigin>,
     network_partition_key: Option<String>,
@@ -673,7 +674,10 @@ fn start_worker_module_graph_fetch(
         );
         return;
     }
-    let browser_request_metadata = request.browser_request_metadata();
+    let browser_request_metadata = match request.browser_request_metadata() {
+        moli_fetch::BrowserRequestMetadata::Worker => worker_destination,
+        metadata => metadata,
+    };
     let mut fetch_request =
         match moli_fetch::Request::new("GET", request.url().as_str(), None, vec![]) {
             Ok(request) => request
@@ -868,6 +872,13 @@ fn flush_worker_module_fetches(
         start_worker_module_graph_fetch(
             request,
             state.borrow().loader.clone(),
+            match state.borrow().global_kind {
+                WorkerGlobalKind::Dedicated { .. } => moli_fetch::BrowserRequestMetadata::Worker,
+                WorkerGlobalKind::Shared { .. } => moli_fetch::BrowserRequestMetadata::SharedWorker,
+                WorkerGlobalKind::Service { .. } => {
+                    moli_fetch::BrowserRequestMetadata::ServiceWorker
+                }
+            },
             state.borrow().request_origin(),
             state.borrow().module_static_import_origin.clone(),
             state.borrow().network_partition_key.clone(),

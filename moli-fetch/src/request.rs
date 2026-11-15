@@ -255,6 +255,7 @@ pub enum BrowserRequestMetadata {
     Ping,
     Script,
     SharedWorker,
+    ServiceWorker,
     Style,
     StyleModule,
     TextTrack,
@@ -276,6 +277,7 @@ impl BrowserRequestMetadata {
             Self::Manifest => "manifest",
             Self::Script => "script",
             Self::SharedWorker => "sharedworker",
+            Self::ServiceWorker => "serviceworker",
             Self::Worker => "worker",
             Self::Style | Self::StyleModule => "style",
             Self::TextTrack => "track",
@@ -1168,22 +1170,19 @@ impl Request {
     }
 
     pub(crate) fn origin_header_value(&self, request_url: &Url, disabled: bool) -> Option<String> {
-        // Module/script loaders supply their CORS Origin in the renderer even
-        // when the network CORS loader is bypassed. Fetch and XHR do not.
+        // Resource loaders set their CORS Origin before the network loader.
+        // Fetch/XHR rely on the network CORS loader; form navigation also
+        // supplies Origin independently of that loader.
         let renderer_cors_origin = self.request_mode == RequestMode::Cors
-            && matches!(
-                self.browser_request_metadata,
-                Some(
-                    BrowserRequestMetadata::Script
-                        | BrowserRequestMetadata::Worker
-                        | BrowserRequestMetadata::SharedWorker
-                        | BrowserRequestMetadata::AudioWorklet
-                        | BrowserRequestMetadata::JsonModule
-                        | BrowserRequestMetadata::TextModule
-                        | BrowserRequestMetadata::StyleModule
+            && self.browser_request_metadata.is_some_and(|metadata| {
+                !matches!(
+                    metadata,
+                    BrowserRequestMetadata::Fetch
+                        | BrowserRequestMetadata::Xhr
+                        | BrowserRequestMetadata::EventSource
                 )
-            );
-        if disabled && !renderer_cors_origin {
+            });
+        if disabled && self.request_mode != RequestMode::Navigate && !renderer_cors_origin {
             return None;
         }
         self.request_origin()?;

@@ -51,8 +51,10 @@ pub(crate) fn start_text_track_resource_fetch(
         .filter(|element| element.is_html_element("audio") || element.is_html_element("video"))
         .context("media element is unavailable")?;
     let (request_mode, credentials_mode) = text_track_cross_origin_request_modes(media);
-    moli_fetch::FetchUrlList::new(&request_url, &[])
-        .validate_request_mode(request_mode, &environment.request_origin)?;
+    if !resource_loader.request_client().web_security_disabled() {
+        moli_fetch::FetchUrlList::new(&request_url, &[])
+            .validate_request_mode(request_mode, &environment.request_origin)?;
+    }
     if host
         .check_top_document_subresource_csp(scope, &request_url, DocumentSubresourceCspKind::Media)
         .blocks_request()

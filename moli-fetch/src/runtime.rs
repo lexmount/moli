@@ -3409,6 +3409,7 @@ fn request_fetch_load_priority(request: &Request) -> crate::ResourceLoadPriority
                 | crate::BrowserRequestMetadata::Ping
                 | crate::BrowserRequestMetadata::Script
                 | crate::BrowserRequestMetadata::SharedWorker
+                | crate::BrowserRequestMetadata::ServiceWorker
                 | crate::BrowserRequestMetadata::Worker
                 | crate::BrowserRequestMetadata::Style
                 | crate::BrowserRequestMetadata::TextTrack
