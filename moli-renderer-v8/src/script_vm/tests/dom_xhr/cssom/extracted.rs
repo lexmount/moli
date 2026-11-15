@@ -6,6 +6,7 @@ mod declaration_aliases;
 mod declarations;
 mod fonts;
 mod grouping_rules;
+mod native_shorthand_queries;
 mod rule_interfaces;
 mod rule_tree_scaling;
 mod style_rule_mutations;
