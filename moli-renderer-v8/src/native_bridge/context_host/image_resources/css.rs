@@ -343,6 +343,7 @@ mod tests {
             format: moli_image::RasterImageFormat::Png,
             width: 1,
             height: 1,
+            color_precision: moli_image::RasterColorPrecision::Unorm8,
         });
         let CssImageResourceAdmission::Fetch(identity) = store.admit(
             DomHandle::new(10),
@@ -374,6 +375,7 @@ mod tests {
             format: moli_image::RasterImageFormat::Png,
             width: 1,
             height: 1,
+            color_precision: moli_image::RasterColorPrecision::Unorm8,
         });
 
         let CssImageResourceAdmission::Fetch(first) =
