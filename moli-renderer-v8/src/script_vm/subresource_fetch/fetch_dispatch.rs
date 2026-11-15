@@ -430,7 +430,7 @@ impl ScriptVm {
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
-        network_error_text: Option<String>,
+        mut network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
         mut supplied_network_record: Option<crate::types::SubresourceNetworkRecord>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
@@ -440,7 +440,11 @@ impl ScriptVm {
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error.message)),
+            AsyncSubresourceFetchResult::Failure(error) => {
+                network_error_text =
+                    network_error_text.or_else(|| error.network_error_text.map(str::to_owned));
+                (None, Err(error.message))
+            }
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
                 unreachable!("body bound above")
             }

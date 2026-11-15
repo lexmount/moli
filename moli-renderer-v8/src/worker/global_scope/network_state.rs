@@ -27,10 +27,6 @@ pub(in crate::worker) struct PendingWorkerFetch {
 
 pub(in crate::worker) enum WorkerFetchEvent {
     Completion(Box<WorkerFetchCompletion>),
-    NetworkFailure {
-        completion: Box<WorkerFetchCompletion>,
-        network_error_text: &'static str,
-    },
     StreamingStarted(WorkerFetchStreamingStarted),
     StreamingChunk(WorkerFetchStreamingChunk),
     StreamingFinished(WorkerFetchStreamingFinished),
@@ -38,6 +34,7 @@ pub(in crate::worker) enum WorkerFetchEvent {
 
 pub(in crate::worker) struct WorkerFetchCompletion {
     pub(super) fetch_id: u32,
+    pub(super) network_error_text: Option<String>,
     pub(super) network_request_headers: Option<Vec<(String, String)>>,
     pub(super) result: Result<WorkerFetchResponse, String>,
 }

@@ -140,7 +140,7 @@ async fn ordinary_manual_redirect_rejects_before_body_in_window_and_worker() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_redirect_invalid_headers_preserve_cookies_by_credentials_mode() {
-    for worker in [false, true] {
+    for worker_mode in ["window", "http", "blob"] {
         for cross in [false, true] {
             for credentials in ["omit", "same-origin", "include"] {
                 for invalid in [false, true] {
@@ -174,10 +174,15 @@ async fn manual_redirect_invalid_headers_preserve_cookies_by_credentials_mode() 
                         "redirect:'manual'",
                         &format!("redirect:'manual',credentials:'{credentials}'"),
                     );
-                    let fetch = if worker {
+                    let fetch = if worker_mode == "http" {
                         let script = format!("{fetch}.then(postMessage)");
                         format!(
                             "new Promise((resolve,reject)=>{{const w=new Worker('/worker.js');w.onmessage=e=>{{w.terminate();resolve(e.data)}};w.onerror=reject;w.postMessage({script:?})}})"
+                        )
+                    } else if worker_mode == "blob" {
+                        let script = format!("onmessage=()=>{{{fetch}.then(postMessage)}};");
+                        format!(
+                            "new Promise((resolve,reject)=>{{const url=URL.createObjectURL(new Blob([{script:?}],{{type:'text/javascript'}}));const w=new Worker(url);w.onmessage=e=>{{w.terminate();URL.revokeObjectURL(url);resolve(e.data)}};w.onerror=reject;w.postMessage(null)}})"
                         )
                     } else {
                         fetch
@@ -195,7 +200,7 @@ async fn manual_redirect_invalid_headers_preserve_cookies_by_credentials_mode() 
                     };
                     assert_eq!(
                         result["result"]["result"]["value"], expected,
-                        "worker={worker}, cross={cross}, credentials={credentials}, invalid={invalid}: {result}"
+                        "worker={worker_mode}, cross={cross}, credentials={credentials}, invalid={invalid}: {result}"
                     );
                     if let Some(server) = page_server {
                         server.abort();

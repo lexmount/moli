@@ -115,23 +115,19 @@ impl ScriptVm {
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
-        network_error_text: Option<String>,
+        mut network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result =
             completion_result.bind_child_body(&mut running.pending.continuation);
-        let mut response_error_reason =
-            crate::network_host::fetch_response_error_reason(network_error_text.as_deref());
         let (encoded, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
             AsyncSubresourceFetchResult::Failure(error) => {
-                if let Some(error_text) = error.network_error_text {
-                    response_error_reason =
-                        crate::network_host::fetch_response_error_reason(Some(error_text));
-                }
+                network_error_text =
+                    network_error_text.or_else(|| error.network_error_text.map(str::to_owned));
                 (None, Err(error.message))
             }
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
@@ -259,6 +255,7 @@ impl ScriptVm {
                         request_headers,
                         request_body,
                         result: Ok(response),
+                        network_error_text: None,
                         encoded,
                         response_status_text,
                         skip_fetch_security_validation,
@@ -301,13 +298,13 @@ impl ScriptVm {
                         request_headers,
                         request_body,
                         result: Err(error),
+                        network_error_text,
                         encoded: None,
                         response_status_text: None,
                         skip_fetch_security_validation,
                         response_filter,
                     };
-                    let mut info = state.response_info();
-                    info.response_error_reason = Some(response_error_reason.to_owned());
+                    let info = state.response_info();
                     let mut host = self._context_host.borrow_mut();
                     host.record_pending_subresource_response(state);
                     host.record_pending_subresource_continue_event(

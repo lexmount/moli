@@ -73,45 +73,43 @@ fn chromium_network_authority(location: &str) -> bool {
     } else {
         host_port
     };
-    let host = percent_encoding::percent_decode_str(host).collect::<Vec<_>>();
-    // GURL normalizes Unicode before applying its ASCII host character table.
-    // Keep its acceptance of spaces while still checking UTF-8 and IDNA. Pure
-    // ASCII hosts bypass IDNA, including the ACE labels accepted by GURL.
-    let normalized;
-    let normalized_decoded;
+    let decoded = percent_encoding::percent_decode_str(host).collect::<Vec<_>>();
+    let Ok(host) = std::str::from_utf8(&decoded) else {
+        return false;
+    };
+    let ascii;
     let host = if host.is_ascii() {
-        host.as_slice()
+        host
     } else {
-        if host
-            .iter()
-            .any(|&b| b.is_ascii() && !network_ascii_host_byte(b))
-        {
+        // Chromium escapes spaces/asterisks before IDNA conversion, then
+        // validates the resulting ASCII host after decoding escapes again.
+        // Keep Unicode validation (including joiners/bidi) enabled; only its
+        // ASCII deny list differs from the WHATWG URL parser's.
+        let escaped = host.replace(' ', "%20").replace('*', "%2A");
+        let Ok(converted) =
+            idna::domain_to_ascii_cow(escaped.as_bytes(), idna::AsciiDenyList::EMPTY)
+        else {
             return false;
-        }
-        // Chromium escapes spaces and asterisks before IDNA, then checks and
-        // unescapes the resulting ASCII host. Escaping after Punycode changes
-        // its meaning and also changes bidirectional-label validation.
-        let mut escaped = Vec::with_capacity(host.len());
-        for byte in &host {
-            match byte {
-                b' ' => escaped.extend_from_slice(b"%20"),
-                b'*' => escaped.extend_from_slice(b"%2A"),
-                byte => escaped.push(*byte),
-            }
-        }
-        normalized = match idna::domain_to_ascii_cow(&escaped, idna::AsciiDenyList::EMPTY) {
-            Ok(host) => host.into_owned(),
-            Err(_) => return false,
         };
-        normalized_decoded = percent_encoding::percent_decode_str(&normalized).collect::<Vec<_>>();
-        normalized_decoded.as_slice()
+        let Ok(decoded) = percent_encoding::percent_decode_str(&converted).decode_utf8() else {
+            return false;
+        };
+        ascii = decoded.into_owned();
+        ascii.as_str()
     };
     // Match Chromium's ASCII host character table. Colon/brackets additionally
     // belong to IP-literal parsing, so they cannot recover an IDNA failure.
-    if host.is_empty() || !host.iter().copied().all(network_ascii_host_byte) {
+    if host.is_empty()
+        || !host.bytes().all(|b| {
+            matches!(b,
+                b' ' | b'!' | b'"' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+'
+                | b',' | b'-' | b'.' | b'0'..=b'9' | b';' | b'=' | b'A'..=b'Z'
+                | b'_' | b'`' | b'a'..=b'z' | b'{' | b'}' | b'~'
+            )
+        })
+    {
         return false;
     }
-    let host = std::str::from_utf8(host).expect("ASCII checked above");
     let last = host
         .trim_end_matches('.')
         .rsplit('.')
@@ -126,14 +124,6 @@ fn chromium_network_authority(location: &str) -> bool {
             .is_some_and(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit())))
 }
 
-fn network_ascii_host_byte(byte: u8) -> bool {
-    matches!(byte,
-        b' ' | b'!' | b'"' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+'
-        | b',' | b'-' | b'.' | b'0'..=b'9' | b';' | b'=' | b'A'..=b'Z'
-        | b'_' | b'`' | b'a'..=b'z' | b'{' | b'}' | b'~'
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,8 +134,8 @@ mod tests {
         for target in [
             "http://example%20host.test/",
             "http://caf%C3%A9%20domain.test/",
-            "http://caf%C3%A9%20domain.test:8080/",
             "//caf%C3%A9%20domain.test/",
+            "http://caf%C3%A9%20domain.test:8080/",
             "http://%D7%90%D7%91%20.test/",
             "http://%D8%A7%D8%A8%20.test/",
             "http://caf%C3%A9%2Adomain.test/",
@@ -182,11 +172,13 @@ mod tests {
             "//",
             "http://xn--a.invalid:abc/",
             "http://example%20host.test:abc/",
-            "http://caf%C3%A9%20domain.test:abc/",
             "http://caf%C3%A9%2Fdomain.test/",
-            "http://caf%FF%20domain.test/",
-            "http://xn--a.caf%C3%A9%20domain.test/",
+            "http://caf%C3%A9%20domain.test:abc/",
             "http://caf%C3%A9%EF%BC%85%30%30domain.test/",
+            "http://caf%FF%20domain.test/",
+            "http://caf%C3%A9%E2%80%8D%20domain.test/",
+            "http://%EF%BC%83caf%C3%A9%20domain.test/",
+            "http://caf%C3%A9.xn--a.invalid/",
         ] {
             assert!(
                 validate_network_redirect_location(
