@@ -313,6 +313,13 @@ impl TargetNetworkAgentState {
         self.active_renderer_subresource_requests.is_empty()
     }
 
+    pub(crate) fn has_native_request_announcement(
+        &self,
+        handle: SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.output_queue.has_native_request_announcement(handle)
+    }
+
     fn output_queue_subresource_record_count(&self) -> usize {
         self.output_queue.subresource_record_count()
     }

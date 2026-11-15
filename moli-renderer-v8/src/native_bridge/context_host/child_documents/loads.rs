@@ -342,9 +342,6 @@ impl PageScriptHost {
         attribution: &ChildDocumentLoadNetworkAttribution,
         snapshot: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
     ) -> bool {
-        if snapshot.network_observed {
-            return true;
-        }
         let event = crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
             frame_id: attribution.frame_id().to_owned(),
             parent_frame_id: attribution.parent_frame_id().map(ToOwned::to_owned),
@@ -1177,7 +1174,8 @@ impl ChildDocumentFetch {
         let completion_tx = self.completion_tx.clone();
         Box::pin(async move {
             use crate::types::AsyncSubresourceFetchResult;
-            let result = async move {
+            let cancellation = loader.clone();
+            let response = async move {
                 if response.is_none() && buffered.is_none() {
                     return Err(UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned());
                 }
@@ -1270,8 +1268,12 @@ impl ChildDocumentFetch {
                     )
                     .with_network_request_headers(network_headers),
                 ))
-            }
-            .await;
+            };
+            let result = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned()),
+                result = response => result,
+            };
             result.unwrap_or_else(AsyncSubresourceFetchResult::Failure)
         })
     }

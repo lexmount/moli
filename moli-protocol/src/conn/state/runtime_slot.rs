@@ -933,6 +933,13 @@ impl TargetRuntimeSlot {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
+    pub(crate) fn has_native_request_announcement(
+        &self,
+        handle: moli_core::page::SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.network_agent.has_native_request_announcement(handle)
+    }
+
     pub(crate) fn record_fetch_pause_announced_redirect(&mut self, request_id: &str) {
         self.network_agent
             .record_fetch_pause_announced_redirect(request_id);

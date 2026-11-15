@@ -2172,6 +2172,16 @@ pub(crate) fn emit_prepared_child_frame_activity(
             document_network.timestamp,
             &document_network.snapshot,
         );
+        if matches!(document_network.snapshot.status, 204 | 205) {
+            for event_session_id in &page_event_session_ids {
+                super::lifecycle::emit_navigation_frame_stopped_loading_background_events(
+                    &mut activity_events,
+                    event_session_id.as_deref(),
+                    &document_network.frame_id,
+                    &document_network.loader_id,
+                );
+            }
+        }
     }
     for commit in document.commits {
         let _ = conn.with_target_owner_state_for_owner_mut(&owner, |state| {

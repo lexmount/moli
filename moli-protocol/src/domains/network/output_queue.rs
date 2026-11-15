@@ -2533,6 +2533,15 @@ impl TargetWebSocketLifecycleDeliveryOutput {
 }
 
 impl TargetNetworkOutputQueue {
+    pub(crate) fn has_native_request_announcement(
+        &self,
+        handle: SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.staged_subresource_requests
+            .get(&handle)
+            .is_some_and(|request| !request.interception_request_announcement())
+    }
+
     pub(crate) fn subresource_record_count(&self) -> usize {
         self.subresource_record_count
     }

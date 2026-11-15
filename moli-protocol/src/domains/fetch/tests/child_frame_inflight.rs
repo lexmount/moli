@@ -129,6 +129,12 @@ async fn ordinary_child_navigation_stays_inflight_until_response_or_detach() {
             m["method"] == terminal && m["params"]["requestId"] == id
         })
         .await;
+        if !detach && matches!(status, 204 | 205) {
+            wait_until_message(&mut ctx, "SID-1", "no-content child loading stopped", |m| {
+                m["method"] == "Page.frameStoppedLoading" && m["params"]["frameId"] == frame
+            })
+            .await;
+        }
         assert_eq!(
             ctx.sent
                 .iter()

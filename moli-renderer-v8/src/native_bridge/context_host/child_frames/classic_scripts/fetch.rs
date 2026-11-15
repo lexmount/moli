@@ -65,21 +65,19 @@ impl PageScriptHost {
             request_cookie_report: None,
         };
         let intercepted = self.should_intercept_subresource(SubresourceResourceType::Script);
-        if !intercepted {
-            self.record_subresource_request_started(SubresourceRequestStarted::new(
-                info.network_request_handle
-                    .expect("source request has a network handle"),
-                info.frame_id.clone(),
-                info.document_url.clone(),
-                info.url.clone(),
-                info.method.clone(),
-                info.request_headers.clone(),
-                None,
-                SubresourceResourceType::Script,
-                SubresourceRequestInitiatorType::Script,
-                None,
-            ));
-        }
+        self.record_subresource_request_started(SubresourceRequestStarted::new(
+            info.network_request_handle
+                .expect("source request has a network handle"),
+            info.frame_id.clone(),
+            info.document_url.clone(),
+            info.url.clone(),
+            info.method.clone(),
+            info.request_headers.clone(),
+            None,
+            SubresourceResourceType::Script,
+            SubresourceRequestInitiatorType::Script,
+            None,
+        ));
         attribution.network_observed = true;
         Some(ChildClassicScriptNetworkLoad {
             request,
@@ -147,27 +145,6 @@ pub(super) async fn load_child_classic_script(
         match response {
             Ok(None) => {}
             response => {
-                let started = SubresourceRequestStarted::new(
-                    network
-                        .info
-                        .network_request_handle
-                        .expect("script network handle"),
-                    network.info.frame_id.clone(),
-                    network.info.document_url.clone(),
-                    network.info.url.clone(),
-                    network.info.method.clone(),
-                    network.info.request_headers.clone(),
-                    None,
-                    SubresourceResourceType::Script,
-                    SubresourceRequestInitiatorType::Script,
-                    None,
-                );
-                network.context.output.publish_network(
-                    network.context.source_document,
-                    moli_page_types::ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
-                        started,
-                    )),
-                );
                 let outcome = match response {
                     Ok(Some(response)) => {
                         crate::planning::external_script_source_load_outcome_from_response_inner(
@@ -193,6 +170,7 @@ pub(super) async fn load_child_classic_script(
             network.cancel,
             SubresourceRequestInitiatorType::Script,
         )
+        .with_initial_request_announced()
         .run()
         .await;
         return match completed.result {
@@ -218,8 +196,7 @@ pub(super) async fn load_child_classic_script(
             Err(error) => failed(error),
         };
     }
-    // Dropping the ordinary future releases its consumer of the shared cache.
-    // The Document lease also makes retirement observable while it is stalled.
+    // The cache owns a shared producer; this cancels only this Document's wait.
     let outcome = tokio::select! {
         biased;
         ()=network.cancel.cancelled()=>failed("net::ERR_ABORTED".into()),

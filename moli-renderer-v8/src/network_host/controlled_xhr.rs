@@ -39,6 +39,7 @@ pub(crate) struct ControlledResourceLoad {
     preflight_headers: Vec<(String, String)>,
     initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
     request_initiator_type: SubresourceRequestInitiatorType,
+    initial_request_announced: bool,
 }
 
 use super::loaded_response::LoadedResponse;
@@ -100,7 +101,13 @@ impl ControlledResourceLoad {
             preflight_headers: Vec::new(),
             initial_decision: None,
             request_initiator_type,
+            initial_request_announced: false,
         }
+    }
+
+    pub(crate) fn with_initial_request_announced(mut self) -> Self {
+        self.initial_request_announced = true;
+        self
     }
 
     /// The Page can publish request admission in the initiating turn. Network
@@ -289,7 +296,7 @@ impl ControlledResourceLoad {
         mut stream: Option<&mut ControlledXhrStream>,
     ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
         use ResourceInterceptionDecision as D;
-        if self.connect_policy.is_none() {
+        if self.connect_policy.is_none() && !self.initial_request_announced {
             let started = crate::types::SubresourceRequestStarted::new(
                 self.info
                     .network_request_handle
