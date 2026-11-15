@@ -620,11 +620,45 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) request_method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
-    pub(super) response: NavigationResponse,
+    pub(super) result: std::result::Result<NavigationResponse, String>,
     pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
     pub(super) response_status_text: Option<String>,
     pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+}
+impl PendingSubresourceResponseState {
+    pub(super) fn response_info(&self) -> PendingSubresourceResponseInfo {
+        let response = self.result.as_ref().ok();
+        PendingSubresourceResponseInfo {
+            internal_id: self.pending.info.internal_id,
+            url: self.request_url.clone(),
+            final_url: response.map_or_else(|| self.request_url.clone(), |r| r.final_url.clone()),
+            method: self.request_method.clone(),
+            request_headers: self.request_headers.clone(),
+            request_body: self.request_body.clone(),
+            resource_type: self.pending.info.resource_type,
+            request_cookie_report: response.map_or_else(
+                || self.pending.info.request_cookie_report.clone(),
+                |r| r.request_cookie_report.clone(),
+            ),
+            network_request_headers: response
+                .and_then(|r| r.network_request_headers().map(|headers| headers.to_vec())),
+            response_status: response.map(|r| r.status),
+            response_error_reason: response.is_none().then(|| "Failed".to_owned()),
+            response_headers: response.map_or_else(Vec::new, |r| r.headers.clone()),
+            response_body: response.map_or_else(
+                || SubresourceResponseBody::from_bytes(Vec::new()),
+                |r| {
+                    self.encoded.as_ref().map_or_else(
+                        || SubresourceResponseBody::from_navigation_response(r),
+                        |image| SubresourceResponseBody::from_parkable_image(image.clone()),
+                    )
+                },
+            ),
+            from_cache: response.is_some_and(|r| r.from_cache),
+            cache_state: response.map_or_else(Default::default, |r| r.cache_state),
+        }
+    }
 }
 
 pub(super) struct PendingSubresourceAuthState {

@@ -2291,23 +2291,23 @@ impl PageScriptHost {
             pending.pending.continuation,
             PendingSubresourceContinuation::ChildDocument(_)
         );
-        if let Some(handle) = pending.pending.info.network_request_handle
+        if let Ok(response) = &pending.result
+            && let Some(handle) = pending.pending.info.network_request_handle
             && !child_document
         {
             self.record_subresource_response_started(
                 SubresourceResponseStarted::new(
                     handle,
-                    pending.response.redirect_chain.clone(),
-                    pending.response.final_url.clone(),
-                    pending.response.status,
-                    pending.response.headers.clone(),
-                    pending.response.cookie_set_reports.clone(),
+                    response.redirect_chain.clone(),
+                    response.final_url.clone(),
+                    response.status,
+                    response.headers.clone(),
+                    response.cookie_set_reports.clone(),
                 )
-                .with_from_cache(pending.response.from_cache)
-                .with_negotiated_http_version(pending.response.negotiated_http_version)
+                .with_from_cache(response.from_cache)
+                .with_negotiated_http_version(response.negotiated_http_version)
                 .with_network_request_headers(
-                    pending
-                        .response
+                    response
                         .network_request_headers()
                         .map(|headers| headers.to_vec()),
                 ),
@@ -2316,7 +2316,7 @@ impl PageScriptHost {
                 SubresourceBodyFinished::failed_with_partial_body(
                     handle,
                     error_text,
-                    SubresourceResponseBody::from_navigation_response(&pending.response),
+                    SubresourceResponseBody::from_navigation_response(response),
                 ),
             );
         } else {
@@ -3201,23 +3201,32 @@ impl PageScriptHost {
                 response_status_text: None,
                 skip_fetch_security_validation: false,
                 response_filter: None,
-                response: navigation_response_from_subresource_body(
-                    &info.response_body,
-                    moli_fetch::ResponseHead {
-                        status_text: None,
-                        final_url: info.url.clone(),
-                        status: info.response_status,
-                        headers: info.response_headers.clone(),
-                        request_cookie_report: info.request_cookie_report.clone(),
-                        cookie_set_reports: Vec::new(),
-                        redirected: false,
-                        redirect_chain: Vec::new(),
-                        from_cache: info.from_cache,
-                        cache_state: info.cache_state,
-                        negotiated_http_version: None,
-                    },
-                )
-                .with_network_request_headers(info.network_request_headers.clone()),
+                result: info
+                    .response_status
+                    .ok_or_else(|| {
+                        info.response_error_reason
+                            .clone()
+                            .unwrap_or_else(|| "Failed".to_owned())
+                    })
+                    .map(|status| {
+                        navigation_response_from_subresource_body(
+                            &info.response_body,
+                            moli_fetch::ResponseHead {
+                                status_text: None,
+                                final_url: info.url.clone(),
+                                status,
+                                headers: info.response_headers.clone(),
+                                request_cookie_report: info.request_cookie_report.clone(),
+                                cookie_set_reports: Vec::new(),
+                                redirected: false,
+                                redirect_chain: Vec::new(),
+                                from_cache: info.from_cache,
+                                cache_state: info.cache_state,
+                                negotiated_http_version: None,
+                            },
+                        )
+                        .with_network_request_headers(info.network_request_headers.clone())
+                    }),
             });
             self.record_pending_subresource_continue_event(
                 PendingSubresourceContinueEvent::ResponsePaused(info),

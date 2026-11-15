@@ -66,8 +66,36 @@ async fn manual_network_redirect_preserves_valid_locations_and_non_redirect_resp
 }
 
 #[tokio::test]
-async fn manual_network_redirect_rejects_invalid_location_before_streaming_head() -> Result<()> {
-    for raw in [false, true] {
+async fn manual_network_redirect_preserves_chromium_network_hosts() -> Result<()> {
+    for transport in [Transport::Buffered, Transport::Raw] {
+        for location in [
+            "http://example%20host.test/",
+            "http://xn--a.invalid/",
+            "//example%20host.test/",
+            "//xn--a.invalid/",
+        ] {
+            let server = ScriptedHttpServer::spawn(vec![
+                ScriptedResponse::status(302, "Found").with_header("Location", location),
+            ]);
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            let request =
+                Request::get(&server.url())?.with_redirect_mode(RequestRedirectMode::Manual);
+            let result = transport.fetch(&client, request).await;
+            let hits = server.hits();
+            server.shutdown();
+            result.with_context(|| {
+                format!("Chromium accepts {location} in {transport:?} manual mode")
+            })?;
+            assert_eq!(hits, 1);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn manual_network_redirect_rejects_invalid_location_before_body() -> Result<()> {
+    for transport in Transport::ALL {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}/redirect", listener.local_addr()?);
         let server = tokio::spawn(async move {
@@ -96,16 +124,31 @@ async fn manual_network_redirect_rejects_invalid_location_before_streaming_head(
         let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
         let request = Request::get(&url)?.with_redirect_mode(RequestRedirectMode::Manual);
         let error = tokio::time::timeout(Duration::from_secs(5), async {
-            if raw {
-                client
+            match transport {
+                Transport::Raw => client
                     .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
                     .await
-                    .expect_err("invalid redirect must not publish a raw response head")
-            } else {
-                client
+                    .expect_err("invalid redirect must not publish a raw response head"),
+                Transport::Html => client
                     .fetch_html_stream(request)
                     .await
-                    .expect_err("invalid redirect must not publish an HTML response head")
+                    .expect_err("invalid redirect must not publish an HTML response head"),
+                Transport::Buffered => {
+                    let (send, receive) = oneshot::channel();
+                    client
+                        .fetch_with_cancel_callback(
+                            request,
+                            FetchCancelHandle::new(),
+                            move |result| {
+                                let _ = send.send(result);
+                            },
+                        )
+                        .expect("start buffered request");
+                    receive
+                        .await
+                        .expect("buffered result")
+                        .expect_err("buffered redirect must fail without reading the body")
+                }
             }
         })
         .await?;

@@ -2525,7 +2525,9 @@ pub struct PendingSubresourceResponseInfo {
     pub resource_type: SubresourceResourceType,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub network_request_headers: Option<Vec<(String, String)>>,
-    pub response_status: u16,
+    pub response_status: Option<u16>,
+    /// Network failure reason when no response headers were received.
+    pub response_error_reason: Option<String>,
     pub response_headers: Vec<(String, Vec<u8>)>,
     /// Captured body for renderer-owned continuations. Native network pauses
     /// carry their pending body capability separately; this is empty there.

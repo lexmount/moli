@@ -440,12 +440,12 @@ fn register_pending_window_fetch_for_test(
                         response_status_text: None,
                         skip_fetch_security_validation: false,
                         response_filter: None,
-                        response: crate::types::NavigationResponse::from_text_body(
+                        result: Ok(crate::types::NavigationResponse::from_text_body(
                             url.clone(),
                             200,
                             Vec::new(),
                             "pending response".to_owned(),
-                        ),
+                        )),
                     },
                 );
             }

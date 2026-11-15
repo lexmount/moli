@@ -151,6 +151,16 @@ async fn fixture_with_userinfo(
                         )
                     }),
                 )
+                .route(
+                    "/invalid-manual",
+                    get(|| async {
+                        (
+                            axum::http::StatusCode::FOUND,
+                            [("location", "http://[")],
+                            "original",
+                        )
+                    }),
+                )
                 .route("/network-final", get(|| async { "network-body" }))
                 .route(
                     "/header-start",
@@ -522,18 +532,151 @@ async fn fulfilled_manual_redirect_does_not_parse_location_but_still_checks_cors
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn failed_manual_redirect_response_can_be_continued_or_fulfilled() {
+    for action in ["continue", "override", "fulfill"] {
+        let (mut ctx, origin, server) = fixture().await;
+        command(&mut ctx, 70_000, "Fetch.enable", json!({"patterns":[{
+            "urlPattern":format!("{origin}/invalid-manual"), "resourceType":"Fetch", "requestStage":"Response"
+        }]})).await;
+        let source = format!("{origin}/invalid-manual");
+        command(&mut ctx, 70_001, "Runtime.evaluate", json!({"expression":format!(
+            "globalThis.failedRedirect=fetch({source:?},{{redirect:'manual'}}).then(async r=>({{status:r.status,body:await r.text()}}),e=>({{error:e.name}}));'started'"
+        )})).await;
+        let pause =
+            wait_for_request_paused(&mut ctx, &source, "failed redirect response pause").await;
+        assert_eq!(pause["params"]["responseErrorReason"], "Failed");
+        assert!(pause["params"].get("responseStatusCode").is_none());
+        assert!(pause["params"].get("responseHeaders").is_none());
+        if action == "fulfill" {
+            command(
+                &mut ctx,
+                70_002,
+                "Fetch.fulfillRequest",
+                json!({
+                    "requestId":pause["params"]["requestId"],"responseCode":200,
+                    "responseHeaders":[{"name":"Content-Type","value":"text/plain"}],
+                    "body":"cmVwbGFjZW1lbnQ="
+                }),
+            )
+            .await;
+        } else {
+            command(
+                &mut ctx,
+                70_002,
+                "Fetch.continueResponse",
+                if action == "override" {
+                    json!({"requestId":pause["params"]["requestId"], "responseCode":200,
+                        "responsePhrase":"OK","responseHeaders":[]})
+                } else {
+                    json!({"requestId":pause["params"]["requestId"]})
+                },
+            )
+            .await;
+        }
+        let result = command(
+            &mut ctx,
+            70_003,
+            "Runtime.evaluate",
+            json!({
+                "expression":"failedRedirect", "awaitPromise":true,"returnByValue":true
+            }),
+        )
+        .await;
+        assert_eq!(
+            result["result"]["result"]["value"],
+            if action == "fulfill" {
+                json!({"status":200,"body":"replacement"})
+            } else {
+                json!({"error":"TypeError"})
+            }
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_manual_redirect_does_not_wait_for_bidi_response_interceptors() {
+    for cdp_interceptor in [false, true] {
+        let (mut ctx, origin, server) = fixture().await;
+        let source = format!("{origin}/invalid-manual");
+        if cdp_interceptor {
+            command(
+                &mut ctx,
+                71_000,
+                "Fetch.enable",
+                json!({"patterns":[{
+                    "urlPattern":source,"resourceType":"Fetch","requestStage":"Response"
+                }]}),
+            )
+            .await;
+        } else {
+            command(&mut ctx, 71_000, "Fetch.disable", json!({})).await;
+        }
+        ctx.execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("BIDI-SID")),
+                    target_id: Some(DevToolsTargetId::from("TID-1")),
+                    browser_context_id: None,
+                },
+                intercept_id: DevToolsNetworkInterceptId::from("failed-response"),
+                phases: vec![DevToolsNetworkInterceptPhase::ResponseStarted],
+                url_patterns: vec![DevToolsNetworkInterceptPattern {
+                    url_pattern: source.clone(),
+                }],
+            }),
+        )
+        .await
+        .expect("BiDi response interceptor");
+        command(&mut ctx, 71_001, "Runtime.evaluate", json!({"expression":format!(
+            "globalThis.failedRedirect=fetch({source:?},{{redirect:'manual'}}).then(r=>r.status,e=>e.name);'started'"
+        )})).await;
+        if cdp_interceptor {
+            let pause = wait_for_request_paused(&mut ctx, &source, "CDP failed response").await;
+            assert_eq!(pause["params"]["responseErrorReason"], "Failed");
+            command(
+                &mut ctx,
+                71_002,
+                "Fetch.continueResponse",
+                json!({
+                    "requestId":pause["params"]["requestId"]
+                }),
+            )
+            .await;
+        }
+        let result = command(
+            &mut ctx,
+            71_003,
+            "Runtime.evaluate",
+            json!({
+                "expression":"failedRedirect","awaitPromise":true,"returnByValue":true
+            }),
+        )
+        .await;
+        assert_eq!(result["result"]["result"]["value"], "TypeError");
+        server.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_preflight_redirect_response_can_be_fulfilled() {
+    check_manual_preflight_redirect(Some("Response"), true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn ordinary_manual_preflight_redirect_validates_network_location() {
-    check_manual_preflight_redirect(None).await;
+    check_manual_preflight_redirect(None, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn intercepted_manual_preflight_redirect_validates_network_location() {
     for stage in ["Request", "Response"] {
-        check_manual_preflight_redirect(Some(stage)).await;
+        check_manual_preflight_redirect(Some(stage), false).await;
     }
 }
 
-async fn check_manual_preflight_redirect(stage: Option<&str>) {
+async fn check_manual_preflight_redirect(stage: Option<&str>, recover_failure: bool) {
     use axum::{
         http::{HeaderMap, HeaderValue, StatusCode},
         response::IntoResponse as _,
@@ -636,27 +779,37 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
             "globalThis.manualPreflightResult=fetch({source:?},{{method:'PUT',headers:{{'X-Probe':'yes'}},redirect:{mode:?}}}).then(async r=>({{status:r.status,type:r.type,url:r.url,headers:[...r.headers],body:await r.text(),redirected:r.redirected}})).catch(e=>({{error:e.name}}));'started'"
         )})).await;
-        if let Some(stage) = stage
-            && !(stage == "Response" && invalid_redirect)
-        {
-            // Invalid network redirects fail before a response head exists.
+        if let Some(stage) = stage {
             let pause =
                 wait_for_request_paused(&mut ctx, &source, "preflight redirect pause").await;
-            assert_eq!(
-                pause["params"]["responseStatusCode"].is_number(),
-                stage == "Response"
-            );
-            command(
-                &mut ctx,
-                id + 1,
-                if stage == "Response" {
-                    "Fetch.continueResponse"
-                } else {
-                    "Fetch.continueRequest"
-                },
-                json!({"requestId":pause["params"]["requestId"]}),
-            )
-            .await;
+            if stage == "Response" && invalid_redirect {
+                assert_eq!(pause["params"]["responseErrorReason"], "Failed");
+                assert!(pause["params"].get("responseStatusCode").is_none());
+            } else {
+                assert_eq!(
+                    pause["params"]["responseStatusCode"].is_number(),
+                    stage == "Response"
+                );
+            }
+            if recover_failure && stage == "Response" && invalid_redirect {
+                command(&mut ctx, id+1,"Fetch.fulfillRequest",json!({
+                    "requestId":pause["params"]["requestId"], "responseCode":200,
+                    "responseHeaders":[{"name":"Access-Control-Allow-Origin","value":"*"},{"name":"Content-Type","value":"text/plain"}],
+                    "body":"cmVwbGFjZW1lbnQ="
+                })).await;
+            } else {
+                command(
+                    &mut ctx,
+                    id + 1,
+                    if stage == "Response" {
+                        "Fetch.continueResponse"
+                    } else {
+                        "Fetch.continueRequest"
+                    },
+                    json!({"requestId":pause["params"]["requestId"]}),
+                )
+                .await;
+            }
         }
         let result = command(
             &mut ctx,
@@ -670,7 +823,10 @@ async fn check_manual_preflight_redirect(stage: Option<&str>) {
         expected_requests.extend([(index, "OPTIONS".to_owned()), (index, "PUT".to_owned())]);
         assert_eq!(*observed.lock(), expected_requests, "{stage:?}/{index}");
         let value = &result["result"]["result"]["value"];
-        if !cors_allowed || mode != "manual" || invalid_redirect {
+        if recover_failure && invalid_redirect {
+            assert_eq!(value["status"], 200);
+            assert_eq!(value["body"], "replacement");
+        } else if !cors_allowed || mode != "manual" || invalid_redirect {
             assert_eq!(value, &json!({"error":"TypeError"}), "{stage:?}/{index}");
         } else if status == 302 {
             assert_eq!(

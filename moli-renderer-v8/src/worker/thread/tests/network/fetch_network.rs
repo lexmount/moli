@@ -1,6 +1,7 @@
 // Tests grouped by behavior. Shared fixtures live in the parent module.
 use super::*;
 use crate::types::SubresourceInterceptionClasses;
+use tokio::io::AsyncReadExt;
 
 #[tokio::test]
 async fn worker_fetch_uses_worker_script_base_url_and_resolves_response_text() {
@@ -563,7 +564,7 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
         panic!("expected worker response-stage pause, got {response_pause:?}");
     };
     assert_eq!(info.internal_id, 23);
-    assert_eq!(info.response_status, 200);
+    assert_eq!(info.response_status, Some(200));
     assert_eq!(
         info.response_body.try_bytes().unwrap().as_ref(),
         b"origin-worker-body"
@@ -1502,6 +1503,39 @@ async fn worker_fetch_manual_redirect_rejects_invalid_network_location() {
             "{location}"
         );
     }
+}
+
+#[tokio::test]
+async fn worker_manual_redirect_rejects_invalid_headers_before_unfinished_body() {
+    ensure_v8();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request_head(&mut stream).await.unwrap();
+        stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://[\r\nContent-Length: 5\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut byte = [0];
+        assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
+    });
+    let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let mut handle = spawn_worker_with_request_client(
+        format!(
+            r#"
+        fetch({base:?}+'/held-body',{{redirect:'manual'}}).then(
+            response=>postMessage({{type:response.type,status:response.status}}),
+            error=>postMessage({{name:error.name,isTypeError:error instanceof TypeError}})
+        ).finally(()=>close());
+    "#
+        ),
+        format!("{base}/worker/main.js"),
+        loader,
+    );
+    let result = recv_post_json(&mut handle).await;
+    assert_eq!(result, r#"{"name":"TypeError","isTypeError":true}"#);
+    tokio::time::timeout(TIMEOUT, server)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]

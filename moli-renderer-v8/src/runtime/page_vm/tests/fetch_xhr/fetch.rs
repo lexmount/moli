@@ -1782,6 +1782,36 @@ async fn window_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
 }
 
 #[tokio::test]
+async fn window_manual_redirect_rejects_invalid_headers_before_unfinished_body() {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/held-body", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_head(&mut stream).await.unwrap();
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://[\r\nContent-Length: 5\r\nConnection: close\r\n\r\n").await.unwrap();
+            // No body is sent: completion must come from rejecting the head.
+            let mut byte = [0];
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
+        });
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(&url).unwrap());
+        let executor = page_vm.local_executor.clone();
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(5), executor.run(async move {
+            page_vm.vm_mut().eval(&format!(r#"
+                fetch({url:?}, {{redirect:'manual'}}).then(
+                    response => ({{type:response.type,status:response.status}}),
+                    error => ({{name:error.name,isTypeError:error instanceof TypeError}})
+                ).then(value => {{globalThis.__fetchObserved=JSON.stringify(value);globalThis.__fetchDone=true;}});
+            "#)).unwrap();
+            drive_websocket_until_done(&mut page_vm, "String(globalThis.__fetchDone===true)", "invalid headers must reject without a body").await.unwrap();
+            page_vm.vm_mut().eval("String(__fetchObserved)").unwrap()
+        })).await.unwrap();
+        assert_eq!(observed, r#"{"name":"TypeError","isTypeError":true}"#);
+        tokio::time::timeout(std::time::Duration::from_secs(5),server).await.unwrap().unwrap();
+    }).await;
+}
+
+#[tokio::test]
 async fn window_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
     run_page_vm_async_test(async move {
             let (base_url, request_rx, server) = spawn_header_capture_http_server().await;

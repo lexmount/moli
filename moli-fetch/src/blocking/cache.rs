@@ -163,7 +163,7 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     if request.redirect_mode() == crate::RequestRedirectMode::Manual {
         // Validate network Location syntax before a manual response can be
         // filtered. Do not follow it or apply automatic redirect limits/policy.
-        next_redirect_url_from_parts(final_url, status, headers, 0)?;
+        super::validate_network_redirect_location(final_url, status, headers)?;
         return Ok(None);
     }
     // A browser may follow redirects itself, preserving the full URL list for

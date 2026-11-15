@@ -35,10 +35,10 @@ use crate::types::{
     NetworkBodySourceId, PendingSubresourceAuthInfo, PendingSubresourceAuthState,
     PendingSubresourceContinuation, PendingSubresourceContinueEvent,
     PendingSubresourceContinueOutcome, PendingSubresourceFetchInfo, PendingSubresourceFetchState,
-    PendingSubresourceResponseInfo, PendingSubresourceResponseState,
-    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion, RunningSubresourceFetchState,
-    StreamingSubresourceFetchState, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-    SubresourceRequestInitiatorType, SubresourceResourceType, SubresourceResponseBody,
+    PendingSubresourceResponseState, PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
+    RunningSubresourceFetchState, StreamingSubresourceFetchState, SubresourceNetworkRecord,
+    SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType, SubresourceResourceType,
+    SubresourceResponseBody,
 };
 use crate::util::v8_string;
 

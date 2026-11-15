@@ -944,6 +944,7 @@ impl RuntimeOwner {
             .buffered_mut()
             .expect("buffered request should use buffered collector")
             .begin_request(
+                &job.current_url,
                 self.config.http_max_response_size(),
                 job.request.redirect_handling() == crate::RequestRedirectHandling::FollowByCaller
                     && matches!(&job.response_tx, RuntimeResponseTx::Raw(_)),
@@ -1549,6 +1550,13 @@ impl RuntimeOwner {
                 anyhow::Error::new(crate::FetchCancelled)
                     .context("fetch runtime request cancelled during shutdown"),
             ));
+        }
+        if let Some(error) = easy
+            .as_mut()
+            .and_then(|easy| easy.get_mut().buffered_mut())
+            .and_then(ResponseCollector::take_callback_error)
+        {
+            return Err((job.response_tx, anyhow::Error::msg(error)));
         }
         let header_terminated = easy
             .as_ref()

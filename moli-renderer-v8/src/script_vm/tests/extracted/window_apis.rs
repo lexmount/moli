@@ -448,7 +448,7 @@ fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
         panic!("CancelAuth should emit one response-stage pause, got {events:?}");
     };
     assert_eq!(info.internal_id, internal_id);
-    assert_eq!(info.response_status, 401);
+    assert_eq!(info.response_status, Some(401));
     assert_eq!(
         info.response_body.try_bytes().unwrap().as_ref(),
         b"auth required"
@@ -459,8 +459,9 @@ fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
         .borrow_mut()
         .take_pending_subresource_response(internal_id)
         .expect("challenged response should remain pending for Fetch.continueResponse");
-    assert_eq!(pending.response.status, 401);
-    assert_eq!(pending.response.body_text(), "auth required");
+    let response = pending.result.expect("challenged response");
+    assert_eq!(response.status, 401);
+    assert_eq!(response.body_text(), "auth required");
 }
 #[tokio::test]
 async fn default_video_fetch_policy_synthesizes_lifecycle_without_a_network_request() {

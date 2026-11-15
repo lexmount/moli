@@ -36,6 +36,12 @@ impl FetchResponseBodySource {
         ) else {
             return Ok(None);
         };
+        if pending.response_error_reason.is_some() {
+            return Err(CommandOutputPlan::error(
+                -32000,
+                "Response body is unavailable for a failed request",
+            ));
+        }
         if pending.response_body_taken_as_stream {
             return Err(CommandOutputPlan::error(
                 -32000,
@@ -300,6 +306,12 @@ pub(super) fn take_response_body_as_stream_command(
         cmd.session_id,
         &params.request_id,
     ) {
+        if pending.response_error_reason.is_some() {
+            return CommandOutputPlan::error(
+                -32000,
+                "Response body is unavailable for a failed request",
+            );
+        }
         if pending.response_body_taken_as_stream {
             return CommandOutputPlan::error(
                 -32000,
