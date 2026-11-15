@@ -362,8 +362,8 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             }
             worker_id
         } else {
-            let cross_origin_http_worker_script =
-                is_cross_origin_http_worker_script(&base_url, &resolved_url);
+            let cross_origin_http_worker_script = !creator_request_client.web_security_disabled()
+                && is_cross_origin_http_worker_script(&base_url, &resolved_url);
             let reserved_service_worker_client_id = if cross_origin_http_worker_script {
                 None
             } else {
@@ -844,12 +844,14 @@ fn materialize_nested_worker_script_source(
         .request_client()
         .fetch_text_for_worker_blocking_boundary(request)
         .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))?;
-    crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        &context.base_url,
-        &response.redirect_chain,
-        &response.final_url,
-    )
-    .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
+    if !loader.request_client().web_security_disabled() {
+        crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            &context.base_url,
+            &response.redirect_chain,
+            &response.final_url,
+        )
+        .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
+    }
     moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
         .map_err(|error| error.to_string())?;
     crate::worker::ensure_worker_script_mime_acceptable(

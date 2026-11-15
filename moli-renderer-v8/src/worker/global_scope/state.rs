@@ -5,6 +5,15 @@ use crate::content_security_policy::ContentSecurityPolicy;
 use super::*;
 
 impl WorkerGlobalState {
+    /// The execution origin belongs to the Worker, independently of its script URL.
+    pub(in crate::worker) fn request_origin(&self) -> moli_url::WebOrigin {
+        moli_url::WebOrigin::from_serialized(
+            self.message_source_security
+                .serialized_origin()
+                .unwrap_or("null"),
+        )
+    }
+
     pub(in crate::worker) fn subresource_interception_config(
         &self,
     ) -> SubresourceInterceptionClasses {
@@ -65,6 +74,9 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) current_script_url: Option<Url>,
     /// Referrer policy parsed from the top-level worker script response.
     pub(in crate::worker) referrer_policy: Option<String>,
+    /// Creator origin used by the bootstrap module graph, independently of a
+    /// data: Worker's own opaque origin and its script URL.
+    pub(in crate::worker) module_static_import_origin: Option<moli_url::WebOrigin>,
     /// CSP policies from outside settings used for module static imports.
     pub(in crate::worker) module_static_import_content_security_policies:
         Vec<ContentSecurityPolicy>,

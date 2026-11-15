@@ -246,7 +246,9 @@ impl ControlledResourceLoad {
     fn sync_info(&mut self) {
         self.info.url = self.request.url.clone();
         self.info.method = self.request.method.clone();
-        self.info.request_headers = self.request.interception_request_headers();
+        self.info.request_headers = self.request.interception_request_headers_with_web_security(
+            self.load.request_client().web_security_disabled(),
+        );
         self.info.request_body_bytes = self.request.body.clone();
         self.info.request_body = self
             .request
@@ -350,7 +352,10 @@ impl ControlledResourceLoad {
         }
         if self.connect_policy.is_none() {
             self.request
-                .admit_request_url(&self.request.url)
+                .admit_request_url_with_web_security(
+                    &self.request.url,
+                    self.load.request_client().web_security_disabled(),
+                )
                 .map_err(|error| error.to_string())?;
         }
         if matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
@@ -632,7 +637,7 @@ impl ControlledResourceLoad {
                     .iter()
                     .any(|(name, _)| name.eq_ignore_ascii_case("location"))
             {
-                if self.response_filter.is_none() && !self.load.request_client().cors_disabled() {
+                if self.response_filter.is_none() && !self.load.request_client().web_security_disabled() {
                     self.request.validate_cors_response_for_url(
                         &response.head.final_url,
                         &response.head.headers,
@@ -644,11 +649,12 @@ impl ControlledResourceLoad {
                     &mut self.request,
                     response.head.clone(),
                     false,
+                    self.load.request_client().web_security_disabled(),
                 )?
             } else {
                 advance_subresource_response(
                     &mut self.request, response.head.clone(), false,
-                    self.load.request_client().cors_disabled(),
+                    self.load.request_client().web_security_disabled(),
                 )?
             };
             let manual = matches!(
@@ -672,7 +678,7 @@ impl ControlledResourceLoad {
                             .expect("XHR has a requesting origin"),
                         &response.head,
                         self.request.credentials_mode,
-                        self.load.request_client().cors_disabled(),
+                        self.load.request_client().web_security_disabled(),
                     )?;
                 }
                 if !is_synthetic {

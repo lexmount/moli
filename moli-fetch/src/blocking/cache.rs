@@ -149,14 +149,14 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     status: u16,
     headers: &[(String, Vec<u8>)],
     redirect_count: usize,
-    cors_disabled: bool,
+    web_security_disabled: bool,
 ) -> Result<Option<Url>> {
     // HTTP fetch checks the network response before HTTP-redirect fetch. This
     // also applies to cached redirects and manual/error redirect modes.
     request
         .validate_cross_origin_resource_policy_for_url(final_url, headers)
         .map_err(anyhow::Error::msg)?;
-    if !cors_disabled && matches!(status, 301 | 302 | 303 | 307 | 308) {
+    if !web_security_disabled && matches!(status, 301 | 302 | 303 | 307 | 308) {
         request
             .validate_cors_response_for_url(final_url, headers)
             .map_err(anyhow::Error::msg)?;
@@ -180,7 +180,9 @@ pub(crate) fn next_followed_redirect_url_from_parts(
         && let Some(next_url) = next_url.as_ref()
     {
         ensure_http_network_transport_url(next_url)?;
-        request.validate_request_mode_for_url(next_url)?;
+        if !web_security_disabled {
+            request.validate_request_mode_for_url(next_url)?;
+        }
         request.check_redirect_policy(next_url)?;
     }
     Ok(next_url)

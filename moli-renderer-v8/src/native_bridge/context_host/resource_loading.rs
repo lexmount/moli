@@ -710,7 +710,9 @@ impl PageScriptHost {
             None,
         );
         let mut visible_info = info.clone();
-        visible_info.request_headers = request.interception_request_headers();
+        visible_info.request_headers = request.interception_request_headers_with_web_security(
+            load.request_client().web_security_disabled(),
+        );
         self.push_pending_subresource_fetch_info(visible_info);
         self.pending_subresource_fetches.insert(
             info.internal_id,
@@ -1633,7 +1635,9 @@ impl PageScriptHost {
             .window_fetch()
             .and_then(|fetch| fetch.intercepted_request.as_deref())
         {
-            visible_info.request_headers = request.interception_request_headers();
+            visible_info.request_headers = request.interception_request_headers_with_web_security(
+                pending.load.request_client().web_security_disabled(),
+            );
         }
         self.push_subresource_fetch_pause(visible_info, None, Some(redirect.into()));
         self.restore_pending_subresource_fetch(pending);

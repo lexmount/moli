@@ -1219,6 +1219,7 @@ async fn fetch_worker_script_source(
             network_partition_key,
             creator_policy_context,
             script_kind,
+            request_client.web_security_disabled(),
         );
     }
     let observed = request_client
@@ -1240,6 +1241,7 @@ async fn fetch_worker_script_source(
         network_partition_key,
         creator_policy_context,
         script_kind,
+        request_client.web_security_disabled(),
     )
 }
 
@@ -1249,13 +1251,16 @@ fn loaded_worker_script_from_navigation_response(
     network_partition_key: Option<String>,
     creator_policy_context: SubresourcePolicyContext,
     script_kind: WorkerScriptKind,
+    web_security_disabled: bool,
 ) -> Result<LoadedWorkerScript, WorkerScriptLoadFailure> {
     let response_head = response.head();
-    if let Err(error) = crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        initiator_url,
-        &response_head.redirect_chain,
-        &response.final_url,
-    ) {
+    if !web_security_disabled
+        && let Err(error) = crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            initiator_url,
+            &response_head.redirect_chain,
+            &response.final_url,
+        )
+    {
         return Err(WorkerScriptLoadFailure::with_response(error, response));
     }
     if let Err(error) =
@@ -1319,7 +1324,6 @@ fn dedicated_worker_policy_context_from_headers(
     creator_policy_context: SubresourcePolicyContext,
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
-        cors_disabled: creator_policy_context.cors_disabled,
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
         // Chromium's DedicatedWorkerHost currently keeps Document-Isolation-Policy

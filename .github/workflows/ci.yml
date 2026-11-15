@@ -589,7 +589,7 @@ jobs:
           chromium_overrides=()
           # The native Worker body-abort contract also requires the current
           # oracle; locked Chromium 145 replaces the custom abort reason.
-          for group in dom-input fetch-headers worker-loading; do
+          for group in dom-input fetch-headers worker-loading web-security; do
             if [[ " $available_groups " == *" $group "* ]]; then
               chromium_overrides+=(--chromium-bin-for-group "$group=$CHROMIUM_CURRENT_ORACLE_BIN")
             fi
@@ -598,11 +598,6 @@ jobs:
             --browser chromium --strict-full-suite --repeat 2 --retries 3 --jobs 4 \
             "${chromium_overrides[@]}" \
             --output-dir target/smoke/cdp-chromium-ci
-      - name: Run pinned web-security oracle
-        run: |
-          uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
-            --browser chromium --group web-security --chromium-bin "$CHROMIUM_CURRENT_ORACLE_BIN" \
-            --repeat 2 --jobs 4 --output-dir target/smoke/web-security-chromium-ci
       - name: Run upstream web-security contracts on Chromium
         shell: bash
         run: |
@@ -621,9 +616,7 @@ jobs:
         uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: cdp-smoke-chromium-diagnostics
-          path: |
-            target/smoke/cdp-chromium-ci
-            target/smoke/web-security-chromium-ci
+          path: target/smoke/cdp-chromium-ci
           if-no-files-found: error
           retention-days: 7
 

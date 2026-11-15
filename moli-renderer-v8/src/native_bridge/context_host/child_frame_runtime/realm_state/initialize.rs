@@ -155,7 +155,10 @@ fn validate_registered_realm(
     ensure!(
         identity.grants_universal_access()
             == matches!(
-                init.world.access_policy(),
+                host.effective_window_access_policy(
+                    OwnerDispatchScope::Child(init.handle),
+                    init.world.access_policy()
+                ),
                 crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
             ),
         "child Window realm access policy changed during initialization"

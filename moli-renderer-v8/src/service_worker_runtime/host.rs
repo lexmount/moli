@@ -985,7 +985,6 @@ fn service_worker_script_policy_context(
     headers: &[(String, Vec<u8>)],
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
-        cors_disabled: false,
         cross_origin_embedder_policy:
             crate::cross_origin_isolation::cross_origin_embedder_policy_from_headers(headers),
         document_isolation_policy:

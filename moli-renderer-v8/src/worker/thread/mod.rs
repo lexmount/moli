@@ -611,6 +611,8 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
 fn start_worker_module_graph_fetch(
     request: WorkerModuleGraphFetchRequest,
     loader: WorkerResourceLoader,
+    worker_origin: moli_url::WebOrigin,
+    outside_origin: Option<moli_url::WebOrigin>,
     network_partition_key: Option<String>,
     module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
     worker_global_content_security_policies: Vec<ContentSecurityPolicy>,
@@ -618,6 +620,14 @@ fn start_worker_module_graph_fetch(
     worker_global_content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
+    // Bootstrap module graphs use outside settings, including data: workers.
+    // Later dynamic imports belong to the Worker's own execution origin.
+    let request_origin = match request.csp_source() {
+        WorkerModuleGraphFetchCspSource::StaticModuleGraph => {
+            outside_origin.unwrap_or_else(|| moli_url::WebOrigin::from_url(request.initiator_url()))
+        }
+        WorkerModuleGraphFetchCspSource::DynamicImportGraph => worker_origin,
+    };
     let fetch_id = request.fetch_id();
     let completion_key = request.module_key();
     let (enforce, report, endpoints, resource_kind) = match request.csp_source() {
@@ -692,13 +702,13 @@ fn start_worker_module_graph_fetch(
     fetch_request = csp_context.apply(
         fetch_request
             .with_initiator_url(request.initiator_url())
-            .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
+            .with_request_origin(request_origin.clone())
             .with_credentials_mode(request.credentials_mode()),
     );
     let requested_url = request.url().clone();
-    let request_initiator_url = request.initiator_url().clone();
     let requested_module_type = request.module_type();
     let request_credentials_mode = request.credentials_mode();
+    let web_security_disabled = loader.request_client().web_security_disabled();
     let response_csp_context = csp_context.clone();
     let completion_tx_for_callback = completion_tx.clone();
     let response_started_at = Instant::now();
@@ -718,11 +728,12 @@ fn start_worker_module_graph_fetch(
                 )
                 .map_err(|error| error.to_string())?;
                 crate::network_host::validate_fetch_response_security_policy(
-                    &request_initiator_url,
+                    &request_origin,
                     &response.head(),
                     moli_fetch::RequestMode::Cors,
                     request_credentials_mode,
                     Default::default(),
+                    web_security_disabled,
                 )?;
                 let response_kind = requested_module_type.response_kind(
                     &response.final_url,
@@ -857,6 +868,8 @@ fn flush_worker_module_fetches(
         start_worker_module_graph_fetch(
             request,
             state.borrow().loader.clone(),
+            state.borrow().request_origin(),
+            state.borrow().module_static_import_origin.clone(),
             state.borrow().network_partition_key.clone(),
             state
                 .borrow()
@@ -1659,13 +1672,16 @@ async fn worker_main(
             crate::structured_clone::RuntimeMessageAgentCluster::ServiceWorker
         }
     };
+    let module_static_import_origin = creator_message_security
+        .as_ref()
+        .and_then(|security| security.serialized_origin())
+        .map(moli_url::WebOrigin::from_serialized);
     let message_source_security = crate::context_bootstrap::RuntimeMessageSourceSecurity::worker(
         current_script_url.as_ref(),
         creator_message_security,
         resource_owner_id,
         message_agent_cluster,
     );
-    let policy_context = policy_context.with_cors_disabled(loader.request_client().cors_disabled());
     let state = Rc::new(RefCell::new(WorkerGlobalState {
         interception_context,
         network_cancel,
@@ -1685,6 +1701,7 @@ async fn worker_main(
         script_kind,
         current_script_url,
         referrer_policy,
+        module_static_import_origin,
         module_static_import_content_security_policies,
         content_security_policies,
         content_security_report_only_policies,

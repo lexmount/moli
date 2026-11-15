@@ -520,12 +520,6 @@ MANAGED_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
 
 OPTIONAL_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
     SmokeGroup(
-        "web-security",
-        "Pinned desktop Chromium default/disabled web-security network and document contracts.",
-        "process",
-        run_web_security_group,
-    ),
-    SmokeGroup(
         "chrome-remote-interface",
         "Optional chrome-remote-interface browser/page session goal-path workflows.",
         "external",
@@ -553,6 +547,12 @@ OPTIONAL_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
 
 
 PROCESS_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "web-security",
+        "Pinned desktop Chromium default/disabled web-security network and document contracts.",
+        "process",
+        run_web_security_group,
+    ),
     SmokeGroup("target-lifecycle", "Managed-process endpoint rotation, target churn, FD bounds, and post-close navigation.",
                "process", run_target_lifecycle_group),
 )

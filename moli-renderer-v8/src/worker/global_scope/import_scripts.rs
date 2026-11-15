@@ -105,11 +105,12 @@ fn materialize_worker_import_source(
             })
         }
         "http" | "https" => {
-            let (loader, initiator_url, referrer_policy, network_partition_key) = {
+            let (loader, initiator_url, request_origin, referrer_policy, network_partition_key) = {
                 let state = state.borrow();
                 (
                     state.loader.clone(),
                     state.current_script_url.clone(),
+                    state.request_origin(),
                     state.referrer_policy.clone(),
                     state.network_partition_key.clone(),
                 )
@@ -118,6 +119,7 @@ fn materialize_worker_import_source(
                 loader,
                 script_url.clone(),
                 initiator_url,
+                request_origin,
                 referrer_policy,
                 network_partition_key,
             )
@@ -152,6 +154,7 @@ pub(super) fn fetch_worker_import_source_blocking(
     loader: crate::network::context::WorkerResourceLoader,
     script_url: Url,
     initiator_url: Option<Url>,
+    request_origin: moli_url::WebOrigin,
     referrer_policy: Option<String>,
     network_partition_key: Option<String>,
 ) -> Result<WorkerImportScriptSource, String> {
@@ -164,7 +167,7 @@ pub(super) fn fetch_worker_import_source_blocking(
     if let Some(ref initiator_url) = request_initiator_url {
         request = request
             .with_initiator_url(initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
+            .with_request_origin(request_origin.clone());
     }
     if let Some(referrer_policy) = referrer_policy {
         request = request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
@@ -198,10 +201,12 @@ pub(super) fn fetch_worker_import_source_blocking(
         &response.headers,
         response.body_bytes(),
     )?;
-    if request_initiator_url.as_ref().is_some_and(|initiator_url| {
-        matches!(initiator_url.scheme(), "http" | "https")
-            && !moli_url::same_origin(initiator_url, &response.final_url)
-    }) {
+    if !loader.request_client().web_security_disabled()
+        && request_initiator_url.as_ref().is_some_and(|initiator_url| {
+            matches!(initiator_url.scheme(), "http" | "https")
+                && !moli_url::same_origin(initiator_url, &response.final_url)
+        })
+    {
         return Err(format!(
             "Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '{}' failed to load.",
             response.final_url

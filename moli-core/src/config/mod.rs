@@ -58,6 +58,15 @@ impl BrowserConfig {
         &mut self.fetch
     }
 
+    /// Startup policy shared by the network client and document execution environments.
+    pub fn web_security_disabled(&self) -> bool {
+        self.fetch.web_security_disabled()
+    }
+
+    pub fn set_web_security_disabled(&mut self, disabled: bool) {
+        self.fetch.set_web_security_disabled(disabled);
+    }
+
     pub fn profile_dir(&self) -> Option<&Path> {
         self.profile_dir.as_deref()
     }

@@ -6,7 +6,7 @@ pub(super) fn follow_intercepted_redirect(
     head: &ResponseHead,
     document_url: &Url,
     network_headers: Option<&[(String, String)]>,
-    cors_disabled: bool,
+    web_security_disabled: bool,
 ) -> Result<Option<(Request, RedirectInfo)>, String> {
     // A manual response does not follow Location, so even an invalid URL must
     // remain opaque. The completion path still checks the response's CORS policy.
@@ -16,7 +16,7 @@ pub(super) fn follow_intercepted_redirect(
     if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
         // A fulfilled network response has the same CORS gate as a real hop.
         // Preserve that failure before rejecting an error-mode redirect.
-        if !cors_disabled {
+        if !web_security_disabled {
             request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
         }
         if request.redirect_mode() == RequestRedirectMode::Error
@@ -60,27 +60,30 @@ pub(super) fn follow_intercepted_redirect(
     }
     let cross_origin = !moli_url::same_origin(&head.final_url, &target);
     request
-        .follow_redirect(RedirectInfo {
-            source: moli_fetch::RedirectSource::Network,
-            from_url: head.final_url.clone(),
-            to_url: target,
-            status: head.status,
-            headers: head.headers.clone(),
-            network_extra_info_available: network_headers.is_some(),
-            request_extra_info: network_headers.map(|headers| {
-                moli_fetch::NetworkRequestExtraInfo {
-                    headers: headers.to_vec(),
-                    cookie_report: head.request_cookie_report.clone().unwrap_or_default(),
-                }
-            }),
-            dispatched_request: None,
-            response_extra_info: None,
-            redirect_has_extra_info: false,
-            request_cookie_report: head.request_cookie_report.clone(),
-            cookie_set_reports: head.cookie_set_reports.clone(),
-            from_cache: head.from_cache,
-            negotiated_http_version: head.negotiated_http_version,
-        })
+        .follow_redirect_with_web_security(
+            RedirectInfo {
+                source: moli_fetch::RedirectSource::Network,
+                from_url: head.final_url.clone(),
+                to_url: target,
+                status: head.status,
+                headers: head.headers.clone(),
+                network_extra_info_available: network_headers.is_some(),
+                request_extra_info: network_headers.map(|headers| {
+                    moli_fetch::NetworkRequestExtraInfo {
+                        headers: headers.to_vec(),
+                        cookie_report: head.request_cookie_report.clone().unwrap_or_default(),
+                    }
+                }),
+                dispatched_request: None,
+                response_extra_info: None,
+                redirect_has_extra_info: false,
+                request_cookie_report: head.request_cookie_report.clone(),
+                cookie_set_reports: head.cookie_set_reports.clone(),
+                from_cache: head.from_cache,
+                negotiated_http_version: head.negotiated_http_version,
+            },
+            web_security_disabled,
+        )
         .map_err(|error| error.to_string())?;
     if cross_origin {
         request

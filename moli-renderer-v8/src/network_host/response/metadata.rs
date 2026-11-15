@@ -127,6 +127,7 @@ pub(crate) fn fetch_response_metadata(
     head: &moli_fetch::ResponseHead,
     mode: RequestMode,
     delivery: Option<&crate::types::AsyncSubresourceFetchResponseFilter>,
+    web_security_disabled: bool,
 ) -> FetchResponseMetadata {
     if let Some(metadata) = delivery.and_then(|delivery| delivery.service_worker_metadata()) {
         let mut metadata = metadata.clone();
@@ -139,7 +140,7 @@ pub(crate) fn fetch_response_metadata(
         metadata.redirected |= head.redirected;
         return metadata;
     }
-    let mut metadata = head.fetch_metadata(origin, mode);
+    let mut metadata = head.fetch_metadata_with_web_security(origin, mode, web_security_disabled);
     if let Some(delivery) = delivery {
         metadata.response_type = delivery.response_type();
     }

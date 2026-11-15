@@ -40,7 +40,9 @@ impl ControlledXhrContext {
         preflight_headers: Vec<(String, String)>,
     ) -> super::ControlledResourceLoad {
         request = load.request_client().bind_browser_site_context(request);
-        info.request_headers = request.interception_request_headers();
+        info.request_headers = request.interception_request_headers_with_web_security(
+            load.request_client().web_security_disabled(),
+        );
         super::ControlledResourceLoad {
             response_policy: super::ResourceResponsePolicy::Xhr,
             service_worker: None,

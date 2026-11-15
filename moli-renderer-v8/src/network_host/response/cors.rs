@@ -46,9 +46,9 @@ pub(crate) fn validate_cors_response_chain(
     request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
-    cors_disabled: bool,
+    web_security_disabled: bool,
 ) -> Result<(), String> {
-    if cors_disabled {
+    if web_security_disabled {
         return Ok(());
     }
     let request_origin = request_origin.into();
@@ -84,11 +84,14 @@ pub(crate) fn validate_fetch_response_security_policy(
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
+    web_security_disabled: bool,
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
-    head.url_list()
-        .validate_request_mode(request_mode, &request_origin)
-        .map_err(|error| error.to_string())?;
+    if !web_security_disabled {
+        head.url_list()
+            .validate_request_mode(request_mode, &request_origin)
+            .map_err(|error| error.to_string())?;
+    }
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
@@ -103,13 +106,17 @@ pub(crate) fn validate_fetch_response_security_policy(
             policy_context.cross_origin_embedder_policy,
             policy_context.document_isolation_policy,
         )?;
-        validate_opaque_response_blocking(&request_origin, &head.final_url, &head.headers)
+        if web_security_disabled {
+            Ok(())
+        } else {
+            validate_opaque_response_blocking(&request_origin, &head.final_url, &head.headers)
+        }
     } else {
         validate_cors_response_chain(
             &request_origin,
             head,
             credentials_mode,
-            policy_context.cors_disabled,
+            web_security_disabled,
         )
     }
 }
@@ -121,6 +128,7 @@ pub(crate) fn validate_fetch_response_security_policy_with_body(
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
+    web_security_disabled: bool,
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
     validate_fetch_response_security_policy_with_body_classified(
@@ -130,6 +138,7 @@ pub(crate) fn validate_fetch_response_security_policy_with_body(
         request_mode,
         credentials_mode,
         policy_context,
+        web_security_disabled,
     )
     .map_err(FetchResponseSecurityViolation::into_message)
 }
@@ -141,11 +150,14 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
+    web_security_disabled: bool,
 ) -> Result<(), FetchResponseSecurityViolation> {
     let request_origin = request_origin.into();
-    head.url_list()
-        .validate_request_mode(request_mode, &request_origin)
-        .map_err(|error| FetchResponseSecurityViolation::Rejected(error.to_string()))?;
+    if !web_security_disabled {
+        head.url_list()
+            .validate_request_mode(request_mode, &request_origin)
+            .map_err(|error| FetchResponseSecurityViolation::Rejected(error.to_string()))?;
+    }
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
@@ -162,6 +174,9 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
             policy_context.document_isolation_policy,
         )
         .map_err(FetchResponseSecurityViolation::Rejected)?;
+        if web_security_disabled {
+            return Ok(());
+        }
         validate_opaque_response_blocking_with_body(
             &request_origin,
             &head.final_url,
@@ -174,7 +189,7 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
             &request_origin,
             head,
             credentials_mode,
-            policy_context.cors_disabled,
+            web_security_disabled,
         )
         .map_err(FetchResponseSecurityViolation::Rejected)
     }
@@ -452,11 +467,11 @@ pub(crate) fn filter_cors_exposed_response_headers(
     request_origin: impl Into<WebOrigin>,
     head: &moli_fetch::ResponseHead,
     credentials_mode: RequestCredentialsMode,
-    cors_disabled: bool,
+    web_security_disabled: bool,
 ) -> Vec<(String, Vec<u8>)> {
     let request_origin = request_origin.into();
     let response_headers = &head.headers;
-    if cors_disabled || !head.url_list().has_cross_origin_url(&request_origin) {
+    if web_security_disabled || !head.url_list().has_cross_origin_url(&request_origin) {
         return response_headers.to_vec();
     }
     if !matches!(head.final_url.scheme(), "http" | "https") {
@@ -631,37 +646,40 @@ mod tests {
     }
 
     #[test]
-    fn disabling_cors_preserves_request_mode_and_no_cors_resource_policy() {
+    fn disabled_web_security_preserves_corp_but_allows_cross_origin_request_modes() {
         let origin = url("https://document.test/");
-        let head = header_response(
-            url("https://cross-origin.test/data"),
-            vec![(
-                "Cross-Origin-Resource-Policy".to_owned(),
-                b"same-origin".to_vec(),
-            )],
-        );
-        let policy = crate::types::SubresourcePolicyContext::default().with_cors_disabled(true);
-        for mode in [RequestMode::SameOrigin, RequestMode::NoCors] {
+        let mut head = header_response(url("https://cross-origin.test/data"), Vec::new());
+        for mode in [
+            RequestMode::SameOrigin,
+            RequestMode::NoCors,
+            RequestMode::Cors,
+        ] {
             assert!(
                 validate_fetch_response_security_policy(
                     &origin,
                     &head,
                     mode,
                     RequestCredentialsMode::Omit,
-                    policy,
+                    Default::default(),
+                    true
                 )
-                .is_err()
+                .is_ok()
             );
         }
+        head.headers.push((
+            "Cross-Origin-Resource-Policy".into(),
+            b"same-origin".to_vec(),
+        ));
         assert!(
             validate_fetch_response_security_policy(
                 &origin,
                 &head,
-                RequestMode::Cors,
+                RequestMode::NoCors,
                 RequestCredentialsMode::Omit,
-                policy,
+                Default::default(),
+                true
             )
-            .is_ok()
+            .is_err()
         );
     }
 

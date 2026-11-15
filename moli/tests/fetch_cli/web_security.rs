@@ -95,6 +95,16 @@ impl Fixture {
     }
 
     fn eval(&self, page: &str, expression: &str, disabled: bool) -> Result<Value> {
+        self.eval_with_profile(page, expression, disabled, None)
+    }
+
+    fn eval_with_profile(
+        &self,
+        page: &str,
+        expression: &str,
+        disabled: bool,
+        profile: Option<&str>,
+    ) -> Result<Value> {
         let page = format!("{}{page}", self.origin);
         let expression = format!("{READ}; {expression}");
         let mut args = vec![
@@ -111,6 +121,9 @@ impl Fixture {
         ];
         if disabled {
             args.push("--disable-web-security");
+        }
+        if let Some(profile) = profile {
+            args.extend(["--profile-dir", profile]);
         }
         args.push(&page);
         let output = run_moli(args)?;
@@ -149,7 +162,7 @@ fn assert_readable(result: &Value) {
 }
 
 #[test]
-fn disabling_cors_allows_fetch_and_both_xhr_paths_without_changing_defaults() -> Result<()> {
+fn disabled_web_security_allows_fetch_and_both_xhr_paths_without_changing_defaults() -> Result<()> {
     let fixture = Fixture::new()?;
     for api in ["fetch", "xhr", "sync-xhr"] {
         for disabled in [false, true, false] {
@@ -181,7 +194,7 @@ fn disabling_cors_allows_fetch_and_both_xhr_paths_without_changing_defaults() ->
 }
 
 #[test]
-fn disabling_cors_skips_preflight_and_preserves_request_data() -> Result<()> {
+fn disabled_web_security_skips_preflight_and_preserves_request_data() -> Result<()> {
     let fixture = Fixture::new()?;
     let target = json!(format!("{}/target", fixture.target));
     for api in ["fetch", "xhr", "sync-xhr"] {
@@ -198,7 +211,7 @@ fn disabling_cors_skips_preflight_and_preserves_request_data() -> Result<()> {
                 assert_eq!(requests[0].headers["x-test"], "unchanged");
                 assert_eq!(requests[0].body.as_ref(), b"request-body");
                 assert!(!requests[0].headers.contains_key("cookie"));
-                assert_eq!(requests[0].headers["origin"].to_str()?, fixture.origin);
+                assert!(!requests[0].headers.contains_key("origin"));
             } else {
                 assert!(result["error"].is_string(), "{result}");
                 assert_eq!(requests[0].method, Method::OPTIONS);
@@ -209,7 +222,7 @@ fn disabling_cors_skips_preflight_and_preserves_request_data() -> Result<()> {
 }
 
 #[test]
-fn disabling_cors_applies_to_redirects() -> Result<()> {
+fn disabled_web_security_applies_to_redirects() -> Result<()> {
     let fixture = Fixture::new()?;
     for api in ["fetch", "xhr", "sync-xhr"] {
         let rejected = fixture.read("/redirect", api, false)?;
@@ -224,7 +237,7 @@ fn disabling_cors_applies_to_redirects() -> Result<()> {
 }
 
 #[test]
-fn workers_inherit_cors_configuration_for_fetch_and_xhr() -> Result<()> {
+fn workers_inherit_instance_security_policy_for_fetch_and_xhr() -> Result<()> {
     let fixture = Fixture::new()?;
     for api in ["fetch", "xhr", "sync-xhr"] {
         for disabled in [false, true] {
@@ -247,44 +260,53 @@ fn workers_inherit_cors_configuration_for_fetch_and_xhr() -> Result<()> {
 }
 
 #[test]
-fn disabling_cors_preserves_request_modes_csp_and_document_access() -> Result<()> {
+fn disabled_web_security_exposes_basic_responses_without_rewriting_request_mode() -> Result<()> {
     let fixture = Fixture::new()?;
     let target = json!(format!("{}/target", fixture.target));
-    let opaque = fixture.eval("/", &format!(
-        "fetch({target}, {{mode:'no-cors'}}).then(async r=>({{type:r.type, text:await r.text()}}))"
-    ), true)?;
-    assert_eq!(opaque, json!({"type":"opaque", "text":""}));
-    fixture.requests.lock().clear();
-    for (page, mode) in [("/", "same-origin"), ("/csp", "cors")] {
-        let rejected = fixture.eval(
-            page,
-            &format!(
-                "fetch({target}, {{mode:{}}}).then(()=>false,()=>true)",
-                json!(mode)
-            ),
-            true,
-        )?;
-        assert_eq!(rejected, true);
-        assert!(
-            fixture.requests.lock().is_empty(),
-            "policy rejects before network dispatch"
-        );
+    for mode in ["cors", "no-cors", "same-origin"] {
+        let result = fixture.eval("/", &format!(
+            "(async()=>{{const request=new Request({target}, {{mode:{mode:?}}}); const r=await fetch(request); return {{mode:request.mode,type:r.type,text:await r.text()}};}})()"
+        ), true)?;
+        assert_eq!(result, json!({"mode":mode,"type":"basic","text":"payload"}));
     }
-    let document_access = fixture.eval(
-        "/frames",
-        r#"
-        (() => {
-          const frame = document.querySelector('iframe');
-          try { return {origin:location.origin, readable:!!frame.contentWindow.document}; }
-          catch(error) { return {origin:location.origin, name:error.name}; }
-        })()
-    "#,
-        true,
-    )?;
-    assert_eq!(
-        document_access,
-        json!({"origin":fixture.origin, "name":"SecurityError"})
-    );
+    Ok(())
+}
+
+#[test]
+fn disabled_web_security_preserves_csp_before_network_dispatch() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let target = json!(format!("{}/target", fixture.target));
+    for disabled in [false, true] {
+        fixture.requests.lock().clear();
+        assert_eq!(
+            fixture.eval(
+                "/csp",
+                &format!("fetch({target}).then(()=>false,()=>true)"),
+                disabled
+            )?,
+            true
+        );
+        assert!(fixture.requests.lock().is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn disabled_web_security_grants_local_window_access_without_changing_origin() -> Result<()> {
+    let fixture = Fixture::new()?;
+    for disabled in [false, true, false] {
+        let result = fixture.eval("/frames", r#"(()=>{
+            const w=document.querySelector('iframe').contentWindow;
+            try { return {origin:location.origin, targetOrigin:w.origin, text:w.document.body.textContent}; }
+            catch(e) { return {origin:location.origin, error:e.name}; }
+        })()"#, disabled)?;
+        let expected = if disabled {
+            json!({"origin":fixture.origin,"targetOrigin":fixture.target,"text":"cross-origin document"})
+        } else {
+            json!({"origin":fixture.origin,"error":"SecurityError"})
+        };
+        assert_eq!(result, expected);
+    }
     Ok(())
 }
 
@@ -307,6 +329,27 @@ fn service_worker_network_fallback_inherits_cors_configuration() -> Result<()> {
         } else {
             assert!(result["error"].is_string(), "{result}");
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn reused_profile_uses_each_launch_web_security_policy() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let profile_dir = super::unique_temp_dir("web-security-reused-profile")?;
+    let profile = profile_dir.to_str().unwrap();
+    let target = json!(format!("{}/target", fixture.target));
+    for disabled in [true, false, true] {
+        let result = fixture.eval_with_profile(
+            "/",
+            &format!("(async()=>({{result:await fetch({target}).then(r=>r.text(),e=>e.name)}}))()"),
+            disabled,
+            Some(profile),
+        )?;
+        assert_eq!(
+            result["result"],
+            if disabled { "payload" } else { "TypeError" }
+        );
     }
     Ok(())
 }
