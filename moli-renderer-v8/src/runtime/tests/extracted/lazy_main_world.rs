@@ -169,6 +169,7 @@ async fn stylesheet_preload_timing_survives_a_blocked_first_external_script() {
         before["moli"]["scriptExecution"]["externalExecutionCount"], 0,
         "{before}"
     );
+    assert_main_world_count(&page, 0).await;
     release_gate.send(()).unwrap();
     drop(body_tx);
     completion_tx.send(Ok(())).unwrap();
