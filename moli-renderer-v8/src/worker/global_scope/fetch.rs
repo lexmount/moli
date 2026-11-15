@@ -836,9 +836,9 @@ pub(in crate::worker) fn continue_pending_worker_fetch_response(
         };
         if let Some(record) = pending.network_record.as_mut() {
             record.intercept_response = false;
+            record.handle_auth_requests = false;
         }
         pending.network_request_handle = request.network_request_handle;
-        pending.network_record = None;
         let Some(mut response) = pending.paused_response.take() else {
             return;
         };
@@ -910,19 +910,26 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch_response(
         };
         if let Some(record) = pending.network_record.as_mut() {
             record.intercept_response = false;
+            record.handle_auth_requests = false;
         }
         pending.network_request_handle = request.network_request_handle;
-        pending.network_record = None;
-        pending.paused_response = None;
-        let response =
-            worker_response_from_body(request.url, response_code, response_headers, response_body);
+        let Some(mut response) = pending.paused_response.take() else {
+            return;
+        };
+        response.head.status = response_code;
+        response.head.status_text = None;
+        response.head.headers = response_headers;
+        response.body = response_body.into_subresource_response_body();
         (completion_tx, response, fetch_id)
     };
     let _ = completion.0.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
             fetch_id: completion.2,
             network_request_headers: None,
-            result: Ok(WorkerFetchResponse::Materialized(Box::new(completion.1))),
+            result: Ok(WorkerFetchResponse::Streamed {
+                head: Box::new(completion.1.head),
+                body: completion.1.body,
+            }),
         },
     )));
 }
@@ -2989,6 +2996,20 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                             )
                         }),
                 }
+            };
+            let security_validation = match security_validation {
+                Ok(()) | Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(_))
+                    if pending.redirect_mode == RequestRedirectMode::Error
+                        && matches!(response_head.status, 301 | 302 | 303 | 307 | 308) =>
+                {
+                    // Interception can supply this status without taking the
+                    // transport's redirect path. Reject after security checks,
+                    // before recording success or exposing an opaque response.
+                    Err(FetchResponseSecurityViolation::Rejected(
+                        "fetch: redirect mode is error".to_owned(),
+                    ))
+                }
+                validation => validation,
             };
             let opaque_response_blocked = match security_validation {
                 Ok(()) => false,

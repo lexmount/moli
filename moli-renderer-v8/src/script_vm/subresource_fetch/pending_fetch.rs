@@ -1351,110 +1351,29 @@ impl ScriptVm {
             | PendingSubresourceContinuation::SharedWorkerFetch { .. }) => {
                 let target = WorkerOwnedFetchTarget::from_continuation(&continuation)
                     .expect("fetch continuation target");
-                let request_url = info.url.clone();
-                let request_method = info.method.clone();
-                let request_headers = info.request_headers.clone();
-                let request_body = info.request_body.clone();
-                let validation = if request_mode == moli_fetch::RequestMode::NoCors {
-                    Ok(())
-                } else {
-                    crate::network_host::validate_cors_response_chain(
-                        &info.document_url,
-                        &head,
-                        credentials_mode,
-                    )
-                };
-                match validation {
-                    Ok(()) => {
-                        let fulfilled = self.fulfill_worker_owned_fetch(
-                            target,
-                            crate::worker::WorkerPendingFetchContinue {
-                                redirect_headers: None,
-                                fetch_id: target.fetch_id(),
-                                internal_id: 0,
-                                network_request_handle: info.network_request_handle,
-                                url: request_url.clone(),
-                                method: request_method.clone(),
-                                body: info.request_body_bytes.clone(),
-                                headers: request_headers.clone(),
-                                intercept_response: false,
-                                handle_auth_requests: false,
-                                auth: None,
-                            },
-                            response_code,
-                            response_headers.clone(),
-                            response_body.clone(),
-                        );
-                        if !fulfilled {
-                            bail!(target.unavailable_message());
-                        }
-                        let request_body_bytes = info.request_body_bytes.clone();
-                        let request_handle = info.network_request_handle;
-                        let network_record = with_pending_subresource_record_identity(
-                            crate::types::SubresourceNetworkRecord::success_with_body(
-                                info.frame_id,
-                                info.document_url,
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                                info.resource_type,
-                                info.request_cookie_report,
-                                Vec::new(),
-                                info.url,
-                                response_code,
-                                response_headers,
-                                response_body.into_subresource_response_body(),
-                                Vec::new(),
-                            ),
-                            request_body_bytes,
-                            request_handle,
-                        );
-                        self._context_host
-                            .borrow_mut()
-                            .record_subresource_network(network_record);
-                    }
-                    Err(message) => {
-                        let failed = self.fail_worker_owned_fetch(
-                            target,
-                            crate::worker::WorkerPendingFetchContinue {
-                                redirect_headers: None,
-                                fetch_id: target.fetch_id(),
-                                internal_id: 0,
-                                network_request_handle: info.network_request_handle,
-                                url: request_url.clone(),
-                                method: request_method.clone(),
-                                body: info.request_body_bytes.clone(),
-                                headers: request_headers.clone(),
-                                intercept_response: false,
-                                handle_auth_requests: false,
-                                auth: None,
-                            },
-                            message.clone(),
-                        );
-                        if !failed {
-                            bail!(target.unavailable_message());
-                        }
-                        let request_body_bytes = info.request_body_bytes.clone();
-                        let request_handle = info.network_request_handle;
-                        let network_record = with_pending_subresource_record_identity(
-                            crate::types::SubresourceNetworkRecord::failure(
-                                info.frame_id,
-                                info.document_url,
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                                info.resource_type,
-                                message,
-                            ),
-                            request_body_bytes,
-                            request_handle,
-                        );
-                        self._context_host
-                            .borrow_mut()
-                            .record_subresource_network(network_record);
-                    }
+                // The Worker validates the final response and publishes its
+                // terminal using this request's original network handle.
+                let fulfilled = self.fulfill_worker_owned_fetch(
+                    target,
+                    crate::worker::WorkerPendingFetchContinue {
+                        redirect_headers: None,
+                        fetch_id: target.fetch_id(),
+                        internal_id,
+                        network_request_handle: info.network_request_handle,
+                        url: info.url,
+                        method: info.method,
+                        body: info.request_body_bytes,
+                        headers: info.request_headers,
+                        intercept_response: false,
+                        handle_auth_requests: false,
+                        auth: None,
+                    },
+                    response_code,
+                    response_headers,
+                    response_body,
+                );
+                if !fulfilled {
+                    bail!(target.unavailable_message());
                 }
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
@@ -1767,31 +1686,6 @@ impl ScriptVm {
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
-            let response = crate::protocol_types::NavigationResponse::with_status_headers_from(
-                &pending.response,
-                response_code.unwrap_or(pending.response.status),
-                response_headers
-                    .clone()
-                    .unwrap_or_else(|| pending.response.headers.clone()),
-            );
-            let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
-                Ok(response)
-            } else {
-                crate::network_host::validate_cors_response_chain(
-                    &pending.pending.info.document_url,
-                    &response.head(),
-                    pending.pending.credentials_mode,
-                )
-                .map(|()| response)
-            };
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
             let request = crate::worker::WorkerPendingFetchContinue {
                 redirect_headers: None,
                 fetch_id: target.fetch_id(),
@@ -1805,24 +1699,14 @@ impl ScriptVm {
                 handle_auth_requests: false,
                 auth: None,
             };
-            match result {
-                Ok(_) => {
-                    let continued = self.continue_worker_owned_fetch_response(
-                        target,
-                        request,
-                        response_code,
-                        response_headers,
-                    );
-                    if !continued {
-                        bail!(target.unavailable_message());
-                    }
-                }
-                Err(message) => {
-                    let failed = self.fail_worker_owned_fetch_response(target, request, message);
-                    if !failed {
-                        bail!(target.unavailable_message());
-                    }
-                }
+            let continued = self.continue_worker_owned_fetch_response(
+                target,
+                request,
+                response_code,
+                response_headers,
+            );
+            if !continued {
+                bail!(target.unavailable_message());
             }
             return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
         }
@@ -2063,37 +1947,6 @@ impl ScriptVm {
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
-            let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
-                status_text: None,
-                final_url: pending.response.final_url.clone(),
-                status: response_code,
-                headers: response_headers.clone(),
-                request_cookie_report: pending.response.request_cookie_report.clone(),
-                cookie_set_reports: Vec::new(),
-                redirected: false,
-                redirect_chain: Vec::new(),
-                from_cache: pending.response.from_cache,
-                cache_state: pending.response.cache_state,
-                negotiated_http_version: pending.response.negotiated_http_version,
-            });
-            let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
-                Ok(response)
-            } else {
-                crate::network_host::validate_cors_response_chain(
-                    &pending.pending.info.document_url,
-                    &response.head(),
-                    pending.pending.credentials_mode,
-                )
-                .map(|()| response)
-            };
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
             let request = crate::worker::WorkerPendingFetchContinue {
                 redirect_headers: None,
                 fetch_id: target.fetch_id(),
@@ -2107,13 +1960,6 @@ impl ScriptVm {
                 handle_auth_requests: false,
                 auth: None,
             };
-            if let Err(message) = result {
-                let failed = self.fail_worker_owned_fetch_response(target, request, message);
-                if !failed {
-                    bail!(target.unavailable_message());
-                }
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
             let fulfilled = self.fulfill_worker_owned_fetch_response(
                 target,
                 request,
