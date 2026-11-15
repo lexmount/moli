@@ -1,5 +1,7 @@
 use super::*;
 
+mod redirect_modes;
+
 #[tokio::test]
 async fn navigator_service_worker_intercepts_csp_report_destination() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
