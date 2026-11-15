@@ -18,8 +18,8 @@ pub(super) fn resolve_url_constructor_input(
     // A supplied base must be validated even for an absolute input. It also
     // participates in parsing same-scheme inputs such as `https:child`.
     match base {
-        Some(base) => url::Url::parse(base)?.join(input),
-        None => url::Url::parse(input),
+        Some(base) => moli_url::parse_url(input, Some(&moli_url::parse_url(base, None)?)),
+        None => moli_url::parse_url(input, None),
     }
 }
 

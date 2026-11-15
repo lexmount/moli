@@ -295,7 +295,7 @@ fn url_writable_attribute_setter_callback<'s>(
         return;
     };
     if matches!(attribute, UrlAttribute::Href) {
-        match url::Url::parse(&value) {
+        match moli_url::parse_url(&value, None) {
             Ok(url) => apply_url_update(scope, this, &url),
             Err(_) => throw_type_error(
                 scope,
