@@ -438,6 +438,9 @@ where
     ) -> impl Iterator<Item = LayoutQuad> + 'a {
         output.object_geometry.iter().filter_map(|index| {
             let object = self.object_geometry.get(*index)?;
+            if object.text_range.is_some() {
+                return None;
+            }
             let space = &self.boxes.get(object.owner.index())?.coordinate_space;
             Some(LayoutQuad {
                 points: object
@@ -607,6 +610,47 @@ where
                     .map(|space| space.local_to_viewport.map_rect(fragment.rect))
             })
             .collect::<Vec<_>>();
+        for index in &output.object_geometry {
+            let Some(object) = self.object_geometry.get(*index) else {
+                continue;
+            };
+            let Some(text) = &object.text_range else {
+                continue;
+            };
+            let range = &text.utf16_range;
+            let start = utf16_range.start.max(range.start);
+            let end = utf16_range.end.min(range.end);
+            if start > end || (start == end && !utf16_range.is_empty()) {
+                continue;
+            }
+            let length = range.end.saturating_sub(range.start).max(1) as f32;
+            let start = start.saturating_sub(range.start) as f32 / length;
+            let end = end.saturating_sub(range.start) as f32 / length;
+            let (start, end) = if text.rtl {
+                (1.0 - end, 1.0 - start)
+            } else {
+                (start, end)
+            };
+            let [top_left, top_right, bottom_right, bottom_left] = object.quad.points;
+            let interpolate = |left: LayoutPoint, right: LayoutPoint, ratio: f32| {
+                LayoutPoint::new(
+                    left.x + (right.x - left.x) * ratio,
+                    left.y + (right.y - left.y) * ratio,
+                )
+            };
+            if let Some(owner) = self.boxes.get(object.owner.index()) {
+                let transform = owner.coordinate_space.local_to_viewport;
+                quads.push(LayoutQuad {
+                    points: [
+                        interpolate(top_left, top_right, start),
+                        interpolate(top_left, top_right, end),
+                        interpolate(bottom_left, bottom_right, end),
+                        interpolate(bottom_left, bottom_right, start),
+                    ]
+                    .map(|point| transform.map_point(point)),
+                });
+            }
+        }
         quads.sort_by(|left, right| {
             let left = left.bounding_rect();
             let right = right.bounding_rect();
@@ -1005,6 +1049,7 @@ mod tests {
         tree.object_geometry.push(crate::LayoutObjectGeometry {
             source: 2,
             owner: LayoutOutputBoxId::from_index(0),
+            text_range: None,
             quad: LayoutQuad {
                 points: [
                     LayoutPoint::new(10.0, 20.0),

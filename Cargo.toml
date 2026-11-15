@@ -152,7 +152,7 @@ stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "10fc9bf
 stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "10fc9bf85318b0d38087f98b13f6b5942ae655ef" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", rev = "520374d714d69f8e2dc93c81a9d6be559ecde3ff" }
 # Preserve original SVG selector inputs and collect unclipped source geometry.
-usvg = { git = "https://github.com/lexmount/resvg", rev = "a137793a5749c27862b724eef60c4734526b14a0" }
+usvg = { git = "https://github.com/lexmount/resvg", rev = "a047e2fe0e5021ab945ff91d198c200ae4b42e32" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
 
 [patch."https://github.com/DioxusLabs/taffy"]

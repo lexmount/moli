@@ -7007,7 +7007,7 @@ dependencies = [
 [[package]]
 name = "usvg"
 version = "0.48.1"
-source = "git+https://github.com/lexmount/resvg?rev=a137793a5749c27862b724eef60c4734526b14a0#a137793a5749c27862b724eef60c4734526b14a0"
+source = "git+https://github.com/lexmount/resvg?rev=a047e2fe0e5021ab945ff91d198c200ae4b42e32#a047e2fe0e5021ab945ff91d198c200ae4b42e32"
 dependencies = [
  "base64 0.23.1",
  "data-url",
