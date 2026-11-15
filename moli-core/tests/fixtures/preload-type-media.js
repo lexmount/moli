@@ -71,7 +71,8 @@
   const observations = records.map(({link, events}, index) => {
     const [as, type, media, supported] = cases[index];
     const count = performance.getEntriesByName(link.href).length;
-    if (count !== Number(supported) || events.length !== Number(supported))
+    if (count !== Number(supported) || events.length !== Number(supported) ||
+        events.some(type => type !== 'load'))
       failures.push({context, as, type, media, supported, count, events});
     return {as, type, media, supported, count, events};
   });

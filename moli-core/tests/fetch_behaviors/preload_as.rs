@@ -121,7 +121,12 @@ async fn check_preload_admission(fixture: &str, case_count: usize) -> Result<()>
             observed["observations"].as_array().unwrap().len(),
             case_count
         );
-        assert_eq!(observed["failures"], serde_json::json!([]), "{context}");
+        assert_eq!(
+            observed["failures"],
+            serde_json::json!([]),
+            "{context}: lifecycle={:#?}",
+            page.script_execution().lifecycle_errors(),
+        );
         assert_eq!(observed["recovered"], true, "{}", observed["failures"]);
         if context == "top-dynamic" {
             parser_markup = observed["parserMarkup"].as_str().unwrap().to_owned();
