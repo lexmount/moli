@@ -543,11 +543,21 @@ jobs:
           echo "CHROMIUM_CURRENT_ORACLE_BIN=$chromium_bin" >> "$GITHUB_ENV"
           "$chromium_bin" --version
       - name: Run full CDP smoke on Chromium
+        shell: bash
         run: |
+          set -euo pipefail
+          # PR workflows can be newer than the exact HEAD checked out above.
+          available_groups=$(uv run --project moli-cdp-smoke --no-sync python -c \
+            'from moli_cdp_smoke.runner import group_listing; print(" ".join(group["name"] for group in group_listing()))')
+          chromium_overrides=()
+          for group in dom-input fetch-headers; do
+            if [[ " $available_groups " == *" $group "* ]]; then
+              chromium_overrides+=(--chromium-bin-for-group "$group=$CHROMIUM_CURRENT_ORACLE_BIN")
+            fi
+          done
           uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
             --browser chromium --strict-full-suite --repeat 2 --retries 3 --jobs 4 \
-            --chromium-bin-for-group "dom-input=$CHROMIUM_CURRENT_ORACLE_BIN" \
-            --chromium-bin-for-group "fetch-headers=$CHROMIUM_CURRENT_ORACLE_BIN" \
+            "${chromium_overrides[@]}" \
             --output-dir target/smoke/cdp-chromium-ci
       - name: Upload Chromium diagnostics
         if: ${{ always() }}
