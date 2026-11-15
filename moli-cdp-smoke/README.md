@@ -257,10 +257,24 @@ or identical scenario counts:
 | Locale/timezone across contexts | Shared process defaults and exclusive claims | Independent renderer defaults and claims |
 | Fetch body streams | Buffered seeking and explicit rejection of continuation after body take | Sequential reads; EOF may require a separate empty read |
 | Fetch.disable with paused subresources | Terminates pending Font and Image loads | Resumes pending Font and Image loads |
-| WebSocket events and URL blocking | Extra generic request events, payload lengths, and WebSocket URL blocking | Dedicated WebSocket events and payload data; URL blocking excludes WebSockets |
+| WebSocket events and URL blocking | Dedicated WebSocket events with payload lengths and WebSocket URL blocking | Dedicated WebSocket events and payload data; URL blocking excludes WebSockets |
 | Hosted file URLs | Capability error before navigation/interception | File navigation and interception; missing file returns `ERR_FILE_NOT_FOUND` |
 | Other capability boundaries | Stack timing privacy, unsupported CPU throttling, PI rename extension | Observed stack timing, successful throttling, rejected PI rename |
 | Response/manifest/idle details | Plaintext TextTrack bodies, document-relative data manifest URLs, same-site idle persistence | Base64 TextTrack bodies, data manifest URL fallbacks, cross-document idle reset |
+
+The `core` and `network` WebSocket event-family checks were recalibrated on
+2026-11-15 against the locked Playwright Chromium 145.0.7632.6. Both engines
+publish WebSockets through `Network.webSocket*`, without ordinary HTTP
+request/response/loading events. Moli retains its URL-blocking policy: a blocked
+socket emits created, handshake-request, frame-error and closed events with
+`net::ERR_BLOCKED_BY_CLIENT`. Chromium allows the same handshake and reports 101.
+The minimal local probe repeated allowed and blocked sockets three times per
+engine. Run the complete affected scenarios with:
+
+```bash
+MOLI_BIN=/path/to/moli uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke --browser moli --group core --group network --repeat 2 --jobs 2
+uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke --browser chromium --group core --group network --repeat 2 --jobs 2
+```
 
 The `dom-input` text-editing checks were calibrated on 2026-09-12 against
 Debian `/usr/bin/chromium` 145.0.7632.116 under xvfb and run unchanged against
