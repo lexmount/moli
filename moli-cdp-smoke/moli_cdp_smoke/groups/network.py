@@ -2085,60 +2085,70 @@ async def _verify_blocked_websocket_events(state: SmokeState) -> None:
     blocked_ws_url = fixture.replace("http:", "ws:", 1) + "/ws-echo"
     blocked_ws_start = len(subresource_events)
     socket_events = attach_cdp_event_collector(state.cdp, [
-        "Network.webSocketCreated", "Network.webSocketHandshakeResponseReceived",
-        "Network.webSocketFrameReceived", "Network.webSocketClosed",
+        "Network.webSocketCreated", "Network.webSocketWillSendHandshakeRequest",
+        "Network.webSocketHandshakeResponseReceived", "Network.webSocketFrameSent",
+        "Network.webSocketFrameReceived", "Network.webSocketFrameError", "Network.webSocketClosed",
     ])
     await state.cdp.send("Network.setBlockedURLs", {"urls": [blocked_ws_url + "*"]})
-    blocked_ws_result = await page.evaluate(
-        """async url => await new Promise(resolve => {
-          const socket = new WebSocket(url, 'smoke');
-          const timer = setTimeout(() => { socket.close(); resolve(`timeout:${socket.readyState}`); }, 5000);
-          socket.onopen = () => { socket.close(); clearTimeout(timer); resolve('open'); };
-          socket.onerror = () => { clearTimeout(timer); resolve(`error:${socket.readyState}`); };
-          socket.onclose = event => { clearTimeout(timer); resolve(`close:${event.code}:${event.wasClean}`); };
-        })""",
-        blocked_ws_url,
-    )
-    if not is_moli_browser():
-        assert_equal(blocked_ws_result, "open", "Chromium setBlockedURLs does not block WebSocket handshakes")
-        await wait_until(lambda: any(e["method"] == "Network.webSocketHandshakeResponseReceived"
-                                    and e["params"].get("response", {}).get("status") == 101
-                                    for e in socket_events), "Chromium WebSocket handshake event")
+    try:
+        blocked_ws_result = await page.evaluate(
+            """async url => await new Promise(resolve => {
+              const socket = new WebSocket(url, 'smoke');
+              const timer = setTimeout(() => { socket.close(); resolve(`timeout:${socket.readyState}`); }, 5000);
+              socket.onopen = () => { socket.close(); clearTimeout(timer); resolve('open'); };
+              socket.onerror = () => { clearTimeout(timer); resolve(`error:${socket.readyState}`); };
+              socket.onclose = event => { clearTimeout(timer); resolve(`close:${event.code}:${event.wasClean}`); };
+            })""",
+            blocked_ws_url,
+        )
+        if is_moli_browser():
+            if blocked_ws_result == "open" or str(blocked_ws_result).startswith("timeout:"):
+                raise SmokeError(f"blocked WebSocket should fail, got {blocked_ws_result}")
+        else:
+            assert_equal(blocked_ws_result, "open", "Chromium setBlockedURLs does not block WebSocket handshakes")
+
+        def socket_closed() -> bool:
+            created = next((e for e in socket_events if e["method"] == "Network.webSocketCreated"
+                            and e["params"].get("url") == blocked_ws_url), None)
+            return bool(created and any(e["method"] == "Network.webSocketClosed"
+                                       and e["params"].get("requestId") == created["params"]["requestId"]
+                                       for e in socket_events))
+
+        await wait_until(socket_closed, "WebSocket Network.webSocketClosed")
         created = next((e for e in socket_events if e["method"] == "Network.webSocketCreated"
                         and e["params"].get("url") == blocked_ws_url), None)
         if created is None:
-            raise SmokeError(f"missing Chromium WebSocket identity: {socket_events}")
+            raise SmokeError(f"missing WebSocket identity: {socket_events}")
         request_id = created["params"]["requestId"]
-        assert_equal(any(e["method"] == "Network.webSocketHandshakeResponseReceived"
-                         and e["params"].get("requestId") == request_id
-                         and e["params"].get("response", {}).get("status") == 101
-                         for e in socket_events), True, "Chromium WebSocket handshake succeeded")
+        current_events = [event for event in socket_events if event["params"].get("requestId") == request_id]
+        methods = [event["method"] for event in current_events]
+        if is_moli_browser():
+            assert_equal(methods, [
+                "Network.webSocketCreated",
+                "Network.webSocketWillSendHandshakeRequest",
+                "Network.webSocketFrameError",
+                "Network.webSocketClosed",
+            ], "blocked WebSocket dedicated failure event sequence")
+            assert_equal(current_events[2]["params"].get("errorMessage"), "net::ERR_BLOCKED_BY_CLIENT",
+                         "blocked WebSocket failure reason")
+        else:
+            assert_equal(any(e["method"] == "Network.webSocketHandshakeResponseReceived"
+                             and e["params"].get("response", {}).get("status") == 101
+                             for e in current_events), True, "Chromium WebSocket handshake succeeded")
+            assert_equal("Network.webSocketFrameError" in methods, False, "Chromium WebSocket handshake has no error")
         assert_equal(any(e["params"].get("requestId") == request_id
+                         or e["params"].get("request", {}).get("url") == blocked_ws_url
+                         or e["params"].get("response", {}).get("url") == blocked_ws_url
                          for e in subresource_events[blocked_ws_start:]), False,
                      "WebSocket uses its own Network event family")
+        state.record("blocked_websocket_network_events", {
+            "policy": "moli-websocket-url-blocking" if is_moli_browser() else "chromium-websocket-exclusion",
+            "requestId": request_id,
+            "eventMethods": methods,
+        })
+    finally:
+        socket_events.close()
         await state.cdp.send("Network.setBlockedURLs", {"urls": []})
-        state.record("blocked_websocket_network_events", {"policy": "chromium-websocket-exclusion"})
-        return
-    if blocked_ws_result == "open" or str(blocked_ws_result).startswith("timeout:"):
-        raise SmokeError(f"blocked WebSocket should fail, got {blocked_ws_result}")
-
-    def saw_blocked_ws_events() -> bool:
-        events = subresource_events[blocked_ws_start:]
-        request = _find_request(events, "WebSocket", blocked_ws_url)
-        request_id = request and request["params"].get("requestId")
-        return bool(
-            request_id
-            and any(
-                event["method"] == "Network.loadingFailed"
-                and event["params"].get("requestId") == request_id
-                and event["params"].get("errorText") == "net::ERR_BLOCKED_BY_CLIENT"
-                for event in events
-            )
-        )
-
-    await wait_until(saw_blocked_ws_events, "blocked WebSocket Network.loadingFailed")
-    await state.cdp.send("Network.setBlockedURLs", {"urls": []})
-    state.record("blocked_websocket_network_events")
 
 
 def _find_request(events: list[dict[str, Any]], resource_type: str, url: str) -> dict[str, Any] | None:
