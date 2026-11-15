@@ -3760,3 +3760,5 @@ fn rejects_classic_command_invalid_params() {
     assert_eq!(error.code, ClassicErrorCode::InvalidArgument);
     assert_eq!(error.message, "args must be an array");
 }
+
+mod keyboard_location;

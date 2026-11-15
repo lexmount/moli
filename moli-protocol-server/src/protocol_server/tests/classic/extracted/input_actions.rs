@@ -2252,3 +2252,50 @@ async fn webdriver_classic_actions_reject_move_target_out_of_bounds() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn webdriver_classic_actions_preserve_right_modifier_and_keypad_locations() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    let navigated=classic_request_json_with_body(app.clone(),Method::POST,&format!("/session/{session_id}/url"),json!({"url":classic_data_url(
+        "<!doctype html><input id=field><script>window.events=[];field.focus();for(const type of ['keydown','keypress','keyup'])document.addEventListener(type,e=>events.push([e.type,e.key,e.code,e.location]));</script>"
+    )})).await;
+    assert_eq!(navigated, json!({"value":null}));
+    classic_capture_layout(app.clone(), session_id).await;
+    let mut actions = Vec::new();
+    let mut expected = Vec::new();
+    for (raw, key, code, location) in [
+        ("\u{E050}", "Shift", "ShiftRight", 2),
+        ("\u{E051}", "Control", "ControlRight", 2),
+        ("\u{E052}", "Alt", "AltRight", 2),
+        ("\u{E053}", "Meta", "MetaRight", 2),
+        ("\u{E019}", "=", "NumpadEqual", 3),
+        ("\u{E054}", "PageUp", "Numpad9", 3),
+    ] {
+        actions.push(json!({"type":"keyDown","value":raw}));
+        actions.push(json!({"type":"keyUp","value":raw}));
+        expected.push(json!(["keydown", key, code, location]));
+        if key == "=" {
+            expected.push(json!(["keypress", key, code, location]));
+        }
+        expected.push(json!(["keyup", key, code, location]));
+    }
+    let response = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/actions"),
+        json!({"actions":[{"type":"key","id":"keyboard","actions":actions}]}),
+    )
+    .await;
+    assert_eq!(response, json!({"value":null}));
+    let observed = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({"script":"return events;","args":[]}),
+    )
+    .await;
+    assert_eq!(observed["value"], json!(expected));
+    let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}

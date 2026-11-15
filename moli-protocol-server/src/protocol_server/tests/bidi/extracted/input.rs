@@ -707,3 +707,59 @@ async fn websocket_bidi_input_element_origin_uses_real_geometry() {
     let _ = socket.close(None).await;
     protocol_server.abort();
 }
+
+#[tokio::test]
+async fn websocket_bidi_actions_preserve_right_modifier_and_keypad_locations() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, context) = bidi_session_with_context(addr).await;
+    let page = "data:text/html,<input id=field><script>window.events=[];field.focus();for(const type of ['keydown','keypress','keyup'])document.addEventListener(type,e=>events.push([e.type,e.key,e.code,e.location]));</script>";
+    let response = send_bidi_command_response(
+        &mut socket,
+        3,
+        "browsingContext.navigate",
+        json!({"context":context,"url":page,"wait":"complete"}),
+    )
+    .await;
+    assert_eq!(response["type"], "success");
+    let response = send_bidi_command_response(
+        &mut socket,
+        4,
+        "browsingContext.captureScreenshot",
+        json!({"context":context}),
+    )
+    .await;
+    assert_eq!(response["type"], "success");
+    let mut actions = Vec::new();
+    let mut expected = Vec::new();
+    for (raw, key, code, location) in [
+        ("\u{E050}", "Shift", "ShiftRight", 2),
+        ("\u{E051}", "Control", "ControlRight", 2),
+        ("\u{E052}", "Alt", "AltRight", 2),
+        ("\u{E053}", "Meta", "MetaRight", 2),
+        ("\u{E019}", "=", "NumpadEqual", 3),
+        ("\u{E054}", "PageUp", "Numpad9", 3),
+    ] {
+        actions.push(json!({"type":"keyDown","value":raw}));
+        actions.push(json!({"type":"keyUp","value":raw}));
+        expected.push(json!(["keydown", key, code, location]));
+        if key == "=" {
+            expected.push(json!(["keypress", key, code, location]));
+        }
+        expected.push(json!(["keyup", key, code, location]));
+    }
+    let response = send_bidi_command_response(
+        &mut socket,
+        5,
+        "input.performActions",
+        json!({"context":context,"actions":[{"type":"key","id":"keyboard","actions":actions}]}),
+    )
+    .await;
+    assert_eq!(response["type"], "success");
+    let response=send_bidi_command_response(&mut socket,6,"script.evaluate",json!({"target":{"context":context},"expression":"JSON.stringify(events)","awaitPromise":false})).await;
+    assert_eq!(response["type"], "success");
+    let observed: serde_json::Value =
+        serde_json::from_str(response["result"]["result"]["value"].as_str().unwrap()).unwrap();
+    assert_eq!(observed, json!(expected));
+    let _ = socket.close(None).await;
+    server.abort();
+}
