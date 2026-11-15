@@ -93,9 +93,30 @@ pub(super) fn layout_content(
         .flatten()?;
     let source = prepare_source(source)?;
     let mut elements = Vec::new();
+    let mut text_nodes: Vec<Vec<(DomHandle, std::ops::Range<usize>)>> = Vec::new();
+    let mut previous_text_parent = None;
     let mut pending = vec![(root, None)];
     let mut referenced_ids = HashSet::new();
     while let Some((node, parent)) = pending.pop() {
+        if let Some(text) = host
+            .node(node)
+            .filter(|node| node.is_text() || node.is_cdata_section())
+            .and_then(|node| node.data_value())
+        {
+            if !text.is_empty() {
+                // Adjacent DOM Text nodes serialize as one XML text node.
+                // Keep each original node's UTF-16 interval in that source.
+                if previous_text_parent != parent || text_nodes.is_empty() {
+                    text_nodes.push(Vec::new());
+                }
+                let group = text_nodes.last_mut().expect("serialized text group");
+                let start = group.last().map_or(0, |(_, range)| range.end);
+                group.push((node, start..start + text.encode_utf16().count()));
+                previous_text_parent = parent;
+            }
+        } else {
+            previous_text_parent = None;
+        }
         let parent = if let Some(element) = host.node(node).and_then(|node| node.as_element()) {
             if element.is_svg_element("use") {
                 let href = element.attribute("href").or_else(|| {
@@ -201,7 +222,7 @@ pub(super) fn layout_content(
             return None;
         }
     };
-    let objects = scene
+    let mut objects: Vec<_> = scene
         .objects
         .into_iter()
         .filter_map(|geometry| {
@@ -212,9 +233,10 @@ pub(super) fn layout_content(
             let [x, y, width, height] = geometry.bounds;
             let [a, b, c, d, e, f] = geometry.transform;
             let map = |x, y| moli_layout::LayoutPoint::new(a * x + c * y + e, b * x + d * y + f);
-            Some((
+            Some(moli_layout::LayoutSvgObject {
                 source,
-                moli_layout::LayoutQuad {
+                text_range: None,
+                quad: moli_layout::LayoutQuad {
                     points: [
                         map(x, y),
                         map(x + width, y),
@@ -222,9 +244,47 @@ pub(super) fn layout_content(
                         map(x, y + height),
                     ],
                 },
-            ))
+            })
         })
         .collect();
+    for geometry in scene.text {
+        let Some(nodes) = text_nodes.get(geometry.text_index) else {
+            continue;
+        };
+        for (source, source_range) in nodes {
+            let start = geometry.utf16_range.start.max(source_range.start);
+            let end = geometry.utf16_range.end.min(source_range.end);
+            if start >= end {
+                continue;
+            }
+            let length = geometry.utf16_range.len().max(1) as f32;
+            let left = (start - geometry.utf16_range.start) as f32 / length;
+            let right = (end - geometry.utf16_range.start) as f32 / length;
+            let (left, right) = if geometry.rtl {
+                (1.0 - right, 1.0 - left)
+            } else {
+                (left, right)
+            };
+            let [x, y, width, height] = geometry.bounds;
+            let [a, b, c, d, e, f] = geometry.transform;
+            let map = |x, y| moli_layout::LayoutPoint::new(a * x + c * y + e, b * x + d * y + f);
+            objects.push(moli_layout::LayoutSvgObject {
+                source: *source,
+                text_range: Some(moli_layout::LayoutTextGeometryRange {
+                    utf16_range: start - source_range.start..end - source_range.start,
+                    rtl: geometry.rtl,
+                }),
+                quad: moli_layout::LayoutQuad {
+                    points: [
+                        map(x + width * left, y),
+                        map(x + width * right, y),
+                        map(x + width * right, y + height),
+                        map(x + width * left, y + height),
+                    ],
+                },
+            });
+        }
+    }
     let image = paint.then(|| {
         let size = scene.image.tree().size();
         LayoutImageResource {
