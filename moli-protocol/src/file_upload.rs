@@ -23,9 +23,13 @@ struct FileSource {
 
 impl FileSource {
     fn read_range(&self, range: Range<usize>) -> io::Result<Vec<u8>> {
-        if let Some(root) = &self.directory_root {
-            directory_upload_metadata(root, &self.path)?;
-        }
+        let metadata = if let Some(root) = &self.directory_root {
+            directory_upload_metadata(root, &self.path)?
+        } else {
+            fs::metadata(&self.path)?
+        };
+        // A FIFO open can wait for a writer before fd-based checks can run.
+        self.check_snapshot(&metadata)?;
         let mut file = fs::File::open(&self.path)?;
         self.check_snapshot(&file.metadata()?)?;
         file.seek(SeekFrom::Start(range.start as u64))?;
@@ -495,6 +499,60 @@ mod backing_tests {
             selected[0].data.read_blocking().unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn selected_file_replaced_by_fifo_fails_without_waiting_for_a_writer() {
+        use std::{os::unix::fs::FileTypeExt, process::Command, sync::mpsc, time::Duration};
+
+        for directory_selection in [false, true] {
+            let scratch = Scratch::new("replaced-fifo");
+            let path = scratch.0.join("file.txt");
+            fs::write(&path, b"public").unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let files = {
+                let _entered = runtime.enter();
+                let selected = if directory_selection {
+                    &scratch.0
+                } else {
+                    &path
+                };
+                selected_files_from_paths(&[selected.to_string_lossy().into_owned()]).unwrap()
+            };
+            fs::remove_file(&path).unwrap();
+            assert!(
+                Command::new("mkfifo")
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(fs::metadata(&path).unwrap().file_type().is_fifo());
+
+            let (send, receive) = mpsc::channel();
+            files[0].data.read_all(Box::new(move |result| {
+                let _ = send.send(result);
+            }));
+            let result = receive.recv_timeout(Duration::from_secs(5));
+            if result.is_err() {
+                // Linux permits O_RDWR on a FIFO without a peer. Only after
+                // recording failure, unblock a regressed reader for teardown.
+                if let Ok(_writer) = fs::OpenOptions::new().read(true).write(true).open(&path) {
+                    let _ = receive.recv_timeout(Duration::from_secs(5));
+                }
+            }
+            runtime.shutdown_timeout(Duration::from_secs(1));
+            let error = result
+                .expect("FIFO read must finish without a writer")
+                .unwrap_err();
+            assert_eq!(
+                moli_file_api::file::read_error_name(&error),
+                "NotReadableError"
+            );
+        }
     }
 
     #[cfg(all(unix, target_pointer_width = "64"))]
