@@ -447,6 +447,17 @@ where
         local_overflow = LayoutRect::new(left, top, right - left, bottom - top);
     }
     if let Some(context) = layout_box.inline_layout.as_ref() {
+        // An editor's empty font strut sizes its box but has no inline ink.
+        // It must not create overflow beyond an authored block-size limit.
+        let empty_editing_content = context.requires_empty_line
+            && context
+                .text_units
+                .iter()
+                .all(|unit| unit.control || unit.collapsible_whitespace)
+            && context
+                .objects
+                .iter()
+                .all(|object| object.role != crate::inline::InlineObjectRole::Atomic);
         let origin = LayoutPoint::new(
             layout.border.left
                 + layout.padding.left
@@ -480,9 +491,15 @@ where
             .as_ref()
             .is_some_and(|layout| layout.is_rtl());
         for line in &context.fragments.lines {
+            if empty_editing_content {
+                continue;
+            }
             local_overflow = local_overflow.union(inline_bounds(line.scrollable_rect(rtl)));
         }
         for fragment in &context.fragments.text {
+            if empty_editing_content && fragment.rect.width == 0.0 {
+                continue;
+            }
             let line = &context.fragments.lines[fragment.line_index];
             let rect = inline_scrollable_rect(fragment.rect, line, rtl);
             local_overflow = local_overflow.union(inline_bounds(rect));
@@ -490,6 +507,9 @@ where
         // These are structural inline boxes. Atomic boxes and their descendants
         // contribute their own overflow through child_contribution instead.
         for fragment in &context.fragments.boxes {
+            if empty_editing_content && fragment.rect.width == 0.0 {
+                continue;
+            }
             let line = &context.fragments.lines[fragment.line_index];
             let rect = inline_scrollable_rect(fragment.rect, line, rtl);
             local_overflow = local_overflow.union(inline_bounds(rect));

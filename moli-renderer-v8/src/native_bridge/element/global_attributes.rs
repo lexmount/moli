@@ -871,7 +871,7 @@ pub(in crate::native_bridge) fn node_enter_key_hint_setter_function<'s>(
 }
 
 fn canonical_content_editable_value(raw: &str) -> &'static str {
-    let normalized = raw.trim().to_ascii_lowercase();
+    let normalized = raw.to_ascii_lowercase();
     if normalized.is_empty() || normalized == "true" {
         "true"
     } else if normalized == "false" {
@@ -891,7 +891,7 @@ fn content_editable_state_from_attr(raw: &str) -> Option<bool> {
     }
 }
 
-fn element_content_editable_state(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+pub(crate) fn element_content_editable_state(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let mut current = Some(handle);
     while let Some(candidate) = current {
         let Some(node) = runtime.dom_host().node(candidate) else {

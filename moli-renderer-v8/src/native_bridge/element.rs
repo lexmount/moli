@@ -2122,3 +2122,5 @@ pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_ha
 }
 
 pub(crate) use geometry::read_client_rects;
+
+pub(crate) use global_attributes::element_content_editable_state;

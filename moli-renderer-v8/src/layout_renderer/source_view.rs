@@ -189,6 +189,36 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }
     }
 
+    fn requires_empty_line(&self, node: Self::NodeId) -> bool {
+        use crate::native_bridge::element::element_content_editable_state;
+        let Some(element) = self.host().node(node).and_then(Node::as_element) else {
+            return false;
+        };
+        if element.namespace() != LayoutNamespace::HTML_URI
+            || !element_content_editable_state(self.runtime, node)
+        {
+            return false;
+        }
+        // Inertness follows the flattened interaction tree; editing inheritance
+        // follows ordinary DOM parents and stops at a ShadowRoot.
+        let mut ancestor = Some(node);
+        while let Some(candidate) = ancestor {
+            if self
+                .host()
+                .node(candidate)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.has_attribute_ns("", "inert"))
+            {
+                return false;
+            }
+            ancestor = self.flat_parent(candidate);
+        }
+        self.host()
+            .parent_node(node)
+            .filter(|parent| self.host().node(*parent).is_some_and(Node::is_element))
+            .is_none_or(|parent| !element_content_editable_state(self.runtime, parent))
+    }
+
     fn text_selection(&self, node: Self::NodeId) -> Option<LayoutTextSelection> {
         if self.runtime.active_element_handle() == Some(node)
             && crate::native_bridge::element::is_text_control(self.runtime, node)

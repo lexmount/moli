@@ -152,6 +152,7 @@ pub enum LayoutAnonymousReason {
     MissingTableRow,
     MissingTableCell,
     FormControlContent,
+    EmptyEditingHost,
 }
 
 impl LayoutAnonymousReason {
@@ -166,6 +167,7 @@ impl LayoutAnonymousReason {
             Self::MissingTableRow => "missing-table-row",
             Self::MissingTableCell => "missing-table-cell",
             Self::FormControlContent => "form-control-content",
+            Self::EmptyEditingHost => "empty-editing-host",
         }
     }
 }
@@ -247,6 +249,7 @@ pub struct LayoutBox<N> {
     pub(crate) style: ResolvedLayoutStyle,
     pub(crate) text: Option<Arc<str>>,
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
+    pub(crate) requires_empty_line: bool,
     /// Shared text/inline layout owned by this formatting-context root.
     pub(crate) inline_layout: Option<InlineFormattingContext>,
     /// Outermost IFC that consumes this box as a flattened or atomic item.
@@ -1228,6 +1231,7 @@ where
             style,
             text,
             text_selection: None,
+            requires_empty_line: false,
             inline_layout: None,
             inline_context_owner: None,
             inline_flattened: false,

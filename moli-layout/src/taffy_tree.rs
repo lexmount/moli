@@ -2192,6 +2192,41 @@ where
             text_layout = inline_context.laid_out.take();
         }
         let mut content_widths = std::mem::take(&mut inline_context.content_widths);
+        // Parley's empty line has logical inline/block dimensions. A vertical
+        // editor must expose that strut on the physical block axis.
+        let empty_vertical_editor = !self.boxes[id.index()].style.uses_horizontal_writing_mode()
+            && inline_context.requires_empty_line
+            && inline_context
+                .text_units
+                .iter()
+                .all(|unit| unit.control || unit.collapsible_whitespace)
+            && inline_context.objects.iter().all(|object| {
+                matches!(
+                    object.role,
+                    InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+                )
+            });
+        // A horizontal block parent supplies an automatic stretch width even
+        // for an orthogonal child. An empty vertical editor instead derives
+        // that automatic block size from its line; authored sizes and flex/grid
+        // stretch remain owned by their formatting contexts.
+        let leaf_inputs = if empty_vertical_editor
+            && style.size.width.is_auto()
+            && !self.boxes[id.index()].style.display().is_inline_level()
+            && !self.boxes[id.index()].style.is_out_of_flow()
+            && self.boxes[id.index()].layout_parent.is_some_and(|parent| {
+                let parent_style = &self.boxes[parent.index()].style;
+                parent_style.uses_horizontal_writing_mode()
+                    && !parent_style.display().is_flex_container()
+                    && !parent_style.display().is_grid_container()
+            }) {
+            LayoutInput {
+                known_dimensions: leaf_inputs.known_dimensions.map_width(|_| None),
+                ..leaf_inputs
+            }
+        } else {
+            leaf_inputs
+        };
         let mut measurement: Option<InlineMeasurement> = None;
         let context = LeafLayoutContext::new(writing_mode, resolved_aspect_ratio, scrollbar_insets);
         let mut output = compute_leaf_layout_with_context(
@@ -2210,11 +2245,16 @@ where
                     });
                 let text_layout = text_layout
                     .get_or_insert_with(|| inline_context.laid_out.clone().unwrap_or_default());
-                let result = self.measure_inline_context(
+                let (measure_dimensions, measure_space) = if empty_vertical_editor {
+                    (known_dimensions.transpose(), available_space.transpose())
+                } else {
+                    (known_dimensions, available_space)
+                };
+                let mut result = self.measure_inline_context(
                     id,
                     inputs,
-                    known_dimensions,
-                    available_space,
+                    measure_dimensions,
+                    measure_space,
                     alignment,
                     &inline_context,
                     text_layout,
@@ -2222,6 +2262,9 @@ where
                     is_floated,
                     block_context,
                 );
+                if empty_vertical_editor {
+                    result.size = result.size.transpose();
+                }
                 let size = result.size;
                 measurement = Some(result);
                 size
@@ -2258,30 +2301,62 @@ where
                     .max(0.0),
                 height: content_box_height,
             };
+            let (
+                block_content_size,
+                block_padding_start,
+                block_border_start,
+                block_scrollbar_start,
+            ) = if empty_vertical_editor {
+                if self.boxes[id.index()].style.vertical_block_start_is_right() == Some(true) {
+                    (
+                        content_box_size.width,
+                        padding.right,
+                        border.right,
+                        scrollbar_insets.right,
+                    )
+                } else {
+                    (
+                        content_box_size.width,
+                        padding.left,
+                        border.left,
+                        scrollbar_insets.left,
+                    )
+                }
+            } else {
+                (
+                    content_box_height,
+                    padding.top,
+                    border.top,
+                    scrollbar_insets.top,
+                )
+            };
             let block_offset = single_subject_block_alignment_offset(
                 Some(style.align_content),
-                content_box_height - measurement.alignment_block_size,
+                block_content_size - measurement.alignment_block_size,
             );
             measurement.translate_block_axis(block_offset);
             output.block_content_end = Some(
                 measurement.alignment_block_size
-                    + padding.top
-                    + border.top
-                    + scrollbar_insets.top
+                    + block_padding_start
+                    + block_border_start
+                    + block_scrollbar_start
                     + block_offset,
             );
-            output.scrollable_overflow_rect.bottom = output.scrollable_overflow_rect.bottom.max(
-                measurement.alignment_block_size
-                    + padding.top
-                    + padding.bottom
-                    + block_offset.max(0.0),
-            );
-            output.baselines.first = measurement
-                .first_baseline
-                .map(|baseline| baseline + padding.top + border.top + scrollbar_insets.top);
-            output.baselines.last = measurement
-                .last_baseline
-                .map(|baseline| baseline + padding.top + border.top + scrollbar_insets.top);
+            if !empty_vertical_editor {
+                output.scrollable_overflow_rect.bottom =
+                    output.scrollable_overflow_rect.bottom.max(
+                        measurement.alignment_block_size
+                            + padding.top
+                            + padding.bottom
+                            + block_offset.max(0.0),
+                    );
+            }
+            output.baselines.first = measurement.first_baseline.map(|baseline| {
+                baseline + block_padding_start + block_border_start + block_scrollbar_start
+            });
+            output.baselines.last = measurement.last_baseline.map(|baseline| {
+                baseline + block_padding_start + block_border_start + block_scrollbar_start
+            });
             if measurement.has_non_phantom_line {
                 output.margins_can_collapse_through = false;
             }
@@ -3141,6 +3216,7 @@ pub(crate) fn single_subject_block_alignment_offset(
 
 fn empty_inline_context() -> InlineFormattingContext {
     InlineFormattingContext {
+        requires_empty_line: false,
         text: "".into(),
         root_style: LayoutBoxId::from_index(0),
         measurement_layout: Some(parley::Layout::default()),

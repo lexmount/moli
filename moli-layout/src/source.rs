@@ -597,6 +597,13 @@ pub trait LayoutSource {
         None
     }
 
+    /// Whether an active editing host retains its font strut when its
+    /// formatting context would otherwise have no line. Sampled for this pass;
+    /// this does not create a selection or a caret.
+    fn requires_empty_line(&self, _node: Self::NodeId) -> bool {
+        false
+    }
+
     /// Returns the active selection for a source text node or text control.
     fn text_selection(&self, _node: Self::NodeId) -> Option<LayoutTextSelection> {
         None
