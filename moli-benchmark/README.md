@@ -31,6 +31,32 @@ that directory to view the report; no web server is required.
 
 ## Common workflows
 
+### Twelve-site native CDP fingerprint observations
+
+```bash
+# From the repository root. Use headed Chromium via a display or Xvfb.
+uv sync --project moli-benchmark --locked --extra fingerprint
+xvfb-run -a uv run --project moli-benchmark --no-sync moli-benchmark fingerprint \
+  --moli-bin target/release/moli --chrome-bin /usr/lib/chromium/chromium \
+  --output-dir target/benchmark/fingerprint-example
+```
+
+This opt-in suite captures selected results from the twelve public bot/fingerprint
+sites over CDP, without screenshots or identity overrides. It reports collection
+coverage **separately** from site verdicts; twelve reports do not mean twelve
+passes. Network failures, partial results and negative verdicts remain visible.
+Use `--baseline-report PREVIOUS_RUN` for per-metric history comparison, or repeated
+`--site ID` / `--engine moli|chromium` to narrow the matrix. See the
+[sampling contract and limitations](moli_benchmark/fingerprint/README.md).
+
+Public-site results are observational and are not a PR hard gate. CI runs only
+deterministic local DOM fixtures plus the offline runner/report unit tests. The
+fixture command is part of the **Runtime and CDP session contracts** job, not the
+default CDP smoke suite. Playwright is an optional client dependency; it connects
+to owned native browsers and does not download or launch its bundled Chromium.
+
+### Fetch and CDP workloads
+
 Run a compact fetch/CDP comparison across the configured engines:
 
 ```bash

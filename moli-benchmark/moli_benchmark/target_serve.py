@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -13,6 +14,7 @@ from typing import Any
 
 from .config import REPO_ROOT, ReservedPort, clear_proxy_env, reserve_port
 from .sampling import ResourceSampler, _stat_read, error_evidence
+from .process import _kill_process_group
 from .serve import probe_url
 from .synthetic_compare import target_enables_all_resource_fetch, target_metadata
 
@@ -45,6 +47,7 @@ class TargetServeHandle:
     ready_ms: float | None = None
     root_identity: dict | None = None
     log_state: dict[str, dict] = field(default_factory=dict)
+    native: bool = False
 
 
 def _append_log(logs: list[str], line: str) -> None:
@@ -112,6 +115,8 @@ def _serve_command(
     port: int,
     temp_dir: Path | None,
     extra_args: tuple[str, ...] = (),
+    *,
+    native: bool = False,
 ) -> list[str]:
     engine = target_metadata(target)["engine"]
     if engine == "moli" or engine == "lightpanda":
@@ -135,6 +140,15 @@ def _serve_command(
     if engine == "chrome":
         if temp_dir is None:
             raise RuntimeError("chrome target requires a temporary profile directory")
+        if native:
+            if extra_args:
+                raise ValueError("native browser launches do not accept identity or feature overrides")
+            return [
+                str(binary), "--no-first-run", "--no-default-browser-check",
+                "--no-proxy-server", "--password-store=basic", "--window-size=1920,1080",
+                "--remote-debugging-address=127.0.0.1",
+                f"--user-data-dir={temp_dir}", f"--remote-debugging-port={port}", "about:blank",
+            ]
         return [
             str(binary),
             "--headless=new",
@@ -157,7 +171,10 @@ def start_target_serve(
     extra_args: tuple[str, ...] = (),
     *,
     sample_interval_seconds: float | None = None,
+    native: bool = False,
 ) -> TargetServeHandle:
+    if native and (target not in {"moli-full-cdp", "chrome-cdp"} or extra_args):
+        raise ValueError("native mode requires moli-full-cdp or chrome-cdp without extra flags")
     engine = target_metadata(target)["engine"]
     temp_dir = (
         Path(tempfile.mkdtemp(prefix=f"moli-benchmark-{target}-"))
@@ -169,7 +186,7 @@ def start_target_serve(
     try:
         port = reserved_port.port
         endpoint = f"http://127.0.0.1:{port}"
-        command = _serve_command(target, binary, port, temp_dir, extra_args)
+        command = _serve_command(target, binary, port, temp_dir, extra_args, native=native)
         reserved_port.release_socket()
         process = subprocess.Popen(
             command,
@@ -198,6 +215,7 @@ def start_target_serve(
             log_threads=[],
             port_lease=reserved_port,
             temp_dir=temp_dir,
+            native=native,
         )
         stage = "root_identity"
         handle.root_identity = _stat_read(process.pid)
@@ -214,14 +232,15 @@ def start_target_serve(
         for label, thread in zip(("stdout", "stderr"), handle.log_threads):
             stage = f"start_{label}_reader"
             thread.start()
-        stage = "create_sampler"
-        handle.sampler = (
-            ResourceSampler(process.pid)
-            if sample_interval_seconds is None
-            else ResourceSampler(process.pid, interval_seconds=sample_interval_seconds)
-        )
-        stage = "start_sampler"
-        handle.sampler.start()
+        if not native:
+            stage = "create_sampler"
+            handle.sampler = (
+                ResourceSampler(process.pid)
+                if sample_interval_seconds is None
+                else ResourceSampler(process.pid, interval_seconds=sample_interval_seconds)
+            )
+            stage = "start_sampler"
+            handle.sampler.start()
         stage = "readiness"
         started = time.perf_counter()
         deadline = started + timeout_seconds
@@ -272,6 +291,8 @@ def start_target_serve(
             evidence["termination"] = cleanup_action(
                 "terminate_root", lambda: _terminate_process(process)
             )
+            if native and os.name == "posix":
+                cleanup_action("kill_native_process_group", lambda: _kill_process_group(process.pid, signal.SIGKILL))
             cleanup_action("release_port", reserved_port.close)
             if temp_dir is not None:
                 cleanup_action("remove_profile", lambda: shutil.rmtree(temp_dir))
@@ -324,6 +345,9 @@ def stop_target_serve(
     # This changes only teardown ordering. Every already-started sample is kept;
     # no periodic tail row is dropped or excused after an engine exit.
     termination = call("terminate_root", lambda: _terminate_process(handle.process))
+    if handle.native and os.name == "posix":
+        # Native sessions own a fresh process group, including after a root exit.
+        call("kill_native_process_group", lambda: _kill_process_group(handle.process.pid, signal.SIGKILL))
     if sampler is not None and (
         resources is None or resources.get("thread_alive_after_stop")
     ):
@@ -371,7 +395,7 @@ def stop_target_serve(
     cleanup = bool(
         termination
         and termination["exited"]
-        and resources.get("thread_alive_after_stop") is False
+        and ((handle.native and sampler is None) or resources.get("thread_alive_after_stop") is False)
         and readers_complete
         and not report["errors"]
     )
@@ -392,6 +416,7 @@ def stop_target_serve(
             sum(state.get("lines_read", 0) for state in reader_states)
             - len(handle.logs),
         ),
+        process_exited=bool(termination and termination["exited"]),
         returncode=handle.process.returncode,
         resources=resources,
         log_tail=list(handle.logs[-40:]),
