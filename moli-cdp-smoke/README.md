@@ -512,6 +512,12 @@ of peer connection leaves the other client's root and target sessions usable.
 The final matrix passed five consecutive runs against one Chromium process and
 ten runs against freshly started Moli processes.
 
+The default `xhr-document-metadata` group checks requester-origin inheritance
+through HTML/XML response Document cloning, creator iframe removal and navigation,
+sync/async redirect fragment inheritance (including explicit empty fragments and
+multiple hops), and Service Worker responses with a different final URL. It uses
+the same HTTP fixtures and assertions for Moli and Chromium.
+
 The default `xhr-sync-semantics` group was calibrated on 2026-08-09 against the
 same executable Chromium and then run unchanged against Moli. It ports 14
 Chromium-vendored XHR WPT contracts into one public-process matrix: nine success

@@ -87,6 +87,7 @@ from .groups.font_face import run_font_face_payload_group
 from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
+from .groups.xhr_document_metadata import run_xhr_document_metadata_group
 from .helpers import attach_cdp_event_collector
 from .progress import await_with_progress
 from .serve import (
@@ -264,6 +265,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 PAGE_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "xhr-document-metadata",
+        "Cross-engine XHR response Document cloning, requester lifetime, redirect fragments and Service Worker URLs.",
+        "page",
+        run_xhr_document_metadata_group,
+    ),
     SmokeGroup(
         "iframe-input",
         "Cross-engine transformed single and nested iframe hover, click, wheel, and target-Document coordinate routing.",
