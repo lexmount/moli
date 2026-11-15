@@ -448,6 +448,123 @@ fn scripting_disabled_runtime_scripts_commit_skip_without_queueing_work() {
 }
 
 #[test]
+fn scripting_disabled_early_bailouts_leave_scripts_available_for_later_preparation() {
+    for (label, connected, source, script_type, expected_reason) in [
+        ("empty", true, "", None, ScriptSkipReason::EmptyInlineScript),
+        (
+            "disconnected",
+            false,
+            "window.later = true",
+            None,
+            ScriptSkipReason::NotInMainDocument,
+        ),
+        (
+            "unsupported",
+            true,
+            "window.later = true",
+            Some("application/json"),
+            ScriptSkipReason::UnsupportedType("application/json".to_owned()),
+        ),
+    ] {
+        let url = Url::parse("https://example.test/").unwrap();
+        let document =
+            HtmlParser::SCRIPTING_ENABLED.parse(url, "<!doctype html><body></body>".to_owned());
+        let body = document.document_body_handle().unwrap();
+        let mut dom_host = DomHost::from_dom(document);
+        let script = dom_host.create_element("script");
+        if !source.is_empty() {
+            assert!(dom_host.set_text_content(script, source));
+        }
+        if let Some(script_type) = script_type {
+            assert!(dom_host.set_attribute(script, "type", script_type));
+        }
+        if connected {
+            assert!(dom_host.append_child(body, script));
+        }
+        assert_eq!(
+            super::decide_runtime_script_start(
+                &mut dom_host,
+                script,
+                ScriptElementLoaderOptions::with_scripting_enabled(false)
+            ),
+            RuntimeScriptStartDecision::Skip {
+                commit_start: false,
+                reason: Some(expected_reason)
+            },
+            "{label} must bail out before committing already-started"
+        );
+        if !connected {
+            assert!(dom_host.append_child(body, script));
+        }
+        assert!(dom_host.set_attribute(script, "type", "text/javascript"));
+        assert!(dom_host.set_text_content(script, "window.later = true"));
+        assert!(
+            matches!(
+                super::decide_runtime_script_start(
+                    &mut dom_host,
+                    script,
+                    ScriptElementLoaderOptions::with_scripting_enabled(true)
+                ),
+                RuntimeScriptStartDecision::ExecuteInlineClassic { .. }
+            ),
+            "{label} must remain eligible once its source and connection are ready"
+        );
+    }
+}
+
+#[test]
+fn legacy_event_mismatch_commits_started_and_restores_parser_state() {
+    let url = Url::parse("https://example.test/").unwrap();
+    let document =
+        HtmlParser::SCRIPTING_ENABLED.parse(url.clone(), "<!doctype html><body></body>".to_owned());
+    let body = document.document_body_handle().unwrap();
+    let mut dom_host = DomHost::from_dom(document);
+    let script = dom_host.create_element("script");
+    assert!(dom_host.set_attribute(script, "for", "window"));
+    assert!(dom_host.set_attribute(script, "event", "onclick"));
+    assert!(dom_host.set_text_content(script, "window.never = true"));
+    assert!(dom_host.append_child(body, script));
+    assert!(dom_host.set_script_parser_inserted_for_prepare(script, true));
+    assert!(dom_host.set_script_force_async(script, false));
+    let document_state = HostDocumentState::new(url);
+    let prepared = PreparedRuntimeScriptStart::analyze(&mut dom_host, &document_state, script);
+    assert!(matches!(
+        prepared.decision,
+        RuntimeScriptStartDecision::Skip {
+            commit_start: true,
+            reason: Some(ScriptSkipReason::UnsupportedType(_))
+        }
+    ));
+    let element = dom_host.node(script).and_then(Node::as_element).unwrap();
+    assert!(element.script_parser_inserted_for_prepare());
+    assert!(!element.script_async());
+    let mut scripts = HostScriptScheduler::default();
+    assert!(
+        prepared
+            .execute(&mut dom_host, &mut scripts, "legacy-mismatch")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        dom_host
+            .node(script)
+            .and_then(Node::as_element)
+            .unwrap()
+            .script_already_started()
+    );
+    assert!(dom_host.set_attribute(script, "event", "onload"));
+    let retried = PreparedRuntimeScriptStart::analyze(&mut dom_host, &document_state, script);
+    assert!(matches!(
+        retried.decision,
+        RuntimeScriptStartDecision::Skip {
+            commit_start: false,
+            reason: Some(ScriptSkipReason::AlreadyStarted)
+        }
+    ));
+    assert!(scripts.drain_dynamic_scripts().in_order.is_empty());
+}
+
+#[test]
 fn parser_inserted_classification_differs_from_dynamic_classification() {
     let parser_mode = classify_script_mode(ScriptSchedulingInput {
         parser_inserted: true,
