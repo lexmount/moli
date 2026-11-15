@@ -9,11 +9,13 @@
 mod client;
 mod config;
 mod session;
+mod stream_io;
 mod tls;
 
 pub use client::{Connector, Owner};
 pub use config::{CertificateHash, Config, CongestionControl, ConnectOptions};
 pub use session::{CloseInfo, CloseReason, RecvStream, SendStream, Session};
+pub use stream_io::{RecvStreamIo, SendStreamIo, StreamIoError};
 pub use web_transport_quinn::{ReadError, SessionError, WriteError};
 
 #[cfg(test)]
