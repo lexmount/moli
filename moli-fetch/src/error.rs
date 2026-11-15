@@ -27,6 +27,13 @@ impl std::fmt::Display for FetchCacheMiss {
 
 impl std::error::Error for FetchCacheMiss {}
 
+#[derive(Debug, thiserror::Error)]
+#[error("failed to resolve redirect location `{location}` from {base}")]
+pub(crate) struct InvalidRedirectLocation {
+    pub(crate) location: String,
+    pub(crate) base: url::Url,
+}
+
 /// Recognizes cancellation through typed causes, including shared body errors.
 pub fn is_fetch_cancelled(error: &anyhow::Error) -> bool {
     error.is::<FetchCancelled>()
@@ -45,6 +52,9 @@ pub(crate) fn browser_network_error_text(error: &anyhow::Error) -> &'static str 
 
     if error.is::<FetchCacheMiss>() {
         return "net::ERR_CACHE_MISS";
+    }
+    if error.is::<InvalidRedirectLocation>() {
+        return "net::ERR_INVALID_REDIRECT";
     }
 
     let Some(error) = error.downcast_ref::<curl::Error>() else {

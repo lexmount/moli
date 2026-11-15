@@ -457,7 +457,7 @@ impl ControlledResourceLoad {
                                 request_cookie_report: response.head.request_cookie_report.clone(),
                                 network_request_headers: network_request_headers.clone(),
                                 response_status: Some(response.head.status),
-                                response_error_reason: None,
+                                response_error: None,
                                 response_headers: response.head.headers.clone(),
                                 response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                                 from_cache: response.head.from_cache,

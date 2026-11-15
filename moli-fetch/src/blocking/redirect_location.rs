@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use url::{ParseError, Url};
 
 /// Check network redirect syntax before publishing a response. The boolean
@@ -28,8 +28,9 @@ pub(crate) fn validate_network_redirect_location(
         // though they cannot be represented by url::Url. Keep follow policy in
         // the existing strict target resolver, independently of this check.
         Err(ParseError::IdnaError) if chromium_network_authority(&location) => Ok(true),
-        Err(error) => Err(error).with_context(|| {
-            anyhow!("failed to resolve redirect location `{location}` from {base}")
+        Err(error) => Err(error).with_context(|| crate::error::InvalidRedirectLocation {
+            location: location.into_owned(),
+            base: base.clone(),
         }),
     }
 }
@@ -77,6 +78,15 @@ fn chromium_network_authority(location: &str) -> bool {
     let Ok(host) = std::str::from_utf8(&decoded) else {
         return false;
     };
+    // Initial unescaping must succeed independently of IDNA normalization.
+    // In particular, %25 leaves a forbidden literal percent; a later pass
+    // must not turn that failure into an accepted space, letter or delimiter.
+    if host
+        .bytes()
+        .any(|b| b.is_ascii() && !allowed_ascii_host_byte(b))
+    {
+        return false;
+    }
     let ascii;
     let host = if host.is_ascii() {
         host
@@ -99,15 +109,7 @@ fn chromium_network_authority(location: &str) -> bool {
     };
     // Match Chromium's ASCII host character table. Colon/brackets additionally
     // belong to IP-literal parsing, so they cannot recover an IDNA failure.
-    if host.is_empty()
-        || !host.bytes().all(|b| {
-            matches!(b,
-                b' ' | b'!' | b'"' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+'
-                | b',' | b'-' | b'.' | b'0'..=b'9' | b';' | b'=' | b'A'..=b'Z'
-                | b'_' | b'`' | b'a'..=b'z' | b'{' | b'}' | b'~'
-            )
-        })
-    {
+    if host.is_empty() || !host.bytes().all(allowed_ascii_host_byte) {
         return false;
     }
     let last = host
@@ -124,9 +126,44 @@ fn chromium_network_authority(location: &str) -> bool {
             .is_some_and(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit())))
 }
 
+fn allowed_ascii_host_byte(byte: u8) -> bool {
+    matches!(byte,
+        b' ' | b'!' | b'"' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+'
+        | b',' | b'-' | b'.' | b'0'..=b'9' | b';' | b'=' | b'A'..=b'Z'
+        | b'_' | b'`' | b'a'..=b'z' | b'{' | b'}' | b'~'
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unicode_network_authorities_do_not_decode_nested_percent_escapes() {
+        let base = Url::parse("http://source.test/page").unwrap();
+        for (location, valid) in [
+            ("http://caf%C3%A9%20domain.test/", true),
+            ("http://caf%C3%A9%2520domain.test/", false),
+            ("http://%2541.%C3%A9.test/", false),
+            ("http://caf%C3%A9%252Adomain.test/", false),
+            ("//caf%C3%A9%2520domain.test/", false),
+            // Unicode normalization can legitimately introduce an escape.
+            // Distinguish that from a forbidden % left by initial unescaping.
+            ("http://%EF%BC%8541.%C3%A9.test/", true),
+            ("http://%EF%B9%AA41.%C3%A9.test/", true),
+        ] {
+            assert_eq!(
+                validate_network_redirect_location(
+                    &base,
+                    302,
+                    &[("location".into(), location.as_bytes().to_vec())]
+                )
+                .is_ok(),
+                valid,
+                "{location}"
+            );
+        }
+    }
 
     #[test]
     fn network_redirect_validation_preserves_chromium_ascii_hosts() {

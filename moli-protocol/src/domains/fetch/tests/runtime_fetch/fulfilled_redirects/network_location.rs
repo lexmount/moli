@@ -228,6 +228,7 @@ async fn manual_redirect_response_pause_preserves_connection_error_reason() {
         for per_request in [false, true] {
             for fulfill in [false, true] {
                 let (mut ctx, _, server) = fixture().await;
+                command(&mut ctx, 64_005, "Network.enable", json!({})).await;
                 command(&mut ctx, 64_000, "Fetch.enable", json!({
                     "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":if per_request { "Request" } else { "Response" }}]
                 })).await;
@@ -291,6 +292,9 @@ async fn manual_redirect_response_pause_preserves_connection_error_reason() {
                     },
                     "worker={worker}, per_request={per_request}: {result}"
                 );
+                if !fulfill {
+                    assert_network_failure(&mut ctx, &pause, "net::ERR_CONNECTION_REFUSED").await;
+                }
                 server.abort();
             }
         }
@@ -315,6 +319,7 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
                     (ctx, None)
                 };
                 let source = format!("{base}/redirect");
+                command(&mut ctx, 62_006, "Network.enable", json!({})).await;
                 command(&mut ctx, 62_001, "Fetch.enable", json!({
                     "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":if per_request { "Request" } else { "Response" }}]
                 })).await;
@@ -382,6 +387,9 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
                     result["result"]["result"]["value"], expected,
                     "worker={worker}, preflight={preflight}, fulfill={fulfill}: {result}"
                 );
+                if !fulfill {
+                    assert_network_failure(&mut ctx, &pause, "net::ERR_INVALID_REDIRECT").await;
+                }
                 assert_eq!(
                     *requests.lock(),
                     if preflight {
@@ -397,4 +405,28 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
             }
         }
     }
+}
+async fn assert_network_failure(ctx: &mut TestContext, pause: &Value, error_text: &str) {
+    let request_id = &pause["params"]["networkId"];
+    wait_until_messages(ctx, Some("SID-1"), "terminal network failure", |messages| {
+        messages.iter().any(|message| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == *request_id
+        })
+    })
+    .await;
+    let errors = ctx
+        .sent
+        .iter()
+        .filter(|message| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == *request_id
+        })
+        .map(|message| message["params"]["errorText"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        errors,
+        vec![json!(error_text)],
+        "failed response must retain its terminal error"
+    );
 }

@@ -645,9 +645,15 @@ impl PendingSubresourceResponseState {
             network_request_headers: response
                 .and_then(|r| r.network_request_headers().map(|headers| headers.to_vec())),
             response_status: response.map(|r| r.status),
-            response_error_reason: response.is_none().then(|| {
-                crate::network_host::response_error_reason(self.network_error_text.as_deref())
-                    .to_owned()
+            response_error: self.result.as_ref().err().map(|message| {
+                moli_page_types::SubresourceResponseError {
+                    reason: crate::network_host::response_error_reason(
+                        self.network_error_text.as_deref(),
+                    )
+                    .to_owned(),
+                    message: message.clone(),
+                    network_error_text: self.network_error_text.clone(),
+                }
             }),
             response_headers: response.map_or_else(Vec::new, |r| r.headers.clone()),
             response_body: response.map_or_else(

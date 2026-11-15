@@ -325,7 +325,7 @@ impl PageScriptHost {
                 request_cookie_report: None,
                 network_request_headers: None,
                 response_status: Some(response_status),
-                response_error_reason: None,
+                response_error: None,
                 response_headers: response_headers.into_iter().collect(),
                 response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                 from_cache: false,

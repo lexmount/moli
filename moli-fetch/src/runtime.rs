@@ -1570,7 +1570,7 @@ impl RuntimeOwner {
             {
                 return Err((job.response_tx, error));
             }
-            return Err((job.response_tx, anyhow::Error::msg(error)));
+            return Err((job.response_tx, error));
         }
         let header_terminated = easy
             .as_ref()
@@ -1959,8 +1959,7 @@ impl RuntimeOwner {
                 let error = easy
                     .get_mut()
                     .streaming_mut()
-                    .and_then(StreamingResponseCollector::take_callback_error)
-                    .map(anyhow::Error::msg)
+                    .and_then(StreamingResponseCollector::take_callback_failure)
                     .unwrap_or(error);
                 fail_streaming_job_with_easy(job, Some(easy), error);
                 return;
@@ -2281,8 +2280,7 @@ impl RuntimeOwner {
                 let error = easy
                     .get_mut()
                     .raw_streaming_mut()
-                    .and_then(RawStreamingResponseCollector::take_callback_error)
-                    .map(anyhow::Error::msg)
+                    .and_then(RawStreamingResponseCollector::take_callback_failure)
                     .unwrap_or(error);
                 fail_raw_streaming_job_with_easy(job, Some(easy), error);
                 return;

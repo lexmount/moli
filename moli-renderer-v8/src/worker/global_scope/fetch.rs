@@ -2796,7 +2796,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             .initial_network_request_headers
             .get_or_insert_with(|| network_request_headers.clone());
     }
-    if completion.result.is_err() {
+    if let Err(message) = &completion.result {
         let state_ref = state.borrow();
         let Some(pending) = state_ref.pending_fetches.get(&completion.fetch_id) else {
             return;
@@ -2815,12 +2815,14 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 request_cookie_report: None,
                 network_request_headers: record.initial_network_request_headers.clone(),
                 response_status: None,
-                response_error_reason: Some(
-                    crate::network_host::response_error_reason(
+                response_error: Some(moli_page_types::SubresourceResponseError {
+                    reason: crate::network_host::response_error_reason(
                         completion.network_error_text.as_deref(),
                     )
                     .to_owned(),
-                ),
+                    message: message.clone(),
+                    network_error_text: completion.network_error_text.clone(),
+                }),
                 response_headers: Vec::new(),
                 response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                 from_cache: false,
@@ -2968,7 +2970,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
                         response_status: Some(response_head.status),
-                        response_error_reason: None,
+                        response_error: None,
                         response_headers: response_head.headers.clone(),
                         response_body: response_body.clone(),
                         from_cache: response_head.from_cache,

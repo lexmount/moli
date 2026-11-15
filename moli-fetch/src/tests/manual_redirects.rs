@@ -4,7 +4,13 @@ use super::*;
 #[tokio::test]
 async fn manual_network_redirect_rejects_invalid_location_in_every_transport() -> Result<()> {
     for transport in Transport::ALL {
-        for location in ["http://[", "http://%GG/", "http://example.test:abc/"] {
+        for location in [
+            "http://[",
+            "http://%GG/",
+            "http://example.test:abc/",
+            "http://caf%C3%A9%2520domain.test/",
+            "http://%2541.%C3%A9.test/",
+        ] {
             for status in [301, 302, 303, 307, 308] {
                 let server = ScriptedHttpServer::spawn(vec![
                     ScriptedResponse::status(status, "Redirect")

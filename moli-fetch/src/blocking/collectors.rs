@@ -134,7 +134,7 @@ pub(crate) struct ResponseCollector {
     status_text: Option<String>,
     stop_at_redirect: bool,
     current_url: Option<Url>,
-    callback_error: Option<String>,
+    callback_error: Option<Error>,
     header_terminated: bool,
     max_response_size: Option<usize>,
     response_too_large: bool,
@@ -190,7 +190,7 @@ impl ResponseCollector {
         &self.body
     }
 
-    pub(crate) fn take_callback_error(&mut self) -> Option<String> {
+    pub(crate) fn take_callback_error(&mut self) -> Option<Error> {
         self.callback_error.take()
     }
 
@@ -223,7 +223,7 @@ pub struct StreamingResponseCollector {
     response_credentials_allowed: bool,
     redirect_chain: Vec<RedirectInfo>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
-    callback_error: Option<String>,
+    callback_error: Option<Error>,
     client_hint_response_policy: Option<ClientHintResponsePolicy>,
     client_hint_restart_requested: bool,
     cancel_handle: FetchCancelHandle,
@@ -297,7 +297,7 @@ pub struct RawStreamingResponseCollector {
     redirect_chain: Vec<RedirectInfo>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
     defer_not_modified_start: bool,
-    callback_error: Option<String>,
+    callback_error: Option<Error>,
     client_hint_response_policy: Option<ClientHintResponsePolicy>,
     client_hint_restart_requested: bool,
     cancel_handle: FetchCancelHandle,
@@ -461,6 +461,10 @@ impl StreamingResponseCollector {
     }
 
     pub fn take_callback_error(&mut self) -> Option<String> {
+        self.take_callback_failure().map(|error| error.to_string())
+    }
+
+    pub(crate) fn take_callback_failure(&mut self) -> Option<Error> {
         self.callback_error.take()
     }
 
@@ -484,8 +488,8 @@ impl StreamingResponseCollector {
         // the empty separator. Run the usual cookie/cache/client-hint policy
         // before the owner decides whether to publish or retry this response.
         self.finalize_headers();
-        if let Some(error) = &self.callback_error {
-            return Err(Error::msg(error.clone()));
+        if let Some(error) = self.callback_error.take() {
+            return Err(error);
         }
         Ok(())
     }
@@ -507,7 +511,7 @@ impl StreamingResponseCollector {
         if self.response_credentials_allowed {
             let Some(request_context) = self.current_cookie_context.as_ref() else {
                 self.callback_error =
-                    Some("response cookie context was not initialized".to_owned());
+                    Some(Error::msg("response cookie context was not initialized"));
                 return false;
             };
             match store_response_cookies(
@@ -520,7 +524,7 @@ impl StreamingResponseCollector {
                     self.cookie_set_reports = reports;
                 }
                 Err(error) => {
-                    self.callback_error = Some(error.to_string());
+                    self.callback_error = Some(error);
                     return false;
                 }
             }
@@ -542,7 +546,7 @@ impl StreamingResponseCollector {
             && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
             && let Err(error) = policy.check(origin, &current_url)
         {
-            self.callback_error = Some(error);
+            self.callback_error = Some(Error::msg(error));
             return false;
         }
         // Reject malformed redirects before publishing a head or committing
@@ -550,7 +554,7 @@ impl StreamingResponseCollector {
         if let Err(error) =
             validate_network_redirect_location(&current_url, self.status, &self.headers)
         {
-            self.callback_error = Some(error.to_string());
+            self.callback_error = Some(error);
             return false;
         }
         let declared_body_length = identity_encoded_content_length(&self.headers);
@@ -886,7 +890,7 @@ impl RawStreamingResponseCollector {
         self.cache_body_writer.take()
     }
 
-    pub fn take_callback_error(&mut self) -> Option<String> {
+    pub(crate) fn take_callback_failure(&mut self) -> Option<Error> {
         self.callback_error.take()
     }
 
@@ -909,8 +913,8 @@ impl RawStreamingResponseCollector {
         // A deferred redirect or 304 has not started either, so track header
         // finalization separately to avoid applying its response policy twice.
         self.finalize_headers();
-        if let Some(error) = &self.callback_error {
-            return Err(Error::msg(error.clone()));
+        if let Some(error) = self.callback_error.take() {
+            return Err(error);
         }
         Ok(())
     }
@@ -932,7 +936,7 @@ impl RawStreamingResponseCollector {
         if self.response_credentials_allowed {
             let Some(request_context) = self.current_cookie_context.as_ref() else {
                 self.callback_error =
-                    Some("response cookie context was not initialized".to_owned());
+                    Some(Error::msg("response cookie context was not initialized"));
                 return false;
             };
             match store_response_cookies(
@@ -945,7 +949,7 @@ impl RawStreamingResponseCollector {
                     self.cookie_set_reports = reports;
                 }
                 Err(error) => {
-                    self.callback_error = Some(error.to_string());
+                    self.callback_error = Some(error);
                     return false;
                 }
             }
@@ -969,14 +973,14 @@ impl RawStreamingResponseCollector {
             && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
             && let Err(error) = policy.check(origin, &current_url)
         {
-            self.callback_error = Some(error);
+            self.callback_error = Some(Error::msg(error));
             return false;
         }
         let is_redirect_response =
             match validate_network_redirect_location(&current_url, self.status, &self.headers) {
                 Ok(is_redirect) => is_redirect,
                 Err(error) => {
-                    self.callback_error = Some(error.to_string());
+                    self.callback_error = Some(error);
                     return false;
                 }
             };
@@ -1141,7 +1145,7 @@ impl Handler for ResponseCollector {
                 && let Err(error) =
                     validate_network_redirect_location(url, self.status, &self.headers)
             {
-                self.callback_error = Some(error.to_string());
+                self.callback_error = Some(error);
                 return false;
             }
 

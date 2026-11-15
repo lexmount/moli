@@ -1143,7 +1143,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
                         response_status: Some(response_head.status),
-                        response_error_reason: None,
+                        response_error: None,
                         response_headers: response_head.headers.clone(),
                         response_body: response_body.clone(),
                         from_cache: response_head.from_cache,

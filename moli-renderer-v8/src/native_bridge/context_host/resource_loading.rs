@@ -3201,12 +3201,16 @@ impl PageScriptHost {
                 response_status_text: None,
                 skip_fetch_security_validation: false,
                 response_filter: None,
-                network_error_text: None,
+                network_error_text: info
+                    .response_error
+                    .as_ref()
+                    .and_then(|error| error.network_error_text.clone()),
                 result: info
                     .response_status
                     .ok_or_else(|| {
-                        info.response_error_reason
-                            .clone()
+                        info.response_error
+                            .as_ref()
+                            .map(|error| error.message.clone())
                             .unwrap_or_else(|| "Failed".to_owned())
                     })
                     .map(|status| {

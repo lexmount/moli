@@ -231,7 +231,7 @@ pub(crate) fn prepare_subresource_continue_action(
                 // error is only pausable by CDP Fetch; otherwise continue it to
                 // the ordinary fetchError notification instead of stranding it.
                 .filter(|stage| {
-                    response_info.response_error_reason.is_none()
+                    response_info.response_error.is_none()
                         || stage.owner_kind == PendingSubresourceFetchOwnerKind::Fetch
                 })
                 .collect::<Vec<_>>();
@@ -251,7 +251,7 @@ pub(crate) fn prepare_subresource_continue_action(
                     },
                 );
             }
-            if response_info.response_error_reason.is_some() && response_stage_sessions.is_empty() {
+            if response_info.response_error.is_some() && response_stage_sessions.is_empty() {
                 return PreparedSubresourceContinueWait::prepare(
                     conn,
                     out,
@@ -508,7 +508,10 @@ fn pending_response_request(
         request_body: response_info.request_body.clone(),
         request_cookie_report: response_info.request_cookie_report.clone(),
         response_status: response_info.response_status,
-        response_error_reason: response_info.response_error_reason.clone(),
+        response_error_reason: response_info
+            .response_error
+            .as_ref()
+            .map(|error| error.reason.clone()),
         response_headers: response_info.response_headers.clone(),
         response_head_overridden: false,
         response_body_taken_as_stream: false,
