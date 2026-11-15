@@ -621,6 +621,7 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) result: std::result::Result<NavigationResponse, String>,
+    pub(super) network_error_text: Option<String>,
     pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
     pub(super) response_status_text: Option<String>,
     pub(super) skip_fetch_security_validation: bool,
@@ -644,7 +645,10 @@ impl PendingSubresourceResponseState {
             network_request_headers: response
                 .and_then(|r| r.network_request_headers().map(|headers| headers.to_vec())),
             response_status: response.map(|r| r.status),
-            response_error_reason: response.is_none().then(|| "Failed".to_owned()),
+            response_error_reason: response.is_none().then(|| {
+                crate::network_host::response_error_reason(self.network_error_text.as_deref())
+                    .to_owned()
+            }),
             response_headers: response.map_or_else(Vec::new, |r| r.headers.clone()),
             response_body: response.map_or_else(
                 || SubresourceResponseBody::from_bytes(Vec::new()),
@@ -721,10 +725,18 @@ pub(super) enum AsyncSubresourceFetchResult {
         response: NavigationResponse,
         encoded: moli_parkable_image::ParkableImage,
     },
-    Failure(String),
+    Failure(crate::network_host::FetchError),
 }
 
 impl AsyncSubresourceFetchResult {
+    pub(super) fn from_network_result(
+        result: std::result::Result<NavigationResponse, crate::network_host::FetchError>,
+    ) -> Self {
+        match result {
+            Ok(response) => Self::Response(response),
+            Err(error) => Self::Failure(error),
+        }
+    }
     pub(super) fn bind_child_body(self, continuation: &mut PendingSubresourceContinuation) -> Self {
         if let Self::ChildDocumentResponse { response, body } = self {
             let PendingSubresourceContinuation::ChildDocument(fetch) = continuation else {
@@ -745,7 +757,7 @@ impl AsyncSubresourceFetchResult {
     ) -> Self {
         match result {
             Ok((response, encoded)) => Self::Image { response, encoded },
-            Err(error) => Self::Failure(error),
+            Err(error) => Self::Failure(error.into()),
         }
     }
 
@@ -756,7 +768,7 @@ impl AsyncSubresourceFetchResult {
         match (result, encoded) {
             (Ok(response), Some(encoded)) => Self::Image { response, encoded },
             (Ok(response), None) => Self::Response(response),
-            (Err(error), _) => Self::Failure(error),
+            (Err(error), _) => Self::Failure(error.into()),
         }
     }
 
@@ -766,7 +778,7 @@ impl AsyncSubresourceFetchResult {
             Self::Response(response)
             | Self::Image { response, .. }
             | Self::ChildDocumentResponse { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
+            Self::Failure(error) => Err(error.message),
         }
     }
 
@@ -776,7 +788,7 @@ impl AsyncSubresourceFetchResult {
             Self::Response(response)
             | Self::Image { response, .. }
             | Self::ChildDocumentResponse { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
+            Self::Failure(error) => Err(&error.message),
         }
     }
 
@@ -796,7 +808,7 @@ impl AsyncSubresourceFetchResult {
     #[cfg(test)]
     pub(super) fn err(self) -> Option<String> {
         match self {
-            Self::Failure(error) => Some(error),
+            Self::Failure(error) => Some(error.message),
             Self::Response(_) | Self::Image { .. } | Self::ChildDocumentResponse { .. } => None,
         }
     }
@@ -814,7 +826,7 @@ impl AsyncSubresourceFetchResult {
     #[cfg(test)]
     pub(super) fn expect_err(self, message: &str) -> String {
         match self {
-            Self::Failure(error) => error,
+            Self::Failure(error) => error.message,
             Self::Response(response)
             | Self::Image { response, .. }
             | Self::ChildDocumentResponse { response, .. } => {
@@ -828,7 +840,7 @@ impl From<std::result::Result<NavigationResponse, String>> for AsyncSubresourceF
     fn from(result: std::result::Result<NavigationResponse, String>) -> Self {
         match result {
             Ok(response) => Self::Response(response),
-            Err(error) => Self::Failure(error),
+            Err(error) => Self::Failure(error.into()),
         }
     }
 }

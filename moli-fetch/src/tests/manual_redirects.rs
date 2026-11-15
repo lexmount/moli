@@ -71,6 +71,7 @@ async fn manual_network_redirect_preserves_chromium_network_hosts() -> Result<()
         for location in [
             "http://example%20host.test/",
             "http://xn--a.invalid/",
+            "http://caf%C3%A9%20domain.test/",
             "//example%20host.test/",
             "//xn--a.invalid/",
         ] {
@@ -88,6 +89,39 @@ async fn manual_network_redirect_preserves_chromium_network_hosts() -> Result<()
                 format!("Chromium accepts {location} in {transport:?} manual mode")
             })?;
             assert_eq!(hits, 1);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn manual_network_redirect_retains_cookies_before_invalid_location_failure() -> Result<()> {
+    for transport in Transport::ALL {
+        for credentials in [
+            RequestCredentialsMode::Include,
+            RequestCredentialsMode::Omit,
+        ] {
+            let server = ScriptedHttpServer::spawn(vec![
+                ScriptedResponse::status(302, "Found")
+                    .with_header("Location", "http://[")
+                    .with_header("Set-Cookie", "redirect_cookie=kept; Path=/"),
+            ]);
+            let cookie_store = new_shared_browser_cookie_store();
+            let client = FetchClient::new(&FetchConfig::default(), cookie_store.clone());
+            let request = Request::get(&server.url())?
+                .with_redirect_mode(RequestRedirectMode::Manual)
+                .with_credentials_mode(credentials);
+            let url = request.url.clone();
+            let context = request.cookie_context.clone();
+            let result = transport.fetch(&client, request).await;
+            server.shutdown();
+            assert!(result.is_err(), "{transport:?}/{credentials:?}");
+            assert_eq!(
+                crate::cookie_header_for_request(&cookie_store, &url, context)?,
+                (credentials == RequestCredentialsMode::Include)
+                    .then(|| "redirect_cookie=kept".to_owned()),
+                "{transport:?}/{credentials:?}"
+            );
         }
     }
     Ok(())

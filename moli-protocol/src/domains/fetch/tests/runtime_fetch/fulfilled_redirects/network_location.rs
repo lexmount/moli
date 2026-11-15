@@ -60,6 +60,7 @@ async fn redirect_server(
                             ("location", "http://["),
                             ("content-length", "5"),
                             ("cache-control", "no-store"),
+                            ("set-cookie", "redirect_cookie=kept; Path=/"),
                         ],
                         body,
                     )
@@ -72,8 +73,18 @@ async fn redirect_server(
 }
 
 fn fetch_expression(url: &str, worker: bool, preflight: bool, abort_timeout: bool) -> String {
+    fetch_expression_with_credentials(url, worker, preflight, abort_timeout, "same-origin")
+}
+
+fn fetch_expression_with_credentials(
+    url: &str,
+    worker: bool,
+    preflight: bool,
+    abort_timeout: bool,
+    credentials: &str,
+) -> String {
     let request = format!(
-        "fetch({url:?},{{redirect:'manual'{} {}}}).then(async r=>({{type:r.type,status:r.status,body:await r.text()}}),e=>({{error:e.name}}))",
+        "fetch({url:?},{{redirect:'manual',credentials:{credentials:?}{} {}}}).then(async r=>({{type:r.type,status:r.status,body:await r.text()}}),e=>({{error:e.name}}))",
         if preflight {
             ",method:'PUT',headers:{'X-Probe':'yes'},"
         } else {
@@ -92,6 +103,51 @@ fn fetch_expression(url: &str, worker: bool, preflight: bool, abort_timeout: boo
         )
     } else {
         request
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ordinary_manual_redirect_failure_retains_cookies_in_window_and_worker() {
+    for worker in [false, true] {
+        for credentials in ["include", "omit"] {
+            let (base, _release, requests, server) = redirect_server(true).await;
+            let mut ctx = TestContext::new();
+            with_loaded_http_document(&mut ctx, &format!("{base}/page"), "SID-1", "TID-1").await;
+            enable_runtime_async(&mut ctx, "SID-1", 64_000).await;
+            let result=command(&mut ctx,64_001,"Runtime.evaluate",json!({
+                "expression":fetch_expression_with_credentials(&format!("{base}/redirect"),worker,false,false,credentials),
+                "awaitPromise":true,"returnByValue":true
+            })).await;
+            assert_eq!(
+                result["result"]["result"]["value"],
+                json!({"error":"TypeError"})
+            );
+            let cookie = command(
+                &mut ctx,
+                64_002,
+                "Runtime.evaluate",
+                json!({
+                    "expression":"document.cookie","returnByValue":true
+                }),
+            )
+            .await;
+            assert_eq!(
+                *requests.lock(),
+                ["GET"],
+                "worker={worker}, credentials={credentials}"
+            );
+            let stored = command(&mut ctx, 64_003, "Network.getAllCookies", json!({})).await;
+            assert_eq!(
+                cookie["result"]["result"]["value"],
+                if credentials == "include" {
+                    "redirect_cookie=kept"
+                } else {
+                    ""
+                },
+                "worker={worker}, credentials={credentials}, stored={stored}"
+            );
+            server.abort();
+        }
     }
 }
 
@@ -125,6 +181,15 @@ async fn ordinary_manual_redirect_rejects_before_body_in_window_and_worker() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
+    check_failed_response_pause(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_redirect_one_shot_response_pause_can_continue_or_fulfill() {
+    check_failed_response_pause(true).await;
+}
+
+async fn check_failed_response_pause(one_shot: bool) {
     for worker in [false, true] {
         for preflight in [false, true] {
             for fulfill in [false, true] {
@@ -141,11 +206,25 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
                 };
                 let source = format!("{base}/redirect");
                 command(&mut ctx, 62_001, "Fetch.enable", json!({
-                    "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":"Response"}]
+                    "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":if one_shot { "Request" } else { "Response" }}]
                 })).await;
                 command(&mut ctx, 62_002, "Runtime.evaluate", json!({
                     "expression":format!("globalThis.failedRedirectResult={};'started'", fetch_expression(&source,worker,preflight,false))
                 })).await;
+                if one_shot {
+                    let request =
+                        wait_for_request_paused(&mut ctx, &source, "initial request pause").await;
+                    assert!(request["params"].get("responseErrorReason").is_none());
+                    command(
+                        &mut ctx,
+                        62_005,
+                        "Fetch.continueRequest",
+                        json!({
+                            "requestId":request["params"]["requestId"],"interceptResponse":true
+                        }),
+                    )
+                    .await;
+                }
                 let pause =
                     wait_for_request_paused(&mut ctx, &source, "failed redirect response").await;
                 assert_eq!(pause["params"]["responseErrorReason"], "Failed");
@@ -203,5 +282,64 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
                 server.abort();
             }
         }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_connection_response_pause_preserves_transport_error_reason() {
+    for worker in [false, true] {
+        let (mut ctx, _, server) = fixture().await;
+        // Keep the address reserved without listening, so another parallel
+        // test cannot acquire this port between reservation and connection.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let source = format!("http://{}/refused", reserved.local_addr().unwrap());
+        command(
+            &mut ctx,
+            63_001,
+            "Fetch.enable",
+            json!({"patterns":[{
+                "urlPattern":source,"resourceType":"Fetch","requestStage":"Response"
+            }]}),
+        )
+        .await;
+        command(
+            &mut ctx,
+            63_002,
+            "Runtime.evaluate",
+            json!({"expression":format!(
+                "globalThis.refusedResult={};'started'",fetch_expression(&source,worker,false,false)
+            )}),
+        )
+        .await;
+        let pause = wait_for_request_paused(&mut ctx, &source, "connection refused response").await;
+        assert_eq!(
+            pause["params"]["responseErrorReason"], "ConnectionRefused",
+            "worker={worker}"
+        );
+        assert!(pause["params"].get("responseStatusCode").is_none());
+        command(
+            &mut ctx,
+            63_003,
+            "Fetch.continueResponse",
+            json!({
+                "requestId":pause["params"]["requestId"]
+            }),
+        )
+        .await;
+        let result = command(
+            &mut ctx,
+            63_004,
+            "Runtime.evaluate",
+            json!({
+                "expression":"refusedResult","awaitPromise":true,"returnByValue":true
+            }),
+        )
+        .await;
+        assert_eq!(
+            result["result"]["result"]["value"],
+            json!({"error":"TypeError"})
+        );
+        server.abort();
     }
 }

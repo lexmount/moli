@@ -139,6 +139,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
+        let mut network_error_text = None;
         let (result, network_request_headers) = if let Err(error) =
             moli_fetch::FetchUrlList::new(&resolved_url, &[])
                 .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
@@ -210,7 +211,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                     network_request_headers,
                                 )
                             }
-                            Err(error) => (Err(format!("fetch: {error}")), None),
+                            Err(error) => {
+                                network_error_text = error.network_error_text.map(str::to_owned);
+                                (Err(format!("fetch: {error}")), None)
+                            }
                         }
                     } else if !allow_headers_first {
                         // Worker fetch still resolves after the full response, but ordinary
@@ -244,7 +248,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                 };
                                 (result, network_request_headers)
                             }
-                            Err(error) => (Err(format!("fetch: {error}")), None),
+                            Err(error) => {
+                                network_error_text = error.network_error_text.map(str::to_owned);
+                                (Err(format!("fetch: {error}")), None)
+                            },
                         }
                     } else {
                         match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
@@ -297,7 +304,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                 ));
                                 return;
                             }
-                            Err(error) => (Err(format!("fetch: {error}")), None),
+                            Err(error) => {
+                                network_error_text = error.network_error_text.map(str::to_owned);
+                                (Err(format!("fetch: {error}")), None)
+                            },
                         }
                     }
                 }
@@ -309,6 +319,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
         };
         let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
             WorkerFetchCompletion {
+                network_error_text,
                 fetch_id,
                 network_request_headers,
                 result,
@@ -409,6 +420,7 @@ fn spawn_worker_fetch_service_worker(
     if !runtime.dispatch_controlled_fetch(dispatch) {
         let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
             WorkerFetchCompletion {
+                network_error_text: None,
                 fetch_id,
                 network_request_headers: None,
                 result: Err("service worker fetch dispatch failed".to_owned()),
@@ -452,6 +464,7 @@ fn spawn_worker_fetch_service_worker(
                 };
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
                     WorkerFetchCompletion {
+                        network_error_text: None,
                         fetch_id,
                         network_request_headers: None,
                         result: Ok(response),
@@ -461,6 +474,7 @@ fn spawn_worker_fetch_service_worker(
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
                     WorkerFetchCompletion {
+                        network_error_text: None,
                         fetch_id,
                         network_request_headers: None,
                         result: Err(message),
@@ -470,6 +484,7 @@ fn spawn_worker_fetch_service_worker(
             Err(_) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
                     WorkerFetchCompletion {
+                        network_error_text: None,
                         fetch_id,
                         network_request_headers: None,
                         result: Err("service worker fetch completion channel closed".to_owned()),
@@ -748,6 +763,7 @@ pub(in crate::worker) fn fail_pending_worker_fetch(
     };
     let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            network_error_text: None,
             fetch_id,
             network_request_headers: None,
             result: Err(error_text),
@@ -773,6 +789,7 @@ pub(in crate::worker) fn fail_pending_worker_fetch_auth(
     };
     let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            network_error_text: None,
             fetch_id,
             network_request_headers: None,
             result: Err(error_text),
@@ -814,6 +831,7 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch(
     };
     let _ = completion.0.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            network_error_text: None,
             fetch_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerFetchResponse::Materialized(Box::new(completion.1))),
@@ -855,6 +873,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch_response(
     };
     let _ = completion.0.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            network_error_text: None,
             fetch_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerFetchResponse::Streamed {
@@ -887,6 +906,7 @@ pub(in crate::worker) fn fail_pending_worker_fetch_response(
     };
     let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            network_error_text: None,
             fetch_id,
             network_request_headers: None,
             result: Err(error_text),
@@ -920,6 +940,7 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch_response(
     };
     let _ = completion.0.send(WorkerFetchEvent::Completion(Box::new(
         WorkerFetchCompletion {
+            network_error_text: None,
             fetch_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerFetchResponse::Materialized(Box::new(completion.1))),
@@ -2794,7 +2815,12 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 request_cookie_report: None,
                 network_request_headers: record.initial_network_request_headers.clone(),
                 response_status: None,
-                response_error_reason: Some("Failed".to_owned()),
+                response_error_reason: Some(
+                    crate::network_host::response_error_reason(
+                        completion.network_error_text.as_deref(),
+                    )
+                    .to_owned(),
+                ),
                 response_headers: Vec::new(),
                 response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                 from_cache: false,

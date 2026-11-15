@@ -63,13 +63,13 @@ impl ScriptVm {
                 )
                 .await
             };
-            result.map(|observed| {
+            AsyncSubresourceFetchResult::from_network_result(result.map(|observed| {
                 let (response, request_observation) = observed.into_parts();
                 crate::protocol_types::NavigationResponse::from(response)
                     .with_network_request_headers(
                         request_observation.map(|observation| observation.into_headers()),
                     )
-            })
+            }))
         };
         self.spawn_running_subresource_response(state, response);
     }
@@ -115,7 +115,7 @@ impl ScriptVm {
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
-        network_error_text: Option<String>,
+        mut network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result =
@@ -125,7 +125,11 @@ impl ScriptVm {
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error) => {
+                network_error_text =
+                    network_error_text.or_else(|| error.network_error_text.map(str::to_owned));
+                (None, Err(error.message))
+            }
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
                 unreachable!("body bound above")
             }
@@ -251,6 +255,7 @@ impl ScriptVm {
                         request_headers,
                         request_body,
                         result: Ok(response),
+                        network_error_text: None,
                         encoded,
                         response_status_text,
                         skip_fetch_security_validation,
@@ -293,6 +298,7 @@ impl ScriptVm {
                         request_headers,
                         request_body,
                         result: Err(error),
+                        network_error_text,
                         encoded: None,
                         response_status_text: None,
                         skip_fetch_security_validation,

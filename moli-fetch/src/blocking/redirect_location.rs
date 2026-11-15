@@ -27,14 +27,14 @@ pub(crate) fn validate_network_redirect_location(
         // IDNA processing. These hosts are observable in manual responses even
         // though they cannot be represented by url::Url. Keep follow policy in
         // the existing strict target resolver, independently of this check.
-        Err(ParseError::IdnaError) if chromium_ascii_authority(&location) => Ok(true),
+        Err(ParseError::IdnaError) if chromium_network_authority(&location) => Ok(true),
         Err(error) => Err(error).with_context(|| {
             anyhow!("failed to resolve redirect location `{location}` from {base}")
         }),
     }
 }
 
-fn chromium_ascii_authority(location: &str) -> bool {
+fn chromium_network_authority(location: &str) -> bool {
     let cleaned;
     let location = if location.contains(['\t', '\r', '\n']) {
         cleaned = location.replace(['\t', '\r', '\n'], "");
@@ -73,11 +73,34 @@ fn chromium_ascii_authority(location: &str) -> bool {
     } else {
         host_port
     };
-    let host = percent_encoding::percent_decode_str(host).collect::<Vec<_>>();
+    let decoded = percent_encoding::percent_decode_str(host).collect::<Vec<_>>();
+    let Ok(host) = std::str::from_utf8(&decoded) else {
+        return false;
+    };
+    let ascii;
+    let host = if host.is_ascii() {
+        host
+    } else {
+        // Chromium escapes spaces/asterisks before IDNA conversion, then
+        // validates the resulting ASCII host after decoding escapes again.
+        // Keep Unicode validation (including joiners/bidi) enabled; only its
+        // ASCII deny list differs from the WHATWG URL parser's.
+        let escaped = host.replace(' ', "%20").replace('*', "%2A");
+        let Ok(converted) =
+            idna::domain_to_ascii_cow(escaped.as_bytes(), idna::AsciiDenyList::EMPTY)
+        else {
+            return false;
+        };
+        let Ok(decoded) = percent_encoding::percent_decode_str(&converted).decode_utf8() else {
+            return false;
+        };
+        ascii = decoded.into_owned();
+        ascii.as_str()
+    };
     // Match Chromium's ASCII host character table. Colon/brackets additionally
     // belong to IP-literal parsing, so they cannot recover an IDNA failure.
     if host.is_empty()
-        || !host.iter().all(|b| {
+        || !host.bytes().all(|b| {
             matches!(b,
                 b' ' | b'!' | b'"' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+'
                 | b',' | b'-' | b'.' | b'0'..=b'9' | b';' | b'=' | b'A'..=b'Z'
@@ -87,7 +110,6 @@ fn chromium_ascii_authority(location: &str) -> bool {
     {
         return false;
     }
-    let host = std::str::from_utf8(&host).expect("ASCII checked above");
     let last = host
         .trim_end_matches('.')
         .rsplit('.')
@@ -111,6 +133,8 @@ mod tests {
         let base = Url::parse("http://source.test/page").unwrap();
         for target in [
             "http://example%20host.test/",
+            "http://caf%C3%A9%20domain.test/",
+            "//caf%C3%A9%20domain.test/",
             "http://xn--a.invalid/",
             "//xn--a.invalid/",
             "//example%20host.test/",
@@ -143,6 +167,11 @@ mod tests {
             "//",
             "http://xn--a.invalid:abc/",
             "http://example%20host.test:abc/",
+            "http://caf%C3%A9%2Fdomain.test/",
+            "http://caf%FF%20domain.test/",
+            "http://caf%C3%A9%E2%80%8D%20domain.test/",
+            "http://%EF%BC%83caf%C3%A9%20domain.test/",
+            "http://caf%C3%A9.xn--a.invalid/",
         ] {
             assert!(
                 validate_network_redirect_location(

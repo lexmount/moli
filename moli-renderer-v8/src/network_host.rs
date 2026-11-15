@@ -9,6 +9,8 @@ mod browser_response;
 mod csp_reports;
 mod event_source;
 mod fetch;
+mod fetch_error;
+pub(crate) use fetch_error::{FetchError, response_error_reason};
 mod fetch_surface;
 mod font_face;
 mod headers;

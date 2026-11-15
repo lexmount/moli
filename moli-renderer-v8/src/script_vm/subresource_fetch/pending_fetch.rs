@@ -562,7 +562,7 @@ impl ScriptVm {
         self.spawn_running_subresource_response(state, async move {
             match prepared {
                 Ok(()) => response.await,
-                Err(error) => AsyncSubresourceFetchResult::Failure(error),
+                Err(error) => AsyncSubresourceFetchResult::Failure(error.into()),
             }
         });
     }
@@ -1013,6 +1013,7 @@ impl ScriptVm {
             request_headers,
             request_body,
             result: Ok(response),
+            network_error_text: None,
             encoded,
             response_status_text,
             skip_fetch_security_validation,
@@ -1749,7 +1750,8 @@ impl ScriptVm {
             Ok(response) => response,
             Err(error) => {
                 let error = error.clone();
-                return self.settle_failed_subresource_response(pending, error);
+                let network_error_text = pending.network_error_text.clone();
+                return self.settle_failed_subresource_response(pending, error, network_error_text);
             }
         };
         if let Some(target) =
@@ -1921,19 +1923,22 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
-        self.settle_failed_subresource_response(pending, error_text)
+        self.settle_failed_subresource_response(pending, error_text, None)
     }
 
     fn settle_failed_subresource_response(
         &mut self,
         pending: PendingSubresourceResponseState,
         error_text: String,
+        network_error_text: Option<String>,
     ) -> Result<AsyncSubresourceCommandExecution<()>> {
         let internal_id = pending.pending.info.internal_id;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
-            let result = Err(error_text.clone());
+            let result = Err(network_error_text
+                .clone()
+                .unwrap_or_else(|| error_text.clone()));
             self.record_subresource_fetch_network_result(
                 &pending.pending,
                 &pending.request_url,
@@ -1966,7 +1971,9 @@ impl ScriptVm {
         }
         if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
         {
-            let result = Err(error_text.clone());
+            let result = Err(network_error_text
+                .clone()
+                .unwrap_or_else(|| error_text.clone()));
             self.record_subresource_fetch_network_result(
                 &pending.pending,
                 &pending.request_url,
@@ -2003,7 +2010,7 @@ impl ScriptVm {
             None,
             false,
             None,
-            None,
+            network_error_text,
             Err(error_text),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))

@@ -235,7 +235,15 @@ pub(crate) fn prepare_subresource_continue_action(
                         || stage.owner_kind == PendingSubresourceFetchOwnerKind::Fetch
                 })
                 .collect::<Vec<_>>();
-            if response_info.response_error_reason.is_some() && response_stage_sessions.is_empty() {
+            let request_selected_response = in_flight.pending.owner_kind
+                == PendingSubresourceFetchOwnerKind::Fetch
+                && !in_flight
+                    .response_stage_url_match_policy
+                    .requires_final_url_match();
+            if response_info.response_error_reason.is_some()
+                && response_stage_sessions.is_empty()
+                && !request_selected_response
+            {
                 return PreparedSubresourceContinueWait::prepare(
                     conn,
                     out,

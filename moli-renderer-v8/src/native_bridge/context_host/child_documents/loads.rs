@@ -1224,7 +1224,7 @@ impl ChildDocumentFetch {
                 ))
             }
             .await;
-            result.unwrap_or_else(AsyncSubresourceFetchResult::Failure)
+            result.unwrap_or_else(|error| AsyncSubresourceFetchResult::Failure(error.into()))
         })
     }
 
@@ -1250,7 +1250,7 @@ impl ChildDocumentFetch {
                 self.set_response_body(body);
                 Ok(response)
             }
-            AsyncSubresourceFetchResult::Failure(error) => Err(error),
+            AsyncSubresourceFetchResult::Failure(error) => Err(error.message),
             AsyncSubresourceFetchResult::Image { .. } => {
                 unreachable!("child navigation cannot receive an image result")
             }

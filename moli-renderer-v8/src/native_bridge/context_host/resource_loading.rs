@@ -3201,6 +3201,7 @@ impl PageScriptHost {
                 response_status_text: None,
                 skip_fetch_security_validation: false,
                 response_filter: None,
+                network_error_text: None,
                 result: info
                     .response_status
                     .ok_or_else(|| {

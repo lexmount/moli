@@ -8,7 +8,7 @@ use cookie_store::{
     SameSiteContextTrackMetadata as CoreSameSiteContextTrackMetadata,
     StorageAccessStatus as CoreStorageAccessStatus,
 };
-use moli_site::same_site_hosts;
+use moli_site::same_site_urls;
 use moli_storage_key::{MoliStorageKey, deserialize_serialized_storage_key, site_for_url};
 use url::Url;
 
@@ -758,16 +758,10 @@ fn approximate_same_site_context(
     schemeful: bool,
     request_type: NetworkCookieRequestType,
 ) -> NetworkSameSiteContext {
-    let Some(request_host) = request_url.host_str() else {
+    if !has_network_cookie_site(request_url) || !has_network_cookie_site(initiator_url) {
         return NetworkSameSiteContext::CrossSite;
-    };
-    let Some(initiator_host) = initiator_url.host_str() else {
-        return NetworkSameSiteContext::CrossSite;
-    };
-    let same_site = same_site_hosts(request_host, initiator_host)
-        && (!schemeful
-            || normalized_network_same_site_scheme(request_url.scheme())
-                == normalized_network_same_site_scheme(initiator_url.scheme()));
+    }
+    let same_site = same_site_urls(request_url, initiator_url, schemeful);
     if same_site {
         NetworkSameSiteContext::SameSiteStrict
     } else if matches!(request_type, NetworkCookieRequestType::TopLevelNavigation) {
@@ -777,12 +771,11 @@ fn approximate_same_site_context(
     }
 }
 
-fn normalized_network_same_site_scheme(scheme: &str) -> &str {
-    match scheme {
-        "ws" => "http",
-        "wss" => "https",
-        other => other,
-    }
+fn has_network_cookie_site(url: &Url) -> bool {
+    // Blob Workers inherit a tuple origin despite having no URL host. Keep
+    // opaque/hostless contexts cross-site, and share normal site comparison
+    // with the existing browser URL rules rather than reimplementing them.
+    url.host_str().is_some() || matches!(url.origin(), url::Origin::Tuple(..))
 }
 
 /// Classifies whether a SameSite context transition became less permissive.
@@ -808,15 +801,9 @@ pub fn site_context_downgrade_type(
 }
 
 fn approximate_is_same_site(request_url: &Url, initiator_url: &Url, schemeful: bool) -> bool {
-    let Some(request_host) = request_url.host_str() else {
-        return false;
-    };
-    let Some(initiator_host) = initiator_url.host_str() else {
-        return false;
-    };
-
-    let same_registrable_site = same_site_hosts(request_host, initiator_host);
-    same_registrable_site && (!schemeful || request_url.scheme() == initiator_url.scheme())
+    has_network_cookie_site(request_url)
+        && has_network_cookie_site(initiator_url)
+        && same_site_urls(request_url, initiator_url, schemeful)
 }
 
 fn redirect_type_for_track(
