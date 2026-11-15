@@ -5,22 +5,23 @@ impl ScriptVm {
         &mut self,
         frame_id: &str,
         url: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<u64>> {
         let Some(child_handle) = self
             ._context_host
             .borrow()
             .child_browsing_context_handle_by_frame_id(frame_id)
         else {
-            return Ok(false);
+            return Ok(None);
         };
         self.with_default_context_scope(|scope, host_ptr| {
-            Ok(
-                unsafe { &mut *host_ptr }.navigate_child_browsing_context_to_url(
-                    scope,
-                    child_handle,
-                    url,
-                ),
-            )
+            let host = unsafe { &mut *host_ptr };
+            Ok(host
+                .navigate_child_browsing_context_to_url(scope, child_handle, url)
+                .then(|| {
+                    host.current_child_navigation_load(child_handle)
+                        .map(|navigation| navigation.navigation_id().0)
+                })
+                .flatten())
         })
     }
 

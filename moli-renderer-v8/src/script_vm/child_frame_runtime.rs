@@ -347,6 +347,15 @@ impl ScriptVm {
             .collect()
     }
 
+    pub(crate) fn child_browsing_context_navigation_identity_snapshot(
+        &self,
+        frame_id: &str,
+    ) -> Option<crate::protocol_types::ChildFrameNavigationIdentitySnapshot> {
+        self._context_host
+            .borrow()
+            .child_browsing_context_navigation_identity_snapshot(frame_id)
+    }
+
     pub(crate) fn child_browsing_context_owner_node_id_by_frame_id(
         &self,
         frame_id: &str,

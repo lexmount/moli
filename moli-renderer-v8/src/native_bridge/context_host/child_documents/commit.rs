@@ -378,7 +378,10 @@ impl PageScriptHost {
             self.child_browsing_contexts
                 .get_mut(&handle)
                 .expect("committed child owner must retain its browsing context")
-                .set_current_document_loader_id(loader_id);
+                .set_current_document_loader_id(
+                    loader_id,
+                    web_mcp_navigation.map(|navigation| navigation.navigation_id().0),
+                );
         }
         let current_owner = owner_transition
             .current_owner()

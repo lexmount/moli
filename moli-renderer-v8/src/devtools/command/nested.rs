@@ -78,6 +78,7 @@ impl RendererPageCommand {
             | Self::DocumentFrontendNodeIdsForBackendNodeIds { .. }
             | Self::DocumentStorageKeySnapshot
             | Self::ChildFrameTreeSnapshot
+            | Self::ChildFrameNavigationIdentitySnapshot { .. }
             | Self::ChildFrameOwnerNodeReference { .. }
             | Self::ChildFrameDocumentRootNodeReference { .. }
             | Self::PendingSubresourceRequestCount

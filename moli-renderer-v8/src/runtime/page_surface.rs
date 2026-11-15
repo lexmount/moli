@@ -5380,6 +5380,9 @@ pub enum RendererPageCommand {
     DocumentStorageKeySnapshot,
     SearchResourceByLines(Box<RendererResourceSearchRequest>),
     ChildFrameTreeSnapshot,
+    ChildFrameNavigationIdentitySnapshot {
+        frame_id: String,
+    },
     ChildFrameOwnerNodeReference {
         inspector_session_id: Option<String>,
         frame_id: String,
@@ -5905,6 +5908,7 @@ impl RendererPageCommand {
                 | Self::LiveChildDefaultRuntimeRealmInventory
                 | Self::RuntimeConsoleMessagesWithContext
                 | Self::ChildFrameTreeSnapshot
+                | Self::ChildFrameNavigationIdentitySnapshot { .. }
                 | Self::PendingSubresourceRequestCount
         )
     }
@@ -5926,6 +5930,9 @@ impl RendererPageCommand {
             }
             Self::SetRuntimeBindingState { .. } => Some("SetRuntimeBindingState"),
             Self::ChildFrameTreeSnapshot => Some("ChildFrameTreeSnapshot"),
+            Self::ChildFrameNavigationIdentitySnapshot { .. } => {
+                Some("ChildFrameNavigationIdentitySnapshot")
+            }
             Self::ChildFrameOwnerNodeReference { .. } => Some("ChildFrameOwnerNodeReference"),
             Self::ChildFrameDocumentRootNodeReference { .. } => {
                 Some("ChildFrameDocumentRootNodeReference")
@@ -6360,6 +6367,9 @@ pub enum RendererPageReply {
     NetworkResourceLoadPreparation(crate::network::RendererNetworkResourceLoadPreparation),
     AppManifestLoadPreparation(crate::RendererAppManifestLoadPreparation),
     ChildFrameTreeSnapshots(Vec<ChildFrameTreeSnapshot>),
+    ChildFrameNavigationIdentitySnapshot(
+        Option<moli_page_types::ChildFrameNavigationIdentitySnapshot>,
+    ),
     DocumentStartScriptResult(Option<(i64, bool)>),
     #[cfg(test)]
     DocumentLifecycleEvents(Vec<RendererDocumentLifecycleEvent>),

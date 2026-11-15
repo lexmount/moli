@@ -99,7 +99,7 @@ impl PageVm {
             RendererPageCommand::NavigateChildFrame { frame_id, url } => self
                 .vm_mut()
                 .navigate_child_browsing_context_frame_to_url(&frame_id, &url)
-                .map(RendererPageReply::Bool),
+                .map(RendererPageReply::OptionalU64),
             RendererPageCommand::NavigateTopLevelSameDocument { url, replace_current } => self
                 .vm_mut()
                 .navigate_top_level_same_document_from_browser(&url, replace_current)
@@ -908,6 +908,11 @@ impl PageVm {
                 Ok(RendererPageReply::ChildFrameTreeSnapshots(
                     self.vm_mut()
                         .child_browsing_context_frame_tree_snapshot_for_protocol(),
+                ))
+            }
+            RendererPageCommand::ChildFrameNavigationIdentitySnapshot { frame_id } => {
+                Ok(RendererPageReply::ChildFrameNavigationIdentitySnapshot(
+                    self.vm().child_browsing_context_navigation_identity_snapshot(&frame_id),
                 ))
             }
             RendererPageCommand::ChildFrameOwnerNodeReference {

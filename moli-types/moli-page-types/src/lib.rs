@@ -3445,6 +3445,15 @@ pub struct ChildFrameTreeSnapshot {
     pub child_frames: Vec<ChildFrameTreeSnapshot>,
 }
 
+/// One frame's committed navigation identity, independent of tree depth or
+/// whether the protocol has consumed its attachment/commit observations yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildFrameNavigationIdentitySnapshot {
+    pub navigation_id: Option<u64>,
+    pub loader_id: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ChildFrameAttachmentSnapshot {
     pub frame_id: String,

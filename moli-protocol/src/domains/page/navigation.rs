@@ -74,7 +74,6 @@ pub(super) struct PendingChildFrameNavigateCommand {
     url: String,
     wait: DevToolsNavigationWait,
     frame_id: String,
-    previous_loader_id: Option<String>,
     result_projection: NavigationResultProjection,
 }
 
@@ -89,7 +88,6 @@ pub(super) struct ChildFrameNavigationInput {
     pub(super) url: String,
     pub(super) wait: DevToolsNavigationWait,
     pub(super) frame_id: String,
-    pub(super) previous_loader_id: Option<String>,
     pub(super) result_projection: NavigationResultProjection,
 }
 
@@ -219,7 +217,6 @@ impl PendingChildFrameNavigateCommand {
             url: self.url,
             wait: self.wait,
             frame_id: self.frame_id,
-            previous_loader_id: self.previous_loader_id,
             result_projection: self.result_projection,
         };
         CompletedChildFrameNavigateCommand { input, completed }
@@ -1084,15 +1081,22 @@ fn direct_navigation_result_from_fetch_continuation(
 }
 
 fn superseded_cdp_page_navigate_payload(state: &NavigationDispatchState) -> Option<Value> {
-    if state.result_projection.protocol() != FrontendProtocol::Cdp {
+    aborted_cdp_navigation_result_payload(&state.result_projection, &state.frame_id)
+}
+
+pub(super) fn aborted_cdp_navigation_result_payload(
+    result: &NavigationResultProjection,
+    frame_id: &str,
+) -> Option<Value> {
+    if result.protocol() != FrontendProtocol::Cdp {
         return None;
     }
-    let mut result = state.result_projection.payload().clone();
+    let mut result = result.payload().clone();
     let payload = result.as_object_mut()?;
     if !payload.contains_key("frameId") {
         return None;
     }
-    payload.insert("frameId".to_owned(), json!(state.frame_id));
+    payload.insert("frameId".to_owned(), json!(frame_id));
     payload.remove("loaderId");
     payload.insert("errorText".to_owned(), json!(NET_ERR_ABORTED_ERROR_TEXT));
     payload.insert("isDownload".to_owned(), json!(false));
@@ -1302,9 +1306,6 @@ fn start_child_frame_navigate_command(
             crate::conn::NoDocumentLoaded,
         ));
     };
-    let previous_loader_id = conn
-        .browsing_context_owner(frame_id)
-        .and_then(|frame| frame.loader_id);
     let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
@@ -1320,7 +1321,6 @@ fn start_child_frame_navigate_command(
                 url: url.to_owned(),
                 wait,
                 frame_id: frame_id.to_owned(),
-                previous_loader_id,
                 result_projection,
             }))
         }
