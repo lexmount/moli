@@ -769,8 +769,9 @@ fn xml_http_request_abort_uses_internal_state_and_resets_completed_response() {
     );
 }
 
-#[test]
-fn xml_http_request_abort_preserves_request_started_by_readystatechange() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_abort_preserves_request_started_by_readystatechange() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-abort-reopen.test/");
     vm.eval(
         r#"
@@ -802,8 +803,9 @@ fn xml_http_request_abort_preserves_request_started_by_readystatechange() {
 "#,
     )
     .expect("abort readystatechange should be able to reopen and send another request");
-    vm.eval("0")
-        .expect("follow-up checkpoint should deliver the replacement request");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     assert_eq!(
         vm.eval("__xhrAbortReopenEvents.join('|')")
             .expect("replacement request events"),
@@ -1453,8 +1455,9 @@ fn progress_event_interface_matches_webidl_property_shape() {
         "function|1|false|false|false|true|true|lengthComputable:true:true:true,loaded:true:true:true,total:true:true:true|false|true|undefined"
     );
 }
-#[test]
-fn xml_http_request_data_url_and_loadstart_state_transitions() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_data_url_and_loadstart_state_transitions() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-loadstart-data.test/");
 
     vm.eval(
@@ -1496,8 +1499,9 @@ fn xml_http_request_data_url_and_loadstart_state_transitions() {
 "#,
     )
     .expect("XHR data URL loadstart probe should run");
-    vm.eval("0")
-        .expect("follow-up checkpoint should drain queued XHR completion");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     let result = vm
         .eval("globalThis.__xhrLoadstartEvents.join('|')")
         .expect("XHR data URL loadstart events should be readable after microtasks");
@@ -1507,8 +1511,9 @@ fn xml_http_request_data_url_and_loadstart_state_transitions() {
         "loadstart:1|InvalidStateError|InvalidStateError|InvalidStateError|abort-loadstart:1|abort-event:4|abort-after:0|load:BB-8"
     );
 }
-#[test]
-fn xml_http_request_data_url_loads_materialized_body() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_data_url_loads_materialized_body() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-data-url.test/");
 
     vm.eval(
@@ -1523,8 +1528,9 @@ fn xml_http_request_data_url_loads_materialized_body() {
 "#,
     )
     .expect("XHR data URL setup should run");
-    vm.eval("0")
-        .expect("follow-up checkpoint should drain queued data URL completion");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     let result = vm
         .eval("__xhrDataEvents.join('|')")
         .expect("XHR data URL event list should be readable");
@@ -1532,8 +1538,9 @@ fn xml_http_request_data_url_loads_materialized_body() {
     assert_eq!(result, "200:BB-8:data:text/plain;base64,QkItOA==");
 }
 
-#[test]
-fn xml_http_request_queued_deliveries_keep_their_own_request_and_payload() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_queued_deliveries_keep_their_own_request_and_payload() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-pending-owner.test/");
     vm.eval(
         r#"
@@ -1563,17 +1570,19 @@ fn xml_http_request_queued_deliveries_keep_their_own_request_and_payload() {
 "#,
     )
     .expect("XHR replacements should enqueue independent outcomes");
-    vm.eval("0")
-        .expect("queued XHR deliveries should reach their checkpoint");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     assert_eq!(
         vm.eval("JSON.stringify(__xhrPendingOwners)")
             .expect("XHR delivery order and response data"),
-        r#"[["text","marker"],["text","load",200,"new"],["binary","marker"],["binary","load",200,[0,255,128]],["json","marker"],["json","load",200,{"new":true}],["failure","marker"],["failure","load",200,"recovered"]]"#
+        r#"[["text","marker"],["binary","marker"],["json","marker"],["failure","marker"],["text","load",200,"new"],["binary","load",200,[0,255,128]],["json","load",200,{"new":true}],["failure","load",200,"recovered"]]"#
     );
 }
 
-#[test]
-fn xml_http_request_queued_delivery_cannot_complete_an_aborted_or_reopened_request() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_queued_delivery_cannot_complete_an_aborted_or_reopened_request() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-pending-retirement.test/");
     vm.eval(
         r#"
@@ -1597,8 +1606,9 @@ fn xml_http_request_queued_delivery_cannot_complete_an_aborted_or_reopened_reque
 "#,
     )
     .expect("pending XHRs should be cancellable or reusable before delivery");
-    vm.eval("0")
-        .expect("obsolete XHR deliveries should be discarded at the checkpoint");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     assert_eq!(
         vm.eval(
             "JSON.stringify([__xhrPendingRetirement, \
@@ -1610,8 +1620,9 @@ fn xml_http_request_queued_delivery_cannot_complete_an_aborted_or_reopened_reque
     );
 }
 
-#[test]
-fn xml_http_request_dispatches_download_progress_before_done() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_dispatches_download_progress_before_done() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-download-progress.test/");
 
     vm.eval(
@@ -1629,8 +1640,9 @@ fn xml_http_request_dispatches_download_progress_before_done() {
 "#,
     )
     .expect("XHR download progress probe should run");
-    vm.eval("0")
-        .expect("follow-up checkpoint should drain queued XHR completion");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
 
     assert_eq!(
         vm.eval("globalThis.__xhrDownloadProgressEvents.join('|')")
@@ -1639,8 +1651,9 @@ fn xml_http_request_dispatches_download_progress_before_done() {
     );
 }
 
-#[test]
-fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-connect-csp.test/");
     vm.set_response_content_security_policies(&[String::from("connect-src 'none'")]);
 
@@ -1672,20 +1685,22 @@ fn xml_http_request_document_csp_blocks_connect_src_and_dispatches_event() {
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
         1
     );
-    vm.eval("0")
-        .expect("follow-up checkpoint should drain queued XHR CSP failure");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     let result = vm
         .eval("JSON.stringify({events: __xhrCspEvents, result: __xhrCspResult})")
         .expect("XHR CSP result should be readable");
 
     assert_eq!(
         result,
-        r#"{"events":[{"blockedURI":"data","effectiveDirective":"connect-src","disposition":"enforce","instance":true}],"result":["error:0:4","loadend:0"]}"#
+        r#"{"events":[{"blockedURI":"data","effectiveDirective":"connect-src","disposition":"enforce","instance":true}],"result":["error:0:4","loadend:1"]}"#
     );
 }
 
-#[test]
-fn xml_http_request_document_csp_report_only_dispatches_without_blocking() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_document_csp_report_only_dispatches_without_blocking() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-connect-report-only.test/");
     vm.set_response_content_security_report_only_policies(&[String::from("connect-src 'none'")]);
 
@@ -1717,15 +1732,16 @@ fn xml_http_request_document_csp_report_only_dispatches_without_blocking() {
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
         1
     );
-    vm.eval("0")
-        .expect("follow-up checkpoint should drain queued XHR report-only response");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     let result = vm
         .eval("JSON.stringify({events: __xhrReportOnlyEvents, result: __xhrReportOnlyResult})")
         .expect("XHR CSP report-only result should be readable");
 
     assert_eq!(
         result,
-        r#"{"events":[{"blockedURI":"data","effectiveDirective":"connect-src","disposition":"report","instance":true}],"result":["200:allowed","loadend:0"]}"#
+        r#"{"events":[{"blockedURI":"data","effectiveDirective":"connect-src","disposition":"report","instance":true}],"result":["200:allowed","loadend:1"]}"#
     );
 }
 
@@ -1852,8 +1868,9 @@ fn xml_http_request_reopen_matches_sync_wpt_state_and_response_reset() {
         r#"{"states":[1],"readyState":1,"status":0,"statusText":"","responseText":"","responseURL":"","responseXML":null,"allHeaders":""}"#
     );
 }
-#[test]
-fn xml_http_request_response_text_is_empty_before_loading_state() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_response_text_is_empty_before_loading_state() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-response-text-state.test/");
 
     vm.eval(
@@ -1871,8 +1888,9 @@ fn xml_http_request_response_text_is_empty_before_loading_state() {
 "#,
     )
     .expect("XHR responseText state setup should run");
-    vm.eval("0")
-        .expect("follow-up checkpoint should drain queued XHR completion");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     let result = vm
         .eval("__xhrResponseTextStates.join('|')")
         .expect("XHR responseText state log should be readable");
@@ -4174,8 +4192,9 @@ fn xml_http_request_upload_listener_flag_is_captured_before_loadstart() {
     );
 }
 
-#[test]
-fn xml_http_request_upload_loadstart_preserves_reopened_request() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_upload_loadstart_preserves_reopened_request() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-upload-reopen.test/");
     vm.eval(
         r#"
@@ -4200,8 +4219,9 @@ fn xml_http_request_upload_loadstart_preserves_reopened_request() {
 "#,
     )
     .expect("upload loadstart should be able to reopen and send another request");
-    vm.eval("0")
-        .expect("replacement request should complete at the following checkpoint");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     assert_eq!(
         vm.eval("__xhrUploadReopenEvents.join('|')")
             .expect("replacement request event trace"),
@@ -4345,8 +4365,9 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
     }
 }
 
-#[test]
-fn xml_http_request_queued_document_response_uses_parsed_overrides_and_xml_errors() {
+#[tokio::test(flavor = "current_thread")]
+async fn xml_http_request_queued_document_response_uses_parsed_overrides_and_xml_errors() {
+    let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm = new_storage_test_vm("https://xhr-queued-document.test/");
     vm.eval(r#"globalThis.__queuedDocumentResults = [];
         for (const responseType of ['', 'document']) {
@@ -4368,6 +4389,9 @@ fn xml_http_request_queued_document_response_uses_parsed_overrides_and_xml_error
                 }
             }
         }"#).expect("enqueue asynchronous data URL responses");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("queued local XHR networking tasks should complete");
     let result = vm
         .eval("JSON.stringify(__queuedDocumentResults)")
         .expect("drain queued responses");
