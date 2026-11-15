@@ -55,6 +55,30 @@ fn fractional_grid_track_limits_terminate_with_a_finite_item_width() -> Result<(
 }
 
 #[test]
+fn overflowing_svg_filter_region_keeps_layout_process_alive() -> Result<()> {
+    // MOL-599: finite filter attributes overflowed during object-bbox mapping,
+    // aborting the process inside tiny-skia even without a screenshot request.
+    let expression = "JSON.stringify([document.body.offsetHeight, document.querySelector('svg').getBoundingClientRect().width, document.querySelector('svg').getBoundingClientRect().height])";
+    let control = run_layout(
+        r#"<!doctype html><svg width="300" height="300"></svg>"#,
+        expression,
+        false,
+    )?;
+    let value = run_layout(
+        r##"<!doctype html><svg width="300" height="300"><defs><filter id="f" x="-736" width="784"><feGaussianBlur stdDeviation="1"/></filter></defs><rect width="1e38" height="100" filter="url(#f)"/></svg>"##,
+        expression,
+        false,
+    )?;
+    assert_eq!(
+        value, control,
+        "filter overflow must preserve the SVG viewport"
+    );
+    assert_eq!(value[1], 300);
+    assert_eq!(value[2], 300);
+    Ok(())
+}
+
+#[test]
 fn layout_probe_drains_large_evaluation_results_before_waiting_for_exit() -> Result<()> {
     const PAYLOAD_SIZE: usize = 256 * 1024;
     let expression = format!(
