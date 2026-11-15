@@ -644,6 +644,8 @@ content-security-policy/nonce-hiding/nonces-css-selector.html
 content-security-policy/nonce-hiding/nonces.html
 content-security-policy/nonce-hiding/script-nonces-hidden.html
 content-security-policy/nonce-hiding/svgscript-nonces-hidden.html
+content-security-policy/object-src/object-src-url-blocked.html
+content-security-policy/object-src/object-src-url-embed-blocked.html
 content-security-policy/parsing/invalid-directive.html
 content-security-policy/reporting/report-strips-fragment.html
 content-security-policy/reporting/report-strips-username-password.html
