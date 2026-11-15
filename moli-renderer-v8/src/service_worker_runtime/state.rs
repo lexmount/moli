@@ -681,6 +681,7 @@ impl ServiceWorkerRuntimeState {
 
 pub(super) enum LifecycleProgress {
     Dispatch((SharedRendererServiceWorkerHost, ServiceWorkerLifecycleEvent)),
+    CompleteActivationSkipWaiting(SharedRendererServiceWorkerHost),
     TerminateHost(SharedRendererServiceWorkerHost),
     FailReplacedWorkerEvents(
         Box<(

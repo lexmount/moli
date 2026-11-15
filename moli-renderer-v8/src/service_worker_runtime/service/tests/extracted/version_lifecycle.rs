@@ -1,5 +1,77 @@
 use super::*;
 
+#[test]
+fn skip_waiting_request_requires_current_run_and_accepts_starting_installers() {
+    for starting in [true, false] {
+        let service = new_service_worker_runtime_service();
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let version_id = ServiceWorkerVersionId(1);
+        insert_inactive_registration(
+            &service,
+            registration_id,
+            version_id,
+            url("https://example.test/app/worker.js"),
+            url("https://example.test/app/"),
+        );
+        let owner = {
+            let mut state = service.inner.state.lock();
+            let version = state.versions.get_mut(&version_id).unwrap();
+            let owner = version.run_owner();
+            let host = new_running_test_host(version_id, owner.run_identity());
+            version.running_state = if starting {
+                ServiceWorkerVersionRunningState::Starting { host }
+            } else {
+                ServiceWorkerVersionRunningState::Running { host }
+            };
+            owner
+        };
+        service.finish_worker_skip_waiting_requested(
+            registration_id,
+            ServiceWorkerRunOwner::fresh(version_id),
+            1,
+        );
+        assert!(!service.inner.state.lock().versions[&version_id].skip_waiting_requested);
+        service.finish_worker_skip_waiting_requested(
+            ServiceWorkerRegistrationId(2),
+            owner.clone(),
+            2,
+        );
+        assert!(!service.inner.state.lock().versions[&version_id].skip_waiting_requested);
+        let running = {
+            let mut state = service.inner.state.lock();
+            std::mem::replace(
+                &mut state.versions.get_mut(&version_id).unwrap().running_state,
+                ServiceWorkerVersionRunningState::Stopped,
+            )
+        };
+        service.finish_worker_skip_waiting_requested(registration_id, owner.clone(), 3);
+        assert!(!service.inner.state.lock().versions[&version_id].skip_waiting_requested);
+        service
+            .inner
+            .state
+            .lock()
+            .versions
+            .get_mut(&version_id)
+            .unwrap()
+            .running_state = running;
+        service.finish_worker_skip_waiting_requested(registration_id, owner, 4);
+        let state = service.inner.state.lock();
+        assert!(state.versions[&version_id].skip_waiting_requested);
+        assert_eq!(
+            state.versions[&version_id].lifecycle_state,
+            ServiceWorkerVersionLifecycleState::Installing
+        );
+        assert_eq!(
+            state.registrations[&registration_id].installing_version_id,
+            Some(version_id)
+        );
+        assert_eq!(
+            state.registrations[&registration_id].waiting_version_id,
+            None
+        );
+    }
+}
+
 fn prepare_waiting_worker_replacement(
     service: &ServiceWorkerRuntimeServiceOwner,
 ) -> (
@@ -1963,7 +2035,11 @@ fn update_install_waits_when_existing_active_version_has_not_been_skipped() {
         );
     }
 
-    service.finish_worker_skip_waiting_requested(registration_id, installing_version_id);
+    service.finish_worker_skip_waiting_requested(
+        registration_id,
+        test_run_owner(installing_version_id, &installing_run),
+        0,
+    );
 
     let state = service.inner.state.lock();
     let registration = state.registrations.get(&registration_id).unwrap();

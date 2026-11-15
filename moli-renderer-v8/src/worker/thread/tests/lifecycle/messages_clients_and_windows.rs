@@ -526,6 +526,139 @@ async fn service_worker_fetch_respond_with_rejection_fails_fetch() {
 }
 
 #[tokio::test]
+async fn service_worker_skip_waiting_waits_for_owner_completion() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener("install", event => {
+            event.waitUntil(skipWaiting().then(() => console.log("skip-resolved")));
+            setTimeout(() => console.log("checkpoint"), 0);
+        });
+        "#,
+    );
+    handle.dispatch_service_worker_lifecycle_event(ServiceWorkerLifecycleEvent {
+        event_id: ServiceWorkerEventId::from_u64_for_worker(71),
+        owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+            ServiceWorkerVersionId::from_u64_for_test(1),
+            crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+        ),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+    });
+    let mut saw_request = false;
+    let first_console = loop {
+        match timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("skipWaiting request or independent timer should make progress")
+            .expect("worker should remain alive")
+        {
+            WorkerToParentMessage::ServiceWorkerSkipWaiting { .. } => saw_request = true,
+            WorkerToParentMessage::Console(message) => break message.message,
+            WorkerToParentMessage::Error { message, .. } => {
+                panic!("unexpected skipWaiting worker error: {message}");
+            }
+            _ => {}
+        }
+    };
+    handle.terminate_and_join();
+    assert!(saw_request, "the host must receive the skipWaiting request");
+    assert_eq!(
+        first_console, "log: checkpoint",
+        "skipWaiting must stay pending until the host has tried activation"
+    );
+}
+
+#[tokio::test]
+async fn service_worker_skip_waiting_results_settle_each_pending_promise() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener("install", event => {
+            const first = skipWaiting().then(value => {
+                console.log("first:" + String(value));
+                return value;
+            });
+            const second = skipWaiting().then(value => {
+                console.log("second:" + String(value));
+                return value;
+            });
+            event.waitUntil(Promise.all([first, second]).then(values => {
+                console.log("all:" + String(values[0]) + ":" + String(values[1]));
+            }));
+        });
+        "#,
+    );
+    handle.dispatch_service_worker_lifecycle_event(ServiceWorkerLifecycleEvent {
+        event_id: ServiceWorkerEventId::from_u64_for_worker(72),
+        owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+            ServiceWorkerVersionId::from_u64_for_test(1),
+            crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+        ),
+        kind: ServiceWorkerLifecycleEventKind::Install,
+    });
+    let mut request_ids = Vec::new();
+    while request_ids.len() < 2 {
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::ServiceWorkerSkipWaiting { request_id, .. } => {
+                request_ids.push(request_id);
+            }
+            WorkerToParentMessage::Console(message) => {
+                panic!(
+                    "skipWaiting settled before owner completion: {}",
+                    message.message
+                );
+            }
+            WorkerToParentMessage::Error { message, .. } => {
+                panic!("unexpected worker error: {message}")
+            }
+            _ => {}
+        }
+    }
+    assert_ne!(request_ids[0], request_ids[1]);
+    handle.dispatch_service_worker_skip_waiting_result(0);
+    handle.dispatch_service_worker_skip_waiting_result(request_ids[1]);
+    loop {
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::Console(message) => {
+                assert_eq!(message.message, "log: second:undefined");
+                break;
+            }
+            WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_) => {
+                panic!("install must remain pending until the first request finishes");
+            }
+            WorkerToParentMessage::Error { message, .. } => {
+                panic!("unexpected worker error: {message}")
+            }
+            _ => {}
+        }
+    }
+    handle.dispatch_service_worker_skip_waiting_result(request_ids[1]);
+    handle.dispatch_service_worker_skip_waiting_result(request_ids[0]);
+    let mut consoles = Vec::new();
+    loop {
+        match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+            WorkerToParentMessage::Console(message) => consoles.push(message.message),
+            WorkerToParentMessage::ServiceWorkerLifecycleCompleted(completion) => {
+                assert_eq!(
+                    completion.event_id,
+                    ServiceWorkerEventId::from_u64_for_worker(72)
+                );
+                assert_eq!(completion.result, Ok(()));
+                break;
+            }
+            WorkerToParentMessage::Error { message, .. } => {
+                panic!("unexpected worker error: {message}")
+            }
+            _ => {}
+        }
+    }
+    handle.terminate_and_join();
+    assert_eq!(
+        consoles,
+        ["log: first:undefined", "log: all:undefined:undefined"]
+    );
+}
+
+#[tokio::test]
 async fn service_worker_skip_waiting_posts_runtime_request() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(
@@ -554,6 +687,7 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
             WorkerToParentMessage::ServiceWorkerSkipWaiting {
                 registration_id,
                 version_id,
+                ..
             } => {
                 assert_eq!(
                     registration_id,

@@ -16,7 +16,7 @@ use super::{
         ServiceWorkerSyncRegistration, ServiceWorkerWorkerMessage,
     },
     host::SharedRendererServiceWorkerHost,
-    ids::{ServiceWorkerRegistrationId, ServiceWorkerVersionId},
+    ids::ServiceWorkerRegistrationId,
     run_owner::ServiceWorkerRunOwner,
     script_loading::{ServiceWorkerScriptResource, ServiceWorkerScriptUpdateCheckCompletion},
     state::WeakServiceWorkerRuntimeService,
@@ -156,7 +156,8 @@ enum ServiceWorkerRuntimeCompletionKind {
     IdleTimeout(ServiceWorkerIdleTimeout),
     SkipWaitingRequested {
         registration_id: ServiceWorkerRegistrationId,
-        version_id: ServiceWorkerVersionId,
+        owner: ServiceWorkerRunOwner,
+        request_id: u64,
     },
     ClientsClaimRequested {
         registration_id: ServiceWorkerRegistrationId,
@@ -573,13 +574,15 @@ impl ServiceWorkerRuntimeCompletion {
     pub(super) fn skip_waiting_requested(
         runtime_service: WeakServiceWorkerRuntimeService,
         registration_id: ServiceWorkerRegistrationId,
-        version_id: ServiceWorkerVersionId,
+        owner: ServiceWorkerRunOwner,
+        request_id: u64,
     ) -> Self {
         Self {
             runtime_service,
             kind: ServiceWorkerRuntimeCompletionKind::SkipWaitingRequested {
                 registration_id,
-                version_id,
+                owner,
+                request_id,
             },
         }
     }
@@ -814,10 +817,13 @@ impl ServiceWorkerRuntimeCompletion {
             }
             ServiceWorkerRuntimeCompletionKind::SkipWaitingRequested {
                 registration_id,
-                version_id,
-            } => self
-                .runtime_service
-                .finish_worker_skip_waiting_requested(registration_id, version_id),
+                owner,
+                request_id,
+            } => self.runtime_service.finish_worker_skip_waiting_requested(
+                registration_id,
+                owner,
+                request_id,
+            ),
             ServiceWorkerRuntimeCompletionKind::ClientsClaimRequested {
                 registration_id,
                 owner,
@@ -1077,11 +1083,13 @@ impl fmt::Debug for ServiceWorkerRuntimeCompletion {
                 .finish_non_exhaustive(),
             ServiceWorkerRuntimeCompletionKind::SkipWaitingRequested {
                 registration_id,
-                version_id,
+                owner,
+                request_id,
             } => f
                 .debug_struct("ServiceWorkerRuntimeCompletion::SkipWaitingRequested")
                 .field("registration_id", registration_id)
-                .field("version_id", version_id)
+                .field("owner", owner)
+                .field("request_id", request_id)
                 .finish(),
             ServiceWorkerRuntimeCompletionKind::ClientsClaimRequested {
                 registration_id,

@@ -892,6 +892,7 @@ async fn service_worker_storage_uses_explicit_registration_storage_key() {
         WorkerToParentMessage::ServiceWorkerSkipWaiting {
             registration_id,
             version_id,
+            ..
         } => {
             assert_eq!(
                 registration_id,
