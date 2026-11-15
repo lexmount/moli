@@ -598,13 +598,20 @@ jobs:
             --browser chromium --strict-full-suite --repeat 2 --retries 3 --jobs 4 \
             "${chromium_overrides[@]}" \
             --output-dir target/smoke/cdp-chromium-ci
+      - name: Run pinned web-security oracle
+        run: |
+          uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
+            --browser chromium --group web-security --chromium-bin "$CHROMIUM_CURRENT_ORACLE_BIN" \
+            --repeat 2 --jobs 4 --output-dir target/smoke/web-security-chromium-ci
       - *checkout-upload-helper
       - name: Upload Chromium diagnostics
         if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
         uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: cdp-smoke-chromium-diagnostics
-          path: target/smoke/cdp-chromium-ci
+          path: |
+            target/smoke/cdp-chromium-ci
+            target/smoke/web-security-chromium-ci
           if-no-files-found: error
           retention-days: 7
 

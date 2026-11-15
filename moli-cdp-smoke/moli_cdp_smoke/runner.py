@@ -88,6 +88,7 @@ from .groups.font_face import run_font_face_payload_group
 from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
 from .groups.workers_native import run_native_worker_loading_group
+from .groups.web_security import browser_args as web_security_browser_args, run_web_security_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
 from .helpers import attach_cdp_event_collector
 from .progress import await_with_progress
@@ -518,6 +519,12 @@ MANAGED_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
 
 OPTIONAL_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
     SmokeGroup(
+        "web-security",
+        "Pinned desktop Chromium default/disabled web-security network and document contracts.",
+        "process",
+        run_web_security_group,
+    ),
+    SmokeGroup(
         "chrome-remote-interface",
         "Optional chrome-remote-interface browser/page session goal-path workflows.",
         "external",
@@ -814,7 +821,9 @@ async def _run_worker(args: argparse.Namespace) -> int:
                 raise RuntimeError(f"invalid MOLI_CDP_PORT: {port_env}")
             serve = await start_browser(
                 port,
-                extra_args=("--scrollbars",)
+                extra_args=web_security_browser_args(fixture.url, False)
+                if selected_group.name == "web-security"
+                else ("--scrollbars",)
                 if args.browser != "chromium" and selected_group.name in {"classic-scrollbar", "iframe-input"}
                 else (),
             )

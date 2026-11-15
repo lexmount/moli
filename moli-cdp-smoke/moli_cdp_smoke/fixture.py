@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from .config import REPO_ROOT
+from .web_security_fixture import WebSecurityFixture
 
 
 def websocket_accept_key(key: str) -> str:
@@ -506,6 +507,7 @@ class ProxyAuthFixtureServer:
 
 class FixtureServer:
     def __init__(self) -> None:
+        self.web_security = WebSecurityFixture()
         self.profile_requests: dict[str, dict[str, Any]] = {}
         self.navigation_redirect_requests: dict[str, list[dict[str, Any]]] = {}
         self._counter_lock = threading.Lock()
@@ -581,10 +583,16 @@ class FixtureServer:
             def do_PATCH(self) -> None:
                 self._dispatch()
 
+            def do_PUT(self) -> None:
+                self._dispatch()
+
             def do_HEAD(self) -> None:
                 self._dispatch()
 
             def do_OPTIONS(self) -> None:
+                if urllib.parse.urlparse(self.path).path.startswith("/web-security/"):
+                    outer.web_security.respond(self, self._read_body())
+                    return
                 if urllib.parse.urlparse(self.path).path.startswith("/fetch-headers/"):
                     self._send_common(HTTPStatus.NO_CONTENT, "text/plain", b"", {
                         "Access-Control-Allow-Origin": "*",
@@ -605,6 +613,10 @@ class FixtureServer:
                 route = parsed.path
                 query = urllib.parse.parse_qs(parsed.query)
                 _body = self._read_body()
+
+                if route.startswith("/web-security/"):
+                    outer.web_security.respond(self, _body)
+                    return
 
                 if route.startswith("/fetch-headers/"):
                     outer._record_resource_request(self.path, self.headers)
