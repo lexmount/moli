@@ -11,7 +11,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
             ("text/html", "document"),
         ] {
             let mut vm = new_parsed_test_vm(
-                "https://requester.example/page/index.html",
+                "https://sub.requester.example/page/index.html",
                 "<!doctype html><html><body></body></html>",
             );
             environment.set_timezone(Some("UTC")).unwrap();
@@ -19,6 +19,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 r#"(() => {{
                     const frame = document.createElement('iframe');
                     document.body.appendChild(frame);
+                    globalThis.__originFrame = frame;
                     globalThis.__originRealm = {child_realm} ? frame.contentWindow : self;
                     globalThis.__documentXhr = new __originRealm.XMLHttpRequest();
                     __documentXhr.open('GET', '/initial');
@@ -65,7 +66,16 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 check(doc instanceof __originRealm.Document, 'XHR creation realm');
                 check(doc.URL === url && doc.documentURI === url, 'response URL metadata');
                 check(__documentXhr.responseURL === url.split('#')[0], 'responseURL serialization');
-                check(doc.domain === 'requester.example', 'origin belongs to requester');
+                check(doc.domain === 'sub.requester.example', 'origin belongs to requester');
+                const clones = [doc.cloneNode(false), doc.cloneNode(true)];
+                for (const clone of clones) {
+                    check(clone.domain === doc.domain, 'clone requester origin');
+                    check(clone.URL === doc.URL, 'clone response URL');
+                }
+                document.domain = 'requester.example';
+                for (const response of [doc, ...clones]) {
+                    check(response.domain === 'requester.example', 'shared origin relaxation');
+                }
                 check(doc.defaultView === null && doc.hidden, 'windowless response document');
                 check(doc.lastModified === '01/01/1970 01:23:45', 'response source modification time');
                 const getter = Object.getOwnPropertyDescriptor(Document.prototype, 'lastModified').get;
@@ -84,6 +94,11 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 __documentXhr.open('GET', '/next');
                 check(__documentXhr.responseXML === null && doc.URL === url, 'XHR reuse');
                 check(doc.lastModified === '01/01/1970 01:23:45', 'source time survives XHR reuse');
+                __originFrame.remove();
+                for (const response of [doc, ...clones]) {
+                    check(response.domain === 'requester.example', 'origin survives creator detach');
+                    check(response.cloneNode(false).domain === response.domain, 'clone after detach');
+                }
                 return 'ok';
             })()"#,
                 )

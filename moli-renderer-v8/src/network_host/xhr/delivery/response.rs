@@ -654,11 +654,7 @@ fn build_xhr_response_document<'s>(
             host.lightweight_popup_document_handle(popup_id)?
         }
     };
-    let origin_document = unsafe { &mut *host_ptr }.native_bridge_mut().wrap_handle(
-        scope,
-        host_ptr,
-        origin_document_handle,
-    )?;
+    let domain = host.capture_document_domain(origin_document_handle);
     let document = if is_html_document_mime(mime) {
         dom_parser::parse_detached_html_document_from_source(scope, response_url, body_text)
     } else {
@@ -672,11 +668,15 @@ fn build_xhr_response_document<'s>(
     }?;
     // The response URL controls relative URL resolution; its origin does not
     // replace the XHR environment's origin (including for CORS responses).
-    crate::native_bridge::document::inherit_detached_document_origin(
-        scope,
-        document,
-        origin_document,
-    );
+    let (host_ptr, document_handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, document)
+            .ok()?;
+    unsafe { &mut *host_ptr }
+        .dom_host_mut()
+        .node_mut(document_handle)?
+        .data_mut()
+        .as_document_mut()?
+        .set_inherited_domain(domain);
     Some(document)
 }
 

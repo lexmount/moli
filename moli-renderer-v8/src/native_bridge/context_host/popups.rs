@@ -369,7 +369,7 @@ pub(super) struct LightweightPopupStorageScope {
 pub(super) struct LightweightPopupDocumentState {
     pub(super) base_url: Url,
     pub(super) policy_container: DocumentPolicyContainer,
-    pub(super) document_domain_override: Option<String>,
+    pub(super) document_domain_override: moli_dom::native::DocumentDomainOverride,
 }
 
 struct LightweightPopupDocumentRecord {
@@ -474,13 +474,13 @@ impl LightweightPopupDocumentState {
         Self {
             base_url,
             policy_container,
-            document_domain_override: None,
+            document_domain_override: Default::default(),
         }
     }
 
     fn reset_for_empty_document(&mut self, base_url: Url) {
         self.base_url = base_url;
-        self.document_domain_override = None;
+        self.document_domain_override = Default::default();
     }
 
     fn apply_navigation_response(
@@ -489,7 +489,7 @@ impl LightweightPopupDocumentState {
         response: DocumentPolicyContainer,
     ) -> Self {
         self.base_url = base_url;
-        self.document_domain_override = None;
+        self.document_domain_override = Default::default();
         self.policy_container.referrer_policy = response.referrer_policy;
         self.policy_container.cross_origin_embedder_policy = response.cross_origin_embedder_policy;
         self.policy_container.document_isolation_policy = response.document_isolation_policy;
@@ -2029,7 +2029,7 @@ impl PageScriptHost {
                     let Some(access_origin) =
                         super::window_security_tokens::WindowAccessOrigin::from_serialized_origin(
                             serialized_origin,
-                            commit.state.document_domain_override.clone(),
+                            commit.state.document_domain_override.get(),
                         )
                     else {
                         return false;
@@ -2794,7 +2794,15 @@ impl PageScriptHost {
         popup_id: u64,
     ) -> Option<String> {
         self.lightweight_popup_document_record(popup_id)
-            .and_then(|document| document.state.document_domain_override.clone())
+            .and_then(|document| document.state.document_domain_override.get())
+    }
+
+    pub(super) fn shared_lightweight_popup_document_domain_override(
+        &self,
+        popup_id: u64,
+    ) -> Option<moli_dom::native::DocumentDomainOverride> {
+        self.lightweight_popup_document_record(popup_id)
+            .map(|document| document.state.document_domain_override.clone())
     }
 
     pub(crate) fn lightweight_popup_document_domain_is_sandboxed(&self, popup_id: u64) -> bool {
@@ -2830,7 +2838,7 @@ impl PageScriptHost {
         let Some(document) = self.lightweight_popup_document_record_mut(popup_id) else {
             return false;
         };
-        document.state.document_domain_override = Some(domain);
+        document.state.document_domain_override.set(domain);
         document.access_origin = access_origin;
         true
     }

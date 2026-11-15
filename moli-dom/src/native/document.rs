@@ -5,12 +5,14 @@ use url::Url;
 use super::{DomStringValue, NativeDom, NativeNodeId};
 
 mod base_url;
+mod domain;
 mod referrer_policy;
 
 #[cfg(test)]
 mod tests;
 
 use base_url::DocumentBaseUrlState;
+pub use domain::{DocumentDomain, DocumentDomainOverride};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentTitleSetterTarget {
@@ -65,6 +67,7 @@ pub struct Document {
 #[derive(Debug, Clone)]
 struct DocumentMetadata {
     url: Url,
+    inherited_domain: Option<DocumentDomain>,
     content_type: Box<str>,
     character_set: Box<str>,
     ready_state: DocumentReadyState,
@@ -113,6 +116,7 @@ impl Document {
             metadata: DocumentMetadata {
                 base_url_state: DocumentBaseUrlState::new(&url),
                 url,
+                inherited_domain: None,
                 content_type: content_type.into(),
                 character_set: "UTF-8".into(),
                 ready_state: DocumentReadyState::Complete,
@@ -167,6 +171,14 @@ impl Document {
 
     pub fn url(&self) -> &Url {
         &self.metadata.url
+    }
+
+    pub fn inherited_domain(&self) -> Option<&DocumentDomain> {
+        self.metadata.inherited_domain.as_ref()
+    }
+
+    pub fn set_inherited_domain(&mut self, domain: DocumentDomain) {
+        self.metadata.inherited_domain = Some(domain);
     }
 
     pub fn content_type(&self) -> &str {

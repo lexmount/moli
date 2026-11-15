@@ -43,7 +43,7 @@ impl ScriptVmDefaultWorldBootstrap {
             Some(ScriptVmInitialDocumentEnvironment {
                 security_token: None,
                 opaque_origin,
-                document_domain_override: Rc::default(),
+                document_domain_override: Default::default(),
                 fallback_base_url: None,
                 storage_key: None,
                 origin: inherited_origin.clone(),

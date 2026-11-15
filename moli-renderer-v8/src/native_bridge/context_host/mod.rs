@@ -899,7 +899,7 @@ pub(crate) struct PageScriptHost {
     #[cfg(test)]
     force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell<bool>,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
-    document_domain_override: Rc<RefCell<Option<String>>>,
+    document_domain_override: moli_dom::native::DocumentDomainOverride,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
