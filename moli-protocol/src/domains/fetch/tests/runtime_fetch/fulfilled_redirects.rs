@@ -1,5 +1,7 @@
 use super::*;
 
+mod network_location;
+
 async fn command(ctx: &mut TestContext, id: u64, method: &str, params: Value) -> Value {
     ctx.process_async(json!({
         "id": id, "sessionId": "SID-1", "method": method, "params": params,

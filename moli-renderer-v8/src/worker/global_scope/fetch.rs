@@ -2775,6 +2775,37 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             .initial_network_request_headers
             .get_or_insert_with(|| network_request_headers.clone());
     }
+    if completion.result.is_err() {
+        let state_ref = state.borrow();
+        let Some(pending) = state_ref.pending_fetches.get(&completion.fetch_id) else {
+            return;
+        };
+        if let Some(record) = &pending.network_record
+            && record.intercept_response
+        {
+            let info = PendingSubresourceResponseInfo {
+                internal_id: record.internal_id,
+                url: record.url.clone(),
+                final_url: record.url.clone(),
+                method: record.method.clone(),
+                request_headers: record.request_headers.clone(),
+                request_body: request_body_text(&record.request_body_bytes),
+                resource_type: SubresourceResourceType::Fetch,
+                request_cookie_report: None,
+                network_request_headers: record.initial_network_request_headers.clone(),
+                response_status: None,
+                response_error_reason: Some("Failed".to_owned()),
+                response_headers: Vec::new(),
+                response_body: SubresourceResponseBody::from_bytes(Vec::new()),
+                from_cache: false,
+                cache_state: Default::default(),
+            };
+            let _ = parent_tx.send(WorkerToParentMessage::SubresourceContinue(
+                PendingSubresourceContinueEvent::ResponsePaused(info),
+            ));
+            return;
+        }
+    }
     if let Ok(response) = &completion.result {
         let response_head = response.head();
         let redirect_status = if response_head.redirect_chain.is_empty() {
