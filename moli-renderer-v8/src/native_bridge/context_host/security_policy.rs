@@ -1,4 +1,6 @@
-use super::{OwnerDispatchScope, PageScriptHost};
+use super::{
+    OwnerDispatchScope, PageScriptHost, child_documents::ChildDocumentNavigationInitiator,
+};
 use crate::network_host::controlled_resource::{ControlledXhrContext, XhrInterceptionRoute};
 use crate::types::SubresourceResourceType;
 use crate::{
@@ -1423,13 +1425,38 @@ impl PageScriptHost {
         .unwrap_or(true)
     }
 
-    pub(crate) fn frame_navigation_csp_violation(
+    pub(in crate::native_bridge::context_host) fn frame_navigation_csp_violation(
         &self,
         frame_handle: DomHandle,
         request_url: &url::Url,
+        initiator: ChildDocumentNavigationInitiator,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let owner = self.owner_dispatch_scope_for_node(frame_handle)?;
         let snapshot = self.owner_document_policy_snapshot(owner)?;
+        if self
+            .dom_host()
+            .is_html_element_named(frame_handle, "object")
+            || self.dom_host().is_html_element_named(frame_handle, "embed")
+        {
+            if self.bypass_content_security_policy()
+                || (initiator == ChildDocumentNavigationInitiator::FrameOwnerElement
+                    && self.embedded_content_request_was_csp_checked(frame_handle, request_url))
+            {
+                return None;
+            }
+            return unsafe { &*self.document_runtime }
+                .document_subresource_csp_check_for_document(
+                    snapshot.document_handle,
+                    &snapshot.document_url,
+                    &snapshot.policy_container,
+                    request_url,
+                    DocumentSubresourceCspKind::Object,
+                )
+                .into_violations()
+                .1
+                .into_iter()
+                .next();
+        }
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &*self.document_runtime }.document_frame_csp_violation_for_document(
             snapshot.document_handle,
@@ -1442,13 +1469,38 @@ impl PageScriptHost {
         )
     }
 
-    pub(crate) fn frame_navigation_csp_report_only_violation(
+    pub(in crate::native_bridge::context_host) fn frame_navigation_csp_report_only_violation(
         &self,
         frame_handle: DomHandle,
         request_url: &url::Url,
+        initiator: ChildDocumentNavigationInitiator,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let owner = self.owner_dispatch_scope_for_node(frame_handle)?;
         let snapshot = self.owner_document_policy_snapshot(owner)?;
+        if self
+            .dom_host()
+            .is_html_element_named(frame_handle, "object")
+            || self.dom_host().is_html_element_named(frame_handle, "embed")
+        {
+            if self.bypass_content_security_policy()
+                || (initiator == ChildDocumentNavigationInitiator::FrameOwnerElement
+                    && self.embedded_content_request_was_csp_checked(frame_handle, request_url))
+            {
+                return None;
+            }
+            return unsafe { &*self.document_runtime }
+                .document_subresource_csp_check_for_document(
+                    snapshot.document_handle,
+                    &snapshot.document_url,
+                    &snapshot.policy_container,
+                    request_url,
+                    DocumentSubresourceCspKind::Object,
+                )
+                .into_violations()
+                .0
+                .into_iter()
+                .next();
+        }
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &*self.document_runtime }.document_frame_csp_report_only_violation_for_document(
             &snapshot.document_url,
