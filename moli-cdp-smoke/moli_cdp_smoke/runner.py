@@ -87,6 +87,7 @@ from .groups.webgl_viewport import run_webgl_viewport_group
 from .groups.font_face import run_font_face_payload_group
 from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
+from .groups.workers_native import run_native_worker_loading_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
 from .helpers import attach_cdp_event_collector
 from .progress import await_with_progress
@@ -372,6 +373,12 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
         "Worker postMessage, worker fetch routing, and worker XHR routing.",
         "page",
         run_workers_group,
+    ),
+    SmokeGroup(
+        "worker-loading",
+        "Worker native request identity, independent abort/body delivery, redirect modes and target/client lifetime.",
+        "page",
+        run_native_worker_loading_group,
     ),
     SmokeGroup(
         "websocket",

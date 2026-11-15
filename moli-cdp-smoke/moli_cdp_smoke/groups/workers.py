@@ -8,16 +8,12 @@ from contextlib import asynccontextmanager
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..helpers import attach_cdp_event_collector, isolated_network_page, run_worker_command
-from ..config import is_moli_browser
 
 
 @asynccontextmanager
 async def _worker_network_events(state: SmokeState):
-    if is_moli_browser():
-        yield
-        return
-    # Chromium emits Worker Network events on the Worker session, while Moli
-    # mirrors them on the owning Page. Enable Network before the Worker starts.
+    # Both browsers publish Network on the Worker target. Enable its agent
+    # before releasing startup; the Page only owns Fetch interception.
     pending: dict[tuple[str, int], asyncio.Future[Any]] = {}
     tasks: list[asyncio.Task[Any]] = []
 
@@ -27,7 +23,7 @@ async def _worker_network_events(state: SmokeState):
         if key in pending and not pending[key].done():
             pending[key].set_result(message)
         if message.get("method", "").startswith("Network."):
-            state.subresource_events.append(message)
+            state.subresource_events.append({**message, "sessionId":event["sessionId"]})
 
     async def enable(event: dict[str, Any]) -> None:
         session = event["sessionId"]
