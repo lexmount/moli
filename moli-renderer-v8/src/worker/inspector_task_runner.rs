@@ -23,12 +23,6 @@ use super::handle::WorkerMessage;
 
 static NEXT_WORKER_INSPECTOR_ROUTE_ID: AtomicU64 = AtomicU64::new(1);
 
-// The frontend's bounded ingress queue releases its slot before an Inspector
-// command finishes. Bound the work retained while the external Worker script
-// is still loading, including callers that do not use a WebSocket frontend.
-const MAX_STARTUP_INSPECTOR_COMMANDS: usize = 256;
-const MAX_STARTUP_INSPECTOR_COMMAND_BYTES: usize = 16 * 1024 * 1024;
-
 thread_local! {
     static WORKER_INSPECTOR_EXECUTORS: RefCell<HashMap<u64, Weak<dyn WorkerInspectorInterruptExecutor>>> =
         RefCell::new(HashMap::new());
@@ -630,40 +624,20 @@ impl WorkerInspectorTaskRunner {
             task.fail(WorkerInspectorError::Detached);
             return false;
         }
-        if state.owner == WorkerInspectorOwnerState::Unstarted {
-            let queued = || {
-                state
-                    .interrupting_tasks
-                    .iter()
-                    .chain(&state.dont_interrupting_tasks)
-            };
-            if let WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. } = &task {
-                let (commands, bytes) = queued().fold((0, 0), |(commands, bytes), task| {
-                    if let WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. } = task {
-                        (commands + 1, bytes + raw_json.len())
-                    } else {
-                        (commands, bytes)
-                    }
-                });
-                if commands >= MAX_STARTUP_INSPECTOR_COMMANDS
-                    || raw_json.len() > MAX_STARTUP_INSPECTOR_COMMAND_BYTES - bytes
-                {
-                    drop(state);
-                    task.fail(WorkerInspectorError::StartupQueueFull);
-                    return false;
-                }
-            }
-            // Control work must still make progress when the command budget is
-            // full. Repeated attach/resume for one incarnation needs one task.
-            if let WorkerInspectorTask::AttachSession { lifetime, .. }
+        // Repeated attach/resume before startup needs one task per incarnation.
+        if state.owner == WorkerInspectorOwnerState::Unstarted
+            && let WorkerInspectorTask::AttachSession { lifetime, .. }
             | WorkerInspectorTask::RunIfWaitingForDebugger { lifetime } = &task
-                && queued().any(|queued| {
+            && state
+                .interrupting_tasks
+                .iter()
+                .chain(&state.dont_interrupting_tasks)
+                .any(|queued| {
                     std::mem::discriminant(queued) == std::mem::discriminant(&task)
                         && queued.belongs_to_session(lifetime)
                 })
-            {
-                return true;
-            }
+        {
+            return true;
         }
         match mode {
             WorkerInspectorTaskMode::Interrupt => state.interrupting_tasks.push_back(task),
@@ -854,10 +828,7 @@ mod tests {
     use parking_lot::Mutex;
     use tokio::sync::{mpsc, oneshot};
 
-    use super::{
-        MAX_STARTUP_INSPECTOR_COMMAND_BYTES, MAX_STARTUP_INSPECTOR_COMMANDS, WorkerInspectorTask,
-        WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
-    };
+    use super::{WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner};
 
     fn runner() -> (
         WorkerInspectorTaskRunner,
@@ -1355,158 +1326,6 @@ mod tests {
             Some(WorkerInspectorTask::RunIfWaitingForDebugger { lifetime })
                 if lifetime.is_active() && !lifetime.matches(&old)
         ));
-    }
-
-    #[test]
-    fn startup_command_budget_spans_sessions_and_modes_without_blocking_control() {
-        let (wake_tx, mut wake_rx) = mpsc::unbounded_channel();
-        let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
-        for session in ["a", "b"] {
-            assert!(runner.append_attach(Some(session.into())));
-        }
-        let mut responses = Vec::new();
-        for id in 0..MAX_STARTUP_INSPECTOR_COMMANDS {
-            let (session, method) = if id % 2 == 0 {
-                ("a", "Runtime.evaluate")
-            } else {
-                ("b", "Debugger.pause")
-            };
-            let (tx, rx) = oneshot::channel();
-            assert!(runner.append_protocol_message(
-                Some(session.into()),
-                serde_json::json!({"id": id, "method": method}).to_string(),
-                None,
-                tx,
-            ));
-            responses.push(rx);
-        }
-        let (tx, mut overflow) = oneshot::channel();
-        let (deferred_tx, mut deferred_rx) = oneshot::channel();
-        assert!(!runner.append_protocol_message(
-            Some("b".into()),
-            r#"{"id":999,"method":"Runtime.evaluate"}"#.into(),
-            Some(crate::runtime::RendererRuntimeInspectorResponseSender::new(
-                999,
-                deferred_tx
-            )),
-            tx,
-        ));
-        assert_eq!(
-            overflow
-                .try_recv()
-                .unwrap()
-                .unwrap_err()
-                .downcast::<WorkerInspectorError>()
-                .unwrap(),
-            WorkerInspectorError::StartupQueueFull
-        );
-        let response = deferred_rx.try_recv().unwrap();
-        assert_eq!(
-            response.output.protocol_response(999).unwrap()["error"]["code"],
-            -32000
-        );
-        assert!(runner.append_run_if_waiting_for_debugger(Some("b")));
-        runner
-            .append_detach(Some("a".into()))
-            .try_recv()
-            .unwrap()
-            .unwrap();
-        assert!(runner.append_attach(Some("SID-worker-runner".into())));
-        let mut replacement = append_protocol(&runner, 1_000, "Runtime.evaluate");
-        assert!(matches!(
-            replacement.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ));
-        assert!(wake_rx.try_recv().is_err());
-        runner.dispose(WorkerInspectorError::Closed);
-        for (id, mut response) in responses.into_iter().enumerate() {
-            assert_eq!(
-                response
-                    .try_recv()
-                    .unwrap()
-                    .unwrap_err()
-                    .downcast::<WorkerInspectorError>()
-                    .unwrap(),
-                if id % 2 == 0 {
-                    WorkerInspectorError::Detached
-                } else {
-                    WorkerInspectorError::Closed
-                }
-            );
-        }
-        assert_eq!(
-            replacement
-                .try_recv()
-                .unwrap()
-                .unwrap_err()
-                .downcast::<WorkerInspectorError>()
-                .unwrap(),
-            WorkerInspectorError::Closed
-        );
-        assert_eq!(runner.session_count(), 0);
-    }
-
-    #[test]
-    fn startup_command_byte_budget_is_released_by_detach() {
-        let (wake_tx, _wake_rx) = mpsc::unbounded_channel();
-        let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
-        assert!(runner.append_attach(Some("large".into())));
-        let mut raw_json = String::with_capacity(MAX_STARTUP_INSPECTOR_COMMAND_BYTES);
-        raw_json.push_str(r#"{"id":1,"method":"Runtime.evaluate"}"#);
-        raw_json.extend(std::iter::repeat_n(
-            ' ',
-            MAX_STARTUP_INSPECTOR_COMMAND_BYTES - raw_json.len(),
-        ));
-        let (tx, mut large) = oneshot::channel();
-        assert!(runner.append_protocol_message(Some("large".into()), raw_json, None, tx));
-        assert!(runner.append_attach(Some("SID-worker-runner".into())));
-        let (tx, mut overflow) = oneshot::channel();
-        assert!(!runner.append_protocol_message(
-            Some("SID-worker-runner".into()),
-            r#"{"id":2,"method":"Runtime.enable"}"#.into(),
-            None,
-            tx,
-        ));
-        assert_eq!(
-            overflow
-                .try_recv()
-                .unwrap()
-                .unwrap_err()
-                .downcast::<WorkerInspectorError>()
-                .unwrap(),
-            WorkerInspectorError::StartupQueueFull
-        );
-        assert!(runner.append_run_if_waiting_for_debugger(Some("SID-worker-runner")));
-        runner
-            .append_detach(Some("large".into()))
-            .try_recv()
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            large
-                .try_recv()
-                .unwrap()
-                .unwrap_err()
-                .downcast::<WorkerInspectorError>()
-                .unwrap(),
-            WorkerInspectorError::Detached
-        );
-        let mut admitted = append_protocol(&runner, 3, "Runtime.enable");
-        runner.start();
-        assert!(matches!(
-            admitted.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ));
-        runner.dispose(WorkerInspectorError::Closed);
-        assert_eq!(
-            admitted
-                .try_recv()
-                .unwrap()
-                .unwrap_err()
-                .downcast::<WorkerInspectorError>()
-                .unwrap(),
-            WorkerInspectorError::Closed
-        );
     }
 
     #[test]

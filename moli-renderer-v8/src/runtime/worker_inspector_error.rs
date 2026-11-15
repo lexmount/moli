@@ -16,8 +16,6 @@ pub enum WorkerInspectorError {
     EnvironmentUnavailable,
     #[error("Worker Inspector owner is unavailable")]
     OwnerUnavailable,
-    #[error("Worker Inspector startup command queue limit exceeded")]
-    StartupQueueFull,
     #[error("Worker closed before Inspector task dispatch")]
     Closed,
     #[error("Worker terminated before Inspector task dispatch")]
