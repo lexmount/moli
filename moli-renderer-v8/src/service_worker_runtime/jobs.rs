@@ -615,6 +615,17 @@ pub(crate) enum ServiceWorkerUnregisterStart {
     Queued,
 }
 
+impl ServiceWorkerUnregisterStart {
+    pub(super) fn complete(job: Option<ServiceWorkerUnregisterJob>, removed: bool) -> Self {
+        if let Some(job) = job {
+            job.send(removed);
+            Self::Queued
+        } else {
+            Self::Completed(removed)
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerVersionLaunchConfig {
     pub(super) document_url: Url,

@@ -697,7 +697,7 @@ pub(super) enum LifecycleProgress {
         ),
     ),
     ForceUpdatePageLoadCompleted(Vec<tokio::sync::oneshot::Sender<()>>),
-    UnregisterCompleted(ServiceWorkerQueuedUnregisterJob),
+    UnregisterCompleted(ServiceWorkerQueuedUnregisterJob, bool),
     FetchFailed(Box<(ServiceWorkerFetchJob, String)>),
     StartWorker(Box<ServiceWorkerQueuedLaunch>),
     StartMainScriptUpdateCheck(

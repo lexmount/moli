@@ -1,6 +1,370 @@
 use super::*;
 
 #[test]
+fn failed_replacement_updates_only_its_registration_object() {
+    let service = new_service_worker_runtime_service();
+    let old_id = ServiceWorkerRegistrationId(10);
+    let old_version = ServiceWorkerVersionId(10);
+    let failed_id = ServiceWorkerRegistrationId(20);
+    let failed_version = ServiceWorkerVersionId(20);
+    let scope = url("https://example.test/app/");
+    let document = scope.join("page.html").unwrap();
+    let old_controller = insert_registered_version(
+        &service,
+        old_id,
+        old_version,
+        scope.join("old.js").unwrap(),
+        scope.clone(),
+        [document.clone()],
+    );
+    assert!(service.mark_registration_unregistered(&scope));
+    let mut register_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut lifecycle_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    insert_starting_version_with_register_job(
+        &service,
+        failed_id,
+        failed_version,
+        scope.join("missing.js").unwrap(),
+        scope.clone(),
+        11,
+        register_queue.sender(),
+    );
+    service.watch_registration_lifecycle(
+        scope.clone(),
+        ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope),
+        crate::window_document_identity::WindowDocumentOwner::for_test(1),
+        lifecycle_queue.sender(),
+    );
+
+    service.finish_worker_start_failed(
+        failed_version,
+        exact_version_run(&service, failed_version),
+        ServiceWorkerVersionStartFailure::ScriptLoad {
+            message: "script was not found".to_owned(),
+        },
+    );
+    assert!(pop_register_completion(&mut register_queue).result.is_err());
+    let Some(crate::page_task_queue::RendererServiceWorkerInternalTask::Lifecycle(notification)) =
+        lifecycle_queue.pop_internal()
+    else {
+        panic!("failed registration objects must receive a slot update");
+    };
+    assert_eq!(notification.registration.registration_id(), failed_id);
+    assert!(notification.registration.installing().is_none());
+    assert!(notification.registration.waiting().is_none());
+    assert!(notification.registration.active().is_none());
+    assert!(notification.events.is_empty());
+    assert!(!lifecycle_queue.has_ready_task());
+    assert_eq!(
+        service.matching_controller_for_document(&document),
+        Some(old_controller)
+    );
+    let state = service.inner.state.lock();
+    assert_eq!(
+        state.registrations[&old_id].active_version_id,
+        Some(old_version)
+    );
+    assert!(state.registrations[&old_id].pending_unregistration);
+    assert!(!state.registrations.contains_key(&failed_id));
+}
+
+#[test]
+fn queued_unregistration_after_initial_script_failure_resolves_false() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(10);
+    let version_id = ServiceWorkerVersionId(10);
+    let scope_url = url("https://example.test/app/");
+    let mut register_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    let mut unregister_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    insert_starting_version_with_register_job(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/missing.js"),
+        scope_url.clone(),
+        11,
+        register_queue.sender(),
+    );
+    assert_eq!(
+        service.start_unregistration(&scope_url, 21, 1, unregister_queue.sender()),
+        ServiceWorkerUnregisterStart::Queued
+    );
+    service.finish_worker_start_failed(
+        version_id,
+        exact_version_run(&service, version_id),
+        ServiceWorkerVersionStartFailure::ScriptLoad {
+            message: "script was not found".to_owned(),
+        },
+    );
+    assert!(pop_register_completion(&mut register_queue).result.is_err());
+    assert!(!pop_unregister_completion(&mut unregister_queue).result);
+    assert_eq!(service.diagnostics_snapshot().registration_count, 0);
+    assert_eq!(service.diagnostics_snapshot().version_count, 0);
+    assert_eq!(
+        service
+            .diagnostics_snapshot()
+            .queued_unregistration_job_count,
+        0
+    );
+}
+
+#[test]
+fn unregistered_registration_is_removed_from_persistent_map_before_clients_unload() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(10);
+    let version_id = ServiceWorkerVersionId(10);
+    let script_url = url("https://example.test/app/worker.js");
+    let scope_url = url("https://example.test/app/");
+    let document_url = url("https://example.test/app/page.html");
+    let old_control = insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        script_url.clone(),
+        scope_url.clone(),
+        [document_url.clone()],
+    );
+    service
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&version_id)
+        .unwrap()
+        .main_script_resource = Some(test_script_resource(&script_url));
+    assert!(
+        service
+            .store_registration_resources_for_test(registration_id, version_id)
+            .unwrap()
+    );
+    assert_eq!(service.inner.resource_store.lock().registrations().len(), 1);
+
+    assert!(service.mark_registration_unregistered(&scope_url));
+    assert!(
+        service
+            .inner
+            .resource_store
+            .lock()
+            .registrations()
+            .is_empty()
+    );
+    assert!(service.restore_all_stored_registrations().is_empty());
+    assert!(service.inner.state.lock().registrations[&registration_id].pending_unregistration);
+    assert_eq!(
+        service.matching_controller_for_document(&document_url),
+        Some(old_control)
+    );
+    assert!(!service.mark_registration_unregistered(&scope_url));
+    service.terminate_all_for_context_shutdown();
+}
+
+#[test]
+fn unregistered_registration_queue_creates_replacement_before_old_client_unloads() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(10);
+    let version_id = ServiceWorkerVersionId(10);
+    let script_url = url("https://example.test/app/worker.js");
+    let scope_url = url("https://example.test/app/");
+    let document_url = url("https://example.test/app/page.html");
+    let old_control = insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        script_url.clone(),
+        scope_url.clone(),
+        [document_url.clone()],
+    );
+    let installing_id = {
+        let mut state = service.inner.state.lock();
+        let update = test_queued_register_job(&service, script_url.clone(), scope_url.clone());
+        service
+            .create_installing_version_locked(&mut state, registration_id, &update, false)
+            .unwrap()
+            .0
+    };
+    let mut unregister_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+    assert_eq!(
+        service.start_unregistration(&scope_url, 21, 1, unregister_queue.sender()),
+        ServiceWorkerUnregisterStart::Queued
+    );
+    service.start_queued_register_job(test_queued_register_job(
+        &service,
+        script_url.clone(),
+        scope_url.clone(),
+    ));
+    assert_eq!(
+        service.diagnostics_snapshot().queued_register_job_count,
+        1,
+        "same-script register must not coalesce across a queued unregister"
+    );
+
+    let progress = {
+        let mut state = service.inner.state.lock();
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        registration.installing_version_id = None;
+        registration.waiting_version_id = Some(installing_id);
+        state
+            .versions
+            .get_mut(&installing_id)
+            .unwrap()
+            .lifecycle_state = ServiceWorkerVersionLifecycleState::Installed;
+        service.advance_registration_job_queue_locked(&mut state, registration_id)
+    };
+    let mut launch = None;
+    for action in progress {
+        if let LifecycleProgress::StartWorker(worker) = action {
+            launch = Some(worker);
+        } else {
+            service.run_lifecycle_progress(action);
+        }
+    }
+    assert!(pop_unregister_completion(&mut unregister_queue).result);
+    let launch = launch.expect("a queued replacement starts without waiting for old clients");
+    assert_ne!(launch.params.registration_id, registration_id);
+    assert_eq!(service.diagnostics_snapshot().queued_register_job_count, 0);
+    assert_eq!(
+        service.matching_controller_for_document(&document_url),
+        Some(old_control)
+    );
+    assert!(service.inner.state.lock().registrations[&registration_id].pending_unregistration);
+    service.terminate_all_for_context_shutdown();
+}
+
+#[test]
+fn unregistered_registration_is_not_revived_when_a_client_still_uses_it() {
+    for same_script in [true, false] {
+        let service = new_service_worker_runtime_service();
+        let old_id = ServiceWorkerRegistrationId(10);
+        let old_version = ServiceWorkerVersionId(10);
+        let document_url = url("https://example.test/app/page.html");
+        let scope_url = url("https://example.test/app/");
+        let script_url = url("https://example.test/app/worker.js");
+        let old_control = insert_registered_version(
+            &service,
+            old_id,
+            old_version,
+            script_url.clone(),
+            scope_url.clone(),
+            [document_url.clone()],
+        );
+        let client_id = client_id_for_document(&service, &document_url);
+        assert!(service.mark_registration_unregistered(&scope_url));
+        assert_eq!(
+            service.matching_registration_for_client(&document_url),
+            None
+        );
+
+        let queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+        service.start_registration(
+            if same_script {
+                script_url
+            } else {
+                url("https://example.test/app/replacement.js")
+            },
+            scope_url.clone(),
+            document_url.clone(),
+            WorkerScriptKind::Classic,
+            test_request_client(&service),
+            WorkerNetworkPolicy::default(),
+            service.browser_context_runtime(),
+            None,
+            None,
+            None,
+            ServiceWorkerUpdateViaCache::Imports,
+            42,
+            1,
+            queue.sender(),
+        );
+
+        let new_id = {
+            let state = service.inner.state.lock();
+            let current = state
+                .registrations
+                .values()
+                .find(|registration| {
+                    registration.scope_url == scope_url && !registration.pending_unregistration
+                })
+                .expect("register should create a current registration");
+            assert_ne!(current.id, old_id, "same_script={same_script}");
+            assert!(current.installing_version_id.is_some());
+            assert_eq!(current.active_version_id, None);
+            assert!(state.registrations[&old_id].pending_unregistration);
+            current.id
+        };
+        assert_eq!(
+            service.matching_controller_for_document(&document_url),
+            Some(old_control),
+            "the existing client keeps its old registration until it unloads"
+        );
+        service.unregister_client(client_id);
+        {
+            let state = service.inner.state.lock();
+            assert!(!state.registrations.contains_key(&old_id));
+            assert!(state.registrations.contains_key(&new_id));
+        }
+        service.terminate_all_for_context_shutdown();
+    }
+}
+
+#[test]
+fn unregistered_registration_cleanup_preserves_replacement_resources() {
+    let service = new_service_worker_runtime_service();
+    let scope_url = url("https://example.test/app/");
+    let document_url = url("https://example.test/app/page.html");
+    insert_registered_version(
+        &service,
+        ServiceWorkerRegistrationId(10),
+        ServiceWorkerVersionId(10),
+        url("https://example.test/app/old.js"),
+        scope_url.clone(),
+        [document_url.clone()],
+    );
+    let client_id = client_id_for_document(&service, &document_url);
+    assert!(service.mark_registration_unregistered(&scope_url));
+    let new_id = ServiceWorkerRegistrationId(11);
+    let new_version = ServiceWorkerVersionId(11);
+    let new_script_url = url("https://example.test/app/new.js");
+    insert_registered_version(
+        &service,
+        new_id,
+        new_version,
+        new_script_url.clone(),
+        scope_url,
+        [],
+    );
+    service
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&new_version)
+        .expect("replacement version")
+        .main_script_resource = Some(test_script_resource(&new_script_url));
+    assert!(
+        service
+            .store_registration_resources_for_test(new_id, new_version)
+            .expect("replacement resources should persist")
+    );
+    service.unregister_client(client_id);
+    assert!(
+        service
+            .inner
+            .state
+            .lock()
+            .registrations
+            .contains_key(&new_id)
+    );
+    let stored = service.inner.resource_store.lock().registrations();
+    assert_eq!(
+        stored.len(),
+        1,
+        "clearing the retired registration must keep the replacement"
+    );
+    assert_eq!(stored[0].script_url, new_script_url);
+    service.terminate_all_for_context_shutdown();
+}
+
+#[test]
 fn registration_lifecycle_watchers_are_partitioned_by_storage_key() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);

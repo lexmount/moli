@@ -70,6 +70,7 @@ pub(super) struct ServiceWorkerRegistration {
     pub(super) installing_version_id: Option<ServiceWorkerVersionId>,
     pub(super) waiting_version_id: Option<ServiceWorkerVersionId>,
     pub(super) active_version_id: Option<ServiceWorkerVersionId>,
+    /// Removed from the registration map; existing clients/events may still use it.
     pub(super) pending_unregistration: bool,
     pub(super) update_via_cache: ServiceWorkerUpdateViaCache,
     pub(super) navigation_preload_state: ServiceWorkerNavigationPreloadState,

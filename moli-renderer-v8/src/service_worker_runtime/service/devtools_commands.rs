@@ -278,7 +278,9 @@ impl ServiceWorkerRuntimeService {
             let Some(registration_id) = state
                 .registrations
                 .values()
-                .find(|registration| registration.key() == registration_key)
+                .find(|registration| {
+                    !registration.pending_unregistration && registration.key() == registration_key
+                })
                 .map(|registration| registration.id)
             else {
                 return Ok(false);
@@ -393,7 +395,9 @@ impl ServiceWorkerRuntimeService {
             let Some(registration_id) = state
                 .registrations
                 .values()
-                .find(|registration| registration.key() == registration_key)
+                .find(|registration| {
+                    !registration.pending_unregistration && registration.key() == registration_key
+                })
                 .map(|registration| registration.id)
             else {
                 return Ok(false);
@@ -453,7 +457,9 @@ impl ServiceWorkerRuntimeService {
             let Some(registration_id) = state
                 .registrations
                 .values()
-                .find(|registration| registration.key() == registration_key)
+                .find(|registration| {
+                    !registration.pending_unregistration && registration.key() == registration_key
+                })
                 .map(|registration| registration.id)
             else {
                 return Ok(false);

@@ -204,24 +204,67 @@ impl ServiceWorkerRuntimeService {
         if !registration_ready_to_delete_locked(state, registration) {
             return Vec::new();
         }
-        let registration_key = registration.key();
-        let has_queued_jobs = state.job_coordinator.has_jobs(&registration_key);
-        if has_queued_jobs {
-            self.delete_registration_resources_for_key_locked(&registration_key);
-            let mut progress = execute_pending_clear_locked(
-                state,
-                registration_id,
-                ServiceWorkerPendingClearAction::KeepRegistrationForQueuedJob,
+        // The persistent registration-map entry was removed by Unregister.
+        // Clearing this retired registration must not delete a replacement
+        // that has since been registered at the same storage key and scope.
+        self.clear_registration_locked(state, registration_id)
+    }
+
+    pub(super) fn clear_registration_locked(
+        &self,
+        state: &mut ServiceWorkerRuntimeState,
+        registration_id: ServiceWorkerRegistrationId,
+    ) -> Vec<LifecycleProgress> {
+        let Some(registration) = state.registrations.get(&registration_id) else {
+            return Vec::new();
+        };
+        let versions = [
+            registration.installing_version_id,
+            registration.waiting_version_id,
+            registration.active_version_id,
+        ];
+        let mut progress = Vec::new();
+        for version_id in versions.into_iter().flatten() {
+            if let Some(version) = state.versions.get_mut(&version_id) {
+                version.lifecycle_state = ServiceWorkerVersionLifecycleState::Redundant;
+            }
+            progress.extend(
+                lifecycle_notifications_for_registration_locked(
+                    state,
+                    registration_id,
+                    vec![ServiceWorkerLifecycleClientEvent::WorkerStateChanged {
+                        version_id,
+                        state: "redundant",
+                    }],
+                )
+                .into_iter()
+                .map(|notification| LifecycleProgress::NotifyLifecycle(Box::new(notification))),
             );
-            progress.extend(self.advance_registration_job_queue_locked(state, registration_id));
-            return progress;
+
+            // Update Worker State and Update Registration State enqueue separate
+            // tasks. A statechange callback and its microtasks still see the
+            // worker in its registration slot before the following task clears it.
+            let registration = state
+                .registrations
+                .get_mut(&registration_id)
+                .expect("registration being cleared");
+            if registration.installing_version_id == Some(version_id) {
+                registration.installing_version_id = None;
+            }
+            if registration.waiting_version_id == Some(version_id) {
+                registration.waiting_version_id = None;
+            }
+            if registration.active_version_id == Some(version_id) {
+                registration.active_version_id = None;
+            }
+            progress.extend(
+                registration_notifications_locked(state, registration_id, Vec::new())
+                    .into_iter()
+                    .map(|notification| LifecycleProgress::NotifyLifecycle(Box::new(notification))),
+            );
         }
-        self.delete_registration_resources_for_key_locked(&registration_key);
-        execute_pending_clear_locked(
-            state,
-            registration_id,
-            ServiceWorkerPendingClearAction::DeleteRegistration,
-        )
+        progress.extend(execute_pending_clear_locked(state, registration_id));
+        progress
     }
 
     pub(super) fn unregistration_progress_for_version_if_ready_locked(
