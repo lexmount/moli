@@ -51,6 +51,13 @@ def _semantic_scenarios() -> tuple[
 ]:
     return (
         (
+            "cdp_contract_audio_buffer_repeated_acquisition",
+            "Sharing one AudioBuffer across started sources and convolvers preserves channel reads, subsequent writes, no-op copies, and buffer identity.",
+            "Chrome 145.0.7632.6 public AudioBuffer data-access oracle; internal detachment and snapshot isolation are covered by renderer tests",
+            ["Runtime.evaluate"],
+            _audio_buffer_repeated_acquisition,
+        ),
+        (
             "cdp_contract_top_level_session_storage_namespaces",
             "Same-origin top-level targets share localStorage but have independent sessionStorage; a popup receives a creation-time sessionStorage copy and then diverges.",
             "HTML Web Storage and Chromium behavior",
@@ -339,6 +346,53 @@ def _find_dom_node_by_attribute(
     if isinstance(content_document, dict):
         return _find_dom_node_by_attribute(content_document, name, value)
     return None
+
+
+async def _audio_buffer_repeated_acquisition(state: SmokeState) -> dict[str, Any]:
+    async with _isolated_page(state) as (_context, page, _cdp):
+        observed = await page.evaluate(
+            """() => {
+              const ctx = new OfflineAudioContext(2, 128, 48000);
+              const buffer = ctx.createBuffer(2, 16, 48000);
+              const start = () => {
+                const source = ctx.createBufferSource();
+                source.buffer = buffer; source.start(); return source;
+              };
+              const read = channel => {
+                const values = new Float32Array(3);
+                buffer.copyFromChannel(values, channel); return [...values];
+              };
+              buffer.getChannelData(0).fill(3); buffer.getChannelData(1).fill(4);
+              const nodes = [start(), start()];
+              const initial = [read(0), read(1)];
+              buffer.copyToChannel(new Float32Array([7, 8]), 0, 1);
+              const copied = [read(0), read(1)]; nodes.push(start());
+              buffer.getChannelData(1)[0] = 9;
+              const written = [read(0), read(1)];
+              const convolver = new ConvolverNode(ctx, {buffer, disableNormalization: true});
+              nodes.push(start());
+              const reassigned = [read(0), read(1)];
+              buffer.copyToChannel(new Float32Array(0), 0);
+              buffer.copyToChannel(new Float32Array([99]), 1, 100);
+              return {initial, copied, written, reassigned, noops: [read(0), read(1)],
+                bufferIdentity: nodes.every(source => source.buffer === buffer) && convolver.buffer === buffer,
+                stableView: buffer.getChannelData(1) === buffer.getChannelData(1)};
+            }"""
+        )
+        assert_equal(
+            observed,
+            {
+                "initial": [[3, 3, 3], [4, 4, 4]],
+                "copied": [[3, 7, 8], [4, 4, 4]],
+                "written": [[3, 7, 8], [9, 4, 4]],
+                "reassigned": [[3, 7, 8], [9, 4, 4]],
+                "noops": [[3, 7, 8], [9, 4, 4]],
+                "bufferIdentity": True,
+                "stableView": True,
+            },
+            "AudioBuffer repeated acquisition and later channel writes",
+        )
+        return observed
 
 
 async def _top_level_storage_namespaces(state: SmokeState) -> dict[str, Any]:

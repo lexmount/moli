@@ -6,6 +6,7 @@ const LENGTH: &str = "__moliAudioBufferLength";
 const SAMPLE_RATE: &str = "__moliAudioBufferSampleRate";
 const CHANNELS: &str = "__moliAudioBufferChannels";
 const VIEWS: &str = "__moliAudioBufferViews";
+const ACQUIRED: &str = "__moliAudioBufferAcquiredContent";
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AudioBuffer, enumerable, receiver)]
@@ -268,33 +269,47 @@ fn get_channel_data<'s>(
     if !valid_channel(scope, args.this(), parsed.channel) {
         return;
     }
-    let views = web_audio_array_slot(scope, args.this(), VIEWS)
-        .expect("AudioBuffer should have channel views");
-    let existing = views
-        .get_index(scope, parsed.channel)
-        .expect("Channel view slot should exist");
-    if !existing.is_undefined() {
-        rv.set(existing);
-        return;
+    rv.set(writable_channel_view(scope, args.this(), parsed.channel).into());
+}
+
+fn writable_channel_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    buffer: v8::Local<'s, v8::Object>,
+    channel: u32,
+) -> v8::Local<'s, v8::Float32Array> {
+    let views =
+        web_audio_array_slot(scope, buffer, VIEWS).expect("AudioBuffer should have channel views");
+    if let Some(existing) = views
+        .get_index(scope, channel)
+        .and_then(|value| v8::Local::<v8::Float32Array>::try_from(value).ok())
+    {
+        return existing;
     }
-    let channels = web_audio_array_slot(scope, args.this(), CHANNELS)
-        .expect("AudioBuffer should have storage");
+    let channels =
+        web_audio_array_slot(scope, buffer, CHANNELS).expect("AudioBuffer should have storage");
     let keeper = channels
-        .get_index(scope, parsed.channel)
+        .get_index(scope, channel)
         .and_then(|v| v8::Local::<v8::ArrayBuffer>::try_from(v).ok())
         .expect("Channel storage should be an ArrayBuffer");
+    // A missing view means acquire detached it and may have shared its storage
+    // with nodes. Copy only this channel before exposing or writing it again.
     let store = keeper.get_backing_store();
-    let realm = args
-        .this()
+    let bytes: Vec<_> = store.iter().map(std::cell::Cell::get).collect();
+    let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+    let keeper = v8::ArrayBuffer::with_backing_store(scope, &store);
+    let _ = channels.set_index(scope, channel, keeper.into());
+    let value = v8::undefined(scope);
+    set_private_value(scope, buffer, ACQUIRED, value.into());
+    let realm = buffer
         .get_creation_context(scope)
         .expect("AudioBuffer should have a creation realm");
     let scope = &mut v8::ContextScope::new(scope, realm);
     let array_buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
-    let length = web_audio_number_slot(scope, args.this(), LENGTH).unwrap_or(0.0) as usize;
+    let length = web_audio_number_slot(scope, buffer, LENGTH).unwrap_or(0.0) as usize;
     let view = v8::Float32Array::new(scope, array_buffer, 0, length)
         .expect("Channel view should allocate");
-    let _ = views.set_index(scope, parsed.channel, view.into());
-    rv.set(view.into());
+    let _ = views.set_index(scope, channel, view.into());
+    view
 }
 
 pub(super) fn nullable_value<'s>(
@@ -313,12 +328,17 @@ pub(super) fn nullable_value<'s>(
     Ok(Some(buffer))
 }
 
-/// Snapshot content before detaching public views. Later writes through a new
-/// getChannelData view affect the buffer, not content already acquired by a node.
+/// Detach public views, then share their now-immutable storage. Repeated acquires
+/// reuse the snapshot until writable_channel_view separates a channel for writes.
 pub(super) fn acquire<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     buffer: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Array> {
+    // Cached content has no attached public views. Any path that exposes or
+    // modifies a channel first calls writable_channel_view and drops this cache.
+    if let Some(acquired) = web_audio_array_slot(scope, buffer, ACQUIRED) {
+        return acquired;
+    }
     let result = private_array(scope, 0);
     let Some(channels) = web_audio_array_slot(scope, buffer, CHANNELS) else {
         return result;
@@ -333,17 +353,6 @@ pub(super) fn acquire<'s>(
             return result;
         }
     }
-    for index in 0..channels.length() {
-        let keeper = channels
-            .get_index(scope, index)
-            .and_then(|v| v8::Local::<v8::ArrayBuffer>::try_from(v).ok())
-            .expect("Channel storage should be an ArrayBuffer");
-        let store = keeper.get_backing_store();
-        let bytes: Vec<_> = store.iter().map(std::cell::Cell::get).collect();
-        let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-        let snapshot = v8::ArrayBuffer::with_backing_store(scope, &store);
-        let _ = result.set_index(scope, index, snapshot.into());
-    }
     for index in 0..views.length() {
         if let Some(view) = views
             .get_index(scope, index)
@@ -357,6 +366,15 @@ pub(super) fn acquire<'s>(
         let value = v8::undefined(scope);
         let _ = views.set_index(scope, index, value.into());
     }
+    // Copy the private list, not PCM. CHANNELS may later replace individual
+    // entries on write, while each node retains this immutable list and storage.
+    for index in 0..channels.length() {
+        let keeper = channels
+            .get_index(scope, index)
+            .expect("Channel storage should exist");
+        let _ = result.set_index(scope, index, keeper);
+    }
+    set_private_value(scope, buffer, ACQUIRED, result.into());
     result
 }
 
@@ -437,6 +455,9 @@ fn copy_channel<'s>(
         .min(parsed.array.length());
     if count == 0 {
         return;
+    }
+    if to_channel {
+        writable_channel_view(scope, args.this(), parsed.channel);
     }
     let channels = web_audio_array_slot(scope, args.this(), CHANNELS)
         .expect("AudioBuffer should have storage");

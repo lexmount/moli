@@ -1726,17 +1726,19 @@ fn build_channel_data_view<'s>(
     length: usize,
     has_input: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let samples = if has_input {
-        synthetic_audio_samples(length)
+    let buffer = if has_input {
+        let samples = synthetic_audio_samples(length);
+        let mut bytes = Vec::with_capacity(samples.len() * std::mem::size_of::<f32>());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+        v8::ArrayBuffer::with_backing_store(scope, &backing_store)
     } else {
-        vec![0.0; length]
+        // V8 initializes the backing store to zero without an intermediate PCM
+        // vector and a second full-size byte allocation.
+        v8::ArrayBuffer::new(scope, length * std::mem::size_of::<f32>())
     };
-    let mut bytes = Vec::with_capacity(samples.len() * std::mem::size_of::<f32>());
-    for sample in samples {
-        bytes.extend_from_slice(&sample.to_le_bytes());
-    }
-    let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-    let buffer = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
     let view = v8::Float32Array::new(scope, buffer, 0, length)
         .expect("Float32Array construction should succeed");
     view.into()
