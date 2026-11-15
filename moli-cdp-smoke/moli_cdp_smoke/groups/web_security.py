@@ -59,7 +59,9 @@ async def worker_read(page: Any, source: str, target: str, api: str, kind: str =
     script = source + '/web-security/' + ('shared.js' if kind == 'shared' else 'worker.js')
     return await page.evaluate('''args => new Promise((resolve,reject) => {
       const [script,url,api,kind,init] = args;
-      const worker = kind === 'shared' ? new SharedWorker(script) : new Worker(script,{type:kind});
+      let worker;
+      try {worker = kind === 'shared' ? new SharedWorker(script) : new Worker(script,{type:kind});}
+      catch(error) {resolve({error:error.name});return;}
       const port = kind === 'shared' ? worker.port : worker;
       const finish = value => {clearTimeout(timer);kind === 'shared' ? port.close() : worker.terminate();resolve(value);};
       const timer = setTimeout(()=>reject(Error('worker did not complete')),8000);
@@ -147,6 +149,9 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
                         init = {} if method == 'GET' else {'method':'PUT','headers':{'X-Author':'kept'},'body':'request-body'}
                         result = await worker_read(page,source,url(target,'echo',key),api,kind,init)
                         observed[kind+'-'+api+'-'+method] = {'result':result,'requests':peer.web_security.requests(key)}
+                key = mode+'-cross-worker-'+kind
+                result = await worker_read(page,target,url(target,'echo',key),'fetch',kind,{'probeOrigin':True})
+                observed['cross-worker-'+kind] = {'result':result,'requests':peer.web_security.requests(key)}
             for kind in ('static','dynamic'):
                 key = mode+'-module-worker-'+kind
                 result = await module_worker(page,source,url(target,'module.js',key),kind)
@@ -177,6 +182,19 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
             for sandbox in (False,True):
                 frame = await frame_case(page,source,target,sandbox)
                 observed['sandbox-frame' if sandbox else 'local-frame'] = frame
+            observed['navigated-proxy'] = await page.evaluate('''source=>new Promise(resolve=>{
+              const frame=document.querySelector('iframe');
+              globalThis.savedProxy=frame.contentWindow;
+              frame.onload=()=>{try{resolve({same:savedProxy===frame.contentWindow,
+                origin:savedProxy.location.origin,body:savedProxy.document.querySelector('main').textContent})}
+                catch(e){resolve({error:e.name})}};
+              frame.removeAttribute('sandbox');frame.src=source+'/web-security/page?navigated=1';
+            })''',source)
+            observed['initial-about'] = await page.evaluate('''()=>{
+              const frame=document.createElement('iframe');document.body.append(frame);
+              const w=frame.contentWindow;return {url:w.location.href,origin:w.origin,
+                readable:!!w.document,ownOrigin:location.origin};
+            }''')
             async with page.expect_popup() as opened:
                 await page.evaluate("url=>{globalThis.probePopup=window.open(url)}", target+'/web-security/page')
             popup = await opened.value
@@ -278,7 +296,40 @@ async def run_web_security_group(endpoint: str, fixture: str, results: list[dict
         finally:
             await stop_browser(disabled_process)
         expected = json.loads(CONTRACTS.read_text())
-        assert_equal(defaults,expected['default'],'Chromium default web-security contract')
-        assert_equal(enabled,expected['disabled'],'Chromium disabled web-security contract')
+        compare_mode(defaults,expected['default'],False,results)
+        compare_mode(enabled,expected['disabled'],True,results)
     finally:
         peer.stop()
+
+
+def compare_mode(observed: dict[str, Any], oracle: dict[str, Any], disabled: bool,
+                 results: list[dict[str, Any]]) -> None:
+    """Keep named representation/standards differences visible and narrowly checked."""
+    expected = json.loads(json.dumps(oracle))
+    differences: dict[str, str] = {}
+    if is_moli_browser():
+        expected['sandbox-frame']['target']['urlOrigin'] = 'null'
+        differences['sandbox-frame'] = 'Existing sandbox Location.origin uses the document opaque origin.'
+        if disabled:
+            for name,origin in [('sandbox-frame','null'),('remote-frame','{remote-target}')]:
+                expected[name]['access'] = {'body':'payload','origin':origin}
+                differences[name] = (differences.get(name,'') +
+                    ' Moli represents this frame locally; Chromium isolates it in a remote renderer.')
+            expected['redirect-manual-invalid']['result'] = dict(expected['redirect-manual-valid']['result'])
+            expected['redirect-error-missing']['result'] = {'error':'TypeError'}
+            for name in ('redirect-manual-invalid','redirect-error-missing'):
+                differences[name] = 'Shared Fetch redirect behavior follows the standard as documented in #2964.'
+        else:
+            for kind in ('classic','module','shared'):
+                name = 'cross-worker-'+kind
+                expected[name]['result'] = {'error':'WorkerError'}
+                differences[name] = 'Existing default Worker constructor reports cross-origin startup failure asynchronously.'
+            expected['sw-synthetic-no-cors']['result'] = {'error':'TypeError'}
+            differences['sw-synthetic-no-cors'] = 'Existing default Service Worker body security rechecks synthetic no-cors text.'
+    assert_equal(sorted(observed),sorted(expected),'web-security case coverage')
+    for name,value in expected.items():
+        assert_equal(observed[name],value,f'web-security {"disabled" if disabled else "default"}/{name}')
+        if name in differences:
+            record(results,f'web_security_known_difference_{disabled}_{name}',{
+                'reason':differences[name],'chromium':oracle[name],'moli':observed[name],
+            })

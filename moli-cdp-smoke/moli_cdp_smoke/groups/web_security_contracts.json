@@ -617,6 +617,12 @@
         }
       ]
     },
+    "cross-worker-classic": {
+      "result": {
+        "error": "SecurityError"
+      },
+      "requests": []
+    },
     "module-fetch-GET": {
       "result": {
         "error": "TypeError"
@@ -707,6 +713,12 @@
         }
       ]
     },
+    "cross-worker-module": {
+      "result": {
+        "error": "SecurityError"
+      },
+      "requests": []
+    },
     "shared-fetch-GET": {
       "result": {
         "error": "TypeError"
@@ -796,6 +808,12 @@
           "body": ""
         }
       ]
+    },
+    "cross-worker-shared": {
+      "result": {
+        "error": "SecurityError"
+      },
+      "requests": []
     },
     "module-worker-static": {
       "result": {
@@ -937,6 +955,17 @@
         "error": "SecurityError"
       },
       "sourceStorage": "source"
+    },
+    "navigated-proxy": {
+      "same": true,
+      "origin": "{source}",
+      "body": "payload"
+    },
+    "initial-about": {
+      "url": "about:blank",
+      "origin": "{source}",
+      "readable": true,
+      "ownOrigin": "{source}"
     },
     "popup": {
       "error": "SecurityError"
@@ -1768,6 +1797,30 @@
         }
       ]
     },
+    "cross-worker-classic": {
+      "result": {
+        "mode": "cors",
+        "type": "basic",
+        "status": 200,
+        "redirected": false,
+        "body": "payload",
+        "clone": "payload",
+        "secret": "visible",
+        "cookie": null,
+        "workerOrigin": "{source}",
+        "scriptOrigin": "{target}"
+      },
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
     "module-fetch-GET": {
       "result": {
         "mode": "cors",
@@ -1881,6 +1934,30 @@
           "cookie": {},
           "author": "kept",
           "body": "request-body"
+        }
+      ]
+    },
+    "cross-worker-module": {
+      "result": {
+        "mode": "cors",
+        "type": "basic",
+        "status": 200,
+        "redirected": false,
+        "body": "payload",
+        "clone": "payload",
+        "secret": "visible",
+        "cookie": null,
+        "workerOrigin": "{source}",
+        "scriptOrigin": "{target}"
+      },
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
         }
       ]
     },
@@ -1999,6 +2076,12 @@
           "body": "request-body"
         }
       ]
+    },
+    "cross-worker-shared": {
+      "result": {
+        "error": "WorkerError"
+      },
+      "requests": []
     },
     "module-worker-static": {
       "result": "module",
@@ -2161,6 +2244,17 @@
         "error": "SecurityError"
       },
       "sourceStorage": "source"
+    },
+    "navigated-proxy": {
+      "same": true,
+      "origin": "{source}",
+      "body": "payload"
+    },
+    "initial-about": {
+      "url": "about:blank",
+      "origin": "{source}",
+      "readable": true,
+      "ownOrigin": "{source}"
     },
     "popup": {
       "body": "payload",
