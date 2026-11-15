@@ -19,7 +19,7 @@ pub(in crate::context_bootstrap) use buffers::*;
 pub(crate) use clone::*;
 pub(in crate::context_bootstrap) use console::*;
 pub(crate) use console::{
-    console_arg_remote_object_json, current_console_stack,
+    console_arg_remote_object_json, current_console_stack, initialize_console_namespace,
     install_console_message_buffers_for_context,
     snapshot_console_message_details_for_current_context,
     snapshot_console_messages_for_current_context,
