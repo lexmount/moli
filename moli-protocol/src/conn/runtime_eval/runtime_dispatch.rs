@@ -258,7 +258,8 @@ impl CdpConnection {
             .browser_context_by_id(&route.browser_context_id)
             .map(|context| context.renderer_runtime())
             .ok_or(RuntimeInspectorError::UnknownSession)?;
-        Ok(renderer_runtime.run_dedicated_worker_if_waiting_for_debugger_for_devtools(instance_id))
+        Ok(renderer_runtime
+            .run_dedicated_worker_if_waiting_for_debugger_for_devtools(instance_id, session_id))
     }
 
     pub(super) fn service_worker_runtime_target_for_session(

@@ -172,19 +172,15 @@ impl RendererBrowserContextRuntime {
             .take_session_response_settlement_receiver()
             .expect("a Worker DevTools response must own one settlement receiver");
         let (response_tx, response_rx) = oneshot::channel();
-        let dispatched = handle.dispatch_runtime_protocol_message(
+        handle.dispatch_runtime_protocol_message(
             Some(inspector_session_id),
             raw_json,
             Some(response),
             response_tx,
         );
-        let dispatch = if dispatched {
-            response_rx
-                .await
-                .unwrap_or_else(|_| Err(WorkerInspectorError::DedicatedUnavailable.into()))
-        } else {
-            Err(WorkerInspectorError::DedicatedUnavailable.into())
-        };
+        let dispatch = response_rx
+            .await
+            .unwrap_or_else(|_| Err(WorkerInspectorError::DedicatedUnavailable.into()));
         Ok(
             crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(
                 dispatch,
@@ -205,14 +201,14 @@ impl RendererBrowserContextRuntime {
             return Err(WorkerInspectorError::DedicatedUnavailable.into());
         };
         let (response_tx, response_rx) = oneshot::channel();
-        if !handle.dispatch_runtime_protocol_message(
+        // Rejected admission settles this receipt too. Do not replace errors
+        // such as StartupQueueFull with the unavailable-worker fallback.
+        handle.dispatch_runtime_protocol_message(
             inspector_session_id,
             raw_json,
             deferred_response,
             response_tx,
-        ) {
-            return Err(WorkerInspectorError::DedicatedUnavailable.into());
-        }
+        );
         response_rx
             .await
             .context(WorkerInspectorError::DedicatedUnavailable)?
@@ -241,9 +237,10 @@ impl RendererBrowserContextRuntime {
     pub fn run_dedicated_worker_if_waiting_for_debugger_for_devtools(
         &self,
         instance_id: u64,
+        inspector_session_id: &str,
     ) -> bool {
-        self.running_dedicated_worker_devtools_handle(instance_id)
-            .is_some_and(|handle| handle.run_if_waiting_for_debugger())
+        self.dedicated_worker_devtools_handle(instance_id)
+            .is_some_and(|handle| handle.run_if_waiting_for_debugger(Some(inspector_session_id)))
     }
 
     pub fn close_dedicated_worker_for_devtools(&self, instance_id: u64) -> bool {
@@ -267,6 +264,52 @@ impl RendererBrowserContextRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn loading_worker_dispatch_preserves_queue_budget_rejection() {
+        let runtime = RendererBrowserContextRuntime::new();
+        let instance = runtime.allocate_dedicated_worker_instance_id();
+        runtime.register_loading_dedicated_worker_devtools_target(instance, None);
+        assert!(
+            runtime.attach_dedicated_worker_runtime_inspector_session(instance, "queued".into())
+        );
+        let mut queued = Vec::new();
+        for id in 0..1024 {
+            let mut command = Box::pin(runtime.dispatch_dedicated_worker_runtime_protocol_message(
+                instance,
+                Some("queued".into()),
+                serde_json::json!({"id": id, "method": "Runtime.evaluate", "params": {"expression": "42"}}).to_string(),
+            ));
+            match futures_util::poll!(&mut command) {
+                std::task::Poll::Pending => queued.push(command),
+                std::task::Poll::Ready(Err(error)) => {
+                    assert_eq!(
+                        error.downcast::<WorkerInspectorError>().unwrap(),
+                        WorkerInspectorError::StartupQueueFull
+                    );
+                    break;
+                }
+                std::task::Poll::Ready(Ok(_)) => {
+                    panic!("an unstarted Worker cannot execute a command")
+                }
+            }
+        }
+        assert!(
+            !queued.is_empty() && queued.len() < 1024,
+            "startup admission must be bounded"
+        );
+        runtime.unregister_dedicated_worker_devtools_handle(instance);
+        for command in queued {
+            assert_eq!(
+                command
+                    .await
+                    .unwrap_err()
+                    .downcast::<WorkerInspectorError>()
+                    .unwrap(),
+                WorkerInspectorError::Closed
+            );
+        }
+    }
 
     #[tokio::test]
     async fn loading_worker_retirement_removes_pending_inspector_attachments() {

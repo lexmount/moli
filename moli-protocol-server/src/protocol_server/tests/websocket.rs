@@ -9,6 +9,7 @@ mod inspector_json;
 mod navigation_debugger;
 mod prepared_document_actions;
 mod target_message;
+mod worker_startup;
 
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],

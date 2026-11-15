@@ -865,8 +865,10 @@ impl WorkerRuntimeInspector {
             } => {
                 self.detach_session_incarnation(inspector_session_id.as_deref(), &lifetime);
             }
-            WorkerInspectorTask::RunIfWaitingForDebugger => {
-                self.task_runner.request_resume();
+            WorkerInspectorTask::RunIfWaitingForDebugger { lifetime } => {
+                if lifetime.is_active() {
+                    self.task_runner.request_resume();
+                }
             }
         }
         self.forward_pending_messages();
