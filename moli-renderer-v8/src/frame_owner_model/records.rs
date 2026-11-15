@@ -11,7 +11,7 @@ use super::lifecycle_blockers::DocumentLifecycleBlockers;
 use super::load_delivery_tasks::{
     FrameDocumentLoadDeliveryAdmissionId, FrameDocumentLoadDeliveryPhase,
 };
-use super::load_event_gate::DocumentLoadGateRelease;
+use super::load_event_gate::{DocumentLoadDelaySettlement, DocumentLoadGateRelease};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct FrameId(pub(crate) String);
@@ -869,7 +869,7 @@ impl DocumentLifecycleRecord {
         let previous_readiness = self.readiness?;
         let ready_state_changed = previous_readiness != DocumentReadinessState::Complete;
 
-        self.blockers.clear_for_retirement();
+        self.blockers.invalidate_all();
         self.incomplete_child_frames.clear();
         self.parsing_delay_token = None;
         self.interactive_transition_token = None;
@@ -898,7 +898,7 @@ impl DocumentLifecycleRecord {
         {
             return false;
         }
-        self.blockers.clear_for_retirement();
+        self.blockers.invalidate_all();
         self.parsing_delay_token = None;
         self.interactive_transition_token = None;
         self.domcontentloaded_transition_token = None;
@@ -1215,18 +1215,12 @@ impl DocumentLifecycleRecord {
         self.blockers.acquire(token, reason)
     }
 
-    /// `Page.stopLoading` cleared this Document's load-delay tokens while
-    /// leaving it current; see [`Self::stop_loading_without_load_event`].
-    pub(super) fn load_was_stopped(&self) -> bool {
-        self.load == DocumentLoadEventProgress::Suppressed
-    }
-
-    pub(super) fn release_load_delay(
+    pub(super) fn settle_load_delay(
         &mut self,
         token: DocumentLoadDelayTokenId,
         expected_reason: DocumentLoadDelayReason,
-    ) -> bool {
-        self.blockers.release(token, expected_reason)
+    ) -> DocumentLoadDelaySettlement {
+        self.blockers.settle(token, expected_reason)
     }
 
     pub(super) fn release_window_load_delay(
@@ -1619,4 +1613,50 @@ pub(crate) enum FrameScriptSource {
 pub(crate) struct FrameFunctionConstructorSource {
     pub(crate) parameters: Vec<String>,
     pub(crate) body: String,
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn forced_completion_invalidates_delays_until_document_retirement() {
+        for kind in [
+            DocumentLoadDeliveryKind::Main,
+            DocumentLoadDeliveryKind::Child,
+        ] {
+            for stopped in [false, true] {
+                let mut lifecycle = DocumentLifecycleRecord::loading(
+                    kind,
+                    DocumentLoadDelayTokenId(1),
+                    DocumentLoadDelayTokenId(2),
+                );
+                let token = DocumentLoadDelayTokenId(3);
+                assert!(
+                    lifecycle.acquire_load_delay(token, DocumentLoadDelayReason::StyleLoadEvent)
+                );
+                if stopped {
+                    assert_eq!(lifecycle.stop_loading_without_load_event(), Some(true));
+                    assert_eq!(lifecycle.stop_loading_without_load_event(), Some(false));
+                } else {
+                    assert!(lifecycle.complete_initial_empty_document());
+                }
+                assert!(lifecycle.is_complete());
+                assert_eq!(lifecycle.load_delay_token_count(), 0);
+                assert!(!lifecycle.acquire_load_delay(
+                    DocumentLoadDelayTokenId(4),
+                    DocumentLoadDelayReason::Image
+                ));
+                assert_eq!(
+                    lifecycle.settle_load_delay(token, DocumentLoadDelayReason::StyleLoadEvent),
+                    DocumentLoadDelaySettlement::Invalidated
+                );
+                lifecycle.retire();
+                assert_eq!(
+                    lifecycle.settle_load_delay(token, DocumentLoadDelayReason::StyleLoadEvent),
+                    DocumentLoadDelaySettlement::NotOwned
+                );
+            }
+        }
+    }
 }

@@ -1,6 +1,7 @@
 use super::ScriptVm;
 use crate::{
     document_runtime::StylesheetImportCompletionAuthority,
+    frame_owner_model::DocumentLoadDelaySettlement,
     page_task_queue::{
         PageConnectedStyleEventTargetEffect, PageConnectedStyleLoadDelayEffect,
         PageStylesheetNetworkingTargetEffect, RendererPageConnectedStyleEventTask,
@@ -109,25 +110,32 @@ impl ScriptVm {
             );
             return PageConnectedStyleLoadDelayEffect::ExactBindingRetiredWithDocument;
         }
-        let had_load_delay_token = binding.load_delay_token().is_some();
         let settled = self
             ._context_host
             .borrow_mut()
             .settle_main_style_load_event(binding);
         assert!(
-            settled,
-            "a current connected style event must release its exact load-delay binding"
+            settled.settled(),
+            "a current connected style event must settle its exact load-delay binding"
         );
         tracing::debug!(
             owner = ?binding.owner(),
             element = ?binding.element(),
             load_delay_token = ?binding.load_delay_token(),
+            ?settled,
             "settled main connected style load inside selected event body"
         );
-        if had_load_delay_token {
-            PageConnectedStyleLoadDelayEffect::ReleasedExactBinding
-        } else {
-            PageConnectedStyleLoadDelayEffect::NoBindingRequired
+        match settled {
+            DocumentLoadDelaySettlement::NoDelayRequired => {
+                PageConnectedStyleLoadDelayEffect::NoBindingRequired
+            }
+            DocumentLoadDelaySettlement::Released => {
+                PageConnectedStyleLoadDelayEffect::ReleasedExactBinding
+            }
+            DocumentLoadDelaySettlement::Invalidated => {
+                PageConnectedStyleLoadDelayEffect::InvalidatedExactBinding
+            }
+            DocumentLoadDelaySettlement::NotOwned => unreachable!("settlement checked above"),
         }
     }
 }

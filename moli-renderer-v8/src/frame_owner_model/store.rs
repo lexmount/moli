@@ -12,7 +12,7 @@ use super::lifecycle_tasks::{
     MainDocumentScriptLoadDelayLease, MainDocumentScriptLoadDelayRelease,
     MainDocumentStyleLoadEventBinding, StylesheetSubresourceLoadDelayBinding,
 };
-use super::load_event_gate::DocumentLoadGateRelease;
+use super::load_event_gate::{DocumentLoadDelaySettlement, DocumentLoadGateRelease};
 use super::module_clients::{
     FrameDocumentModuleClientReservation, FrameDocumentModuleFetchClientStart,
     FrameDocumentModulepreloadLinkClient,
@@ -2514,7 +2514,7 @@ impl FrameOwnerStore {
                 token,
                 DocumentLoadDelayReason::Navigation,
             );
-            debug_assert!(released);
+            debug_assert!(released.released());
         }
         Some(expected.owner())
     }
@@ -2787,6 +2787,7 @@ impl FrameOwnerStore {
             .release_window_load_delay(token, reason)
         {
             DocumentLoadGateRelease::NotOwned => MainDocumentScriptLoadDelayRelease::NotOwned,
+            DocumentLoadGateRelease::Invalidated => MainDocumentScriptLoadDelayRelease::Invalidated,
             DocumentLoadGateRelease::StillBlocked => {
                 MainDocumentScriptLoadDelayRelease::StillBlocked
             }
@@ -2841,21 +2842,18 @@ impl FrameOwnerStore {
     pub(crate) fn settle_main_style_load_event(
         &mut self,
         binding: MainDocumentStyleLoadEventBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         if !self.main_style_load_event_is_current(binding) {
-            return false;
+            return DocumentLoadDelaySettlement::NotOwned;
         }
         let Some(token) = binding.load_delay_token() else {
-            return true;
+            return DocumentLoadDelaySettlement::NoDelayRequired;
         };
-        let owner = binding.owner();
-        self.release_document_load_delay(owner, token, DocumentLoadDelayReason::StyleLoadEvent)
-            // A stopped Document already dropped every load-delay token.
-            || self
-                .documents
-                .get(&owner.document_id)
-                .filter(|document| document.local_window_id == owner.local_window_id)
-                .is_some_and(|document| document.lifecycle_progress.load_was_stopped())
+        self.release_document_load_delay(
+            binding.owner(),
+            token,
+            DocumentLoadDelayReason::StyleLoadEvent,
+        )
     }
 
     pub(crate) fn accept_current_main_stylesheet_subresource_load_delay(
@@ -2926,12 +2924,12 @@ impl FrameOwnerStore {
     pub(crate) fn settle_stylesheet_subresource_load_delay(
         &mut self,
         binding: StylesheetSubresourceLoadDelayBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         if !self.stylesheet_subresource_load_delay_is_current(binding) {
-            return false;
+            return DocumentLoadDelaySettlement::NotOwned;
         }
         let Some(token) = binding.load_delay_token() else {
-            return true;
+            return DocumentLoadDelaySettlement::NoDelayRequired;
         };
         self.release_document_load_delay(
             binding.owner(),
@@ -2976,12 +2974,12 @@ impl FrameOwnerStore {
     pub(crate) fn settle_main_image_load_delay(
         &mut self,
         binding: MainDocumentImageLoadDelayBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         if !self.main_image_load_delay_is_current(binding) {
-            return false;
+            return DocumentLoadDelaySettlement::NotOwned;
         }
         let Some(token) = binding.load_delay_token() else {
-            return true;
+            return DocumentLoadDelaySettlement::NoDelayRequired;
         };
         self.release_document_load_delay(binding.owner(), token, DocumentLoadDelayReason::Image)
     }
@@ -3022,12 +3020,12 @@ impl FrameOwnerStore {
     pub(crate) fn settle_main_media_load_delay(
         &mut self,
         binding: MainDocumentMediaLoadDelayBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         if !self.main_media_load_delay_is_current(binding) {
-            return false;
+            return DocumentLoadDelaySettlement::NotOwned;
         }
         let Some(token) = binding.load_delay_token() else {
-            return true;
+            return DocumentLoadDelaySettlement::NoDelayRequired;
         };
         self.release_document_load_delay(binding.owner(), token, DocumentLoadDelayReason::Media)
     }
@@ -3132,9 +3130,13 @@ impl FrameOwnerStore {
     pub(crate) fn settle_child_image_load_event_binding(
         &mut self,
         binding: FrameDocumentImageLoadEventBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         let Some(token) = binding.load_delay_token() else {
-            return self.child_image_load_event_binding_is_current(binding);
+            return if self.child_image_load_event_binding_is_current(binding) {
+                DocumentLoadDelaySettlement::NoDelayRequired
+            } else {
+                DocumentLoadDelaySettlement::NotOwned
+            };
         };
         self.release_document_load_delay(binding.owner(), token, DocumentLoadDelayReason::Image)
     }
@@ -3180,9 +3182,13 @@ impl FrameOwnerStore {
     pub(crate) fn settle_child_media_load_delay(
         &mut self,
         binding: FrameDocumentMediaLoadDelayBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         let Some(token) = binding.load_delay_token() else {
-            return self.child_media_load_delay_is_current(binding);
+            return if self.child_media_load_delay_is_current(binding) {
+                DocumentLoadDelaySettlement::NoDelayRequired
+            } else {
+                DocumentLoadDelaySettlement::NotOwned
+            };
         };
         self.release_document_load_delay(binding.owner(), token, DocumentLoadDelayReason::Media)
     }
@@ -3239,6 +3245,7 @@ impl FrameOwnerStore {
         token: DocumentLoadDelayTokenId,
     ) -> bool {
         self.release_document_load_delay(owner, token, DocumentLoadDelayReason::AsyncClassicScript)
+            .settled()
     }
 
     pub(crate) fn release_blocking_stylesheet_load_delay(
@@ -3247,6 +3254,7 @@ impl FrameOwnerStore {
         token: DocumentLoadDelayTokenId,
     ) -> bool {
         self.release_document_load_delay(owner, token, DocumentLoadDelayReason::BlockingStylesheet)
+            .settled()
     }
 
     pub(crate) fn release_parser_deferred_script_load_delay(
@@ -3259,6 +3267,7 @@ impl FrameOwnerStore {
             token,
             DocumentLoadDelayReason::ParserDeferredScript,
         )
+        .settled()
     }
 
     pub(crate) fn release_async_module_script_load_delay(
@@ -3267,6 +3276,7 @@ impl FrameOwnerStore {
         token: DocumentLoadDelayTokenId,
     ) -> bool {
         self.release_document_load_delay(owner, token, DocumentLoadDelayReason::AsyncModuleScript)
+            .settled()
     }
 
     fn release_document_load_delay(
@@ -3274,14 +3284,12 @@ impl FrameOwnerStore {
         owner: FrameDocumentTaskOwner,
         token: DocumentLoadDelayTokenId,
         reason: DocumentLoadDelayReason,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         self.documents
             .get_mut(&owner.document_id)
             .filter(|document| document.local_window_id == owner.local_window_id)
-            .is_some_and(|document| {
-                document
-                    .lifecycle_progress
-                    .release_load_delay(token, reason)
+            .map_or(DocumentLoadDelaySettlement::NotOwned, |document| {
+                document.lifecycle_progress.settle_load_delay(token, reason)
             })
     }
 

@@ -22,6 +22,8 @@ mod script_events;
 mod store;
 mod task_sources;
 
+pub(crate) use load_event_gate::DocumentLoadDelaySettlement;
+
 pub(crate) use classic_script_tasks::{
     FrameClassicDocumentScriptExecutionAction, FrameClassicDocumentScriptExecutionStart,
     FrameDocumentClassicCompletionFinishAction, FrameDocumentClassicCompletionFollowup,

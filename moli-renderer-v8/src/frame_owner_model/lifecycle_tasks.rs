@@ -34,6 +34,8 @@ pub(crate) enum MainDocumentScriptLoadDelayRelease {
     /// `load` had already completed when the script was admitted, so the
     /// lease intentionally carried no gate token.
     AlreadyUnblocked,
+    /// The Document invalidated this exact lease before its terminal body.
+    Invalidated,
     /// The exact token was released, while another load blocker remains.
     StillBlocked,
     /// The exact token was the final entry in the Document load gate.
@@ -41,7 +43,7 @@ pub(crate) enum MainDocumentScriptLoadDelayRelease {
 }
 
 impl MainDocumentScriptLoadDelayRelease {
-    pub(crate) const fn released(self) -> bool {
+    pub(crate) const fn settled(self) -> bool {
         !matches!(self, Self::NotOwned)
     }
 }
