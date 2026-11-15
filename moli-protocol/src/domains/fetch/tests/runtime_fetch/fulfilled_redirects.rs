@@ -1,6 +1,6 @@
 use super::*;
 
-async fn command(ctx: &mut TestContext, id: u64, method: &str, params: Value) -> Value {
+pub(super) async fn command(ctx: &mut TestContext, id: u64, method: &str, params: Value) -> Value {
     ctx.process_async(json!({
         "id": id, "sessionId": "SID-1", "method": method, "params": params,
     }))
@@ -1147,4 +1147,5 @@ async fn network_redirect_repauses_and_expires_request_scoped_header_edits() {
     server.abort();
 }
 
+mod cors_order;
 mod exact_patterns;

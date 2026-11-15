@@ -12,10 +12,13 @@ pub(super) fn follow_intercepted_redirect(
     if request.redirect_mode() == RequestRedirectMode::Manual {
         return Ok(None);
     }
-    if request.redirect_mode() == RequestRedirectMode::Error
-        && matches!(head.status, 301 | 302 | 303 | 307 | 308)
-    {
-        return Err("fetch: redirect mode is error".to_owned());
+    if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
+        // A fulfilled network response has the same CORS gate as a real hop.
+        // Preserve that failure before rejecting an error-mode redirect.
+        request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+        if request.redirect_mode() == RequestRedirectMode::Error {
+            return Err("fetch: redirect mode is error".to_owned());
+        }
     }
     let Some(mut target) = crate::network_host::next_redirect_url(
         &head.final_url,
@@ -26,7 +29,6 @@ pub(super) fn follow_intercepted_redirect(
     else {
         return Ok(None);
     };
-    request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
     let includes_credentials = !target.username().is_empty() || target.password().is_some();
     // Like Chromium's credentialed-subresource check, allow credentials already
     // present in the same-origin embedding document. Fetch's CORS taint remains
