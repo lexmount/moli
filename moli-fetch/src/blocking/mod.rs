@@ -1140,6 +1140,48 @@ mod tests {
     }
 
     #[test]
+    fn disabled_web_security_preserves_renderer_resource_and_form_origins() {
+        let mut config = FetchConfig::default();
+        config.set_web_security_disabled(true);
+        let origin = moli_url::WebOrigin::from_url(&url("https://page.test/"));
+        for metadata in [
+            BrowserRequestMetadata::Style,
+            BrowserRequestMetadata::Image,
+            BrowserRequestMetadata::Font,
+            BrowserRequestMetadata::SharedWorker,
+            BrowserRequestMetadata::ServiceWorker,
+            BrowserRequestMetadata::Fetch,
+            BrowserRequestMetadata::Xhr,
+        ] {
+            let request = Request::new("GET", "https://resource.test/item", None, Vec::new())
+                .unwrap()
+                .with_request_origin(origin.clone())
+                .with_request_mode(RequestMode::Cors)
+                .with_browser_request_metadata(metadata);
+            let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
+            let expected = (!matches!(
+                metadata,
+                BrowserRequestMetadata::Fetch | BrowserRequestMetadata::Xhr
+            ))
+            .then_some("https://page.test");
+            assert_eq!(
+                header_value(&headers, "origin").as_deref(),
+                expected,
+                "{metadata:?}"
+            );
+        }
+        let request = Request::new("POST", "https://resource.test/form", None, Vec::new())
+            .unwrap()
+            .with_request_origin(origin)
+            .with_top_level_navigation_cookie_context();
+        let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
+        assert_eq!(
+            header_value(&headers, "origin").as_deref(),
+            Some("https://page.test")
+        );
+    }
+
+    #[test]
     fn browser_subresource_origin_header_is_method_mode_and_origin_aware() {
         struct Case {
             name: &'static str,

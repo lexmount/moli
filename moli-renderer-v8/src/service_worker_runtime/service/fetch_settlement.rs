@@ -172,22 +172,25 @@ fn apply_service_worker_synthetic_redirect(
         .cloned()
         .unwrap_or_else(|| job.request.url.clone());
     job.request
-        .follow_redirect(moli_fetch::RedirectInfo {
-            source: moli_fetch::RedirectSource::ServiceWorker,
-            from_url,
-            to_url: next_url.clone(),
-            status: response.head.status,
-            headers: response.head.headers,
-            network_extra_info_available: false,
-            request_extra_info: None,
-            dispatched_request: None,
-            response_extra_info: None,
-            redirect_has_extra_info: false,
-            request_cookie_report: job.request_cookie_report.take(),
-            cookie_set_reports: Vec::new(),
-            from_cache: false,
-            negotiated_http_version: None,
-        })
+        .follow_redirect_with_web_security(
+            moli_fetch::RedirectInfo {
+                source: moli_fetch::RedirectSource::ServiceWorker,
+                from_url,
+                to_url: next_url.clone(),
+                status: response.head.status,
+                headers: response.head.headers,
+                network_extra_info_available: false,
+                request_extra_info: None,
+                dispatched_request: None,
+                response_extra_info: None,
+                redirect_has_extra_info: false,
+                request_cookie_report: job.request_cookie_report.take(),
+                cookie_set_reports: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            },
+            job.request_client.web_security_disabled(),
+        )
         .map_err(|error| error.to_string())?;
     job.cors_preflight_request_headers = job.request.request_headers.to_byte_strings();
     Ok(())

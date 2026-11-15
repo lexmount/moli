@@ -839,7 +839,12 @@ fn materialize_nested_worker_script_source(
         .with_page_network_policy()
         .with_network_partition_key(context.network_policy.network_partition_key.clone())
         .with_initiator_url(&context.base_url)
-        .with_request_origin(moli_url::WebOrigin::from_url(&context.base_url));
+        .with_request_origin(moli_url::WebOrigin::from_serialized(
+            context
+                .creator_message_security
+                .serialized_origin()
+                .unwrap_or("null"),
+        ));
     let response = loader
         .request_client()
         .fetch_text_for_worker_blocking_boundary(request)
