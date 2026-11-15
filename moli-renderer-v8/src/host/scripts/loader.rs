@@ -360,12 +360,6 @@ pub(crate) fn decide_runtime_script_start(
             )),
         };
     }
-    if options.scripting_disabled {
-        return RuntimeScriptStartDecision::Skip {
-            commit_start: true,
-            reason: Some(ScriptSkipReason::ScriptExecutionDisabled),
-        };
-    }
     let source = match script_src {
         Some(source) => source,
         None => {
@@ -393,12 +387,17 @@ pub(crate) fn decide_runtime_script_start(
         };
     }
 
-    if classification.legacy_event_for_mismatch {
+    // Empty, disconnected, and unsupported scripts remain available for later
+    // preparation. Restore parser state once preparation commits to starting.
+    if was_parser_inserted {
+        let _ = dom_host.set_script_parser_inserted_for_prepare(node, true);
+        let _ = dom_host.set_script_force_async(node, false);
+    }
+
+    if options.scripting_disabled {
         return RuntimeScriptStartDecision::Skip {
-            commit_start: false,
-            reason: Some(ScriptSkipReason::UnsupportedType(
-                "legacy for/event script did not match window.onload".to_owned(),
-            )),
+            commit_start: true,
+            reason: Some(ScriptSkipReason::ScriptExecutionDisabled),
         };
     }
 
@@ -409,17 +408,21 @@ pub(crate) fn decide_runtime_script_start(
         };
     }
 
+    if classification.legacy_event_for_mismatch {
+        return RuntimeScriptStartDecision::Skip {
+            commit_start: true,
+            reason: Some(ScriptSkipReason::UnsupportedType(
+                "legacy for/event script did not match window.onload".to_owned(),
+            )),
+        };
+    }
+
     if disposition == ScriptPreparationDisposition::ImportMap {
         return if source_kind == ScriptSourceKind::External {
             RuntimeScriptStartDecision::RejectExternalImportMap
         } else {
             RuntimeScriptStartDecision::RegisterImportMap { source }
         };
-    }
-
-    if was_parser_inserted {
-        let _ = dom_host.set_script_parser_inserted_for_prepare(node, true);
-        let _ = dom_host.set_script_force_async(node, false);
     }
 
     let (kind, mode) = disposition
