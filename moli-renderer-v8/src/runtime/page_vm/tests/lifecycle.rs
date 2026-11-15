@@ -3185,6 +3185,7 @@ document.body.appendChild(replacementFrame);
                                     "retired child classic failed".to_owned(),
                                 ))),
                                 network_attribution: ChildClassicScriptNetworkAttribution {
+                                    request_handle: None,
                                     frame_id: Some("retired-child-classic-frame".to_owned()),
                                     document_url: Url::parse(
                                         "https://old-document.test/classic-child",

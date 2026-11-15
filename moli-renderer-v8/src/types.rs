@@ -1347,6 +1347,7 @@ impl DocumentWriteExternalScriptLoadCompletion {
 
 #[derive(Debug)]
 pub(super) struct ChildClassicScriptNetworkAttribution {
+    pub(super) request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(super) frame_id: Option<String>,
     pub(super) document_url: Url,
     pub(super) request_url: Url,

@@ -2877,10 +2877,17 @@ impl TargetNetworkOutputQueue {
                 request,
             ),
         );
-        self.staged_subresource_requests
-            .insert(output.handle(), output.clone());
-        self.delivery_outputs
-            .push_subresource(TargetSubresourcePlanOutput::RequestStarted(output));
+        // Completion can enrich an admitted request's metadata, for example
+        // when a script's HTTP error supplies its cookie report. Keep that
+        // metadata without announcing the same logical request a second time.
+        let already_started = self
+            .staged_subresource_requests
+            .insert(output.handle(), output.clone())
+            .is_some();
+        if !already_started {
+            self.delivery_outputs
+                .push_subresource(TargetSubresourcePlanOutput::RequestStarted(output));
+        }
         self.subresource_record_count = index + 1;
     }
 

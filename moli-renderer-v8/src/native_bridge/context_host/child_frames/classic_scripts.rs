@@ -34,7 +34,7 @@ use crate::{
     planning::{PreparedScript, ScriptSource},
     types::{
         ChildClassicScriptLoadCompletion, ChildClassicScriptNetworkAttribution,
-        SubresourceResourceType,
+        SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
     },
 };
 
@@ -131,6 +131,7 @@ impl PageScriptHost {
             return None;
         }
         Some(ChildClassicScriptNetworkAttribution {
+            request_handle: None,
             frame_id: Some(snapshot.frame_id.0),
             document_url: snapshot.document_url,
             request_url,
@@ -370,12 +371,14 @@ impl PageScriptHost {
             .is_some_and(crate::frame_owner_model::FrameDocumentTaskRealmCurrentness::names_current_document_realm);
         if let Some(network_result) = completion.network_result.as_deref() {
             if owner_current {
-                self.record_get_subresource_network_result(
+                self.record_get_subresource_network_result_with_handle(
                     completion.network_attribution.frame_id.clone(),
                     completion.network_attribution.document_url.clone(),
                     completion.network_attribution.request_url.clone(),
                     SubresourceResourceType::Script,
+                    SubresourceRequestInitiatorType::Script,
                     network_result,
+                    completion.network_attribution.request_handle,
                 );
             } else {
                 self.record_historical_child_classic_script_network_result(completion);
@@ -673,7 +676,7 @@ impl PageScriptHost {
         &mut self,
         request: crate::frame_owner_model::FrameDocumentClassicScriptSourceLoadRequest,
         loader: crate::network::context::DocumentResourceLoader,
-        network_attribution: ChildClassicScriptNetworkAttribution,
+        mut network_attribution: ChildClassicScriptNetworkAttribution,
     ) {
         let request_target = *request.target();
         let document_character_set = self
@@ -715,6 +718,24 @@ impl PageScriptHost {
                 self.admit_runnable_child_document_script_tasks();
             }
             return;
+        }
+        // Publish admission before awaiting the source. A hung parser script
+        // must remain visible as an in-flight request to automation clients.
+        if matches!(script_for_load.source, ScriptSource::External) {
+            let request_handle = self.next_subresource_network_request_handle();
+            self.record_subresource_request_started(SubresourceRequestStarted::new(
+                request_handle,
+                network_attribution.frame_id.clone(),
+                network_attribution.document_url.clone(),
+                network_attribution.request_url.clone(),
+                "GET".to_owned(),
+                Default::default(),
+                None,
+                SubresourceResourceType::Script,
+                SubresourceRequestInitiatorType::Script,
+                None,
+            ));
+            network_attribution.request_handle = Some(request_handle);
         }
         let task_loader = loader.clone();
         let browser_context_runtime = self.browser_context_runtime();
@@ -801,12 +822,14 @@ impl PageScriptHost {
         );
         let (_owner_target, source_load) = owner.into_parts();
         if let Some(network_result) = completion.network_result.as_deref() {
-            self.record_get_subresource_network_result(
+            self.record_get_subresource_network_result_with_handle(
                 completion.network_attribution.frame_id.clone(),
                 completion.network_attribution.document_url.clone(),
                 completion.network_attribution.request_url.clone(),
                 SubresourceResourceType::Script,
+                SubresourceRequestInitiatorType::Script,
                 network_result,
+                completion.network_attribution.request_handle,
             );
         }
         let handle = completion.handle;
@@ -841,13 +864,14 @@ impl PageScriptHost {
         let Some(network_result) = completion.network_result.as_deref() else {
             return false;
         };
-        self.record_historical_get_subresource_network_result_with_initiator(
+        self.record_historical_get_subresource_network_result_with_handle(
             completion.network_attribution.frame_id.clone(),
             completion.network_attribution.document_url.clone(),
             completion.network_attribution.request_url.clone(),
             SubresourceResourceType::Script,
             crate::types::SubresourceRequestInitiatorType::Script,
             network_result,
+            completion.network_attribution.request_handle,
         );
         true
     }

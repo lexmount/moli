@@ -1063,6 +1063,7 @@ mod tests {
             result: Ok("globalThis.childClassic = true".to_owned()),
             network_result: None,
             network_attribution: ChildClassicScriptNetworkAttribution {
+                request_handle: None,
                 frame_id: Some("child-frame".to_owned()),
                 document_url: Url::parse("https://example.test/child").unwrap(),
                 request_url: Url::parse("https://example.test/child.js").unwrap(),
