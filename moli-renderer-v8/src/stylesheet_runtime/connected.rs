@@ -572,11 +572,11 @@ impl DocumentRuntime {
             owner = ?binding.owner(),
             element = ?binding.element(),
             load_delay_token = ?binding.load_delay_token(),
-            settled,
+            ?settled,
             reason,
             "settled main connected style load before event posting"
         );
-        settled
+        settled.settled()
     }
 
     fn settle_connected_style_load_admission(

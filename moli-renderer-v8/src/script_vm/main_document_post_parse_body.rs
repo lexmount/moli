@@ -158,7 +158,7 @@ impl ScriptVm {
                     ._context_host
                     .borrow_mut()
                     .release_main_document_script_load_delay(binding);
-                if !release.released() {
+                if !release.settled() {
                     tracing::warn!(
                         ?owner,
                         ?kind,

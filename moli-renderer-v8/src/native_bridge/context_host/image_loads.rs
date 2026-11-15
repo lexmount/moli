@@ -377,19 +377,19 @@ impl PageScriptHost {
                     owner = ?binding.owner(),
                     image = binding.element().index(),
                     token = ?binding.load_delay_token(),
-                    settled,
+                    ?settled,
                     "settled main image load-delay binding"
                 );
-                settled
+                settled.settled()
             }
             PendingImageLoadDelaySettlement::Child(binding) => {
-                if !self
+                let settled = self
                     .frame_owner_store
-                    .settle_child_image_load_event_binding(binding)
-                {
+                    .settle_child_image_load_event_binding(binding);
+                if !settled.settled() {
                     return false;
                 }
-                if queue_lifecycle_followup && binding.load_delay_token().is_some() {
+                if queue_lifecycle_followup && settled.released() {
                     let _ = self.queue_child_document_complete_lifecycle_if_ready_for_owner(
                         binding.child_handle(),
                         binding.owner(),

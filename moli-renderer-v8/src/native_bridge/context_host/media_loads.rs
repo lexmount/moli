@@ -286,10 +286,10 @@ impl PageScriptHost {
                     media = media_handle.index(),
                     sequence = id.get(),
                     token = ?binding.load_delay_token(),
-                    settled,
+                    ?settled,
                     "settled main media load-delay binding"
                 );
-                settled
+                settled.settled()
             }
             PendingMediaLoadDelaySettlement::Child(binding) => {
                 self.settle_pending_child_media_load_delay(binding, true, Some(id))
@@ -391,7 +391,7 @@ impl PageScriptHost {
             PendingMediaLoadOwner::Main {
                 load_delay: Some(binding),
                 ..
-            } => self.settle_main_media_load_delay(binding),
+            } => self.settle_main_media_load_delay(binding).settled(),
             PendingMediaLoadOwner::Child {
                 load_delay: Some(binding),
                 ..
@@ -425,16 +425,16 @@ impl PageScriptHost {
             media = binding.element().index(),
             sequence = sequence.map(MediaLoadSequenceId::get),
             token = ?binding.load_delay_token(),
-            settled,
+            ?settled,
             "settled child media load-delay binding"
         );
-        if settled && queue_lifecycle_followup && binding.load_delay_token().is_some() {
+        if settled.released() && queue_lifecycle_followup {
             let _ = self.queue_child_document_complete_lifecycle_if_ready_for_owner(
                 binding.child_handle(),
                 binding.owner(),
             );
         }
-        settled
+        settled.settled()
     }
 }
 
