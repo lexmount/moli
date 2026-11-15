@@ -121,6 +121,7 @@ mod event_target_identity;
 mod event_target_prototype;
 mod named_node_map_receivers;
 mod node_native_aliases;
+mod node_tree_mutation_bindings;
 mod range_bindings;
 
 mod window_focus;

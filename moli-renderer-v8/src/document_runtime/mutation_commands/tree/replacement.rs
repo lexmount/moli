@@ -8,7 +8,7 @@ use crate::{
     custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
-    mutation_coordinator::RuntimeMutationOptions,
+    mutation_coordinator::{ConnectedScriptMutationPolicy, RuntimeMutationOptions},
     native_bridge::PageScriptHost,
 };
 
@@ -33,10 +33,11 @@ impl DocumentRuntime {
             new_child,
             old_child,
             TreeReactionDispatchPolicy::AppendToCurrentQueue,
+            ConnectedScriptMutationPolicy::PrepareAndStart,
         )
     }
 
-    fn replace_child_with_reaction_policy(
+    pub(super) fn replace_child_with_reaction_policy(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
@@ -44,7 +45,10 @@ impl DocumentRuntime {
         new_child: DomHandle,
         old_child: DomHandle,
         reaction_policy: TreeReactionDispatchPolicy,
+        connected_script_policy: ConnectedScriptMutationPolicy,
     ) -> bool {
+        let mutation_options = RuntimeMutationOptions::js_dom_api()
+            .with_connected_script_policy(connected_script_policy);
         if new_child == old_child {
             if self.dom_host.node(old_child).and_then(Node::parent_node) != Some(parent) {
                 return false;
@@ -58,12 +62,7 @@ impl DocumentRuntime {
             let effects =
                 self.replace_child_with_self_effects_in_structural_scope(parent, old_child);
             if effects.did_change()
-                && !self.apply_runtime_mutation_effects(
-                    scope,
-                    host_ptr,
-                    effects,
-                    RuntimeMutationOptions::js_dom_api(),
-                )
+                && !self.apply_runtime_mutation_effects(scope, host_ptr, effects, mutation_options)
             {
                 return false;
             }
@@ -218,7 +217,7 @@ impl DocumentRuntime {
             scope,
             host_ptr,
             effects,
-            RuntimeMutationOptions::js_dom_api(),
+            mutation_options,
             prepublished_removals,
         );
         if !changed {
