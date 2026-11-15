@@ -256,19 +256,28 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    if let Err(error) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
-        .validate_request_mode(prepared.request_mode, &prepared.request_origin)
+    if !prepared
+        .resource_loader
+        .request_client()
+        .web_security_disabled()
+        && let Err(error) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
+            .validate_request_mode(prepared.request_mode, &prepared.request_origin)
     {
         rv.set(make_rejected_promise(scope, &error.to_string()).into());
         return;
     }
 
-    if let Err(error) = validate_no_cors_http_redirect_mode(
-        &prepared.request_origin,
-        &prepared.resolved_url,
-        prepared.request_mode,
-        prepared.redirect_mode,
-    ) {
+    if !prepared
+        .resource_loader
+        .request_client()
+        .web_security_disabled()
+        && let Err(error) = validate_no_cors_http_redirect_mode(
+            &prepared.request_origin,
+            &prepared.resolved_url,
+            prepared.request_mode,
+            prepared.redirect_mode,
+        )
+    {
         let message = reject_url_policy_fetch(host, prepared, error.to_string());
         rv.set(make_rejected_promise(scope, &message).into());
         return;

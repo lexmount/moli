@@ -145,6 +145,7 @@ pub(crate) fn start_scanned_image_preload(
                     RequestMode::NoCors,
                     RequestCredentialsMode::Include,
                     policy_context,
+                    loader.web_security_disabled(),
                 )
                 .is_ok()
         });

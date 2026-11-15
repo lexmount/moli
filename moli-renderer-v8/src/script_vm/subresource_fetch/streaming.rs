@@ -567,6 +567,7 @@ impl ScriptVm {
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
+                        pending.load.request_client().web_security_disabled(),
                     )
                     .err()
                 })
@@ -780,7 +781,7 @@ impl ScriptVm {
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
-                    )
+                    pending.load.request_client().web_security_disabled(),)
                     .err()
                 })
                 .flatten()
@@ -971,7 +972,7 @@ impl ScriptVm {
                     &pending.request_origin,
                     &observable_head,
                     pending.credentials_mode,
-                    pending.policy_context.cors_disabled,
+                    pending.load.request_client().web_security_disabled(),
                 );
             }
 
@@ -1067,7 +1068,7 @@ impl ScriptVm {
                         started.body_source_id,
                         crate::network_host::fetch_response_metadata(
                             &pending.request_origin, &started.head, pending.request_mode, started.response_filter.as_ref(),
-                        ),
+                        pending.load.request_client().web_security_disabled(),),
                     );
                     resolver.resolve(scope, response_obj.into());
                 }
@@ -1888,7 +1889,7 @@ impl ScriptVm {
                                     &streaming.head,
                                     response_body_size,
                                     streaming.response_filter.as_ref(),
-                                ),
+                                streaming.pending.load.request_client().web_security_disabled(),),
                             );
                         }
                         if let PendingSubresourceContinuation::Xhr { xhr, initiator_url, .. } =
@@ -1923,7 +1924,7 @@ impl ScriptVm {
                                         &streaming.pending.request_origin,
                                         &observable_head,
                                         streaming.pending.credentials_mode,
-                                        streaming.pending.policy_context.cors_disabled,
+                                        streaming.pending.load.request_client().web_security_disabled(),
                                     );
                             }
                             // XHR still exposes a complete response at DONE. Keep the

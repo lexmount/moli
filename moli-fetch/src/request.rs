@@ -1149,8 +1149,15 @@ impl Request {
     /// Generated Origin is visible to interception, but is not promoted into
     /// the author header list retained across redirects.
     pub fn interception_request_headers(&self) -> crate::RequestHeaders {
+        self.interception_request_headers_with_web_security(false)
+    }
+
+    pub fn interception_request_headers_with_web_security(
+        &self,
+        disabled: bool,
+    ) -> crate::RequestHeaders {
         let mut headers = self.request_headers.clone();
-        if let Some(origin) = self.origin_header_value(&self.url)
+        if let Some(origin) = self.origin_header_value(&self.url, disabled)
             && !headers
                 .iter()
                 .any(|(name, _)| name.eq_ignore_ascii_case("origin"))
@@ -1160,7 +1167,25 @@ impl Request {
         headers
     }
 
-    pub(crate) fn origin_header_value(&self, request_url: &Url) -> Option<String> {
+    pub(crate) fn origin_header_value(&self, request_url: &Url, disabled: bool) -> Option<String> {
+        // Module/script loaders supply their CORS Origin in the renderer even
+        // when the network CORS loader is bypassed. Fetch and XHR do not.
+        let renderer_cors_origin = self.request_mode == RequestMode::Cors
+            && matches!(
+                self.browser_request_metadata,
+                Some(
+                    BrowserRequestMetadata::Script
+                        | BrowserRequestMetadata::Worker
+                        | BrowserRequestMetadata::SharedWorker
+                        | BrowserRequestMetadata::AudioWorklet
+                        | BrowserRequestMetadata::JsonModule
+                        | BrowserRequestMetadata::TextModule
+                        | BrowserRequestMetadata::StyleModule
+                )
+            );
+        if disabled && !renderer_cors_origin {
+            return None;
+        }
         self.request_origin()?;
         if !matches!(request_url.scheme(), "http" | "https") {
             return None;
@@ -1356,7 +1381,18 @@ impl Request {
 
     /// Follows an authorized redirect without rebuilding the Fetch request.
     pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
-        self.validate_request_mode_for_url(&redirect.to_url)?;
+        self.follow_redirect_with_web_security(redirect, false)
+    }
+
+    /// Follow using the owning client's policy; the request's real origin and mode are unchanged.
+    pub fn follow_redirect_with_web_security(
+        &mut self,
+        redirect: RedirectInfo,
+        disabled: bool,
+    ) -> Result<()> {
+        if !disabled {
+            self.validate_request_mode_for_url(&redirect.to_url)?;
+        }
         self.check_redirect_policy(&redirect.to_url)?;
         // Cookie origin adaptation must not become a new referrer source,
         // including when this hop selected no referrer at all.
@@ -1395,6 +1431,14 @@ impl Request {
 
     /// Applies request policy before cache lookup or dispatch, including retries.
     pub fn admit_request_url(&self, request_url: &Url) -> Result<()> {
+        self.admit_request_url_with_web_security(request_url, false)
+    }
+
+    pub fn admit_request_url_with_web_security(
+        &self,
+        request_url: &Url,
+        disabled: bool,
+    ) -> Result<()> {
         // Recheck the effective URL before dispatch/cache lookup, including
         // internal HTTPS upgrades. The hop ordinal lets report producers avoid
         // duplicating the earlier redirect-target check.
@@ -1404,7 +1448,11 @@ impl Request {
         {
             (policy.0)(request_url, self.redirect_chain.len())?;
         }
-        self.validate_request_mode_for_url(request_url)
+        if disabled {
+            Ok(())
+        } else {
+            self.validate_request_mode_for_url(request_url)
+        }
     }
 
     /// Checks Fetch mode restrictions without invoking stateful redirect policy.

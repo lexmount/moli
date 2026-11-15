@@ -350,7 +350,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                         request_origin,
                         response,
                         document_character_set,
-                        loader.cors_disabled(),
+                        loader.web_security_disabled(),
                     )
                 }
                 Err(error) => {
@@ -552,18 +552,22 @@ pub(crate) fn external_script_source_load_outcome_from_response(
     request_origin: &moli_url::WebOrigin,
     response: crate::protocol_types::NavigationResponse,
     document_character_set: Option<&str>,
-    cors_disabled: bool,
+    web_security_disabled: bool,
 ) -> PreparedScriptSourceLoadOutcome {
     let request_mode = external_script_request_mode(script.kind, &script.fetch_metadata);
     let head = response.head();
-    let response_filter =
-        crate::network_host::network_response_filter(request_origin, &head, request_mode);
+    let response_filter = crate::network_host::network_response_filter(
+        request_origin,
+        &head,
+        request_mode,
+        web_security_disabled,
+    );
     let cors_error = if request_mode == RequestMode::Cors {
         crate::network_host::validate_cors_response_chain(
             request_origin,
             &head,
             external_script_credentials_mode(script.kind, &script.fetch_metadata),
-            cors_disabled,
+            web_security_disabled,
         )
         .err()
     } else {
@@ -583,7 +587,7 @@ pub(crate) fn external_script_source_load_outcome_from_result(
     request_origin: &moli_url::WebOrigin,
     result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     document_character_set: Option<&str>,
-    cors_disabled: bool,
+    web_security_disabled: bool,
 ) -> PreparedScriptSourceLoadOutcome {
     match result {
         Ok(response) => external_script_source_load_outcome_from_response(
@@ -591,7 +595,7 @@ pub(crate) fn external_script_source_load_outcome_from_result(
             request_origin,
             response,
             document_character_set,
-            cors_disabled,
+            web_security_disabled,
         ),
         Err(message) => failed_external_script_source_load_outcome(message),
     }

@@ -501,7 +501,10 @@ fn send_synchronous_network_xhr(
                 &prepared.request_origin,
                 &response.head(),
                 prepared.credentials_mode,
-                prepared.resource_loader.request_client().cors_disabled(),
+                prepared
+                    .resource_loader
+                    .request_client()
+                    .web_security_disabled(),
             );
             let mut response = response;
             response.headers = observable_headers;

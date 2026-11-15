@@ -413,7 +413,7 @@ pub(super) fn evaluate_module_worker_bootstrap_source(
         options: WorkerModuleGraphFetchOptions {
             initiator_url: static_import_initiator_url.unwrap_or(root_url),
             csp_source: WorkerModuleGraphFetchCspSource::StaticModuleGraph,
-            browser_request_metadata: BrowserRequestMetadata::Fetch,
+            browser_request_metadata: BrowserRequestMetadata::Worker,
             referrer_policy,
         },
     };
@@ -1322,7 +1322,7 @@ impl WorkerDynamicModuleImportJob {
         if self.audio_worklet_bootstrap {
             BrowserRequestMetadata::AudioWorklet
         } else {
-            BrowserRequestMetadata::Fetch
+            BrowserRequestMetadata::Script
         }
     }
 }

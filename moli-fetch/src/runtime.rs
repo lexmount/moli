@@ -880,7 +880,10 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled"),
             ));
         }
-        if let Err(error) = job.request.admit_request_url(&job.current_url) {
+        if let Err(error) = job.request.admit_request_url_with_web_security(
+            &job.current_url,
+            self.config.web_security_disabled(),
+        ) {
             return Err((job.response_tx, error));
         }
         let request_cookie_report = if job.request.allows_credentials_for_url(&job.current_url) {
@@ -1071,7 +1074,10 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled"),
             ));
         }
-        if let Err(error) = job.request.admit_request_url(&job.current_url) {
+        if let Err(error) = job.request.admit_request_url_with_web_security(
+            &job.current_url,
+            self.config.web_security_disabled(),
+        ) {
             return Err((Box::new(job), None, error));
         }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);
@@ -1305,7 +1311,10 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled"),
             ));
         }
-        if let Err(error) = job.request.admit_request_url(&job.current_url) {
+        if let Err(error) = job.request.admit_request_url_with_web_security(
+            &job.current_url,
+            self.config.web_security_disabled(),
+        ) {
             return Err((Box::new(job), None, error));
         }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);
@@ -1699,7 +1708,7 @@ impl RuntimeOwner {
             response.status,
             &response.headers,
             job.redirect_count,
-            self.config.cors_disabled(),
+            self.config.web_security_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((job.response_tx, error)),
@@ -1977,7 +1986,7 @@ impl RuntimeOwner {
             status,
             &headers,
             job.redirect_count,
-            self.config.cors_disabled(),
+            self.config.web_security_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => {
@@ -2372,7 +2381,7 @@ impl RuntimeOwner {
             status,
             &headers,
             job.redirect_count,
-            self.config.cors_disabled(),
+            self.config.web_security_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => {
@@ -2537,7 +2546,7 @@ impl RuntimeOwner {
             cached.status,
             &cached.headers,
             job.redirect_count,
-            self.config.cors_disabled(),
+            self.config.web_security_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((Box::new(job), error)),
@@ -2599,7 +2608,7 @@ impl RuntimeOwner {
             cached.status,
             &cached.headers,
             job.redirect_count,
-            self.config.cors_disabled(),
+            self.config.web_security_disabled(),
         ) {
             Ok(next_url) => next_url,
             Err(error) => return Err((Box::new(job), error)),

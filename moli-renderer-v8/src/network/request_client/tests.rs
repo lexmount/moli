@@ -1894,3 +1894,35 @@ fn browser_resource_executor_progresses_without_polling_the_callers_runtime() {
     rx.recv_timeout(std::time::Duration::from_secs(5))
         .expect("the single resource worker must progress while the caller blocks");
 }
+
+#[test]
+fn resource_runtime_reuse_distinguishes_instance_web_security_policy() -> anyhow::Result<()> {
+    let default = FetchConfig::default();
+    let mut disabled = default.clone();
+    disabled.set_web_security_disabled(true);
+    let strict = ResourceRequestClient::new(&default)?;
+    let relaxed = ResourceRequestClient::new(&disabled)?;
+    assert!(
+        strict
+            .browser_resource_runtime()
+            .matches_fetch_config(&default)
+    );
+    assert!(
+        !strict
+            .browser_resource_runtime()
+            .matches_fetch_config(&disabled)
+    );
+    assert!(
+        relaxed
+            .browser_resource_runtime()
+            .matches_fetch_config(&disabled)
+    );
+    assert!(
+        !relaxed
+            .browser_resource_runtime()
+            .matches_fetch_config(&default)
+    );
+    assert!(!strict.web_security_disabled());
+    assert!(relaxed.web_security_disabled());
+    Ok(())
+}

@@ -42,6 +42,7 @@ impl ScriptVm {
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
+                        pending.load.request_client().web_security_disabled(),
                     )?;
                 }
                 Ok(response)
@@ -213,7 +214,7 @@ impl ScriptVm {
                                         pending.request_mode,
                                         pending.credentials_mode,
                                         pending.policy_context,
-                                    )
+                                    pending.load.request_client().web_security_disabled(),)
                                     .err()
                                 })
                                 .flatten()
@@ -481,7 +482,7 @@ impl ScriptVm {
                 &response.head(),
                 &pending.info.document_url,
                 response.network_request_headers(),
-                pending.policy_context.cors_disabled,
+                pending.load.request_client().web_security_disabled(),
             ) {
                 Ok(Some((request, redirect))) => {
                     return self.continue_intercepted_window_redirect(pending, request, redirect);
@@ -636,7 +637,7 @@ impl ScriptVm {
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
-                    );
+                    pending.load.request_client().web_security_disabled(),);
                     match validation {
                         Ok(()) => {}
                         Err(crate::network_host::FetchResponseSecurityViolation::OpaqueResponseBlocked(_))
@@ -747,13 +748,13 @@ impl ScriptVm {
                             fetch.resource_timing().completed(
                                 fetch.initial_request_url(&pending.info.url), &pending.request_origin, pending.request_mode,
                                 &response.head(), response.body_bytes().len(), response_filter.as_ref(),
-                            )
+                            pending.load.request_client().web_security_disabled(),)
                         };
                         crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                     }
                     let mut metadata = crate::network_host::fetch_response_metadata(
                         &pending.request_origin, &response.head(), pending.request_mode, response_filter.as_ref(),
-                    );
+                    pending.load.request_client().web_security_disabled(),);
                     if opaque_response_blocked {
                         metadata.response_type = crate::types::FetchResponseType::Opaque;
                         metadata.timing_allow_passed = false;
@@ -768,7 +769,7 @@ impl ScriptVm {
                                 &pending.request_origin,
                                 &observable_response.head(),
                                 pending.credentials_mode,
-                                pending.policy_context.cors_disabled,
+                                pending.load.request_client().web_security_disabled(),
                             );
                     }
                     let continuation_started =

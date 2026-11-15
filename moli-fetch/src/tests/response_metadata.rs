@@ -90,3 +90,32 @@ fn response_metadata_url_list_keeps_real_redirects_to_the_same_url() {
         [head.final_url.clone(), head.final_url.clone()]
     );
 }
+
+#[test]
+fn disabled_web_security_changes_network_readability_without_forging_identity_or_timing() {
+    let origin = moli_url::WebOrigin::from_url(&Url::parse("https://home.test/").unwrap());
+    for mode in [
+        RequestMode::Cors,
+        RequestMode::NoCors,
+        RequestMode::SameOrigin,
+    ] {
+        let head = redirected_head(false);
+        let strict = head.fetch_metadata(&origin, mode);
+        let readable = head.fetch_metadata_with_web_security(&origin, mode, true);
+        assert_eq!(readable.response_type, FetchResponseType::Basic);
+        assert_eq!(readable.url_list, strict.url_list);
+        assert_eq!(readable.redirected, strict.redirected);
+        assert_eq!(readable.timing_allow_passed, strict.timing_allow_passed);
+        let mut redirect = head;
+        redirect.status = 302;
+        redirect
+            .headers
+            .push(("Location".into(), b"/next".to_vec()));
+        assert_eq!(
+            redirect
+                .fetch_metadata_with_web_security(&origin, mode, true)
+                .response_type,
+            FetchResponseType::OpaqueRedirect
+        );
+    }
+}

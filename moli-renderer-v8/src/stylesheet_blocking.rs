@@ -269,7 +269,7 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
             &options,
             response,
             provenance,
-            loader.cors_disabled(),
+            loader.web_security_disabled(),
         )
     };
     if let Some(context) = service_worker_context {
@@ -447,6 +447,7 @@ impl StylesheetResponseProvenance {
         &self,
         request_origin: &moli_url::WebOrigin,
         head: &moli_fetch::ResponseHead,
+        web_security_disabled: bool,
     ) -> bool {
         match self {
             // Fetch classifies data responses as basic despite their opaque URL
@@ -455,6 +456,7 @@ impl StylesheetResponseProvenance {
                 request_origin,
                 head,
                 moli_fetch::RequestMode::NoCors,
+                web_security_disabled,
             )
             .is_none(),
             Self::ServiceWorker { filter } => {
@@ -479,7 +481,7 @@ fn stylesheet_terminal_from_response(
     options: &StylesheetFetchOptions,
     response: crate::protocol_types::NavigationResponse,
     response_provenance: StylesheetResponseProvenance,
-    cors_disabled: bool,
+    web_security_disabled: bool,
 ) -> StylesheetFetchTerminal {
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
     let head = response.head();
@@ -496,13 +498,13 @@ fn stylesheet_terminal_from_response(
                     request_origin,
                     &head,
                     credentials_mode,
-                    cors_disabled,
+                    web_security_disabled,
                 )
                 .map_err(|error| format!("failed to fetch stylesheet `{request_url}`: {error}"))
             }
         });
     let origin_clean = cors_usability.as_ref().map_or_else(
-        || response_provenance.is_cors_same_origin(request_origin, &head),
+        || response_provenance.is_cors_same_origin(request_origin, &head, web_security_disabled),
         Result::is_ok,
     );
     let fetch_usability = if !(200..=299).contains(&response.status) {

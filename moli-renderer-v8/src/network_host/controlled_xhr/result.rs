@@ -141,7 +141,7 @@ pub(crate) fn start_buffered_xhr(
                         &origin,
                         &response.head(),
                         credentials,
-                        load.request_client().cors_disabled(),
+                        load.request_client().web_security_disabled(),
                     )?;
                     Ok(response)
                 });

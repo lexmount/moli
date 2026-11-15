@@ -196,10 +196,11 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
     initialize_simple_event_target(scope, global);
 
     let script_url = state.borrow().current_script_url.clone();
-    let origin = script_url
-        .as_ref()
-        .map(moli_url::origin_ascii_serialization)
-        .unwrap_or_else(|| "null".to_owned());
+    let origin = state
+        .borrow()
+        .request_origin()
+        .ascii_serialization()
+        .to_owned();
     WorkerGlobalOriginDeclaration::new(origin)
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize worker global origin: {error}"))?;

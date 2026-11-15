@@ -318,7 +318,10 @@ impl PageScriptHost {
                             .map(|owner| {
                                 WindowExecutionContextRealmRegistration::new(
                                     owner,
-                                    WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+                                    self.effective_window_access_policy(
+                                        dispatch_scope,
+                                        WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+                                    ),
                                 )
                             })
                     })
@@ -449,6 +452,21 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn effective_window_access_policy(
+        &self,
+        dispatch_scope: OwnerDispatchScope,
+        policy: WindowExecutionContextAccessPolicy,
+    ) -> WindowExecutionContextAccessPolicy {
+        // Detached/test hosts may have no active loader. They gain no additional
+        // authority; live realms inherit the immutable policy of their instance.
+        match self.document_resource_loader_for_dispatch_scope(dispatch_scope) {
+            Some(loader) if loader.request_client().web_security_disabled() => {
+                WindowExecutionContextAccessPolicy::Universal
+            }
+            _ => policy,
+        }
+    }
+
     pub(crate) fn register_window_execution_context_realm(
         &mut self,
         owner: WindowExecutionContextOwner,
@@ -465,6 +483,7 @@ impl PageScriptHost {
             );
             return false;
         }
+        let access_policy = self.effective_window_access_policy(dispatch_scope, access_policy);
         let registration = WindowExecutionContextRealmRegistration::new(owner, access_policy);
         match self.window_execution_context_realms.register(
             dispatch_scope,

@@ -114,7 +114,7 @@ impl RuntimeMessageSourceSecurity {
         owner: crate::resource_owner::ResourceOwnerId,
         agent_cluster: RuntimeMessageAgentCluster,
     ) -> Self {
-        if script_url.is_some_and(|url| url.scheme() == "blob")
+        if script_url.is_some_and(|url| url.scheme() != "data")
             && let Some(mut creator) = creator
         {
             creator.agent_cluster = agent_cluster;

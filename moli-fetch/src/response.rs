@@ -118,6 +118,21 @@ impl ResponseHead {
         }
     }
 
+    /// Classify using the associated client's startup policy without changing
+    /// the request mode, real origin, redirect list or timing authorization.
+    pub fn fetch_metadata_with_web_security(
+        &self,
+        origin: &moli_url::WebOrigin,
+        mode: crate::RequestMode,
+        disabled: bool,
+    ) -> crate::FetchResponseMetadata {
+        let mut metadata = self.fetch_metadata(origin, mode);
+        if disabled && metadata.response_type != crate::FetchResponseType::OpaqueRedirect {
+            metadata.response_type = crate::FetchResponseType::Basic;
+        }
+        metadata
+    }
+
     pub fn fetch_response_type(
         &self,
         origin: &moli_url::WebOrigin,

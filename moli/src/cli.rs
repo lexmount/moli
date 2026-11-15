@@ -487,8 +487,8 @@ pub struct ServeArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
 pub struct CommonArgs {
-    /// Disable CORS checks and CORS response-header filtering for browser
-    /// network requests. DOM access, request modes and other policies are unchanged.
+    /// Disable same-origin access checks, CORS and ORB for this browser instance.
+    /// CSP, CORP, TLS verification and credentials policies remain enforced.
     #[arg(long)]
     pub disable_web_security: bool,
 

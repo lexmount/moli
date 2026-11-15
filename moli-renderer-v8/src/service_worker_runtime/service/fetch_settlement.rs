@@ -331,7 +331,7 @@ impl ServiceWorkerRuntimeService {
                             &request_origin,
                             &head,
                             credentials_mode,
-                            request_client.cors_disabled(),
+                            request_client.web_security_disabled(),
                         )
                     {
                         let _ =
@@ -342,6 +342,7 @@ impl ServiceWorkerRuntimeService {
                         &request_origin,
                         &head,
                         request_mode,
+                        request_client.web_security_disabled(),
                     );
                     let body = response.clone_body_bytes();
                     let navigation_response =
@@ -798,7 +799,8 @@ fn service_worker_fetch_is_navigation_request(job: &ServiceWorkerFetchJob) -> bo
 fn service_worker_fetch_response_requires_body_security_policy(
     job: &ServiceWorkerFetchJob,
 ) -> bool {
-    job.request.request_mode == moli_fetch::RequestMode::NoCors
+    !job.request_client.web_security_disabled()
+        && job.request.request_mode == moli_fetch::RequestMode::NoCors
         && matches!(
             job.network_context.resource_type,
             crate::types::SubresourceResourceType::Fetch

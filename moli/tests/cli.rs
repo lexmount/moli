@@ -1819,7 +1819,7 @@ fn cors_checks_are_opt_out_for_fetch_and_serve() {
                 .unwrap()
                 .browser
                 .fetch()
-                .cors_disabled()
+                .web_security_disabled()
         );
         args.push("--disable-web-security");
         let cli = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap();
@@ -1828,7 +1828,7 @@ fn cors_checks_are_opt_out_for_fetch_and_serve() {
                 .unwrap()
                 .browser
                 .fetch()
-                .cors_disabled()
+                .web_security_disabled()
         );
     }
 }

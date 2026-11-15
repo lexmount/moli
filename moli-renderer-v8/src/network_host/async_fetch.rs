@@ -256,13 +256,13 @@ impl ManualCorsRedirectState {
         &mut self,
         head: ResponseHead,
         network_extra_info_available: bool,
-        cors_disabled: bool,
+        web_security_disabled: bool,
     ) -> Result<SubresourceResponseTransition, String> {
         let transition = advance_subresource_response(
             &mut self.request,
             head,
             network_extra_info_available,
-            cors_disabled,
+            web_security_disabled,
         )?;
         if transition == SubresourceResponseTransition::FollowedRedirect {
             self.preflight_request_headers = self.request.request_headers.to_byte_strings();
@@ -334,7 +334,7 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
         match redirects.advance(
             observed.response().head(),
             network_extra_info_available,
-            loader.cors_disabled(),
+            loader.web_security_disabled(),
         )? {
             SubresourceResponseTransition::FinalResponse => {
                 cancel_handle.adopt_response_progress(&response_cancel);
@@ -379,7 +379,11 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
             .map_err(format_network_error)?;
         let network_extra_info_available = observed.request_observation().is_some();
         let head = observed.response().head();
-        match redirects.advance(head, network_extra_info_available, loader.cors_disabled())? {
+        match redirects.advance(
+            head,
+            network_extra_info_available,
+            loader.web_security_disabled(),
+        )? {
             SubresourceResponseTransition::FinalResponse => {
                 cancel_handle.adopt_response_progress(&observed.response().cancellation_handle());
                 let redirect_chain = redirects.into_redirect_chain();
@@ -485,7 +489,7 @@ async fn run_cors_preflight_if_needed(
     preflight_request_headers: &[(String, String)],
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<(), String> {
-    if loader.cors_disabled() {
+    if loader.web_security_disabled() {
         return Ok(());
     }
     let request_origin = request

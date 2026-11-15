@@ -28,8 +28,10 @@ impl FetchResourceTiming {
         head: &ResponseHead,
         body_size: usize,
         filter: Option<&AsyncSubresourceFetchResponseFilter>,
+        web_security_disabled: bool,
     ) -> ResourcePerformanceEntry {
-        let network_filter = crate::network_host::network_response_filter(origin, head, mode);
+        let network_filter =
+            crate::network_host::network_response_filter(origin, head, mode, web_security_disabled);
         let filter = filter.or(network_filter.as_ref());
         let readable = filter.is_none_or(|filter| filter.is_readable());
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(

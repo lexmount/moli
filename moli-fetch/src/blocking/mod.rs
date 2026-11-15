@@ -291,7 +291,7 @@ fn outgoing_request_header_bytes_for_url(
     append_browser_subresource_headers(&mut outgoing, config, request, request_url);
     append_browser_storage_access_header(&mut outgoing, request, request_url);
 
-    if let Some(origin) = request.origin_header_value(request_url) {
+    if let Some(origin) = request.origin_header_value(request_url, config.web_security_disabled()) {
         append_encoded_header_if_missing(&mut outgoing, "Origin", origin);
     }
 

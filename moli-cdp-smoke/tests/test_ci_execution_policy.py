@@ -72,7 +72,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                     args = parse_args(invocation)
                 self.assertEqual(args.chromium_bin_for_group, {
                     name: "/tmp/oracle with spaces=156/chrome"
-                    for name in ("dom-input", "fetch-headers", "worker-loading") if name in groups
+                    for name in ("dom-input", "fetch-headers", "worker-loading", "web-security") if name in groups
                 })
                 self.assertEqual(args.group, [])
                 self.assertTrue(args.strict_full_suite)
