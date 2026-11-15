@@ -15,6 +15,13 @@ use crate::{
 
 const DETACHED_ADOPT_MAX_DEPTH: usize = 512;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DetachedNodeProjection {
+    AdoptSubtree,
+    ImportSubtree,
+    NativeView,
+}
+
 pub(in crate::native_bridge::document) fn build_fragment_from_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
@@ -264,7 +271,14 @@ pub(in crate::native_bridge::document) fn adopt_live_node_as_detached<'s>(
     node: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let _ = detach_live_native_node_from_parent(scope, node);
-    adopt_live_node_as_detached_with_parent(scope, owner_document, node, None, 0, false, true)
+    adopt_live_node_as_detached_with_parent(
+        scope,
+        owner_document,
+        node,
+        None,
+        0,
+        DetachedNodeProjection::AdoptSubtree,
+    )
 }
 
 pub(in crate::native_bridge::document) fn adopt_live_node_as_detached_appending_to_current_reaction_queue<
@@ -275,7 +289,14 @@ pub(in crate::native_bridge::document) fn adopt_live_node_as_detached_appending_
     node: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let _ = detach_live_native_node_from_parent_appending_to_current_reaction_queue(scope, node);
-    adopt_live_node_as_detached_with_parent(scope, owner_document, node, None, 0, false, true)
+    adopt_live_node_as_detached_with_parent(
+        scope,
+        owner_document,
+        node,
+        None,
+        0,
+        DetachedNodeProjection::AdoptSubtree,
+    )
 }
 
 fn adopt_live_node_as_detached_for_insert<'s>(
@@ -286,7 +307,14 @@ fn adopt_live_node_as_detached_for_insert<'s>(
     // Do not pre-remove here. Native-backed detached insertions enter the
     // runtime mutation pipeline, which owns implicit removal, adoption, and
     // lifecycle ordering for the final destination.
-    adopt_live_node_as_detached_with_parent(scope, owner_document, node, None, 0, false, true)
+    adopt_live_node_as_detached_with_parent(
+        scope,
+        owner_document,
+        node,
+        None,
+        0,
+        DetachedNodeProjection::AdoptSubtree,
+    )
 }
 
 pub(in crate::native_bridge::document) fn adopt_attached_imported_node_as_detached<'s>(
@@ -301,8 +329,7 @@ pub(in crate::native_bridge::document) fn adopt_attached_imported_node_as_detach
         node,
         Some(parent),
         0,
-        true,
-        true,
+        DetachedNodeProjection::ImportSubtree,
     )
 }
 
@@ -311,7 +338,14 @@ pub(in crate::native_bridge::document) fn materialize_attached_native_node_as_de
     owner_document: v8::Local<'s, v8::Object>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    adopt_live_node_as_detached_with_parent(scope, owner_document, node, None, 0, false, false)
+    adopt_live_node_as_detached_with_parent(
+        scope,
+        owner_document,
+        node,
+        None,
+        0,
+        DetachedNodeProjection::NativeView,
+    )
 }
 
 fn detach_live_native_node_from_parent(
@@ -338,8 +372,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
     mut node: v8::Local<'s, v8::Object>,
     allowed_parent: Option<v8::Local<'s, v8::Object>>,
     depth: usize,
-    allow_identity_replacement: bool,
-    materialize_children: bool,
+    projection: DetachedNodeProjection,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if depth > DETACHED_ADOPT_MAX_DEPTH {
         return None;
@@ -363,7 +396,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
     {
         return None;
     }
-    let live_children = if materialize_children
+    let live_children = if projection != DetachedNodeProjection::NativeView
         && let Some((runtime_ptr, handle)) = native_handle
         && let Some(children) = live_native_child_node_objects(scope, runtime_ptr, handle)
     {
@@ -487,7 +520,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                     .is_none_or(|namespace| namespace == XHTML_NS)
                 && raw_prefix.as_deref().is_none_or(str::is_empty)
                 && html_element_constructor_name(&local_name) == Some("HTMLElement")
-                && allow_identity_replacement
+                && projection == DetachedNodeProjection::ImportSubtree
                 && let Some(proxy) = generic_html_element_proxy(scope, node)
             {
                 node = proxy;
@@ -531,7 +564,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
             }
             if document_kind == "html" && local_name == "select" {
                 install_detached_select_instance_properties(scope, node);
-                if allow_identity_replacement
+                if projection == DetachedNodeProjection::ImportSubtree
                     && let Some(proxy) = select_html_element_proxy(scope, node)
                 {
                     node = proxy;
@@ -603,8 +636,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
             child,
             Some(node),
             depth + 1,
-            allow_identity_replacement,
-            true,
+            projection,
         )?;
     }
     Some(node)
