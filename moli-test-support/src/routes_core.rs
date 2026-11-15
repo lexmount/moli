@@ -526,6 +526,14 @@ pub(super) async fn streaming_chunked_html_page() -> Response {
 }
 
 pub(super) async fn streaming_slow_html_tail_page() -> Response {
+    streaming_html_tail_response(Duration::from_secs(1))
+}
+
+pub(super) async fn streaming_stalled_html_tail_page() -> Response {
+    streaming_html_tail_response(Duration::from_secs(30))
+}
+
+fn streaming_html_tail_response(tail_delay: Duration) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel(2);
     tokio::spawn(async move {
         if tx
@@ -540,7 +548,10 @@ pub(super) async fn streaming_slow_html_tail_page() -> Response {
         // Keep initial page creation parked in its streaming-parser
         // continuation long enough for a caller-owned readiness deadline to
         // cancel the fetch and synchronously tear down the browser context.
-        sleep(Duration::from_millis(1_000)).await;
+        tokio::select! {
+            _ = sleep(tail_delay) => {}
+            _ = tx.closed() => return,
+        }
         let _ = tx
             .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
                 b"</main></body></html>",

@@ -104,6 +104,10 @@ pub(super) fn build_router() -> Router {
             get(streaming_slow_html_tail_page),
         )
         .route(
+            "/streaming/stalled-html-tail",
+            get(streaming_stalled_html_tail_page),
+        )
+        .route(
             "/location-nav/replace-source",
             get(location_nav_replace_source_page),
         )

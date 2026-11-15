@@ -339,6 +339,10 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
             get(wait_until_slow_interval_fetch_page),
         )
         .route(
+            "/wait-until-delayed-interval-fetch",
+            get(wait_until_delayed_interval_fetch_page),
+        )
+        .route(
             "/wait-until-slow-interval-dom-mutation",
             get(wait_until_slow_interval_dom_mutation_page),
         )
@@ -741,6 +745,13 @@ async fn wait_until_slow_static_page() -> Html<&'static str> {
 
 async fn wait_until_slow_interval_fetch_page() -> Html<&'static str> {
     sleep(Duration::from_millis(500)).await;
+    Html(WAIT_UNTIL_INTERVAL_FETCH_HTML)
+}
+
+// Leave two seconds of a five-second CLI budget for startup and scheduling,
+// while a mistakenly restarted readiness wait still adds three seconds.
+async fn wait_until_delayed_interval_fetch_page() -> Html<&'static str> {
+    sleep(Duration::from_secs(3)).await;
     Html(WAIT_UNTIL_INTERVAL_FETCH_HTML)
 }
 

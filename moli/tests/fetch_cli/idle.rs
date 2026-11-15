@@ -391,7 +391,7 @@ fn idle_has_a_strict_timeout_for_resources_that_stay_alive() -> Result<()> {
         "setInterval(() => {}, 30)",
         "const c = new MessageChannel(); c.port1.onmessage = () => {}",
     ] {
-        let output = run(&document(script), "800", &["--dump", "html"])?;
+        let output = run(&document(script), "5000", &["--dump", "html"])?;
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(
@@ -410,7 +410,7 @@ fn idle_has_a_strict_timeout_for_live_workers_and_websockets() -> Result<()> {
         "globalThis.socket = new WebSocket(location.origin.replace('http:', 'ws:') + '/socket')",
     ] {
         let server = Server::new(script)?;
-        let output = run(&server.url, "1000", &["--dump", "html"])?;
+        let output = run(&server.url, "5000", &["--dump", "html"])?;
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(

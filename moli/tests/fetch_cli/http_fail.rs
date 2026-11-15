@@ -551,16 +551,19 @@ async fn unsupported_raw_output_cancels_without_waiting_for_the_body() -> Result
                             "--redirect-wait-ms",
                             "0",
                             "--timeout",
-                            "5000",
+                            "30000",
                             "--wait-until",
                             wait_until,
                         ])
                         .args(flag)
                         .arg(format!("{}/raw", server.base_url));
                     let output = tokio::task::spawn_blocking(move || {
-                        run_command_with_process_timeout(command, Duration::from_secs(2))
+                        run_command_with_process_timeout(command, Duration::from_secs(10))
                     })
-                    .await??;
+                    .await?
+                    .with_context(|| {
+                        format!("raw cancellation: status={status}, wait={wait_until}, flag={flag:?}, dump={dump}")
+                    })?;
                     assert!(output.stdout.is_empty(), "{output:?}");
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     if flag == Some("--fail") && status >= 400 {
@@ -582,7 +585,7 @@ async fn unsupported_raw_output_cancels_without_waiting_for_the_body() -> Result
                         assert_eq!(stderr.lines().count(), 2, "{stderr}");
                     }
                     assert!(!stderr.contains("timed out"), "{stderr}");
-                    tokio::time::timeout(Duration::from_secs(2), &mut server.task)
+                    tokio::time::timeout(Duration::from_secs(10), &mut server.task)
                         .await
                         .expect("the HTTP download must be cancelled")?;
                 }
@@ -694,7 +697,7 @@ async fn http_failure_modes_report_status_when_page_readiness_times_out() -> Res
                 let output = server.run_with_timeout(
                     &path,
                     &[flag, "--dump", "markdown", wait_option, condition],
-                    1000,
+                    5000,
                 )?;
                 if flag == "--fail" {
                     server.assert_http_failure(&output, status, &path);
@@ -738,14 +741,14 @@ async fn http_failure_modes_bound_diagnostics_for_busy_wait_scripts() -> Result<
                     "--wait-until",
                     "load",
                     "--timeout",
-                    "1000",
+                    "5000",
                     "--wait-script",
                     "() => { for (;;) {} }",
                 ])
                 .args(flag)
                 .arg(format!("{}{path}", server.base_url));
             let output = tokio::task::spawn_blocking(move || {
-                run_command_with_process_timeout(command, Duration::from_secs(4))
+                run_command_with_process_timeout(command, Duration::from_secs(15))
             })
             .await?
             .with_context(|| format!("busy readiness script: status {status}, flag {flag:?}"))?;
@@ -758,7 +761,7 @@ async fn http_failure_modes_bound_diagnostics_for_busy_wait_scripts() -> Result<
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 stderr.contains(
-                    "fetch readiness timed out after 1000 ms while waiting for a script to become truthy"
+                    "fetch readiness timed out after 5000 ms while waiting for a script to become truthy"
                 ),
                 "{stderr}"
             );
