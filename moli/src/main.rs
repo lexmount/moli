@@ -4,11 +4,11 @@
 //! `moli` facade into CLI commands such as page fetches and the embedded
 //! protocol server.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use moli::{
+    app::ServeTransport,
     cli::{Cli, normalize_args_for_compat},
-    config::AppConfig,
 };
 use std::process::ExitCode;
 
@@ -28,12 +28,15 @@ mod allocator;
 fn run() -> Result<()> {
     let cli = Cli::parse_from(normalize_args_for_compat(std::env::args_os()));
     #[cfg(unix)]
-    let pipe = match &cli.command {
+    let transport = match &cli.command {
         moli::cli::Commands::Serve(args) if args.remote_debugging_pipe => {
-            Some(take_inherited_pipe_descriptors()?)
+            let (input, output) = take_inherited_pipe_descriptors()?;
+            ServeTransport::Pipe(input, output)
         }
-        _ => None,
+        _ => ServeTransport::Tcp,
     };
+    #[cfg(not(unix))]
+    let transport = ServeTransport::Tcp;
     moli_process_signal::install_immediate_exit_handlers()?;
     let runtime_thread_budget = moli::runtime_thread_budget::tokio_runtime_thread_budget();
     tokio::runtime::Builder::new_multi_thread()
@@ -41,23 +44,7 @@ fn run() -> Result<()> {
         .max_blocking_threads(runtime_thread_budget)
         .enable_all()
         .build()?
-        .block_on(async move {
-            let config = AppConfig::from_cli(&cli).context("failed to build app configuration")?;
-            moli::telemetry::init(&config.log_filter);
-            let mut stdout = std::io::stdout();
-            #[cfg(unix)]
-            if let Some((input, output)) = pipe {
-                return moli::app::run_cli_with_config_and_pipe(
-                    cli,
-                    config,
-                    &mut stdout,
-                    input,
-                    output,
-                )
-                .await;
-            }
-            moli::app::run_cli_with_config(cli, config, &mut stdout).await
-        })
+        .block_on(moli::app::run_with_transport(cli, transport))
 }
 
 /// Claims the launcher's inherited CDP endpoints once, before starting Tokio

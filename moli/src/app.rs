@@ -33,10 +33,22 @@ const READINESS_FAILURE_DIAGNOSTICS_TIMEOUT: Duration = Duration::from_millis(25
 
 pub async fn run_from_env() -> Result<()> {
     let cli = Cli::parse_from(normalize_args_for_compat(std::env::args_os()));
+    run_with_transport(cli, ServeTransport::Tcp).await
+}
+
+/// Initializes logging and runs a parsed command using process stdout.
+/// Pipe endpoints must already be owned by the caller.
+pub async fn run_with_transport(cli: Cli, transport: ServeTransport) -> Result<()> {
     let config = AppConfig::from_cli(&cli).context("failed to build app configuration")?;
     crate::telemetry::init(&config.log_filter);
     let mut stdout = std::io::stdout();
-    run_cli_with_config(cli, config, &mut stdout).await
+    match transport {
+        ServeTransport::Tcp => run_cli_with_config(cli, config, &mut stdout).await,
+        #[cfg(unix)]
+        ServeTransport::Pipe(input, output) => {
+            run_cli_with_config_and_pipe(cli, config, &mut stdout, input, output).await
+        }
+    }
 }
 
 pub async fn run_cli<W: Write>(stdout: &mut W, cli: Cli) -> Result<()> {
@@ -76,8 +88,12 @@ pub async fn run_cli_with_config_and_pipe<W: Write>(
     run_cli_with_transport(cli, config, stdout, ServeTransport::Pipe(input, output)).await
 }
 
-enum ServeTransport {
+/// The caller supplies owned endpoints when serving over a pipe.
+#[derive(Debug)]
+pub enum ServeTransport {
+    /// Serve over the configured TCP listener.
     Tcp,
+    /// Read CDP commands from the first endpoint and write replies to the second.
     #[cfg(unix)]
     Pipe(std::os::fd::OwnedFd, std::os::fd::OwnedFd),
 }
