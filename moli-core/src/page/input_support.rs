@@ -192,7 +192,6 @@ pub trait PageInputExt {
         modifiers: u8,
         auto_repeat: bool,
         should_insert_text: bool,
-        location: u32,
     ) -> Result<PendingPageCommand>;
     fn finish_dispatch_key_event_with_outcome(
         &mut self,
@@ -486,18 +485,17 @@ impl PageInputExt for Page {
         modifiers: u8,
         auto_repeat: bool,
         should_insert_text: bool,
-        location: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DispatchKeyEvent {
-            event_name: event_name.to_owned(),
-            key: key.to_owned(),
-            code: code.to_owned(),
-            text: text.to_owned(),
+        self.start_dispatch_key_event_with_location_outcome(
+            event_name,
+            key,
+            code,
+            text,
             modifiers,
             auto_repeat,
             should_insert_text,
-            location,
-        })
+            0,
+        )
     }
 
     fn finish_dispatch_key_event_with_outcome(
@@ -566,4 +564,31 @@ pub fn decode_element_click_dispatch_completion(
 ) -> Result<Result<RendererInputDispatchOutcome, super::RendererElementClickError>> {
     expect_page_reply!(settled_input_reply(completion)?, "dispatch element click", "element click dispatch",
         RendererPageReply::ElementClickDispatch(outcome) => Ok(outcome))
+}
+
+impl Page {
+    /// Starts key dispatch with an explicit DOM KeyboardEvent location.
+    /// The legacy PageInputExt entry point continues to use location 0.
+    pub fn start_dispatch_key_event_with_location_outcome(
+        &self,
+        event_name: &str,
+        key: &str,
+        code: &str,
+        text: &str,
+        modifiers: u8,
+        auto_repeat: bool,
+        should_insert_text: bool,
+        location: u32,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DispatchKeyEvent {
+            event_name: event_name.to_owned(),
+            key: key.to_owned(),
+            code: code.to_owned(),
+            text: text.to_owned(),
+            modifiers,
+            auto_repeat,
+            should_insert_text,
+            location,
+        })
+    }
 }

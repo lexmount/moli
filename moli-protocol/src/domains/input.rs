@@ -1042,7 +1042,7 @@ fn start_devtools_dispatch_key_event_command(
         PendingInputCommandKind::DispatchKeyEvent,
         targets_outgoing_document,
         |page| {
-            page.start_dispatch_key_event_with_outcome(
+            page.start_dispatch_key_event_with_location_outcome(
                 key::devtools_key_event_dom_event_name(command.event_type),
                 &command.key,
                 &command.code,

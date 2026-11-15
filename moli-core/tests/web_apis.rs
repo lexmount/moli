@@ -6399,3 +6399,6 @@ async fn window_host_globals_expose_aliases_performance_and_visual_viewport() ->
     server.shutdown().await;
     Ok(())
 }
+
+#[path = "web_apis/keyboard_location.rs"]
+mod keyboard_location;

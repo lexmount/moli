@@ -252,13 +252,11 @@ pub fn element_send_keys_input_commands(
                 pressed_modifier_keys.insert(key.key.clone());
                 pressed_modifiers.push(key.clone());
             }
-            let event_key = key.event_key(modifiers);
+
             commands.push(dispatch_key_event_command_with_modifiers(
                 context,
                 DevToolsKeyEventType::KeyDown,
-                event_key.as_ref(),
-                &key.code,
-                "",
+                &key,
                 modifiers,
                 auto_repeat,
                 false,
@@ -266,14 +264,10 @@ pub fn element_send_keys_input_commands(
             continue;
         }
 
-        let event_key = key.event_key(modifiers);
-        let input_text = key.input_text(modifiers);
         commands.push(dispatch_key_event_command_with_modifiers(
             context,
             DevToolsKeyEventType::KeyDown,
-            event_key.as_ref(),
-            &key.code,
-            input_text.as_ref(),
+            &key,
             modifiers,
             false,
             key.should_insert_text(modifiers),
@@ -281,9 +275,7 @@ pub fn element_send_keys_input_commands(
         commands.push(dispatch_key_event_command_with_modifiers(
             context,
             DevToolsKeyEventType::KeyUp,
-            event_key.as_ref(),
-            &key.code,
-            "",
+            &key,
             modifiers,
             false,
             false,
@@ -311,13 +303,11 @@ fn element_send_keys_release_modifiers(
         if let Some(mask) = key.modifier_mask {
             *modifiers &= !mask;
         }
-        let event_key = key.event_key(*modifiers);
+
         commands.push(dispatch_key_event_command_with_modifiers(
             context,
             DevToolsKeyEventType::KeyUp,
-            event_key.as_ref(),
-            &key.code,
-            "",
+            &key,
             *modifiers,
             false,
             false,
@@ -603,13 +593,11 @@ pub fn release_actions_commands(
                 if let Some(mask) = key.modifier_mask {
                     source.modifiers &= !mask;
                 }
-                let event_key = key.event_key(source.modifiers);
+
                 commands.push(dispatch_key_event_command_with_modifiers(
                     context,
                     DevToolsKeyEventType::KeyUp,
-                    event_key.as_ref(),
-                    &key.code,
-                    "",
+                    &key,
                     source.modifiers,
                     false,
                     false,
@@ -1206,14 +1194,11 @@ impl ClassicKeyActionSource {
                     self.modifiers |= mask;
                 }
                 self.pressed.insert(key.key.clone(), key.clone());
-                let event_key = key.event_key(self.modifiers);
-                let input_text = key.input_text(self.modifiers);
+
                 commands.push(dispatch_key_event_command_with_modifiers(
                     context,
                     DevToolsKeyEventType::KeyDown,
-                    event_key.as_ref(),
-                    &key.code,
-                    input_text.as_ref(),
+                    &key,
                     self.modifiers,
                     auto_repeat,
                     key.should_insert_text(self.modifiers),
@@ -1226,13 +1211,11 @@ impl ClassicKeyActionSource {
                 if let Some(mask) = key.modifier_mask {
                     self.modifiers &= !mask;
                 }
-                let event_key = key.event_key(self.modifiers);
+
                 commands.push(dispatch_key_event_command_with_modifiers(
                     context,
                     DevToolsKeyEventType::KeyUp,
-                    event_key.as_ref(),
-                    &key.code,
-                    "",
+                    &key,
                     self.modifiers,
                     false,
                     false,
@@ -1494,25 +1477,22 @@ fn dispatch_touch_event_command(
 fn dispatch_key_event_command_with_modifiers(
     context: &ClassicDevToolsCommandContext,
     event_type: DevToolsKeyEventType,
-    key: &str,
-    code: &str,
-    text: &str,
+    key: &ClassicWebDriverKey,
     modifiers: u8,
     auto_repeat: bool,
     should_insert_text: bool,
 ) -> AutomationCommand {
     AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
-        location: match code {
-            "ShiftLeft" | "ControlLeft" | "AltLeft" | "MetaLeft" => 1,
-            "ShiftRight" | "ControlRight" | "AltRight" | "MetaRight" => 2,
-            code if code.starts_with("Numpad") => 3,
-            _ => 0,
-        },
+        location: key.location,
         context: context.command_context(),
         event_type,
-        key: key.to_owned(),
-        code: code.to_owned(),
-        text: text.to_owned(),
+        key: key.event_key(modifiers).into_owned(),
+        code: key.code.clone(),
+        text: if should_insert_text {
+            key.input_text(modifiers).into_owned()
+        } else {
+            String::new()
+        },
         modifiers,
         auto_repeat,
         should_insert_text,
@@ -1527,6 +1507,7 @@ const CLASSIC_MODIFIER_SHIFT: u8 = 8;
 #[derive(Debug, Clone, PartialEq)]
 struct ClassicWebDriverKey {
     key: String,
+    location: u32,
     code: String,
     text: String,
     modifier_mask: Option<u8>,
@@ -1535,6 +1516,7 @@ struct ClassicWebDriverKey {
 impl ClassicWebDriverKey {
     fn text(key: String, code: impl Into<String>, text: String) -> Self {
         Self {
+            location: 0,
             key,
             code: code.into(),
             text,
@@ -1544,6 +1526,7 @@ impl ClassicWebDriverKey {
 
     fn named(key: impl Into<String>, code: impl Into<String>) -> Self {
         Self {
+            location: 0,
             key: key.into(),
             code: code.into(),
             text: String::new(),
@@ -1553,6 +1536,7 @@ impl ClassicWebDriverKey {
 
     fn modifier(key: impl Into<String>, code: impl Into<String>, modifier_mask: u8) -> Self {
         Self {
+            location: 0,
             key: key.into(),
             code: code.into(),
             text: String::new(),
@@ -1646,12 +1630,11 @@ fn webdriver_key_for_action(
 }
 
 fn webdriver_key_for_action_character(character: char) -> ClassicWebDriverKey {
-    match character {
+    let mut key = match character {
         '\u{E003}' => ClassicWebDriverKey::named("Backspace", "Backspace"),
         '\u{E004}' => ClassicWebDriverKey::named("Tab", "Tab"),
-        '\u{E006}' | '\u{E007}' => {
-            ClassicWebDriverKey::text("Enter".to_owned(), "Enter", "\r".to_owned())
-        }
+        '\u{E006}' => ClassicWebDriverKey::text("Enter".to_owned(), "Enter", "\r".to_owned()),
+        '\u{E007}' => ClassicWebDriverKey::text("Enter".to_owned(), "NumpadEnter", "\r".to_owned()),
         '\u{E008}' => ClassicWebDriverKey::modifier("Shift", "ShiftLeft", CLASSIC_MODIFIER_SHIFT),
         '\u{E009}' => {
             ClassicWebDriverKey::modifier("Control", "ControlLeft", CLASSIC_MODIFIER_CONTROL)
@@ -1670,7 +1653,7 @@ fn webdriver_key_for_action_character(character: char) -> ClassicWebDriverKey {
         '\u{E016}' => ClassicWebDriverKey::named("Insert", "Insert"),
         '\u{E017}' => ClassicWebDriverKey::named("Delete", "Delete"),
         '\u{E018}' => ClassicWebDriverKey::text(";".to_owned(), "Semicolon", ";".to_owned()),
-        '\u{E019}' => ClassicWebDriverKey::text("=".to_owned(), "Equal", "=".to_owned()),
+        '\u{E019}' => ClassicWebDriverKey::text("=".to_owned(), "NumpadEqual", "=".to_owned()),
         '\u{E01A}' => ClassicWebDriverKey::text("0".to_owned(), "Numpad0", "0".to_owned()),
         '\u{E01B}' => ClassicWebDriverKey::text("1".to_owned(), "Numpad1", "1".to_owned()),
         '\u{E01C}' => ClassicWebDriverKey::text("2".to_owned(), "Numpad2", "2".to_owned()),
@@ -1700,8 +1683,34 @@ fn webdriver_key_for_action_character(character: char) -> ClassicWebDriverKey {
         '\u{E03B}' => ClassicWebDriverKey::named("F11", "F11"),
         '\u{E03C}' => ClassicWebDriverKey::named("F12", "F12"),
         '\u{E03D}' => ClassicWebDriverKey::modifier("Meta", "MetaLeft", CLASSIC_MODIFIER_META),
+        '\u{E050}' => ClassicWebDriverKey::modifier("Shift", "ShiftRight", CLASSIC_MODIFIER_SHIFT),
+        '\u{E051}' => {
+            ClassicWebDriverKey::modifier("Control", "ControlRight", CLASSIC_MODIFIER_CONTROL)
+        }
+        '\u{E052}' => ClassicWebDriverKey::modifier("Alt", "AltRight", CLASSIC_MODIFIER_ALT),
+        '\u{E053}' => ClassicWebDriverKey::modifier("Meta", "MetaRight", CLASSIC_MODIFIER_META),
+        '\u{E054}' => ClassicWebDriverKey::named("PageUp", "Numpad9"),
+        '\u{E055}' => ClassicWebDriverKey::named("PageDown", "Numpad3"),
+        '\u{E056}' => ClassicWebDriverKey::named("End", "Numpad1"),
+        '\u{E057}' => ClassicWebDriverKey::named("Home", "Numpad7"),
+        '\u{E058}' => ClassicWebDriverKey::named("ArrowLeft", "Numpad4"),
+        '\u{E059}' => ClassicWebDriverKey::named("ArrowUp", "Numpad8"),
+        '\u{E05A}' => ClassicWebDriverKey::named("ArrowRight", "Numpad6"),
+        '\u{E05B}' => ClassicWebDriverKey::named("ArrowDown", "Numpad2"),
+        '\u{E05C}' => ClassicWebDriverKey::named("Insert", "Numpad0"),
+        '\u{E05D}' => ClassicWebDriverKey::named("Delete", "NumpadDecimal"),
         _ => webdriver_key_for_character(character),
-    }
+    };
+    // Location comes from the raw WebDriver key, independently of code.
+    // Legacy Enter (E007) has location 1 despite its NumpadEnter code:
+    // https://w3c.github.io/webdriver/#dfn-key-location
+    key.location = match character {
+        '\u{E007}'..='\u{E00A}' | '\u{E03D}' => 1,
+        '\u{E050}'..='\u{E053}' => 2,
+        '\u{E019}'..='\u{E029}' | '\u{E054}'..='\u{E05D}' => 3,
+        _ => 0,
+    };
+    key
 }
 
 fn webdriver_key_for_character(character: char) -> ClassicWebDriverKey {
