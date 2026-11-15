@@ -2,8 +2,6 @@ accessibility/crashtests/animated-textarea.html
 conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
 content-security-policy/object-src/object-src-no-url-blocked.html
-content-security-policy/object-src/object-src-url-blocked.html
-content-security-policy/object-src/object-src-url-embed-blocked.html
 content-security-policy/script-src/nonce-enforce-blocked.html
 content-security-policy/script-src/script-src-1_10.html
 content-security-policy/script-src/script-src-strict_dynamic_discard_source_expressions.html
@@ -57,6 +55,7 @@ html/browsers/browsing-the-web/unloading-documents/prompt-and-unload-script-clos
 html/browsers/history/the-history-interface/joint_session_history/002.html
 html/browsers/history/the-history-interface/traverse_the_history_1.html
 html/browsers/history/the-history-interface/traverse_the_history_write_after_load_1.html
+html/browsers/history/the-location-interface/location_replace_session_history.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
 html/browsers/the-window-object/open-close/close_pagehide.html
