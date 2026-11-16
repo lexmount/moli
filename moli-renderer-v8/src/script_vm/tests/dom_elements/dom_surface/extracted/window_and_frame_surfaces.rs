@@ -1788,3 +1788,38 @@ async fn cross_origin_child_source_changes_preserve_the_parent_execution_realm()
         );
     }
 }
+
+#[test]
+fn html_constructor_proxy_handlers_ignore_inherited_get_traps() {
+    let mut vm = new_storage_test_vm("https://html-constructor-handler.test/");
+    let result = vm.eval(r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const frame = body.appendChild(document.createElement('iframe'));
+  for (const w of [window, frame.contentWindow]) {
+    const constructors = [w.HTMLElement, w.HTMLDivElement, w.HTMLSpanElement, w.HTMLButtonElement]
+      .map(constructor => [constructor, constructor.prototype]);
+    const target = w.Object.prototype;
+    const previous = Object.getOwnPropertyDescriptor(target, 'get');
+    let reads = 0;
+    Object.defineProperty(target, 'get', {
+      configurable: true,
+      get() { reads++; throw Error('inherited Proxy get trap'); }
+    });
+    try {
+      for (const [constructor, prototype] of constructors) {
+        if (Reflect.get(constructor, 'prototype') !== prototype) throw Error('constructor prototype identity');
+      }
+    } finally {
+      if (previous) Object.defineProperty(target, 'get', previous);
+      else delete target.get;
+    }
+    if (reads !== 0) throw Error('internal Proxy consulted an author prototype');
+  }
+  frame.remove();
+  return 'ok';
+})()
+"#).expect("HTML constructor Proxy trap lookup should stay internal");
+    assert_eq!(result, "ok");
+}
