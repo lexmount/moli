@@ -61,25 +61,58 @@ fn parse_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ParseArgs>(scope, &args) else {
         return;
     };
-    let mut parser = Parser::new(&parsed.css_text);
-    parser.set_nested_block_limit(MAX_DEPTH);
-    let mut budget = Budget(MAX_NODES);
-    match parser.parse_entirely(|p| parse_value(p, &mut budget, 0, false)) {
+    match parse_expression(&parsed.css_text) {
         Ok(expression) => {
             if let Some(value) = expression.bind(scope) {
                 rv.set(value.into());
             }
         }
-        Err(error) => match error.kind {
-            ParseErrorKind::Custom(Error::TooLarge)
-            | ParseErrorKind::Basic(BasicParseErrorKind::TooManyNestedBlocks) => {
-                crate::util::throw_range_error(scope, "CSS numeric expression is too large")
-            }
-            _ => {
-                webidl::throw_dom_exception(scope, "SyntaxError", "Invalid CSS numeric expression")
-            }
-        },
+        Err(Error::TooLarge) => {
+            crate::util::throw_range_error(scope, "CSS numeric expression is too large")
+        }
+        Err(Error::Syntax) => {
+            webidl::throw_dom_exception(scope, "SyntaxError", "Invalid CSS numeric expression")
+        }
     }
+}
+
+/// Reify a calculation already validated against the property's grammar by
+/// Stylo. Reuse numeric parsing to retain source doubles and operand order;
+/// functions outside that parser's syntax can still have a native projection
+/// after the style engine simplifies them (for example round(3.3px, 1px)).
+pub(in crate::context_bootstrap::css_runtime::typed_om) fn from_declared<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: &str,
+    native: &style::typed_om::NumericValue,
+) -> Option<v8::Local<'s, v8::Object>> {
+    match parse_expression(source) {
+        Ok(mut expression) => {
+            // A declaration's calculation remains a math value even when it
+            // simplifies to a scalar. Range restriction belongs to computation.
+            if expression.is_unit() {
+                expression = Expression::unsimplified(Kind::Sum, vec![expression]).ok()?;
+            }
+            expression.bind(scope)
+        }
+        Err(Error::Syntax) => reification::from_native_declared(scope, native),
+        Err(Error::TooLarge) => {
+            crate::util::throw_range_error(scope, "CSS numeric expression is too large");
+            None
+        }
+    }
+}
+
+fn parse_expression(source: &str) -> Result<Expression, Error> {
+    let mut parser = Parser::new(source);
+    parser.set_nested_block_limit(MAX_DEPTH);
+    let mut budget = Budget(MAX_NODES);
+    parser
+        .parse_entirely(|p| parse_value(p, &mut budget, 0, false))
+        .map_err(|error| match error.kind {
+            ParseErrorKind::Custom(error) => error,
+            ParseErrorKind::Basic(BasicParseErrorKind::TooManyNestedBlocks) => Error::TooLarge,
+            _ => Error::Syntax,
+        })
 }
 
 fn parse_value<'i>(
