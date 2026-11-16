@@ -121,6 +121,15 @@ pub(in crate::network_host::xhr) fn apply_xhr_response_pending_body<'s>(
     fallback_body_text: String,
     fallback_body_len: Option<usize>,
 ) {
+    if xhr_response_has_null_body(scope, xhr, &head) {
+        apply_xhr_response_body_source(
+            scope,
+            xhr,
+            head,
+            moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
+        );
+        return;
+    }
     let response_type = xhr_response_type(scope, xhr);
     if response_type == XmlHttpRequestResponseType::ArrayBuffer
         && let Some(body_value) = body_value
@@ -201,6 +210,12 @@ fn apply_xhr_response_body(
     status_text: Option<&str>,
     mode: XhrResponseDeliveryMode,
 ) {
+    // Filter cached text as well as bytes before selecting the response type.
+    let (body_text, body_bytes) = if xhr_response_has_null_body(scope, xhr, &head) {
+        (None, Vec::new())
+    } else {
+        (body_text, body_bytes)
+    };
     let Some(response_type) = prepare_xhr_response(scope, xhr, &head, status_text, mode) else {
         return;
     };
@@ -346,6 +361,7 @@ fn apply_xhr_response_prebuilt_value(
     finish_xhr_response(scope, xhr, response_type, response_val, "", progress, mode);
 }
 
+/// Returns whether the transport state should remain registered.
 pub(crate) fn apply_xhr_streaming_response_head(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
@@ -357,8 +373,28 @@ pub(crate) fn apply_xhr_streaming_response_head(
     }
     set_xhr_response_head(scope, xhr, head, None);
     super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::HeadersReceived);
-    !scope.is_execution_terminating()
-        && super::progress::xhr_stream_is_current(scope, xhr, internal_id)
+    if scope.is_execution_terminating()
+        || !super::progress::xhr_stream_is_current(scope, xhr, internal_id)
+    {
+        return false;
+    }
+    if xhr_response_has_null_body(scope, xhr, head) {
+        // XHR handles a null body's end immediately after HEADERS_RECEIVED.
+        // Keep transport bookkeeping alive, but retire this XHR delivery so
+        // subsequent chunks and terminal errors cannot alter its response.
+        let generation = xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT);
+        apply_xhr_streaming_response_body_source(
+            scope,
+            xhr,
+            head.clone(),
+            moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
+            internal_id,
+        );
+        return !scope.is_execution_terminating()
+            && !xhr_is_aborted(scope, xhr)
+            && xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT) == generation;
+    }
+    true
 }
 
 pub(crate) fn apply_xhr_streaming_response_chunk(
@@ -476,7 +512,7 @@ fn finish_xhr_response(
     }
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_TEXT_SLOT, response_text);
     set_xhr_state_value(scope, xhr, XHR_RESPONSE_SLOT, response_val);
-    if dispatch_intermediate_events {
+    if dispatch_intermediate_events && progress.loaded > 0.0 {
         super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::Loading);
         if scope.is_execution_terminating() {
             return;
@@ -485,7 +521,11 @@ fn finish_xhr_response(
             return;
         }
     }
-    if dispatch_intermediate_events {
+    // A zero-byte stream has no chunk that could have dispatched progress.
+    // It still needs the end-of-body event, without synthesizing LOADING.
+    if xhr_is_async(scope, xhr)
+        && (matches!(mode, XhrResponseDeliveryMode::Buffered) || progress.loaded == 0.0)
+    {
         xhr_dispatch_progress_event_with_length_computable(
             scope,
             xhr,
@@ -534,12 +574,14 @@ fn xhr_response_progress(head: &moli_fetch::ResponseHead, loaded: f64) -> XhrRes
     if matches!(head.final_url.scheme(), "data" | "blob") {
         return XhrResponseProgress {
             loaded,
-            length_computable: true,
+            length_computable: loaded > 0.0,
             total: loaded,
         };
     }
 
-    let total = identity_encoded_content_length(&head.headers).map(|value| value as f64);
+    let total = identity_encoded_content_length(&head.headers)
+        .filter(|value| *value > 0)
+        .map(|value| value as f64);
     XhrResponseProgress {
         loaded,
         length_computable: total.is_some(),
@@ -605,6 +647,11 @@ fn parse_xhr_response_document<'s>(
     headers: &[(String, Vec<u8>)],
     response_type: XmlHttpRequestResponseType,
 ) -> v8::Local<'s, v8::Value> {
+    let method = xhr_state_string_property(scope, xhr, XHR_METHOD_SLOT).unwrap_or_default();
+    let status = xhr_state_number_property(scope, xhr, XHR_STATUS_SLOT).unwrap_or_default() as u16;
+    if response_has_null_body(&method, status) {
+        return v8::null(scope).into();
+    }
     let mime =
         xhr_response_mime_essence(scope, xhr, headers).unwrap_or_else(|| "text/xml".to_owned());
     let is_xml = matches!(mime.as_str(), "text/xml" | "application/xml") || mime.ends_with("+xml");
@@ -657,6 +704,15 @@ fn xhr_response_blob_mime_type(
         .filter(|mime| !mime.is_empty())
         .or_else(|| extract_response_mime_type(headers).map(|mime| mime.to_string()))
         .unwrap_or_else(|| "text/xml".to_owned())
+}
+
+fn xhr_response_has_null_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    head: &moli_fetch::ResponseHead,
+) -> bool {
+    let method = xhr_state_string_property(scope, xhr, XHR_METHOD_SLOT).unwrap_or_default();
+    response_has_null_body(&method, head.status)
 }
 
 #[cfg(test)]
