@@ -319,20 +319,18 @@ measured and links to the details.
 
 | Area | Suite | Measures | Moli | Details |
 | --- | --- | --- | --- | --- |
-| Web Fetch · Live sites | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 live-site tasks | Share of tasks whose required content comes back from a live site | **89.8%**, first of five browsers | [Web Fetch](#web-fetch) |
-| Web Fetch · Saved pages | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 saved pages | Extraction-quality score against human annotations (higher is better) | **39.27%**, first of five | [Web Fetch](#web-fetch) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 live-site tasks; [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 saved pages | Share of live-site tasks passed; extraction-quality score on saved pages | **89.8%** and **39.27%**, first of five browsers on both | [Web Fetch](#web-fetch) |
 | Browser automation | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 comparable tasks | Share of CDP, automation-tool and web-platform tasks that succeed | **81.9%**; Chrome 99.8% | [Browser automation](#browser-automation) |
 | Resource use | Lexbench-Headless-Browser · 557 tasks all local engines completed | Median CPU time and peak memory per task | **15%** of Chrome's CPU, **13%** of its memory | [Resource use](#resource-use) |
 | Web standards | Selected [WPT](https://github.com/web-platform-tests/wpt) tests | WPT tests passed | **1.612 million** tests passed in one full run | — |
 
 ### Web Fetch
 
-[LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)
-sends 430 tasks to live websites, so a pass needs both site access and correct
-content. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main)
-scores main-content extraction on 545 saved pages, without live access. Click a
-title to switch charts. Each row compares Moli (blue) with the range of the
-other four browsers.
+Moli is compared with four other browsers on live sites and on saved pages.
+Click a title to switch; each row shows Moli (blue) against the range of the
+other four. [Full report](https://browser.lexmount.com/blog/webfetch-benchmark)
+· reproduce with [Webstone](https://github.com/lexmount/webstone)
+([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)).
 
 <details name="web-fetch-chart" open>
 <summary><strong>Live sites · LexBench-Web-Fetch, 430 tasks</strong></summary>
@@ -342,25 +340,8 @@ other four browsers.
   <img alt="Pass rate on 430 live-site tasks. Overall: Moli 386/430 (89.8%), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Anti-bot: Moli 88/100, best other 37. Popular: Moli 91, best other 58. Dynamic: Moli 90, best other 58. Static: Moli 97, Chromium 99. Documents and media: Moli 20/30, best other 17." src="assets/webfetch-live-light.png" width="100%">
 </picture>
 
-</details>
-
-<details name="web-fetch-chart">
-<summary><strong>Saved pages · WebMainBench, 545 pages</strong></summary>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/webmainbench-dark.png">
-  <img alt="Extraction quality on 545 saved pages. Overall: Moli 39.27%, Lightpanda 35.00%, Kitesurf 33.43%, Obscura 31.03%, Chromium 27.02%. Code: Moli 91.06%, best other 84.71%. Moli trails the best other method on text, formula, table content and table structure." src="assets/webmainbench-light.png" width="100%">
-</picture>
-
-</details>
-
-Moli leads overall on both suites. Its largest margins are on anti-bot, popular
-and dynamic sites, while plain static pages are close for every browser. Read
-the [full report](https://browser.lexmount.com/blog/webfetch-benchmark). To
-reproduce it, run the Web Fetch track in
-[Webstone](https://github.com/lexmount/webstone)
-([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md));
-the results use the 430-task v1.0.0 edition of the dataset.
+A pass needs both site access and correct content
+([dataset, v1.0.0 edition](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)).
 
 <details>
 <summary>Exact numbers</summary>
@@ -376,6 +357,24 @@ the results use the 430-task v1.0.0 edition of the dataset.
 Cells show tasks passed. The last column combines document content, direct
 media, and media embedded in web pages.
 
+</details>
+
+</details>
+
+<details name="web-fetch-chart">
+<summary><strong>Saved pages · WebMainBench, 545 pages</strong></summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/webmainbench-dark.png">
+  <img alt="Extraction quality on 545 saved pages. Overall: Moli 39.27%, Lightpanda 35.00%, Kitesurf 33.43%, Obscura 31.03%, Chromium 27.02%. Code: Moli 91.06%, best other 84.71%. Moli trails the best other method on text, formula, table content and table structure." src="assets/webmainbench-light.png" width="100%">
+</picture>
+
+Main-content extraction scored against human annotations, without live access
+([dataset](https://github.com/lexmount/WebMainBench/tree/lex-main)).
+
+<details>
+<summary>Exact numbers</summary>
+
 | Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
@@ -383,6 +382,8 @@ media, and media embedded in web pages.
 | Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
 | Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
 | Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
 
 </details>
 
@@ -439,7 +440,8 @@ about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
 [resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
 for the methodology and full data.
 
-A sample agent workload shows the same pattern for a single episode:
+<details>
+<summary>Sample agent workload · one episode, Moli vs Chromium</summary>
 
 | Metric | Moli | Chromium |
 | --- | ---: | ---: |
@@ -447,6 +449,8 @@ A sample agent workload shows the same pattern for a single episode:
 | Episode active p50 | 33.40 ms | 57.13 ms |
 | Peak PSS | 102.46 MiB | 348.82 MiB |
 | Peak processes / threads | 1 / 24 | 11 / 123 |
+
+</details>
 
 ## Project scope
 

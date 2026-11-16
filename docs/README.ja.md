@@ -250,15 +250,14 @@ Moli は、タスクが固定された公開ベンチマークで測定してい
 
 | 分野 | ベンチマーク | 指標 | Moli | 詳細 |
 | --- | --- | --- | --- | --- |
-| Web Fetch · 実サイト | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 実サイト 430 タスク | 必要な内容を実サイトから取得できたタスクの割合 | **89.8%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
-| Web Fetch · 保存済みページ | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 保存済み 545 ページ | 人手によるアノテーションに対する抽出品質スコア（高いほど良い） | **39.27%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 実サイト 430 タスク、[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 保存済み 545 ページ | 実サイトのタスク合格率、保存済みページでの抽出品質スコア | **89.8%** と **39.27%**、いずれも 5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
 | ブラウザ自動操作 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 比較可能な 1,308 タスク | CDP、自動操作ツール、Web プラットフォームのタスクの成功率 | **81.9%**、Chrome は 99.8% | [ブラウザ自動操作](#ブラウザ自動操作) |
 | リソース使用量 | Lexbench-Headless-Browser · すべてのローカルエンジンが完了した 557 タスク | タスクあたりの CPU 時間とピークメモリの中央値 | Chrome の CPU 時間の **15%**、メモリの **13%** | [リソース使用量](#リソース使用量) |
 | Web 標準 | 選定した [WPT](https://github.com/web-platform-tests/wpt) テスト | 合格した WPT テスト数 | 1 回の全件実行で **161万2,000件** が合格 | — |
 
 ### Web Fetch
 
-[LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) は実サイトに対して 430 タスクを実行するため、合格にはサイトへのアクセスと正しい内容の両方が必要です。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) は保存済みの 545 ページを使い、実サイトへアクセスせずに本文抽出を評価します。タイトルをクリックするとグラフが切り替わります。各行では、Moli（青）を他の 4 ブラウザの範囲と比べています。
+Moli を実サイトと保存済みページの両方で、他の 4 ブラウザと比較しています。タイトルをクリックするとグラフが切り替わり、各行では Moli（青）を他の 4 ブラウザの範囲と比べています。[レポート全文](https://browser.lexmount.com/blog/webfetch-benchmark) · [Webstone](https://github.com/lexmount/webstone) で再現できます（[ガイド](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。
 
 <details name="web-fetch-chart" open>
 <summary><strong>実サイト · LexBench-Web-Fetch、430 タスク</strong></summary>
@@ -268,19 +267,7 @@ Moli は、タスクが固定された公開ベンチマークで測定してい
   <img alt="実サイト 430 タスクの成功率。総合：Moli 386/430（89.8%）、Chromium 234、Lightpanda 228、Obscura 223、Kitesurf 192。ボット対策：Moli 88/100、他ブラウザの最高 37。人気サイト：Moli 91、他ブラウザの最高 58。動的サイト：Moli 90、他ブラウザの最高 58。静的ページ：Moli 97、Chromium 99。文書・メディア：Moli 20/30、他ブラウザの最高 17。" src="../assets/webfetch-live-light.png" width="100%">
 </picture>
 
-</details>
-
-<details name="web-fetch-chart">
-<summary><strong>保存済みページ · WebMainBench、545 ページ</strong></summary>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
-  <img alt="保存済み 545 ページの抽出品質。総合：Moli 39.27%、Lightpanda 35.00%、Kitesurf 33.43%、Obscura 31.03%、Chromium 27.02%。コード：Moli 91.06%、他方式の最高 84.71%。全文、数式、表の内容、表の構造では、Moli は他方式の最高値を下回ります。" src="../assets/webmainbench-light.png" width="100%">
-</picture>
-
-</details>
-
-Moli は両ベンチマークの総合で首位です。差が最も大きいのはボット対策のあるサイト、人気サイト、動的サイトで、単純な静的ページではどのブラウザも大差ありません。詳しくは[ベンチマークの詳細](https://browser.lexmount.com/blog/webfetch-benchmark)をご覧ください。結果を再現するには、[Webstone](https://github.com/lexmount/webstone) の Web Fetch トラックを実行してください（[ガイド](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。結果はデータセットの 430 タスク版（v1.0.0）に基づきます。
+合格にはサイトへのアクセスと正しい内容の両方が必要です（[データセット、v1.0.0 版](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)）。
 
 <details>
 <summary>詳細な数値</summary>
@@ -295,6 +282,23 @@ Moli は両ベンチマークの総合で首位です。差が最も大きいの
 
 各セルは合格タスク数です。最後の列は文書の内容、直接配信されるメディア、Web ページに埋め込まれたメディアをまとめたものです。
 
+</details>
+
+</details>
+
+<details name="web-fetch-chart">
+<summary><strong>保存済みページ · WebMainBench、545 ページ</strong></summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
+  <img alt="保存済み 545 ページの抽出品質。総合：Moli 39.27%、Lightpanda 35.00%、Kitesurf 33.43%、Obscura 31.03%、Chromium 27.02%。コード：Moli 91.06%、他方式の最高 84.71%。全文、数式、表の内容、表の構造では、Moli は他方式の最高値を下回ります。" src="../assets/webmainbench-light.png" width="100%">
+</picture>
+
+人手によるアノテーションに対して本文抽出を評価します。実サイトへはアクセスしません（[データセット](https://github.com/lexmount/WebMainBench/tree/lex-main)）。
+
+<details>
+<summary>詳細な数値</summary>
+
 | 方式 | 本文を生成 | 総合 | 全文 | コード | 数式 | 表の内容 | 表の構造 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
@@ -302,6 +306,8 @@ Moli は両ベンチマークの総合で首位です。差が最も大きいの
 | Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
 | Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
 | Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
 
 </details>
 
@@ -339,7 +345,8 @@ JavaScript の実行後に、本文に相当する内容を取得できた場合
 
 Kitesurf はリモートサービスのため、CPU、メモリ、プロセス数を測定できません。リソース比較は 4 つのローカルエンジンのみを対象とします。別に実施した 557 タスクの測定では、4 エンジンすべてが完了した処理だけを集計しています。Moli のタスクあたり中央値は **CPU 100.6 ms**、**ピークメモリ 92 MiB** でした。Chrome はそれぞれ **687 ms**、**697 MiB** でした。Moli の CPU 時間は Chrome の約 15%、ピークメモリは約 13% です。測定方法と全データはベンチマークの[リソースカード](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)を参照してください。
 
-AI エージェント処理の測定例でも、1 回の処理について同じ傾向が見られます。
+<details>
+<summary>AI エージェント処理の測定例 · 1 回の処理、Moli と Chromium</summary>
 
 | 指標 | Moli | Chromium |
 | --- | ---: | ---: |
@@ -347,6 +354,8 @@ AI エージェント処理の測定例でも、1 回の処理について同じ
 | 1 回の処理時間（p50） | 33.40 ms | 57.13 ms |
 | PSS 最大値 | 102.46 MiB | 348.82 MiB |
 | 最大プロセス数／最大スレッド数 | 1 / 24 | 11 / 123 |
+
+</details>
 
 ## 対応範囲
 

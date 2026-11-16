@@ -250,15 +250,14 @@ Moli 在任务固定的公开评测集上进行测试。每一行说明测量的
 
 | 方向 | 评测集 | 测量内容 | Moli | 详情 |
 | --- | --- | --- | --- | --- |
-| Web Fetch · 真实网站 | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 道真实网站任务 | 从真实网站取回所需内容的任务比例 | **89.8%**，五个浏览器中第一 | [Web Fetch](#web-fetch) |
-| Web Fetch · 网页快照 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 份网页快照 | 相对人工标注的正文提取质量得分（越高越好） | **39.27%**，五个浏览器中第一 | [Web Fetch](#web-fetch) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 道真实网站任务；[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 份网页快照 | 真实网站任务的通过比例；网页快照上的正文提取质量得分 | **89.8%** 和 **39.27%**，两项均为五个浏览器中第一 | [Web Fetch](#web-fetch) |
 | 浏览器自动化 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 道可比任务 | CDP、自动化工具和 Web 平台任务的成功比例 | **81.9%**；Chrome 99.8% | [浏览器自动化](#浏览器自动化) |
 | 资源占用 | Lexbench-Headless-Browser · 所有本地引擎都完成的 557 道任务 | 单题 CPU 时间和内存峰值的中位数 | Chrome CPU 时间的 **15%**、内存峰值的 **13%** | [资源占用](#资源占用) |
 | Web 标准 | 选定的 [WPT](https://github.com/web-platform-tests/wpt) 测试 | 通过的 WPT 测试数 | 一次完整运行通过 **161.2 万**项测试 | — |
 
 ### Web Fetch
 
-[LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) 直接访问真实网站，共有 430 道任务，因此通过既要求网站能够访问，也要求返回内容正确。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) 使用 545 份预先保存的网页比较正文提取质量，不包含真实网站访问。点击标题可切换图表。每一行把 Moli（蓝色）与其他四个浏览器的分布范围放在一起对比。
+Moli 在真实网站和网页快照上与其他四个浏览器对比。点击标题可切换图表；每一行把 Moli（蓝色）与其他四个浏览器的分布范围放在一起对比。[完整报告](https://browser.lexmount.com/blog/webfetch-benchmark) · 使用 [Webstone](https://github.com/lexmount/webstone) 复现（[指南](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。
 
 <details name="web-fetch-chart" open>
 <summary><strong>真实网站 · LexBench-Web-Fetch，430 道任务</strong></summary>
@@ -268,19 +267,7 @@ Moli 在任务固定的公开评测集上进行测试。每一行说明测量的
   <img alt="430 道真实网站任务的通过率。总成绩：Moli 386/430（89.8%），Chromium 234，Lightpanda 228，Obscura 223，Kitesurf 192。反爬网站：Moli 88/100，其他浏览器最高 37。热门网站：Moli 91，其他浏览器最高 58。动态网站：Moli 90，其他浏览器最高 58。静态网页：Moli 97，Chromium 99。文档与媒体：Moli 20/30，其他浏览器最高 17。" src="../assets/webfetch-live-light.png" width="100%">
 </picture>
 
-</details>
-
-<details name="web-fetch-chart">
-<summary><strong>网页快照 · WebMainBench，545 份页面</strong></summary>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
-  <img alt="545 份网页快照的正文提取质量。综合：Moli 39.27%，Lightpanda 35.00%，Kitesurf 33.43%，Obscura 31.03%，Chromium 27.02%。代码：Moli 91.06%，其他方法最高 84.71%。在全文、公式、表格内容和表格结构上，Moli 低于其他方法中的最高分。" src="../assets/webmainbench-light.png" width="100%">
-</picture>
-
-</details>
-
-Moli 在两个评测集上的总成绩都排第一。领先最多的是反爬网站、热门网站和动态网站；普通静态网页上各浏览器差距很小。[查看完整评测报告](https://browser.lexmount.com/blog/webfetch-benchmark)。如需复现，请在 [Webstone](https://github.com/lexmount/webstone) 中运行 Web Fetch 评测（[指南](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）；结果基于数据集的 430 道任务版本（v1.0.0）。
+通过既要求网站能够访问，也要求返回内容正确（[数据集，v1.0.0 版本](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)）。
 
 <details>
 <summary>详细数据</summary>
@@ -295,6 +282,23 @@ Moli 在两个评测集上的总成绩都排第一。领先最多的是反爬网
 
 单元格均为通过题数。最后一列合并了文档正文、直接媒体文件和网页内嵌媒体。
 
+</details>
+
+</details>
+
+<details name="web-fetch-chart">
+<summary><strong>网页快照 · WebMainBench，545 份页面</strong></summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
+  <img alt="545 份网页快照的正文提取质量。综合：Moli 39.27%，Lightpanda 35.00%，Kitesurf 33.43%，Obscura 31.03%，Chromium 27.02%。代码：Moli 91.06%，其他方法最高 84.71%。在全文、公式、表格内容和表格结构上，Moli 低于其他方法中的最高分。" src="../assets/webmainbench-light.png" width="100%">
+</picture>
+
+对照人工标注评估正文提取质量，不包含真实网站访问（[数据集](https://github.com/lexmount/WebMainBench/tree/lex-main)）。
+
+<details>
+<summary>详细数据</summary>
+
 | 方法 | 生成正文 | 综合 | 全文 | 代码 | 公式 | 表格内容 | 表格结构 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
@@ -302,6 +306,8 @@ Moli 在两个评测集上的总成绩都排第一。领先最多的是反爬网
 | Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
 | Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
 | Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
 
 </details>
 
@@ -339,7 +345,8 @@ Moli 在两个评测集上的总成绩都排第一。领先最多的是反爬网
 
 Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源对比只覆盖四个本地引擎。在另一轮 557 道任务的测试中，只统计四个引擎都完成的工作。Moli 单题 CPU 中位数为 **100.6 ms**，内存峰值中位数为 **92 MiB**；Chrome 分别为 **687 ms** 和 **697 MiB**。Moli 的 CPU 时间约为 Chrome 的 15%，内存峰值约为 13%。测试方法和完整数据见 benchmark 的[资源报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)。
 
-单个回合的智能体工作负载样例也呈现同样的规律：
+<details>
+<summary>智能体工作负载样例 · 单个回合，Moli 对比 Chromium</summary>
 
 | 指标 | Moli | Chromium |
 | --- | ---: | ---: |
@@ -347,6 +354,8 @@ Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源�
 | 回合活跃时间 p50 | 33.40 ms | 57.13 ms |
 | PSS 峰值 | 102.46 MiB | 348.82 MiB |
 | 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
+
+</details>
 
 ## 项目范围
 
