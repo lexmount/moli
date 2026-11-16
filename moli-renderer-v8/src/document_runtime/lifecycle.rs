@@ -239,16 +239,17 @@ impl DocumentRuntime {
     pub(crate) fn take_pending_devtools_dom_mutations(
         &mut self,
     ) -> Vec<super::devtools_mutations::DevToolsDomMutationFact> {
-        self.pending_devtools_dom_mutations.take()
+        std::mem::take(&mut self.pending_devtools_dom_mutations)
     }
 
     pub(super) fn queue_devtools_dom_mutations(
         &mut self,
         mutations: Vec<super::devtools_mutations::DevToolsDomMutationFact>,
-        source: crate::mutation_coordinator::DomMutationSource,
     ) {
-        self.pending_devtools_dom_mutations
-            .extend(mutations, source);
+        if mutations.is_empty() {
+            return;
+        }
+        self.pending_devtools_dom_mutations.extend(mutations);
     }
     pub(crate) fn has_all_blocking_stylesheets_resolved(&self) -> bool {
         !self.stylesheet_lifecycle.fetches.has_any_pending_entries()

@@ -35,6 +35,9 @@ use super::{
     stream::HtmlTreeSinkStream,
 };
 
+mod pending_text;
+use pending_text::PendingText;
+
 /// HTML parser configured with the scripting state of the target `Document`.
 ///
 /// This state controls HTML parsing semantics such as `<noscript>` tokenization;
@@ -370,6 +373,8 @@ impl ParserElementFlags {
 
 pub(super) struct DocumentSink {
     target: RefCell<ParserStreamHtmlTreeSinkTarget>,
+    pending_text: RefCell<Option<PendingText>>,
+    committed_dom_mutations: Cell<bool>,
     // html5ever exposes token lines but not columns. Once inserted input is
     // mixed into the tokenizer queue, it also cannot distinguish generated
     // lines from the original document tail, so location fidelity only
@@ -1471,11 +1476,16 @@ impl DocumentSink {
         &self,
         mutation: impl FnOnce(&mut ParserStreamHtmlTreeSinkTarget) -> ParserMutationEffectDelivery,
     ) {
+        self.flush_pending_text();
         let delivery = {
+            self.committed_dom_mutations.set(true);
             let mut target = self.target.borrow_mut();
             mutation(&mut target)
         };
         delivery.consume();
+        // Reentrant parsing may consume the inner token's commit flag. This
+        // operation still belongs to the outer token's callback boundary.
+        self.committed_dom_mutations.set(true);
     }
 
     pub(super) fn finish_parser_dom_mutations(&self) -> std::ops::ControlFlow<()> {
@@ -1486,9 +1496,15 @@ impl DocumentSink {
         finish.map_or(std::ops::ControlFlow::Continue(()), |finish| finish())
     }
 
+    pub(super) fn take_committed_dom_mutations(&self) -> bool {
+        self.committed_dom_mutations.replace(false)
+    }
+
     pub(super) fn new(target: ParserStreamHtmlTreeSinkTarget) -> Self {
         Self {
             target: RefCell::new(target),
+            pending_text: RefCell::new(None),
+            committed_dom_mutations: Cell::new(false),
             source_positions_known: Cell::new(true),
             current_script_nonceable: Cell::new(None),
             html4_empty_system_id_quirks_override_pending: Cell::new(false),
@@ -1500,10 +1516,12 @@ impl DocumentSink {
     }
 
     pub(super) fn snapshot_parser_stream_document(&self) -> NativeDom {
+        self.flush_pending_text();
         self.target.borrow().snapshot_parser_stream_document()
     }
 
     pub(super) fn snapshot_parser_stream_dom_host(&self) -> DomHost {
+        self.flush_pending_text();
         self.target.borrow().snapshot_parser_stream_dom_host()
     }
 
@@ -1516,6 +1534,7 @@ impl DocumentSink {
     }
 
     pub(super) fn take_parser_stream_dom_host(&self) -> DomHost {
+        self.flush_pending_text();
         self.target.borrow_mut().take_parser_stream_document()
     }
 
@@ -1532,6 +1551,10 @@ impl DocumentSink {
     }
 
     pub(super) fn clear_runtime_dom_sinks_after_parse_step(&self) {
+        // A failed pump must not replay uncommitted writes using a later
+        // owner's scoped callbacks. Successful pumps flush before returning.
+        self.pending_text.borrow_mut().take();
+        self.committed_dom_mutations.set(false);
         self.target
             .borrow_mut()
             .clear_runtime_dom_sinks_after_parse_step()
@@ -1542,6 +1565,8 @@ impl DocumentSink {
     }
 
     pub(super) fn replace_parser_stream_document(&self, document: NativeDom) {
+        self.pending_text.borrow_mut().take();
+        self.committed_dom_mutations.set(false);
         self.target
             .borrow_mut()
             .replace_parser_stream_document(document);
@@ -1613,6 +1638,7 @@ impl DocumentSink {
     }
 
     pub(super) fn finish_construction(&self) {
+        self.flush_pending_text();
         self.target.borrow().finish_construction();
     }
 
@@ -1667,6 +1693,7 @@ impl TreeSink for DocumentSink {
         Self: 'a;
 
     fn finish(self) -> Self::Output {
+        self.flush_pending_text();
         let target = self.target.into_inner();
         target.finish_construction();
         target
@@ -1719,12 +1746,17 @@ impl TreeSink for DocumentSink {
         attrs: Vec<Attribute>,
         flags: ElementFlags,
     ) -> Self::Handle {
-        self.target.borrow_mut().create_element(
+        // Custom-element construction can observe or reenter the parser.
+        self.flush_pending_text();
+        self.committed_dom_mutations.set(true);
+        let element = self.target.borrow_mut().create_element(
             name,
             attrs,
             flags,
             self.current_script_nonceable.get(),
-        )
+        );
+        self.committed_dom_mutations.set(true);
+        element
     }
 
     fn create_comment(&self, text: StrTendril) -> Self::Handle {
@@ -1738,11 +1770,33 @@ impl TreeSink for DocumentSink {
     }
 
     fn append(&self, parent: &Self::Handle, child: NodeOrText<Self::Handle>) {
-        self.mutate_target(|target| target.append(parent.node_id(), child));
+        match child {
+            NodeOrText::AppendText(text) => {
+                let point = self
+                    .target
+                    .borrow_mut()
+                    .text_insertion_point(parent.node_id());
+                self.buffer_text(point, &text);
+            }
+            child => self.mutate_target(|target| target.append(parent.node_id(), child)),
+        }
     }
 
     fn append_before_sibling(&self, sibling: &Self::Handle, child: NodeOrText<Self::Handle>) {
-        self.mutate_target(|target| target.append_before_sibling(sibling.node_id(), child));
+        match child {
+            NodeOrText::AppendText(text) => {
+                let point = self
+                    .target
+                    .borrow_mut()
+                    .text_insertion_point_before_sibling(sibling.node_id());
+                if let Some(point) = point {
+                    self.buffer_text(point, &text);
+                }
+            }
+            child => {
+                self.mutate_target(|target| target.append_before_sibling(sibling.node_id(), child))
+            }
+        }
     }
 
     fn append_based_on_parent_node(
@@ -1751,9 +1805,21 @@ impl TreeSink for DocumentSink {
         prev_element: &Self::Handle,
         child: NodeOrText<Self::Handle>,
     ) {
-        self.mutate_target(|target| {
-            target.append_based_on_parent_node(element.node_id(), prev_element.node_id(), child)
-        });
+        match child {
+            NodeOrText::AppendText(text) => {
+                let point = self
+                    .target
+                    .borrow_mut()
+                    .text_insertion_point_based_on_parent_node(
+                        element.node_id(),
+                        prev_element.node_id(),
+                    );
+                self.buffer_text(point, &text);
+            }
+            child => self.mutate_target(|target| {
+                target.append_based_on_parent_node(element.node_id(), prev_element.node_id(), child)
+            }),
+        }
     }
 
     fn append_doctype_to_document(
@@ -1794,15 +1860,20 @@ impl TreeSink for DocumentSink {
         template: &Self::Handle,
         attrs: &[Attribute],
     ) -> bool {
+        self.flush_pending_text();
+        self.committed_dom_mutations.set(true);
         let Some(location_id) = location.dom_node_id() else {
             return false;
         };
         let Some(template_id) = template.dom_node_id() else {
             return false;
         };
-        self.target
-            .borrow_mut()
-            .attach_declarative_shadow(location_id, template_id, attrs)
+        let attached =
+            self.target
+                .borrow_mut()
+                .attach_declarative_shadow(location_id, template_id, attrs);
+        self.committed_dom_mutations.set(true);
+        attached
     }
 
     fn add_attrs_if_missing(&self, target: &Self::Handle, attrs: Vec<Attribute>) {
@@ -1858,6 +1929,8 @@ impl TreeSink for DocumentSink {
     }
 
     fn pop(&self, node: &Self::Handle) {
+        self.flush_pending_text();
+        self.committed_dom_mutations.set(true);
         // html5ever calls `pop()` when the element has been fully closed by the parser. For
         // classic parser-inserted scripts that is the earliest safe moment to hand execution back
         // to the runtime without risking partial inline source or a half-built element subtree.
@@ -1866,6 +1939,7 @@ impl TreeSink for DocumentSink {
                 .borrow_mut()
                 .note_node_closed(node_id, node.is_script_element());
         }
+        self.committed_dom_mutations.set(true);
     }
 
     fn set_current_line(&self, line_number: u64) {

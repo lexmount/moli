@@ -83,6 +83,12 @@ impl EmbedderPausingTreeBuilder {
         token: Token,
         line_number: u64,
     ) -> TokenSinkResult<ParseHandle> {
+        if !matches!(
+            &token,
+            Token::CharacterTokens(_) | Token::NullCharacterToken | Token::ParseError(_)
+        ) {
+            self.sink().flush_pending_text();
+        }
         let current_script_nonceable = match &token {
             Token::TagToken(tag)
                 if tag.kind == TagKind::StartTag && AsRef::<str>::as_ref(&tag.name) == "script" =>
@@ -166,6 +172,17 @@ impl EmbedderPausingTreeBuilder {
         }
         result
     }
+
+    fn flush_text_at_input_boundary(&self) {
+        self.sink().flush_pending_text();
+        if self.sink().take_committed_dom_mutations()
+            && self.sink().finish_parser_dom_mutations().is_break()
+        {
+            // As with a character-token callback, retain the notification
+            // until html5ever can safely pause at a tag token.
+            self.deferred_owner_interruption.set(true);
+        }
+    }
 }
 
 impl TokenSink for EmbedderPausingTreeBuilder {
@@ -177,8 +194,23 @@ impl TokenSink for EmbedderPausingTreeBuilder {
         // custom-element pause visible only after one of those tokens. Retain
         // the sink-owned pause until a tag token can yield it safely.
         let can_pause = matches!(&token, Token::TagToken(_));
+        let commits_text = !matches!(
+            &token,
+            Token::CharacterTokens(_) | Token::NullCharacterToken | Token::ParseError(_)
+        );
         let result = self.process_token_before_callbacks(token, line_number);
-        let current_owner_interruption = self.sink().finish_parser_dom_mutations().is_break();
+        let committed_dom = self.sink().take_committed_dom_mutations();
+        let finish_mutations = commits_text || committed_dom;
+        if finish_mutations {
+            // Processing this token can itself drain html5ever's pending
+            // table characters into a foster-parented insertion point.
+            self.sink().flush_pending_text();
+            self.sink().take_committed_dom_mutations();
+        }
+        // A callback can execute script or inspect the live DOM. Buffered
+        // character fragments must not expose a stale, partially committed run.
+        let current_owner_interruption =
+            finish_mutations && self.sink().finish_parser_dom_mutations().is_break();
         let deferred_owner_interruption = self.deferred_owner_interruption.replace(false);
         let owner_interrupted = current_owner_interruption || deferred_owner_interruption;
         if !can_pause {
@@ -225,7 +257,9 @@ impl TokenSink for EmbedderPausingTreeBuilder {
     }
 
     fn end(&self) {
+        self.sink().flush_pending_text();
         self.inner.end();
+        self.sink().take_committed_dom_mutations();
         let _ = self.sink().finish_parser_dom_mutations();
     }
 
@@ -290,6 +324,7 @@ impl HtmlParserSession {
             // blocking-stylesheet pauses must be discarded before continuing.
             self.discard_parser_side_embedder_yield();
         }
+        self.tokenizer.sink.flush_text_at_input_boundary();
     }
 
     pub(super) fn push_back(&self, input: StrTendril) {
@@ -300,6 +335,7 @@ impl HtmlParserSession {
         if input.is_empty() {
             return;
         }
+        self.tokenizer.sink.flush_text_at_input_boundary();
         // Without segment provenance from html5ever, any later token can span
         // inserted input and the original tail after this insertion frame is
         // restored. Prefer permanent unknown locations over reporting
@@ -332,6 +368,7 @@ impl HtmlParserSession {
     pub(super) fn feed(&self) -> HtmlParserSessionResult {
         let input = self.input.borrow().current();
         let result = feed_with_definitive_encoding(&self.tokenizer, &input);
+        self.tokenizer.sink.flush_text_at_input_boundary();
         if matches!(result, HtmlParserSessionResult::InputDrained)
             && self.input.borrow().is_current(&input)
         {

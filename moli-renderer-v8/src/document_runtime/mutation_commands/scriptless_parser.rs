@@ -122,10 +122,7 @@ impl DocumentRuntime {
             self.dom_host(),
             effects,
         );
-        self.queue_devtools_dom_mutations(
-            facts,
-            crate::mutation_coordinator::DomMutationSource::ParserTreeSink,
-        );
+        self.queue_devtools_dom_mutations(facts);
         let changes = effects.stylesheet_owners().changes();
         if !changes.is_empty() {
             let prime = self.prime_stylesheet_owner_runtime_changes(host_ptr, changes);
