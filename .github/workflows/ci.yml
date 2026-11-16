@@ -603,6 +603,18 @@ jobs:
           uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
             --browser chromium --group web-security --chromium-bin "$CHROMIUM_CURRENT_ORACLE_BIN" \
             --repeat 2 --jobs 4 --output-dir target/smoke/web-security-chromium-ci
+      - name: Run upstream web-security contracts on Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          available_groups=$(uv run --project moli-cdp-smoke --no-sync python -c \
+            'from moli_cdp_smoke.runner import group_listing; print(" ".join(group["name"] for group in group_listing()))')
+          if [[ " $available_groups " == *" web-security-upstream "* ]]; then
+            uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
+              --browser chromium --chromium-bin "$CHROMIUM_CURRENT_ORACLE_BIN" \
+              --group web-security-upstream --repeat 2 --retries 0 --jobs 4 \
+              --output-dir target/smoke/cdp-chromium-ci/upstream-web-security
+          fi
       - *checkout-upload-helper
       - name: Upload Chromium diagnostics
         if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}

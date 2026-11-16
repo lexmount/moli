@@ -84,6 +84,7 @@ from .groups.target_lifecycle import run_target_lifecycle_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
 from .groups.web_security import browser_args as web_security_browser_args, run_web_security_group
+from .groups.web_security_upstream import run_web_security_upstream_group
 from .groups.webgl_viewport import run_webgl_viewport_group
 from .groups.font_face import run_font_face_payload_group
 from .groups.media_error import run_media_error_group
@@ -559,7 +560,15 @@ PROCESS_GROUPS: tuple[SmokeGroup, ...] = (
 DEFAULT_GROUPS: tuple[SmokeGroup, ...] = (
     RAW_GROUPS + PAGE_GROUPS + BROWSER_GROUPS + MANAGED_EXTERNAL_GROUPS + PROCESS_GROUPS
 )
-ALL_GROUPS: tuple[SmokeGroup, ...] = DEFAULT_GROUPS + OPTIONAL_EXTERNAL_GROUPS
+OPTIONAL_PROCESS_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "web-security-upstream",
+        "Strict ports of Chromium web-security tests, including unsupported Moli capabilities.",
+        "process",
+        run_web_security_upstream_group,
+    ),
+)
+ALL_GROUPS: tuple[SmokeGroup, ...] = DEFAULT_GROUPS + OPTIONAL_EXTERNAL_GROUPS + OPTIONAL_PROCESS_GROUPS
 DEFAULT_GROUP_NAMES: tuple[str, ...] = tuple(group.name for group in DEFAULT_GROUPS)
 DEFAULT_GROUP_NAME_SET = frozenset(DEFAULT_GROUP_NAMES)
 GROUPS_BY_NAME: dict[str, SmokeGroup] = {group.name: group for group in ALL_GROUPS}
@@ -822,7 +831,7 @@ async def _run_worker(args: argparse.Namespace) -> int:
             serve = await start_browser(
                 port,
                 extra_args=web_security_browser_args(fixture.url, False)
-                if selected_group.name == "web-security"
+                if selected_group.name in ("web-security", "web-security-upstream")
                 else ("--scrollbars",)
                 if args.browser != "chromium" and selected_group.name in {"classic-scrollbar", "iframe-input"}
                 else (),

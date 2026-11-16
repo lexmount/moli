@@ -1,0 +1,375 @@
+{
+  "chromium": {
+    "revision": "a03603fe9af6230a12f1b2fb2c18a7d003a0d937",
+    "source_version": "147.0.7709.0",
+    "oracle_version": "156.0.8078.73",
+    "upstream_license": "BSD-3-Clause; see chromium_test_ports.LICENSE"
+  },
+  "discovery": [
+    "kDisableWebSecurity",
+    "disable-web-security",
+    "disable_web_security = true",
+    "WebKitWebSecurityEnabled",
+    "kWebKitWebSecurityEnabled, false",
+    "web_security_enabled = false"
+  ],
+  "policy": "web-security-upstream is strict and opt-in: observed Moli differences are failures, never rewritten expectations. Chrome-only internals are inventoried with explicit reasons instead of reported as passing ports.",
+  "entries": [
+    {
+      "path": "content/browser/loader/cors_file_origin_browsertest.cc",
+      "sha256": "ee20228ccb75f7416e8275f2857a75bf8cdbd9cab002b28852616093f46501e5",
+      "tests": [
+        "CorsFileOriginBrowserTest.AccessControlAllowOriginIsNull",
+        "CorsFileOriginBrowserTest.AccessControlAllowOriginIsFile",
+        "CorsFileOriginBrowserTest.AccessToSelfFileUrl",
+        "CorsFileOriginBrowserTest.AccessToAnotherFileUrl",
+        "CorsFileOriginBrowserTest.NoCorsImagefileTaint",
+        "CorsFileOriginBrowserTest.CorsImagefileTaint",
+        "CorsFileOriginBrowserTestWithDisableWebSecurity.AccessControlAllowOriginIsNull",
+        "CorsFileOriginBrowserTestWithDisableWebSecurity.AccessControlAllowOriginIsFile",
+        "CorsFileOriginBrowserTestWithDisableWebSecurity.AccessToSelfFileUrl",
+        "CorsFileOriginBrowserTestWithDisableWebSecurity.AccessToAnotherFileUrl",
+        "CorsFileOriginBrowserTestWithDisableWebSecurity.NoCorsImagefileTaint",
+        "CorsFileOriginBrowserTestWithDisableWebSecurity.CorsImagefileTaint"
+      ],
+      "disposition": "port",
+      "cases": [
+        "file-xhr-null",
+        "file-xhr-file",
+        "file-xhr-self",
+        "file-xhr-other",
+        "file-canvas-no-cors",
+        "file-canvas-cors",
+        "http-canvas-no-cors",
+        "http-canvas-cors"
+      ],
+      "notes": "Preserve default and disabled controls, preflight/Origin server witnesses, and all three canvas readback entry points. HTTP canvas variants isolate taint behavior from local-file loader availability."
+    },
+    {
+      "path": "content/browser/loader/cors_file_origin_browsertest.cc",
+      "sha256": "ee20228ccb75f7416e8275f2857a75bf8cdbd9cab002b28852616093f46501e5",
+      "tests": [
+        "CorsFileOriginBrowserTestWithAllowFileAccessFromFiles.*",
+        "CorsFileOriginBrowserTest.MAYBE_UniversalAccessFromFileUrls"
+      ],
+      "disposition": "different_configuration",
+      "cases": [],
+      "notes": "These exercise the independent allow-file-access-from-files switch or an embedder-only allow_universal_access_from_file_urls preference, not disable-web-security. Moli does not expose either setting."
+    },
+    {
+      "path": "content/browser/loader/file_url_loader_factory_browsertest.cc",
+      "sha256": "e3cd4ca45d6eab09ebb120af52be63fa9c998c6719fba42aa11d414b7575e394",
+      "tests": [
+        "FileURLLoaderFactoryDisabledSecurityBrowserTest.SubresourcesInSandboxedFileFrame"
+      ],
+      "disposition": "port",
+      "cases": [
+        "sandbox-file-image"
+      ],
+      "notes": "Sandbox allow-scripts, local file document and local image, including the default-mode rejection control."
+    },
+    {
+      "path": "content/browser/loader/cross_site_document_blocking_browsertest.cc",
+      "sha256": "b54c47d2bb1d4475aadec0626be52d6df3a0941221b998f7a6e06dfa0dec25c7",
+      "tests": [
+        "CrossSiteDocumentBlockingDisableWebSecurityTest.DisableBlocking"
+      ],
+      "disposition": "port",
+      "cases": [
+        "orb-disable-blocking"
+      ],
+      "notes": "Cross-origin XHR reads an ORB-protected document MIME type. Existing web-security/orb also tests no-cors Fetch response filtering."
+    },
+    {
+      "path": "content/browser/service_worker/service_worker_browsertest.cc",
+      "sha256": "76c465def59e4a1720b868ea1b3dda1a31795e5096ffc7837c3f6a71c24f6d67",
+      "tests": [
+        "ServiceWorkerDisableWebSecurityTest.GetRegistrationNoCrash",
+        "ServiceWorkerDisableWebSecurityTest.MAYBE_RegisterNoCrash",
+        "ServiceWorkerDisableWebSecurityTest.UnregisterNoCrash",
+        "ServiceWorkerDisableWebSecurityTest.UpdateNoCrash"
+      ],
+      "disposition": "port",
+      "cases": [
+        "sw-get-cross",
+        "sw-register-cross",
+        "sw-unregister",
+        "sw-update"
+      ],
+      "notes": "Real cross-origin registration/query; update and unregister run in the child Window Realm, without requiring parent access to a possibly remote frame. The workers are installed through the public API rather than a browser-internal hook."
+    },
+    {
+      "path": "content/browser/service_worker/service_worker_security_utils_unittest.cc",
+      "sha256": "d13002f7586855453855247b16a77d7d8ca4c7fefbc956829a92adb3412acc38",
+      "tests": [
+        "ServiceWorkerSecurityUtilsTest.AllOriginsMatchAndCanAccessServiceWorkers"
+      ],
+      "disposition": "port",
+      "cases": [
+        "sw-register-cross",
+        "sw-reject-filesystem",
+        "sw-reject-file",
+        "sw-reject-data",
+        "sw-insecure-document"
+      ],
+      "notes": "Port the flag-dependent origin exception, trustworthy localhost positive control, insecure HTTP document rejection, and disallowed-scheme invariant through public APIs. The upstream HTTPS trustworthy-origin branch is represented by loopback HTTP, without adding fake TLS or disabling certificate validation."
+    },
+    {
+      "path": "content/browser/service_worker/service_worker_container_host_unittest.cc",
+      "sha256": "e61026ae9ab8929a5666f0a7bfc72c8d70f138f69cf6f1b6996c02c2155ba489",
+      "tests": [
+        "ServiceWorkerContainerHostTest.GetCorrectStorageKeyForWebSecurityState"
+      ],
+      "disposition": "port",
+      "cases": [
+        "sw-storage-key"
+      ],
+      "notes": "Cross-origin getRegistration can find the remote registration in disabled mode, while own getRegistrations remains empty and the remote origin retains its registration. This tests public lookup/storage isolation, not Chromium StorageKey object equality."
+    },
+    {
+      "path": "content/browser/isolated_origin_browsertest.cc",
+      "sha256": "09927b82017bbb941cc74f4539f57697a8adedb9b71fb84dc9dfdb08f2081864",
+      "tests": [
+        "SameProcessNoWebSecurityOriginIsolationOptInHeaderTest.DisableWebSecurityDisablesOriginAgentCluster"
+      ],
+      "disposition": "port",
+      "cases": [
+        "origin-agent-cluster"
+      ],
+      "notes": "Port the OAC response header, originAgentCluster value and cross-origin parent access. The 147 C++ fixture additionally forces same-process origin isolation; our 156 oracle intentionally retains desktop default Site Isolation, and records the resulting parent-access restriction rather than disabling isolation to make access succeed."
+    },
+    {
+      "path": "third_party/blink/web_tests/paint/invalidation/sub-frame-svg-background.html",
+      "sha256": "8751334a05819bf1b47a4ee244e15dac4f1939496be8cdabf41153028f072b6b",
+      "tests": [
+        "sub-frame-svg-background.html"
+      ],
+      "disposition": "port",
+      "cases": [
+        "data-svg-background"
+      ],
+      "notes": "Replace testRunner.overridePreference(WebKitWebSecurityEnabled,false) with the startup flag. Mutate the data: SVG child background after an initial screenshot; assert both DOM access and painted before/after pixels. Default mode is a negative control."
+    },
+    {
+      "path": "content/browser/security/local_network_access/local_network_access_browsertest.cc",
+      "sha256": "0be38e77598ca2ba5913fee5794250ef64993aaaab59098b727633bddd8ef569",
+      "tests": [
+        "LocalNetworkAccessBrowserTestDisableWebSecurity.LocalNetworkRequestIsNotBlocked"
+      ],
+      "disposition": "port",
+      "cases": [
+        "local-network-request"
+      ],
+      "notes": "Port the exact loopback-to-loopback resource request and verify isSecureContext remains unchanged. This does not claim to test public-to-private network permission enforcement."
+    },
+    {
+      "path": "content/browser/security/local_network_access/local_network_access_browsertest.cc",
+      "sha256": "0be38e77598ca2ba5913fee5794250ef64993aaaab59098b727633bddd8ef569",
+      "tests": [
+        "LocalNetworkAccessBrowserTestDisableWebSecurity.LocalNetworkPolicyIsAllowInsecure",
+        "LocalNetworkAccessBrowserTestDisableWebSecurity.LocalNetworkPolicyIsAllowSecure"
+      ],
+      "disposition": "browser_internal",
+      "cases": [],
+      "notes": "These assert RenderFrameHostImpl::BuildClientSecurityState on synthetic secure/insecure public-address-space fixtures. Moli has no ClientSecurityState/LNA permission model or equivalent browser-internal API; loopback success alone would not be an equivalent port."
+    },
+    {
+      "path": "content/browser/renderer_host/local_network_access_util_unittest.cc",
+      "sha256": "803b116c5298b935fa8a08f95539cdd14781bfdd1a2a42b6cae43198fe256ae2",
+      "tests": [
+        "LocalNetworkAccessUtilTest.DerivePolicyDisableWebSecurity"
+      ],
+      "disposition": "browser_internal",
+      "cases": [],
+      "notes": "AllAllowMap enumerates internal secure-context, allow-insecure, IP-address-space and request-context inputs. There is no corresponding Moli LNA policy function; do not substitute a single successful fetch for this matrix."
+    },
+    {
+      "path": "content/browser/webui/web_ui_security_browsertest.cc",
+      "sha256": "c052529e3ffed1b237fef520cd6bcd1e09fbcf8d11a48fdeea8ce85206aa53dd",
+      "tests": [
+        "WebUIBrowserSideSecurityTest.DenyWebAccessToSharedResources"
+      ],
+      "disposition": "observable_guard",
+      "cases": [
+        "reject-script-chrome-untrusted"
+      ],
+      "notes": "Keep the observable denial of a chrome-untrusted://resources script. Moli has no WebUI URLDataSource or Mojo bindings; the Chrome-specific implementation and process-kill assertions are not ported."
+    },
+    {
+      "path": "content/browser/webui/web_ui_navigation_browsertest.cc",
+      "sha256": "c2c5538363f6b1b9c48ebfb5581830872bae209c9051ce38362c875d4a7082ac",
+      "tests": [
+        "WebUINavigationDisabledWebSecurityBrowserTest.DisallowEmbeddingChromeSchemeFromWebFrameBrowserCheck2",
+        "WebUINavigationDisabledWebSecurityBrowserTest.DisallowNavigatingToChromeSchemeFromWebFrameBrowserCheck",
+        "WebUINavigationDisabledWebSecurityBrowserTest.DisallowNavigatingToChromeUntrustedSchemeFromWebFrameBrowserCheck",
+        "WebUINavigationDisabledWebSecurityBrowserTest.DisallowWebWindowOpenToChromeURL",
+        "WebUINavigationDisabledWebSecurityBrowserTest.DisallowWebWindowOpenToChromeUntrustedURL"
+      ],
+      "disposition": "observable_guard",
+      "cases": [
+        "reject-navigation-iframe-chrome",
+        "reject-navigation-iframe-chrome-untrusted",
+        "reject-navigation-self-chrome",
+        "reject-navigation-self-chrome-untrusted",
+        "reject-navigation-popup-chrome",
+        "reject-navigation-popup-chrome-untrusted"
+      ],
+      "notes": "Port the script-initiated iframe/main-frame/window.open denial through CDP committed URLs. Moli cannot install Chromium WebUI controllers or assert RenderProcessHost/SiteInstance identities; nonexistent privileged URLs do not test WebUI bindings isolation."
+    },
+    {
+      "path": "content/browser/security_exploit_browsertest.cc",
+      "sha256": "554b704902d022240aa6a60071aff4d28985227f3ebba652894572fce4eb8b02",
+      "tests": [
+        "SecurityExploitViaDisabledWebSecurityTest.WebToFileNavigation",
+        "SecurityExploitViaDisabledWebSecurityTest.WebToViewSourceNavigation"
+      ],
+      "disposition": "observable_guard",
+      "cases": [
+        "reject-navigation-iframe-file",
+        "reject-navigation-self-file",
+        "reject-navigation-popup-file",
+        "reject-navigation-iframe-view-source",
+        "reject-navigation-self-view-source",
+        "reject-navigation-popup-view-source"
+      ],
+      "notes": "Port web-initiated local/privileged destination blocking, including the original window.open path. The C++ process/site-instance and forged-navigation assertions have no Moli equivalent."
+    },
+    {
+      "path": "content/browser/security_exploit_browsertest.cc",
+      "sha256": "554b704902d022240aa6a60071aff4d28985227f3ebba652894572fce4eb8b02",
+      "tests": [
+        "SecurityExploitViaDisabledWebSecurityTest.ValidateBaseUrlForDataUrl",
+        "SecurityExploitViaDisabledWebSecurityTest.ValidateInitiatorBaseUrlNotEmpty"
+      ],
+      "disposition": "browser_internal",
+      "cases": [],
+      "notes": "Directly forge BeginNavigation Mojo IPC fields and require a renderer bad-message process kill. Neither the IPC nor the process security model exists in Moli; JS cannot construct the tested input."
+    },
+    {
+      "path": "content/browser/renderer_host/frame_tree_browsertest.cc",
+      "sha256": "57ff5388141f8c5e1fe35984ef6916231b05057ca9f327c59f5a20d592831c8d",
+      "tests": [
+        "IsolateIcelandFrameTreeBrowserTest.MAYBE_ProcessSwitchForIsolatedBlob"
+      ],
+      "disposition": "browser_internal",
+      "cases": [],
+      "notes": "Uses isolate-origins=http://b.is and an invalid blob navigation to assert renderer process transfers and RenderFrameProxyHost topology. Moli has no site-isolated remote-frame process representation. Upstream itself disables this test on Linux/Windows."
+    },
+    {
+      "path": "content/browser/network_service_browsertest.cc",
+      "sha256": "49d9fe09104f92e174a6cdbb3383c055cd92d1fbbddbb37e5b38d78ad3142be8",
+      "tests": [
+        "NetworkServiceBrowserTest.MAYBE_WebUIBindingsNoHttp",
+        "NetworkServiceBrowserTest.NoWebUIBindingsHttp",
+        "NetworkServiceBrowserTest.FileSystemBindingsCorrectOrigin"
+      ],
+      "disposition": "browser_internal",
+      "cases": [],
+      "notes": "Uses WebUI bindings and browser URLLoaderFactory injection to emulate a compromised renderer and assert process termination. Other inherited cache/crash/network-service tests use the flag only as fixture scaffolding, not as their assertion subject."
+    },
+    {
+      "path": "content/browser/network_service_browsertest.cc",
+      "sha256": "49d9fe09104f92e174a6cdbb3383c055cd92d1fbbddbb37e5b38d78ad3142be8",
+      "tests": [
+        "NetworkServiceBrowserTest.FileSystemBindingsCorrectOrigin"
+      ],
+      "disposition": "observable_guard",
+      "cases": [
+        "reject-fetch-filesystem"
+      ],
+      "notes": "Public XHR to a filesystem: URL is still rejected; this covers only the observable unsupported-scheme guard, not forged browser-side URLLoaderFactory requests from a WebUI process."
+    },
+    {
+      "path": "chrome/browser/chrome_security_exploit_browsertest.cc",
+      "sha256": "7422e864e9e241e35a9a4bdcb3f09572eb4709087f2fdb7a3f4055ea558aa45c",
+      "tests": [
+        "ChromeWebSecurityDisabledBrowserTest.DISABLED_ChromeExtensionResources"
+      ],
+      "disposition": "observable_guard",
+      "cases": [
+        "reject-fetch-chrome-extension"
+      ],
+      "notes": "Port denial of XHR to chrome-extension:. The installed-extension/process-security scenario is unavailable in Moli and the upstream test is disabled for Site Isolation incompatibility."
+    },
+    {
+      "path": "chrome/browser/extensions/process_manager_browsertest.cc",
+      "sha256": "9ef309de7276c3c1c33243ce109290c781dc1f22378a6b2f3eddc733657f8724",
+      "tests": [
+        "ProcessManagerBrowserTest.NestedURLNavigationsToExtensionBlocked",
+        "ProcessManagerBrowserTest.BlobURLDownloadsToExtensionAllowed",
+        "ProcessManagerBrowserTest.NestedURLNavigationsToExtensionBlockedInSubframe",
+        "ProcessManagerBrowserTest.DISABLED_NestedURLNavigationsToAppBlocked"
+      ],
+      "disposition": "chrome_platform",
+      "cases": [],
+      "notes": "Related tests disable the WebKit preference rather than the flag. Require installed Chrome extensions, apps/webview guests, privileged blob/filesystem URL factories and extension process locks. Moli does not implement this platform."
+    },
+    {
+      "path": "chrome/browser/ui/startup/startup_browser_creator_browsertest.cc",
+      "sha256": "c49055320f7ea36636f7c1a6c612a655cfe975a87aa3081ac3ebed714b8765e5",
+      "tests": [
+        "StartupBrowserCreatorInfobarsTest.*",
+        "StartupBrowserCreatorInfobarsWithoutStartupWindowTest.CheckInfobar",
+        "StartupBrowserCreatorInfobarsKioskTest.CheckInfobarForBadFlag",
+        "StartupBrowserCreatorPickerInfobarTest.*"
+      ],
+      "disposition": "chrome_platform",
+      "cases": [],
+      "notes": "Bad-flag infobars, enterprise warning policy, kiosk windows and profile-picker UI; none exists in Moli headless fetch/serve. Instance-specific profile/config behavior is already covered by the Moli CLI web-security tests."
+    },
+    {
+      "path": "chrome/browser/media/encrypted_media_browsertest.cc",
+      "sha256": "f0f6a29144c57fdce3f0ab7e15eedb3251c521637924773bf515be185893abcb",
+      "tests": [
+        "EncryptedMediaTestBase.SetUpCommandLineForKeySystem"
+      ],
+      "disposition": "fixture_only",
+      "cases": [],
+      "notes": "The flag is setup for cross-port DRM license servers, not the subject of these media/decryption tests. Moli has no CDM/license-server playback implementation. Cross-port Fetch/XHR is already tested in web-security."
+    },
+    {
+      "path": "services/network/cors/preflight_controller_unittest.cc",
+      "sha256": "e1c866d3b46425976e574a36025880a688dad523bd7c612b3778cfe451ac527c",
+      "tests": [
+        "PreflightControllerTest.PreflightControllerTest"
+      ],
+      "disposition": "fixture_only",
+      "cases": [],
+      "notes": "Disable CORS on the internal loader used to issue OPTIONS so preflights do not recursively preflight themselves. The suite tests PreflightController, not the CLI flag. Existing web-security PUT witnesses assert one OPTIONS in default mode and none in disabled mode."
+    },
+    {
+      "path": "services/network/cors/cors_url_loader_factory_unittest.cc",
+      "sha256": "76a51bf76fe3b3fbfa0fda21c1ce449f1ceae3c1a72e5d4b1a63cbce8e6ba32f",
+      "tests": [
+        "NetworkBoundCorsURLLoaderFactoryTest.CorsPreflightRequestAreAllowed"
+      ],
+      "disposition": "chrome_platform",
+      "cases": [],
+      "notes": "Android-only bound_network/NetworkHandle internal network-factory behavior; skipped by upstream on desktop and has no Moli desktop equivalent."
+    },
+    {
+      "path": "services/network/network_context_unittest.cc",
+      "sha256": "8826309cd9a894fba8815ec8b133443f158b32bdabe963040afefcfc4a9e7d56",
+      "tests": [
+        "NetworkContextTest.NetworkBoundURLLoaderFactory"
+      ],
+      "disposition": "chrome_platform",
+      "cases": [],
+      "notes": "Android-only URLRequestContext bound-network propagation; disabled security is fixture configuration, not the tested behavior."
+    },
+    {
+      "path": "content/browser/webui/web_ui_security_browsertest.cc",
+      "sha256": "c052529e3ffed1b237fef520cd6bcd1e09fbcf8d11a48fdeea8ce85206aa53dd",
+      "tests": [
+        "WebUIBrowserSideSecurityTest.DenyWebAccessToSharedResources"
+      ],
+      "disposition": "additional_guard",
+      "cases": [
+        "reject-fetch-chrome",
+        "reject-fetch-chrome-untrusted",
+        "reject-fetch-view-source"
+      ],
+      "notes": "Additional negative XHR controls for browser-owned schemes. These are not presented as ports of Chrome WebUI/extension process internals."
+    }
+  ]
+}
