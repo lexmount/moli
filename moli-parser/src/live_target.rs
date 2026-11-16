@@ -22,6 +22,9 @@ use moli_stylesheet_blocking::{
 use super::{HtmlTreeSinkState, stream::HtmlTreeSinkStream};
 use crate::html::{ParseHandle, ParserCustomElementConstructionHandoff, ParserElementFlags};
 
+#[cfg(test)]
+mod pending_text_tests;
+
 #[allow(unused_imports)]
 use super::html_chunks;
 
@@ -1214,6 +1217,12 @@ impl ParserElementCreationSink {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ParserTextInsertionPoint {
+    pub(super) parent: NativeNodeId,
+    pub(super) reference_child: Option<NativeNodeId>,
+}
+
 pub(super) struct ParserMutationEffectDelivery {
     effects: DomMutationEffects,
     sink: Option<ParserMutationEffectSink>,
@@ -1339,6 +1348,7 @@ struct TestMutationEffectCollector<'a> {
     host: *mut DomHost,
     effects: &'a mut DomMutationEffects,
     panic_on_mutation: bool,
+    finish_texts: Option<&'a mut Vec<String>>,
 }
 
 #[cfg(test)]
@@ -1637,6 +1647,18 @@ impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
 impl ParserMutationEffectConsumer for TestMutationEffectCollector<'_> {
     fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
         self.effects.merge(effects);
+    }
+
+    fn finish_parser_dom_mutations(&mut self) -> std::ops::ControlFlow<()> {
+        if let Some(texts) = &mut self.finish_texts {
+            // SAFETY: the test owns the host throughout the scoped pump.
+            let host = unsafe { &*self.host };
+            texts.push(
+                host.text_content(host.document_handle())
+                    .unwrap_or_default(),
+            );
+        }
+        std::ops::ControlFlow::Continue(())
     }
 }
 
@@ -3097,6 +3119,56 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.insert_text_node(parent_id, None, text)
     }
 
+    pub(super) fn text_insertion_point(
+        &mut self,
+        parent: NativeNodeId,
+    ) -> ParserTextInsertionPoint {
+        self.clear_template_contents_insertion_hint();
+        ParserTextInsertionPoint {
+            parent,
+            reference_child: None,
+        }
+    }
+
+    pub(super) fn text_insertion_point_before_sibling(
+        &mut self,
+        sibling: NativeNodeId,
+    ) -> Option<ParserTextInsertionPoint> {
+        self.clear_template_contents_insertion_hint();
+        Some(ParserTextInsertionPoint {
+            parent: self.read_parent_node(sibling)?,
+            reference_child: Some(sibling),
+        })
+    }
+
+    pub(super) fn text_insertion_point_based_on_parent_node(
+        &mut self,
+        element: NativeNodeId,
+        previous_element: NativeNodeId,
+    ) -> ParserTextInsertionPoint {
+        if let Some(point) = self.text_insertion_point_before_sibling(element) {
+            point
+        } else {
+            self.text_insertion_point(previous_element)
+        }
+    }
+
+    pub(super) fn insert_buffered_text(
+        &mut self,
+        point: ParserTextInsertionPoint,
+        text: String,
+    ) -> ParserMutationEffectDelivery {
+        // An embedder callback may have detached the insertion anchor. Do not
+        // replay text into a different parent after a reentrant DOM change.
+        if point
+            .reference_child
+            .is_some_and(|child| self.read_parent_node(child) != Some(point.parent))
+        {
+            return ParserMutationEffectDelivery::none();
+        }
+        self.insert_text_node(point.parent, point.reference_child, text)
+    }
+
     fn insert_text_node(
         &mut self,
         parent_id: NativeNodeId,
@@ -3960,6 +4032,7 @@ fn parser_stream_runtime_dom_sinks_pump_preserves_runtime_mutation_effects() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let _ = stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
             "<!doctype html><html><body><div id='a'></div><script src='/app.js'></script></body></html>",
@@ -3997,6 +4070,7 @@ fn parser_stream_runtime_dom_consumer_is_cleared_when_pump_unwinds() {
         host: ptr,
         effects: &mut effects,
         panic_on_mutation: true,
+        finish_texts: None,
     };
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -4027,6 +4101,7 @@ fn parser_stream_runtime_dom_sinks_rejects_snapshot_readback() {
         host: ptr,
         effects: &mut effects,
         panic_on_mutation: false,
+        finish_texts: None,
     };
     let mut target = ParserStreamHtmlTreeSinkTarget::new_live_document_root(url, document);
     target.with_runtime_dom_consumer_for_test(&mut collector, |target| {
@@ -4048,6 +4123,7 @@ fn parser_stream_runtime_dom_sinks_routes_parser_state_writes_through_sink() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let mut target = ParserStreamHtmlTreeSinkTarget::new_live_document_root(url, document);
         script = target.with_runtime_dom_consumer_for_test(&mut collector, |target| {
@@ -4097,6 +4173,7 @@ fn parser_stream_runtime_dom_sinks_routes_declarative_shadow_attach_through_sink
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let _ = stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
             concat!(
@@ -4300,6 +4377,7 @@ fn parser_stream_live_document_root_writes_detached_document() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let _ = stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
             "<!doctype html><html><body><p id='child'>child text</p></body></html>",
@@ -4348,6 +4426,7 @@ fn parser_stream_live_fragment_root_writes_fragment() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let stream = crate::DocumentStream::new_live_fragment_root_for_testing(
             url,
@@ -4431,6 +4510,7 @@ fn live_fragment_parser_uses_template_contents_owner_document() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         crate::HtmlParser::with_scripting_enabled(true).parse_fragment_into_live_dom(
             url,
@@ -4489,6 +4569,7 @@ fn parser_stream_element_creation_sink_can_own_token_attributes() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let _ = stream.pump_parser_step_with_runtime_dom_consumers(
             "<!doctype html><html><body><x-sync id='owned'></x-sync><p id='default'></p></body></html>",
@@ -4536,6 +4617,7 @@ fn parser_stream_element_creation_request_reports_intended_parent() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let _ = stream.pump_parser_step_with_runtime_dom_consumers(
             "<!doctype html><html><body><svg><g/><x-sync id='inside-svg'></x-sync></svg><x-sync id='after-svg'></x-sync><x-sync id='outer'><x-sync id='inner'></x-sync></x-sync></body></html>",
@@ -4622,6 +4704,7 @@ fn parser_stream_element_creation_sink_uses_live_document_root_handle() {
             host: ptr,
             effects: &mut effects,
             panic_on_mutation: false,
+            finish_texts: None,
         };
         let _ = stream.pump_parser_step_with_runtime_dom_consumers(
             "<!doctype html><html><body><x-sync id='child-owned'></x-sync></body></html>",

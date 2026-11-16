@@ -1729,7 +1729,6 @@ impl DocumentRuntime {
 
 pub(crate) struct RuntimeMutationApplyResult {
     changed: bool,
-    source: crate::mutation_coordinator::DomMutationSource,
     meta_refresh_candidates: Vec<super::meta_refresh::MetaRefreshMutationCandidate>,
     devtools_dom_mutations: Vec<super::devtools_mutations::DevToolsDomMutationFact>,
     runtime_script_start_candidates: Vec<crate::mutation_coordinator::RuntimeScriptStartCandidate>,
@@ -1766,7 +1765,6 @@ pub(super) fn finish_runtime_mutation_effects(
 ) -> bool {
     let RuntimeMutationApplyResult {
         changed,
-        source,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates,
@@ -1777,7 +1775,7 @@ pub(super) fn finish_runtime_mutation_effects(
         connected_style_csp_roots,
     } = result;
 
-    runtime.queue_devtools_dom_mutations(devtools_dom_mutations, source);
+    runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
 
     runtime.finish_meta_refresh_mutation_candidates(scope, host_ptr, meta_refresh_candidates);
 
@@ -2122,7 +2120,6 @@ pub(super) fn prepare_runtime_mutation_effects(
         super::devtools_mutations::capture_devtools_dom_mutation_facts(dom_host, effects);
     RuntimeMutationApplyResult {
         changed: effects.did_change(),
-        source: options.source,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates: Vec::new(),

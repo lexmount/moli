@@ -768,7 +768,7 @@ pub(super) struct DocumentRuntime {
     parser_discovered_modulepreloads: HashSet<ModuleMapKey>,
     modulepreload_invalid_as_link_errors: HashSet<DomHandle>,
     style_source_document_sync_pending: bool,
-    pending_devtools_dom_mutations: devtools_mutations::DevToolsDomMutationQueue,
+    pending_devtools_dom_mutations: Vec<devtools_mutations::DevToolsDomMutationFact>,
     #[cfg(test)]
     pending_runtime_binding_calls: Vec<native_bridge::PendingRuntimeBindingCall>,
     pending_inspector_issues: Vec<inspector_issues::PendingInspectorIssue>,
