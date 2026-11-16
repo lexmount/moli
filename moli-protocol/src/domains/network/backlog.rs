@@ -471,7 +471,9 @@ fn emit_staged_subresource_request_started(
             event_session_ids,
         );
     }
-    if !request_was_announced_by_fetch_pause || output.redirect().is_some() {
+    if output.announces_request()
+        && (!request_was_announced_by_fetch_pause || output.redirect().is_some())
+    {
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
                 out,

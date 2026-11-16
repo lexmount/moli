@@ -215,6 +215,18 @@ async fn binary_request_round_trip(
     } else {
         ctx.worker_network_session_for_request(&network_id)
     };
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| {
+                message["method"] == "Network.requestWillBeSent"
+                    && message["params"]["requestId"] == network_id
+                    && message["sessionId"] == network_session
+            })
+            .count(),
+        1,
+        "updating an intercepted upload must not announce the request again"
+    );
     ctx.process_async(
         json!({"id":id,"method":"Network.getRequestPostData","sessionId":network_session,
         "params":{"requestId":network_id}}),

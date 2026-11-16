@@ -1364,6 +1364,7 @@ impl TargetSubresourcePlanOutput {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetSubresourceRequestStartedOutput {
+    announces_request: bool,
     redirect: Option<Box<moli_core::page::NavigationRedirect>>,
     delivery_order_index: usize,
     index: usize,
@@ -1388,8 +1389,10 @@ impl TargetSubresourceRequestStartedOutput {
         index: usize,
         loader_id: &str,
         request: &SubresourceRequestStarted,
+        announces_request: bool,
     ) -> Self {
         Self {
+            announces_request,
             redirect: request.redirect().cloned().map(Box::new),
             delivery_order_index,
             index,
@@ -1407,6 +1410,10 @@ impl TargetSubresourceRequestStartedOutput {
             request_cookie_report: request.request_cookie_report().cloned(),
             request_extra_info_deferred: request.request_extra_info_deferred(),
         }
+    }
+
+    pub(crate) fn announces_request(&self) -> bool {
+        self.announces_request
     }
 
     pub(crate) fn redirect(&self) -> Option<&moli_core::page::NavigationRedirect> {
@@ -2876,22 +2883,25 @@ impl TargetNetworkOutputQueue {
         request: &SubresourceRequestStarted,
     ) {
         let delivery_order_index = self.next_delivery_order_index();
+        let announces_request = !self
+            .staged_subresource_requests
+            .contains_key(&request.handle())
+            || request.redirect().is_some();
         let output = Arc::new(
             TargetSubresourceRequestStartedOutput::from_page_request_started(
                 delivery_order_index,
                 index,
                 document_loader_id,
                 request,
+                announces_request,
             ),
         );
-        // Completion can enrich an admitted request's metadata, for example
-        // when a script's HTTP error supplies its cookie report. Keep that
-        // metadata without announcing the same logical request a second time.
-        let already_started = self
-            .staged_subresource_requests
-            .insert(output.handle(), output.clone())
-            .is_some();
-        if !already_started {
+        // Every snapshot must reach body capture, including Worker overrides
+        // after Fetch.continueRequest. Only the first snapshot and redirects
+        // announce a request; enrichment is not another network start.
+        self.staged_subresource_requests
+            .insert(output.handle(), output.clone());
+        if announces_request {
             // An admission cookie report emits ExtraInfo inline unless the
             // producer defers it to transport. Later enrichment is not itself
             // publication of an ExtraInfo event.
@@ -2899,9 +2909,9 @@ impl TargetNetworkOutputQueue {
                 self.subresource_request_extra_info_handles
                     .insert(output.handle());
             }
-            self.delivery_outputs
-                .push_subresource(TargetSubresourcePlanOutput::RequestStarted(output));
         }
+        self.delivery_outputs
+            .push_subresource(TargetSubresourcePlanOutput::RequestStarted(output));
         self.subresource_record_count = index + 1;
     }
 
@@ -3699,10 +3709,9 @@ mod tests {
             assert_eq!(
                 outputs
                     .iter()
-                    .filter(|output| matches!(
-                        output,
-                        TargetSubresourcePlanOutput::RequestStarted(_)
-                    ))
+                    .filter(|output| matches!(output,
+                        TargetSubresourcePlanOutput::RequestStarted(request)
+                            if request.announces_request()))
                     .count(),
                 1
             );
@@ -3711,7 +3720,8 @@ mod tests {
                     .iter()
                     .filter(|output| match output {
                         TargetSubresourcePlanOutput::RequestStarted(request) =>
-                            request.request_cookie_report().is_some()
+                            request.announces_request()
+                                && request.request_cookie_report().is_some()
                                 && !request.request_extra_info_deferred(),
                         TargetSubresourcePlanOutput::RequestExtraInfo(extra) => {
                             assert_eq!(
