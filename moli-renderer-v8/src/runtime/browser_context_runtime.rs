@@ -221,6 +221,7 @@ struct RendererBrowserContextRuntimeInner {
 enum DedicatedWorkerDevToolsTarget {
     Loading {
         inspector_sessions: Vec<Option<String>>,
+        resume_on_attach: bool,
     },
     Running {
         handle: crate::worker::WorkerDevToolsHandle,
