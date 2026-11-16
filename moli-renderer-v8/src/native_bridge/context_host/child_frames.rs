@@ -32,6 +32,7 @@ use url::Url;
 mod classic_scripts;
 mod discovery;
 mod embedded_csp;
+mod embedded_images;
 mod local_history;
 mod lookup;
 mod module_scripts;

@@ -161,6 +161,10 @@ pub(super) struct ElementRenderedState {
     hidden_by_closed_details: bool,
 }
 
+pub(crate) fn element_is_being_rendered(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    ElementRenderedState::read(runtime, handle).box_state() == ElementBoxState::Box
+}
+
 impl ElementRenderedState {
     pub(super) fn read(runtime: &PageScriptHost, handle: DomHandle) -> Self {
         let mut scope = StyleObservation::new(runtime);

@@ -546,13 +546,18 @@ impl super::PageScriptHost {
 
         let loader =
             self.document_resource_loader_for_dispatch_scope(pending.target().dispatch_scope());
-        let decode_enabled = self.layout_policy().uses_real_layout()
-            && loader.as_ref().is_some_and(|loader| {
-                loader
-                    .request_client()
-                    .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
-            });
-        if decode_enabled && self.image_resources.complete_shared_ready(&identity) {
+        let embedded_image = identity.request_key.navigation_destination().is_some();
+        let decode_enabled = embedded_image
+            || (self.layout_policy().uses_real_layout()
+                && loader.as_ref().is_some_and(|loader| {
+                    loader.request_client().optional_resource_fetch_enabled(
+                        crate::types::SubresourceResourceType::Image,
+                    )
+                }));
+        if decode_enabled
+            && !embedded_image
+            && self.image_resources.complete_shared_ready(&identity)
+        {
             let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
                 return ImageResponseCompletion::Ignored;
             };

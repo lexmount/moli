@@ -1,6 +1,7 @@
 use super::*;
 
 mod embedded_destinations;
+mod embedded_images;
 mod navigation_preload;
 mod window_container;
 

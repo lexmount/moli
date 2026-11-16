@@ -371,27 +371,32 @@ fn apply_image_subresource_terminal(
     request_url: &url::Url,
     terminal: ImageSubresourceTerminal<'_>,
 ) {
-    let timing_initiator = context_host
+    let pending = context_host
         .borrow()
         .pending_image_load_event(image_handle)
-        .filter(|pending| pending.id() == sequence)
-        .map(|pending| {
-            (
-                pending.resource_timing_initiator_type(),
-                pending.resource_timing_initiator().clone(),
-            )
-        });
+        .filter(|pending| pending.id() == sequence);
+    let navigation_destination = pending
+        .as_ref()
+        .and_then(|pending| pending.request_key())
+        .and_then(|key| key.navigation_destination());
     let (accepted, followup) = match &terminal {
         ImageSubresourceTerminal::Response {
             response,
             encoded,
             origin_clean,
         } => {
-            let descriptor = crate::network_host::image_response_descriptor_from_parkable(
-                response,
-                encoded,
-                *origin_clean,
-            );
+            let descriptor = if navigation_destination
+                == Some(moli_fetch::NavigationRequestDestination::Object)
+                && response.status >= 400
+            {
+                None
+            } else {
+                crate::network_host::image_response_descriptor_from_parkable(
+                    response,
+                    encoded,
+                    *origin_clean,
+                )
+            };
             let completion = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_response_if_matches(
@@ -417,8 +422,10 @@ fn apply_image_subresource_terminal(
     };
     if accepted
         && !matches!(terminal, ImageSubresourceTerminal::PreloadFailure)
-        && let Some((initiator_type, initiator)) = timing_initiator
+        && let Some(pending) = pending
     {
+        let initiator_type = pending.resource_timing_initiator_type();
+        let initiator = pending.resource_timing_initiator();
         let mut entry = terminal.resource_performance_entry(request_url, initiator_type);
         if let ImageSubresourceTerminal::Response {
             response,

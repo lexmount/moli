@@ -71,8 +71,16 @@ pub(super) fn request_for_pending_subresource(
         let request = request.with_redirect_headers(pending.redirect_headers.clone());
         return match &pending.continuation {
             PendingSubresourceContinuation::Image {
-                request_metadata, ..
-            } => request.with_subresource_request_metadata(request_metadata.clone()),
+                request_metadata,
+                embedded,
+                ..
+            } => {
+                let request = request.with_subresource_request_metadata(request_metadata.clone());
+                match embedded {
+                    Some(embedded) => embedded.apply(request),
+                    None => request,
+                }
+            }
             PendingSubresourceContinuation::ResponsePreload(preload) => {
                 crate::network_host::apply_response_preload_request_metadata(request, preload)
                     .with_network_partition_key(pending.network_partition_key.clone())
@@ -156,8 +164,16 @@ pub(super) fn request_for_pending_subresource(
     };
     let request = match &pending.continuation {
         PendingSubresourceContinuation::Image {
-            request_metadata, ..
-        } => request.with_subresource_request_metadata(request_metadata.clone()),
+            request_metadata,
+            embedded,
+            ..
+        } => {
+            let request = request.with_subresource_request_metadata(request_metadata.clone());
+            match embedded {
+                Some(embedded) => embedded.apply(request),
+                None => request,
+            }
+        }
         PendingSubresourceContinuation::ResponsePreload(preload) => {
             crate::network_host::apply_response_preload_request_metadata(request, preload)
                 .with_network_partition_key(pending.network_partition_key.clone())

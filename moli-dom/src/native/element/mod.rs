@@ -1204,7 +1204,10 @@ impl Element {
     }
 
     pub fn set_image_load_dispatched(&mut self, dispatched: bool) -> bool {
-        if !self.is_html_element("img") {
+        if !self.is_html_element("img")
+            && !self.is_html_element("object")
+            && !self.is_html_element("embed")
+        {
             return false;
         }
         self.control_state_mut()

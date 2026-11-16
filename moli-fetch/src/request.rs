@@ -339,7 +339,7 @@ pub enum BrowserNavigationRequestKind {
 
 /// The native destination of a navigation, independent of the resource's MIME
 /// type and of author or interception supplied Fetch Metadata headers.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum NavigationRequestDestination {
     #[default]
     Document,

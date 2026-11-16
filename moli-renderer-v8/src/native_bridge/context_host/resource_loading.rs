@@ -1107,6 +1107,20 @@ impl PageScriptHost {
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
     ) -> Option<u64> {
+        let embedded =
+            self.embedded_image_request_configuration(image_handle, &info.document_url, &info.url);
+        if self
+            .pending_image_load_event(image_handle)
+            .and_then(|pending| {
+                pending
+                    .request_key()
+                    .and_then(|key| key.navigation_destination())
+            })
+            .is_some()
+            && embedded.is_none()
+        {
+            return None;
+        }
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         if !self.bind_pending_image_load_network_request_if_matches(
@@ -1146,6 +1160,7 @@ impl PageScriptHost {
                     sequence,
                     request_initiator_type,
                     request_metadata,
+                    embedded,
                 },
                 deferred_request_started: false,
                 blob_url_entry: None,

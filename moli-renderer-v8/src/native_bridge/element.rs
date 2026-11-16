@@ -92,6 +92,7 @@ mod popover;
 mod query;
 mod reflection;
 mod rendered_state;
+pub(crate) use rendered_state::element_is_being_rendered;
 mod script_execution;
 mod shadow_dom;
 mod shared;
@@ -311,10 +312,6 @@ use event_handlers::{
     body_onload_setter_function, body_onmessageerror_getter_function,
     body_onmessageerror_setter_function,
 };
-pub(crate) use events::construct_focus_event;
-#[cfg(feature = "devtools")]
-pub(crate) use events::construct_activation_pointer_event;
-pub(crate) use events::construct_clipboard_event;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
 use events::{ClickEventSource, construct_click_event};
@@ -326,22 +323,24 @@ pub(crate) use events::{
 };
 #[cfg(any(feature = "devtools", test))]
 pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};
-#[cfg(any(test, feature = "devtools"))]
-pub(crate) use events::{construct_drag_event_with_related_target, construct_pointer_event};
 #[cfg(feature = "devtools")]
 pub(crate) use events::{
-    construct_drop_input_event,
+    construct_activation_pointer_event, construct_drop_input_event,
     construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
     construct_mouse_event_with_related_target_for_target,
     construct_wheel_event_for_target,
 };
+pub(crate) use events::{construct_clipboard_event, construct_focus_event};
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use events::{construct_drag_event_with_related_target, construct_pointer_event};
 #[cfg(feature = "devtools")]
 pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
 pub(crate) use focus::{
-    apply_document_focus_fixup, contenteditable_editing_host, focus_element, focus_element_preserving_selection,
-    focus_window_client_document, perform_access_key_default_action_for_dispatched_event,
+    apply_document_focus_fixup, contenteditable_editing_host, focus_element,
+    focus_element_preserving_selection, focus_window_client_document,
+    perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
     process_post_parse_autofocus, reset_document_navigation_focus, update_focus,
