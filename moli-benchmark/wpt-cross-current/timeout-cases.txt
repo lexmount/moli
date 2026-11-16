@@ -30,7 +30,6 @@ dom/events/webkit-animation-end-event.html
 dom/events/webkit-animation-iteration-event.html
 dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
-dom/nodes/NodeList-static-length-getter-tampered-1.html
 editing/crashtests/designMode-caret-change.html
 editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-events.html
 editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
@@ -39,7 +38,6 @@ focus/focus-event-after-iframe-gets-focus.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
 focus/iframe-activeelement-after-focusing-out-iframes.html
-html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/back-forward-cache/storage-events.html
 html/browsers/browsing-the-web/back-forward-cache/timers.html
 html/browsers/browsing-the-web/navigating-across-documents/009.html
@@ -96,7 +94,6 @@ permissions-policy/policy-extends-to-sandbox.html
 permissions-policy/reporting/fullscreen-reporting.html
 permissions-policy/reporting/sync-xhr-report-only.html
 permissions-policy/reporting/sync-xhr-reporting.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/tentative/stylesheet-initiated.html
 scroll-to-text-fragment/find-range-from-text-directive-no-reveal.html
 selection/crashtests/selectall-and-find-svg-text-on-selectstart.html
@@ -112,4 +109,3 @@ svg/linking/scripted/href-script-element.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-navigation.html?36-last
 xhr/open-url-multi-window-4.htm
-xhr/setrequestheader-header-forbidden.htm
