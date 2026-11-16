@@ -533,13 +533,7 @@ pub(super) fn buffer_source_has_shared_or_resizable_backing_store(
     false
 }
 
-pub(super) fn array_buffer_from_bytes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    bytes: Vec<u8>,
-) -> Option<v8::Local<'s, v8::ArrayBuffer>> {
-    let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-    Some(v8::ArrayBuffer::with_backing_store(scope, &backing_store))
-}
+pub(super) use moli_v8_util::array_buffer_from_bytes;
 
 fn new_uint8_array_from_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,

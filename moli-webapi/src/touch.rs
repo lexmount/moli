@@ -1,8 +1,8 @@
-use super::*;
-use crate::util::{callback_data_index_value, get_private_value};
-use crate::web_api_interfaces;
-use crate::webidl;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{callback_data_index_value, get_private_value};
+use moli_v8_util::{callback_data_item, throw_type_error};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 mod list;
@@ -178,14 +178,14 @@ fn touch_event_getter<'s>(
         rv.set_undefined();
         return;
     };
-    let receiver = crate::context_bootstrap::event_backing(scope, args.this());
+    let receiver = crate::events::state::event_backing(scope, args.this());
     match get_private_value(scope, receiver, slot) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),
     }
 }
 
-pub(in crate::context_bootstrap) fn touch_constructor_callback<'s>(
+pub fn touch_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -210,7 +210,7 @@ pub(in crate::context_bootstrap) fn touch_constructor_callback<'s>(
     rv.set(touch.into());
 }
 
-pub(in crate::context_bootstrap) fn initialize_touch_event_lists<'s>(
+pub fn initialize_touch_event_lists<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     touches: &[v8::Local<'s, v8::Object>],
@@ -234,7 +234,7 @@ pub(in crate::context_bootstrap) fn initialize_touch_event_lists<'s>(
     .expect("TouchEvent lists");
 }
 
-pub(in crate::context_bootstrap) fn install_touch_template_bindings<'s>(
+pub fn install_touch_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,

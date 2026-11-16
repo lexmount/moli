@@ -2,7 +2,7 @@ use super::*;
 
 mod helpers;
 mod install;
-mod keys;
+use moli_webapi::crypto_key as keys;
 mod random;
 mod subtle;
 
@@ -14,7 +14,6 @@ pub(in crate::context_bootstrap) use install::{
 };
 pub(crate) use keys::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, crypto_key_clone_payload_from_object,
-    crypto_key_object_from_clone_payload,
 };
 
 /// Owner-neutral result of one blocking WebCrypto operation.
@@ -31,4 +30,15 @@ pub(crate) enum WebCryptoTaskResult {
         private_key: Box<CryptoKeyClonePayload>,
         public_key: Box<CryptoKeyClonePayload>,
     },
+}
+
+pub(crate) fn crypto_key_object_from_clone_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    payload: CryptoKeyClonePayload,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !super::exposed_interfaces::is_realm_interface_exposed(scope, "CryptoKey") {
+        return None;
+    }
+    super::ensure_intrinsic_interface_constructor(scope, "CryptoKey").ok()?;
+    keys::crypto_key_object_from_clone_payload(scope, payload)
 }

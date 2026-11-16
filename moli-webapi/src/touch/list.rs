@@ -28,7 +28,7 @@ struct ItemArgs {
     index: u32,
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -52,11 +52,11 @@ fn install_indexed(template: v8::Local<'_, v8::ObjectTemplate>) {
     );
 }
 
-pub(super) fn build<'s>(
+pub fn build<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     touches: &[v8::Local<'s, v8::Object>],
 ) -> v8::Local<'s, v8::Object> {
-    let values = crate::util::serialize_v8_array(scope, touches).expect("TouchList values");
+    let values = moli_webapi_declare::serialize_v8_array(scope, touches).expect("TouchList values");
     let template = v8::ObjectTemplate::new(scope);
     install_indexed(template);
     let object = template.new_instance(scope).expect("TouchList instance");

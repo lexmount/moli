@@ -118,16 +118,6 @@ pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_ONCHANGE_SLOT: &str =
     "__moliMediaQueryListOnchange";
 pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_REGISTRY_SLOT: &str =
     "__moliMediaQueryLists";
-pub(in crate::context_bootstrap) const CRYPTO_KEY_KIND_SLOT: &str = "__moliCryptoKeyKind";
-pub(in crate::context_bootstrap) const CRYPTO_KEY_ALGORITHM_SLOT: &str = "__moliCryptoKeyAlgorithm";
-pub(in crate::context_bootstrap) const CRYPTO_KEY_EXTRACTABLE_SLOT: &str =
-    "__moliCryptoKeyExtractable";
-pub(in crate::context_bootstrap) const CRYPTO_KEY_USAGES_SLOT: &str = "__moliCryptoKeyUsages";
-pub(in crate::context_bootstrap) const CRYPTO_KEY_VISIBLE_ALGORITHM_SLOT: &str =
-    "__moliCryptoKeyVisibleAlgorithm";
-pub(in crate::context_bootstrap) const CRYPTO_KEY_VISIBLE_USAGES_SLOT: &str =
-    "__moliCryptoKeyVisibleUsages";
-pub(in crate::context_bootstrap) const CRYPTO_KEY_BYTES_SLOT: &str = "__moliCryptoKeyBytes";
 pub(in crate::context_bootstrap) const READABLE_STREAM_QUEUE_SLOT: &str =
     "__moliReadableStreamQueue";
 pub(in crate::context_bootstrap) const READABLE_STREAM_QUEUE_HEAD_SLOT: &str =

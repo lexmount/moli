@@ -14,7 +14,6 @@ pub use moli_v8_util::{
     registered_ecmascript_constructor, registered_ecmascript_prototype, set_null_prototype,
     set_private_value, throw_range_error, throw_type_error, v8_string, v8str, walk_object_chain,
 };
-use moli_webapi_declare::WebApiValue;
 pub(crate) use moli_webapi_declare::define_array_data_property as define_v8_array_data_property;
 use std::{
     cell::{Cell, RefCell},
@@ -308,28 +307,7 @@ pub(crate) use moli_v8_util::materialize_hidden_function_template_prototype;
 // `replace_document_resource_runtime`, `take_network_output`) which are called from Rust code
 // outside V8 callback context, where re-entrancy cannot occur.
 
-pub(crate) fn serialize_v8_array<'s, T>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: T,
-) -> Option<v8::Local<'s, v8::Array>>
-where
-    T: WebApiValue<'s>,
-{
-    let value = value.to_v8_value(scope)?;
-    v8::Local::<v8::Array>::try_from(value).ok()
-}
-
-pub(crate) fn serialize_v8_iter_array<'s, I, T>(
-    scope: &mut v8::PinScope<'s, '_>,
-    values: I,
-) -> Option<v8::Local<'s, v8::Array>>
-where
-    I: IntoIterator<Item = T>,
-    T: WebApiValue<'s>,
-{
-    let values = values.into_iter().collect::<Vec<_>>();
-    serialize_v8_array(scope, values.as_slice())
-}
+pub(crate) use moli_webapi_declare::{serialize_v8_array, serialize_v8_iter_array};
 
 pub(crate) use moli_v8_util::{
     callable_relevant_context, new_target_realm_constructor_prototype,

@@ -1,11 +1,9 @@
-use super::super::*;
-use crate::web_api_interfaces;
-use crate::{
-    util::get_private_value,
-    webidl::{self, SnapshotPrototype, WebIdlDictionarySerialize},
-};
+use crate::interfaces as web_api_interfaces;
+use anyhow::{Result, anyhow};
+use moli_v8_util::get_private_value;
 use moli_v8_util::set_resolved_promise;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl::{self as webidl, SnapshotPrototype, WebIdlDictionarySerialize};
 
 const MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT: &str = "__moliMediaCapabilitiesSecureContext";
 const MEDIA_CAPABILITIES_WORKER_SLOT: &str = "__moliMediaCapabilitiesWorker";
@@ -232,7 +230,7 @@ struct EncodingInfoArgs {
     configuration: MediaEncodingConfiguration,
 }
 
-pub(super) fn install_media_capabilities_template_bindings<'s>(
+pub fn install_media_capabilities_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -245,7 +243,7 @@ pub(super) fn install_media_capabilities_template_bindings<'s>(
     }
 }
 
-pub(super) fn build_media_capabilities_object<'s>(
+pub fn build_media_capabilities_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     secure_context: bool,
     worker: bool,
@@ -277,7 +275,7 @@ fn media_capabilities_decoding_info_callback<'s>(
 
     let supported = if configuration.key_system_configuration.is_some() {
         if media_capabilities_is_worker(scope, receiver) {
-            let reason = crate::context_bootstrap::new_dom_exception_value(
+            let reason = crate::dom_exception::new_dom_exception_value(
                 scope,
                 "Encrypted media capabilities are unavailable in workers",
                 "InvalidStateError",
@@ -286,7 +284,7 @@ fn media_capabilities_decoding_info_callback<'s>(
             return;
         }
         if !media_capabilities_is_secure_context(scope, receiver) {
-            let reason = crate::context_bootstrap::new_dom_exception_value(
+            let reason = crate::dom_exception::new_dom_exception_value(
                 scope,
                 "Encrypted media capabilities require a secure context",
                 "SecurityError",
@@ -354,11 +352,11 @@ fn media_capabilities_encoding_info_callback<'s>(
     set_resolved_promise(scope, &mut rv, info.into());
 }
 
-use super::promises::try_parse_promise_args;
+use self::promises::try_parse_promise_args;
 
-use super::promises::type_error_value;
+use self::promises::type_error_value;
 
-use super::promises::set_rejected_promise;
+use self::promises::set_rejected_promise;
 
 fn media_capabilities_is_secure_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -518,3 +516,5 @@ fn video_codec_color_supported(video: &VideoConfiguration) -> bool {
             })
     })
 }
+
+pub mod promises;

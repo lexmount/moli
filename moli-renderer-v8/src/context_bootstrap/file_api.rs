@@ -5,7 +5,7 @@ mod data_transfer_string;
 mod directory_reader;
 mod file;
 mod file_entry_file;
-mod file_list;
+use moli_webapi::file_list;
 mod file_reader;
 mod file_reader_sync;
 mod file_reading;
@@ -53,7 +53,6 @@ pub(crate) use file_entry_file::{
     FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
     file_system_file_entry_file_callback,
 };
-pub(super) use file_list::file_list_item_callback;
 pub(crate) use file_list::{
     build_file_list_object, file_list_files_from_object, is_file_list_object,
     sync_file_list_contents,

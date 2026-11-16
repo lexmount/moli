@@ -359,3 +359,5 @@ pub use prototype::{
     set_interface_prototype, set_required_interface_prototype,
 };
 pub use value::{WebApiTemplateValue, WebApiValue, define_array_data_property};
+
+pub use value::{serialize_v8_array, serialize_v8_iter_array};
