@@ -314,14 +314,82 @@ retained display list, GPU compositor, or persistent window.
 
 ## Benchmark
 
-The following measurements show Moli's current capability envelope. They cover
-real websites, automation clients, Chromium/WPT behavior checks, and a large
-nextest regression suite.
+Moli is measured on public suites with fixed tasks. Each row says what a pass
+means and where to reproduce it.
 
-### Mixed public-web crawl test
+| Area | Suite | A pass means | Moli | Details |
+| --- | --- | --- | --- | --- |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 live-site tasks | The required content comes back from a live site | **89.8%**, first of five browsers | [Web Fetch](#web-fetch) |
+| Content extraction | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 saved pages | Main content matches the human annotation | **39.27%**, first of five | [Web Fetch](#web-fetch) |
+| Browser automation | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 comparable tasks | A CDP, automation-tool or web-platform task succeeds | **81.9%**; Chrome 99.8% | [Browser automation](#browser-automation) |
+| Resource use | Lexbench-Headless-Browser · 557 tasks all local engines completed | Median CPU time and peak memory per task | **15%** of Chrome's CPU, **13%** of its memory | [Resource use](#resource-use) |
+| Web standards | Selected [WPT](https://github.com/web-platform-tests/wpt) tests | A WPT test passes | **1.612 million** tests passed in one full run | — |
 
-The test covers 192 public URLs from major Chinese and international sites. A
-page only counts as successful if it produces meaningful content after
+### Web Fetch
+
+[LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)
+sends 430 tasks to live websites, so a pass needs both site access and correct
+content. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main)
+scores main-content extraction on 545 saved pages, without live access. Click a
+title to switch charts. Each row compares Moli (blue) with the range of the
+other four browsers.
+
+<details name="web-fetch-chart" open>
+<summary><strong>Live sites · LexBench-Web-Fetch, 430 tasks</strong></summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/webfetch-live-dark.png">
+  <img alt="Pass rate on 430 live-site tasks. Overall: Moli 386/430 (89.8%), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Anti-bot: Moli 88/100, best other 37. Popular: Moli 91, best other 58. Dynamic: Moli 90, best other 58. Static: Moli 97, Chromium 99. Documents and media: Moli 20/30, best other 17." src="assets/webfetch-live-light.png" width="100%">
+</picture>
+
+</details>
+
+<details name="web-fetch-chart">
+<summary><strong>Saved pages · WebMainBench, 545 pages</strong></summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/webmainbench-dark.png">
+  <img alt="Extraction quality on 545 saved pages. Overall: Moli 39.27%, Lightpanda 35.00%, Kitesurf 33.43%, Obscura 31.03%, Chromium 27.02%. Code: Moli 91.06%, best other 84.71%. Moli trails the best other method on text, formula, table content and table structure." src="assets/webmainbench-light.png" width="100%">
+</picture>
+
+</details>
+
+Moli leads overall on both suites. Its largest margins are on anti-bot, popular
+and dynamic sites, while plain static pages are close for every browser. Read
+the [full report](https://browser.lexmount.com/blog/webfetch-benchmark). To
+reproduce it, run the Web Fetch track in
+[Webstone](https://github.com/lexmount/webstone)
+([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md));
+the results use the 430-task v1.0.0 edition of the dataset.
+
+<details>
+<summary>Exact numbers</summary>
+
+| Method | Overall | Static /100 | Anti-bot /100 | Popular /100 | Dynamic /100 | Documents and media /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
+
+Cells show tasks passed. The last column combines document content, direct
+media, and media embedded in web pages.
+
+| Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
+
+<details>
+<summary>Mixed public-web crawl test · 192 public URLs</summary>
+
+A page only counts as successful if it produces meaningful content after
 JavaScript runs — an HTTP 200, challenge page, login wall, empty response, or
 shell-only application does not count.
 
@@ -332,21 +400,9 @@ shell-only application does not count.
 | Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
 | Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
 
-### Sample agent workload
+</details>
 
-| Metric | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP ready | 34.85 ms | 169.37 ms |
-| Episode active p50 | 33.40 ms | 57.13 ms |
-| Peak PSS | 102.46 MiB | 348.82 MiB |
-| Peak processes / threads | 1 / 24 | 11 / 123 |
-
-### WPT tests
-
-In the current WPT selection used to validate Moli's agent-browser scope, one
-full run passed **1.612 million tests**.
-
-### Moli's performance in Lexbench-Headless-Browser
+### Browser automation
 
 The full [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)
 corpus contains 1,928 tasks covering raw CDP, 13 pinned automation tools
@@ -367,6 +423,8 @@ of local binaries. See the benchmark's
 [five-engine report](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)
 for the full results.
 
+### Resource use
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-efficiency-map-dark.jpg">
   <img alt="Task success rate plotted against median peak memory per task for the four local engines: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.jpg" width="100%">
@@ -381,34 +439,14 @@ about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
 [resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
 for the methodology and full data.
 
-### Web Fetch benchmarks
+A sample agent workload shows the same pattern for a single episode:
 
-[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) sends 430 tasks to live websites, so its pass rate reflects both site access and correct content extraction. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) processes 545 saved HTML pages and scores extraction quality without live-site access. [Read the benchmark report](https://browser.lexmount.com/blog/webfetch-benchmark).
-
-To reproduce these results, run the Web Fetch track in [Webstone](https://github.com/lexmount/webstone) ([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)). The table uses the 430-task v1.0.0 edition of the dataset.
-
-| Method | Overall | Static /100 | Anti-bot /100 | Popular /100 | Dynamic /100 | Documents and media /30 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
-| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
-| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
-| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
-| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
-
-Cells show tasks passed. The last column combines document content, direct media, and media embedded in web pages; together, the table covers all seven task families.
-
-<details>
-<summary><strong>WebMainBench · extraction quality on 545 saved pages</strong></summary>
-
-| Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
-| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
-| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
-| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
-| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
-
-</details>
+| Metric | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP ready | 34.85 ms | 169.37 ms |
+| Episode active p50 | 33.40 ms | 57.13 ms |
+| Peak PSS | 102.46 MiB | 348.82 MiB |
+| Peak processes / threads | 1 / 24 | 11 / 123 |
 
 ## Project scope
 
