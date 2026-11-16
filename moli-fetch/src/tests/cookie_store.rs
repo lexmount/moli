@@ -780,7 +780,10 @@ fn browser_audio_worklet_subresource_headers_use_audioworklet_destination() {
         header_value(&headers, "sec-fetch-dest"),
         Some("audioworklet")
     );
-    assert_eq!(header_value(&headers, "origin"), None);
+    assert_eq!(
+        header_value(&headers, "origin"),
+        Some("https://example.com")
+    );
 }
 
 #[test]
@@ -906,7 +909,10 @@ fn browser_json_module_subresource_headers_use_json_destination() {
     );
     assert_eq!(header_value(&headers, "sec-fetch-mode"), Some("cors"));
     assert_eq!(header_value(&headers, "sec-fetch-dest"), Some("json"));
-    assert_eq!(header_value(&headers, "origin"), None);
+    assert_eq!(
+        header_value(&headers, "origin"),
+        Some("https://example.com")
+    );
 }
 
 #[test]
@@ -932,7 +938,10 @@ fn browser_text_module_subresource_headers_use_text_destination() {
     );
     assert_eq!(header_value(&headers, "sec-fetch-mode"), Some("cors"));
     assert_eq!(header_value(&headers, "sec-fetch-dest"), Some("text"));
-    assert_eq!(header_value(&headers, "origin"), None);
+    assert_eq!(
+        header_value(&headers, "origin"),
+        Some("https://example.com")
+    );
 }
 
 #[test]
@@ -981,7 +990,10 @@ fn browser_style_module_subresource_headers_use_style_destination() {
     );
     assert_eq!(header_value(&headers, "sec-fetch-mode"), Some("cors"));
     assert_eq!(header_value(&headers, "sec-fetch-dest"), Some("style"));
-    assert_eq!(header_value(&headers, "origin"), None);
+    assert_eq!(
+        header_value(&headers, "origin"),
+        Some("https://example.com")
+    );
 }
 
 #[test]

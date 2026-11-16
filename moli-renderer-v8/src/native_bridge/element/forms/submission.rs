@@ -547,22 +547,20 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     };
     // A parsed/detached Document has no browsing context to navigate. Resolve
     // that from the native document, independently of the form's wrapper kind.
-    let initiator = {
+    let (submitting_document, initiator_url, initiator_origin) = {
         let runtime = unsafe { &*runtime_ptr };
         let Some(document) =
             source_document.filter(|&document| runtime.document_has_browsing_context(document))
         else {
             return false;
         };
-        RendererNavigationInitiator::new(
+        (
+            document,
             runtime.document_url_for_handle(document),
             moli_url::WebOrigin::from_serialized(
                 &runtime
                     .document_security_origin(document)
                     .ascii_serialization(),
-            ),
-            crate::context_bootstrap::document_referrer_policy_for_native_document(
-                runtime, document,
             ),
         )
     };
@@ -585,6 +583,16 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     if sandbox_blocks_navigation {
         return true;
     }
+    // formdata can change the policy. Read it now from the captured submitting
+    // Document, not the form's potentially changed owner or navigation target.
+    let initiator = RendererNavigationInitiator::new(
+        initiator_url,
+        initiator_origin,
+        crate::context_bootstrap::document_referrer_policy_for_native_document(
+            unsafe { &*runtime_ptr },
+            submitting_document,
+        ),
+    );
 
     let special_target = target_name
         .as_deref()
