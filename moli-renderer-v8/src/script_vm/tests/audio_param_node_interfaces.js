@@ -15,6 +15,7 @@
     for (const [label, w] of realms) {
       const context = new w.AudioContext();
       const types = [
+        ['GainNode', 'createGain', 'gain', 1, -Math.fround(3.4028234663852886e38), Math.fround(3.4028234663852886e38), 'max'],
         ['DelayNode', 'createDelay', 'delayTime', 0, 0, 1, 'max'],
         ['StereoPannerNode', 'createStereoPanner', 'pan', 0, -1, 1, 'clamped-max']
       ];
