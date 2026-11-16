@@ -27,9 +27,9 @@ async fn ordinary_preloads_do_not_delay_window_load_or_lose_late_events() -> Res
             ("font", "font/ttf"),
             ("track", "text/vtt"),
         ] {
-            for successful in [true, false] {
+            for status in [Some("200 OK"), Some("404 Not Found"), None] {
                 let server =
-                    gated_preload_server(destination, content_type, dynamic, successful).await?;
+                    gated_preload_server(destination, content_type, dynamic, status).await?;
                 let mut config = AppConfig::default();
                 config.set_optional_resource_fetch_mask(
                     moli_page_types::OptionalResourceFetchMask::ALL,
@@ -52,7 +52,7 @@ async fn ordinary_preloads_do_not_delay_window_load_or_lose_late_events() -> Res
                 assert_eq!(
                     before,
                     serde_json::json!({"state":"complete","events":["window:complete"],"count":0}),
-                    "{destination}, dynamic={dynamic}, successful={successful}"
+                    "{destination}, dynamic={dynamic}, status={status:?}"
                 );
 
                 server.release.send(()).expect("release preload response");
@@ -69,6 +69,8 @@ async fn ordinary_preloads_do_not_delay_window_load_or_lose_late_events() -> Res
                     })()"#,
                 )
                 .await?;
+                let successful =
+                    status == Some("200 OK") || (status.is_some() && destination != "style");
                 let event = if successful { "load" } else { "error" };
                 assert_eq!(
                     after,
@@ -76,7 +78,7 @@ async fn ordinary_preloads_do_not_delay_window_load_or_lose_late_events() -> Res
                         "state":"complete", "events":["window:complete",format!("link:{event}:complete")],
                         "count":1
                     }),
-                    "{destination}, dynamic={dynamic}, successful={successful}"
+                    "{destination}, dynamic={dynamic}, status={status:?}"
                 );
                 server.task.await??;
             }
@@ -96,7 +98,7 @@ async fn gated_preload_server(
     destination: &str,
     content_type: &'static str,
     dynamic: bool,
-    successful: bool,
+    response_status: Option<&'static str>,
 ) -> Result<GatedPreloadServer> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -147,15 +149,11 @@ async fn gated_preload_server(
                 assert!(request.starts_with(b"GET /resource "));
                 let _ = request_tx.take().expect("one preload request").send(());
                 let _ = release_rx.take().expect("one response gate").await;
-                (
-                    if successful {
-                        "200 OK"
-                    } else {
-                        "404 Not Found"
-                    },
-                    content_type,
-                    "body {}",
-                )
+                let Some(status) = response_status else {
+                    stream.shutdown().await?;
+                    continue;
+                };
+                (status, content_type, "body {}")
             };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

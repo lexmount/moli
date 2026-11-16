@@ -2168,8 +2168,11 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 let origin_clean =
                     connected_link_origin_clean_from_service_worker_filter(response_filter.clone());
                 let response = *response.response;
-                let load_event_successful =
-                    connected_link_load_event_successful(&response, response_filter);
+                let load_event_successful = connected_link_load_event_successful(
+                    options.link_preload,
+                    &response,
+                    response_filter,
+                );
                 return Ok(ConnectedLinkReadinessFetchResponse::new(
                     response,
                     origin_clean,
@@ -2185,10 +2188,12 @@ async fn fetch_connected_link_readiness_with_service_worker(
         }
     }
     let request_mode = options.request_mode;
+    let link_preload = options.link_preload;
     fetch_connected_link_readiness_with_request(loader, url, options, request)
         .await
         .map(|response| {
-            let load_event_successful = connected_link_load_event_successful(&response, None);
+            let load_event_successful =
+                connected_link_load_event_successful(link_preload, &response, None);
             let origin_clean = crate::network_host::network_response_filter(
                 &request_origin,
                 &response.head(),
@@ -2273,12 +2278,14 @@ fn link_crossorigin_credentials_mode(cross_origin: Option<&str>) -> RequestCrede
 }
 
 fn connected_link_load_event_successful(
+    link_preload: bool,
     response: &crate::protocol_types::NavigationResponse,
     response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 ) -> bool {
-    response_filter
-        .as_ref()
-        .is_some_and(|filter| !filter.is_readable())
+    link_preload
+        || response_filter
+            .as_ref()
+            .is_some_and(|filter| !filter.is_readable())
         || (200..=299).contains(&response.status)
 }
 
