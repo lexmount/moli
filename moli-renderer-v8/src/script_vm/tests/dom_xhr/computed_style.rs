@@ -69,6 +69,7 @@ mod css_numeric_parse;
 mod css_numeric_serialization;
 mod css_style_property_map;
 mod css_style_value_parse;
+mod css_transforms;
 mod css_unparsed;
 mod css_variable_fonts;
 mod nested_document_invalidation;
