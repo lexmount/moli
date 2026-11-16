@@ -85,22 +85,6 @@ pub(super) fn complete_pending_dom_command(
                 out,
             );
         }
-        PendingDomCommandKind::ResolveFrontendNodeForSetFileInputFiles {
-            frontend_node_id,
-            file_paths,
-            append,
-        } => {
-            return set_file_input::complete_frontend_node_binding_for_set_file_input_files(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                file_paths,
-                append,
-                out,
-            );
-        }
         kind => kind,
     };
     let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -124,22 +108,6 @@ pub(super) fn complete_pending_dom_command(
                 Ok(None) => out.push_error(-32000, "Could not find node with given id"),
                 Err(error) => out.push_error(-32000, format!("Could not remove node: {error}")),
             }
-        }
-        PendingDomCommandKind::SetFileInputFilesPreflight {
-            reference,
-            file_paths,
-            append,
-        } => {
-            return set_file_input::complete_preflight(
-                page,
-                command_id,
-                &owner_scope,
-                completion,
-                reference,
-                file_paths,
-                append,
-                out,
-            );
         }
         PendingDomCommandKind::Focus {
             missing_node_message,
@@ -517,8 +485,7 @@ pub(super) fn complete_pending_dom_command(
         | PendingDomCommandKind::SetNodeStackTracesEnabled
         | PendingDomCommandKind::GetNodeStackTraces
         | PendingDomCommandKind::ResolveFrontendNodeForResolveNode { .. }
-        | PendingDomCommandKind::ResolveBidiNodeForSetFileInputFiles { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForSetFileInputFiles { .. } => {
+        | PendingDomCommandKind::ResolveBidiNodeForSetFileInputFiles { .. } => {
             unreachable!(
                 "DOM search/frontend/shared-node lookup pending commands are completed before borrowing page"
             )

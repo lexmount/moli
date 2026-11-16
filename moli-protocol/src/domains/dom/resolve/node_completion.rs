@@ -70,21 +70,6 @@ pub(crate) fn complete_pending_dom_command_result(
                 append,
             );
         }
-        PendingDomCommandKind::ResolveFrontendNodeForSetFileInputFiles {
-            frontend_node_id,
-            file_paths,
-            append,
-        } => {
-            return set_file_input::complete_frontend_node_binding_for_set_file_input_files_result(
-                conn,
-                completed.command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                file_paths,
-                append,
-            );
-        }
         PendingDomCommandKind::SetFileInputFiles => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
                 return devtools_dom_command_task_complete(Err(DevToolsError::new(

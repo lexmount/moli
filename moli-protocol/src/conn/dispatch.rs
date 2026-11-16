@@ -955,6 +955,9 @@ impl CdpConnection {
                     crate::domains::dom::DomCommandDispatchStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Dom(*pending))
                     }
+                    crate::domains::dom::DomCommandDispatchStep::Workflow(workflow) => {
+                        self.start_command_workflow(workflow, cmd.id, cmd.session_id, command_context)
+                    }
                     crate::domains::dom::DomCommandDispatchStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
                     }

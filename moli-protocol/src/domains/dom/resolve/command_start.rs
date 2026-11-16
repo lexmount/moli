@@ -250,18 +250,6 @@ pub(super) fn start_pending_dom_command(
     if action == DomAction::Focus {
         return start_cdp_dom_focus_command(conn, cmd).map(Some);
     }
-    if action == DomAction::SetFileInputFiles {
-        let Some(command) = set_file_input::build_cdp_set_file_input_files_command(conn, cmd)?
-        else {
-            return set_file_input::start_cdp_set_file_input_files_by_node_reference(conn, cmd);
-        };
-        return start_devtools_dom_command_for_owner(
-            conn,
-            cmd.id,
-            &owner,
-            AutomationCommand::SetFileInputFiles(command),
-        );
-    }
     if matches!(
         action,
         DomAction::SetAttributeValue | DomAction::RemoveAttribute

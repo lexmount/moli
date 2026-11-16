@@ -42,6 +42,7 @@ use moli_core::page::{
 use moli_page_types::DocumentSnapshotNodeId;
 
 mod command_start;
+pub(super) mod files;
 pub(crate) fn start_runtime_dom_query(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
@@ -226,11 +227,6 @@ pub(super) enum PendingDomCommandKind {
         files: Vec<SelectedFile>,
         append: bool,
     },
-    ResolveFrontendNodeForSetFileInputFiles {
-        frontend_node_id: u32,
-        file_paths: Vec<String>,
-        append: bool,
-    },
     GetAttributesLive,
     GetTextLive,
     GetPropertyLive,
@@ -252,11 +248,6 @@ pub(super) enum PendingDomCommandKind {
         top_frame_id: Option<String>,
     },
     SetFileInputFiles,
-    SetFileInputFilesPreflight {
-        reference: DevToolsDomNodeReference,
-        file_paths: Vec<String>,
-        append: bool,
-    },
     ObjectReferenceLiveClientRect {
         operation: PendingDomObjectReferenceOperation,
     },
