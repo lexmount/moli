@@ -27,6 +27,47 @@ fn editing_shortcuts_cut_follows_focus_changed_by_the_clipboard_callback() {
 }
 
 #[test]
+fn editing_shortcuts_copy_uses_rendered_block_line_breaks() {
+    for (markup, expected) in [
+        ("<div>first</div><div>second</div>", "first\nsecond"),
+        ("<p>first</p><p>second</p>", "first\n\nsecond"),
+        (
+            "<div><div>first</div></div><div>second</div>",
+            "first\nsecond",
+        ),
+        (
+            "<span style='display:block'>first</span><span style='display:block'>second</span>",
+            "first\nsecond",
+        ),
+        (
+            "<div style='display:inline'>first</div><div style='display:inline'>second</div>",
+            "firstsecond",
+        ),
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://editing-copy-blocks.test/",
+            &format!(
+                "<div id=editor contenteditable>{markup}</div><textarea id=output></textarea>"
+            ),
+        );
+        vm.eval("globalThis.editor=document.getElementById('editor');editor.focus();getSelection().selectAllChildren(editor)").unwrap();
+        assert_eq!(
+            vm.eval("getSelection().getRangeAt(0).toString()").unwrap(),
+            "firstsecond"
+        );
+        key(&mut vm, "c", "KeyC", 2);
+        vm.eval("document.getElementById('output').focus()")
+            .unwrap();
+        key(&mut vm, "v", "KeyV", 2);
+        assert_eq!(
+            vm.eval("document.getElementById('output').value").unwrap(),
+            expected,
+            "{markup}"
+        );
+    }
+}
+
+#[test]
 fn editing_shortcuts_cut_reads_selection_and_editability_after_callbacks() {
     let mut vm = new_parsed_test_vm(
         "https://editing-cut-callback.test/",
