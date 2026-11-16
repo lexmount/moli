@@ -291,7 +291,7 @@ fn parse_single_unit_value(text: &str) -> Option<(f64, String)> {
         .ok()
 }
 
-fn normalize_unit_name(unit: &str) -> Option<String> {
+pub(super) fn normalize_unit_name(unit: &str) -> Option<String> {
     let unit = unit.to_ascii_lowercase();
     VALID_UNIT_NAMES.contains(&unit.as_str()).then_some(unit)
 }
@@ -461,7 +461,7 @@ fn css_unit_value_unit_getter_callback<'s>(
     }
 }
 
-fn css_unit_value_number<'s>(
+pub(super) fn css_unit_value_number<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<f64> {
