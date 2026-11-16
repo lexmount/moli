@@ -162,6 +162,13 @@ pub struct FetchArgs {
     #[arg(long)]
     pub disable_css: bool,
 
+    /// Allow the fetched URL to be a `file:` URL. A document loaded from a
+    /// file may load its stylesheets, scripts, images and fonts from files;
+    /// web pages still cannot read files, and Fetch and XMLHttpRequest keep
+    /// their usual schemes.
+    #[arg(long)]
+    pub allow_file_urls: bool,
+
     #[arg(long)]
     pub with_base: bool,
 

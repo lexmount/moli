@@ -6,6 +6,7 @@ use moli_cookie_jar::{
     advance_cookie_request_context,
 };
 use moli_url::{WebOrigin, same_origin};
+use moli_url_policy::LocalFileNavigationAccess;
 use url::Url;
 
 use crate::{
@@ -72,6 +73,9 @@ pub struct Request {
     referrer_source: ReferrerSource,
     /// Retained independently so Fetch can reset an explicit selection to client.
     client_referrer_url: Option<Url>,
+    /// Granted only by browser entry points that navigate to a URL the
+    /// embedder chose; never by a document.
+    local_file_navigation_access: LocalFileNavigationAccess,
     pub use_page_network_policy: bool,
     pub request_mode: RequestMode,
     use_cors_preflight: bool,
@@ -667,6 +671,7 @@ impl Request {
             context: RequestContext::Http,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
+            local_file_navigation_access: LocalFileNavigationAccess::Denied,
             use_page_network_policy: false,
             request_mode: RequestMode::Navigate,
             use_cors_preflight: false,
@@ -706,6 +711,7 @@ impl Request {
             context: RequestContext::Http,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
+            local_file_navigation_access: LocalFileNavigationAccess::Denied,
             use_page_network_policy: false,
             request_mode: RequestMode::Navigate,
             use_cors_preflight: false,
@@ -778,6 +784,7 @@ impl Request {
             context: RequestContext::Http,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
+            local_file_navigation_access: LocalFileNavigationAccess::Denied,
             use_page_network_policy: false,
             request_mode: RequestMode::Cors,
             use_cors_preflight: false,
@@ -1626,6 +1633,20 @@ impl Request {
             .cookie_context
             .with_initiator_url(&self.url, initiator_url);
         self
+    }
+
+    /// The client URL set by [`Self::with_initiator_url`], if any.
+    pub fn initiator_url(&self) -> Option<&Url> {
+        self.client_referrer_url.as_ref()
+    }
+
+    pub fn with_local_file_navigation_access(mut self, access: LocalFileNavigationAccess) -> Self {
+        self.local_file_navigation_access = access;
+        self
+    }
+
+    pub fn local_file_navigation_access(&self) -> LocalFileNavigationAccess {
+        self.local_file_navigation_access
     }
 
     pub fn with_site_for_cookies_url(mut self, site_for_cookies_url: &Url) -> Self {

@@ -53,6 +53,10 @@ impl AppConfig {
                     .browser
                     .set_script_execution_disabled(args.disable_js);
                 config.browser.set_author_styles_disabled(args.disable_css);
+                config
+                    .browser
+                    .fetch_mut()
+                    .set_allow_file_urls(args.allow_file_urls);
                 config.fetch.dump_mode = args.dump;
                 config.fetch.strip = args.strip_options();
                 config.fetch.with_base = args.with_base;

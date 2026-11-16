@@ -84,7 +84,7 @@ impl NavigationInterception {
     fn transport_request(&self) -> Result<Request> {
         moli_url_policy::route_navigation_url(
             &self.request.url,
-            moli_url_policy::LocalFileNavigationAccess::Denied,
+            self.loader.request_client().local_file_navigation_access(),
         )?;
         Ok(if self.manual_redirects {
             self.request.clone().with_single_hop()
