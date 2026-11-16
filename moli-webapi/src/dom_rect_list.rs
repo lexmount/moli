@@ -1,10 +1,11 @@
-use crate::{
-    util::{get_private_object, serialize_v8_array, throw_type_error},
-    web_api_interfaces, webidl,
-};
+//! Indexed DOMRectList snapshots, independent of the layout producer.
+
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_object, throw_type_error};
 use moli_webapi_declare::{
-    DataPropertyDescriptorDeclaration, WebApiFunctionTemplate, WebApiObject,
+    DataPropertyDescriptorDeclaration, WebApiFunctionTemplate, WebApiObject, WebApiValue,
 };
+use moli_webidl as webidl;
 
 const DOM_RECT_LIST_VALUES_SLOT: &str = "__moliDomRectListValues";
 
@@ -42,11 +43,14 @@ struct DomRectListItemArgs {
     index: u32,
 }
 
-pub(crate) fn build_dom_rect_list_object<'s>(
+pub fn build_dom_rect_list_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rects: &[v8::Local<'s, v8::Object>],
 ) -> v8::Local<'s, v8::Object> {
-    let values = serialize_v8_array(scope, rects).unwrap_or_else(|| v8::Array::new(scope, 0));
+    let values = rects
+        .to_v8_value(scope)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .unwrap_or_else(|| v8::Array::new(scope, 0));
     let template = v8::ObjectTemplate::new(scope);
     template.set_indexed_property_handler(
         v8::IndexedPropertyHandlerConfiguration::new()
@@ -67,7 +71,7 @@ pub(crate) fn build_dom_rect_list_object<'s>(
     object
 }
 
-pub(in crate::context_bootstrap) fn install_dom_rect_list_template_bindings<'s>(
+pub fn install_dom_rect_list_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,

@@ -1,13 +1,16 @@
-use super::*;
-use crate::native_bridge::throw_dom_exception;
-use crate::util::{callback_data_index_value, get_private_value, set_private_value};
-use crate::web_api_interfaces;
-use crate::webidl;
+//! DOMPoint and DOMMatrix declarations, conversions, and native value operations.
+
+use crate::{embedding, interfaces as web_api_interfaces};
 use moli_geometry::{
     DOM_MATRIX_COMPONENT_COUNT, DomMatrixComponents, dom_matrix_components_from_values,
     parse_dom_matrix_value_with_dimension,
 };
+use moli_v8_util::{
+    callback_data_index_value, callback_data_item, get_private_value, set_private_value,
+    throw_type_error, v8_string, v8str,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 const DOM_POINT_X_SLOT: &str = "__moliDomPointX";
@@ -503,20 +506,20 @@ struct DomMatrixConstructorDeclaration {
 
 #[derive(Clone, Copy, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMPointInit", snapshot)]
-pub(super) struct DomPointInit {
+pub struct DomPointInit {
     // WebIDL converts dictionary members in lexicographic order.
     #[webidl(default = 1.0)]
     #[webidl(snapshot_slot = DOM_POINT_W_SLOT, snapshot_order = 3)]
-    pub(super) w: f64,
+    pub w: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_POINT_X_SLOT, snapshot_order = 0)]
-    pub(super) x: f64,
+    pub x: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_POINT_Y_SLOT, snapshot_order = 1)]
-    pub(super) y: f64,
+    pub y: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_POINT_Z_SLOT, snapshot_order = 2)]
-    pub(super) z: f64,
+    pub z: f64,
 }
 
 impl Default for DomPointInit {
@@ -564,7 +567,7 @@ impl DomMatrixValue {
     }
 }
 
-pub(super) fn dom_point_constructor_callback<'s>(
+pub fn dom_point_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -583,7 +586,7 @@ pub(super) fn dom_point_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(super) fn dom_point_readonly_constructor_callback<'s>(
+pub fn dom_point_readonly_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -621,13 +624,14 @@ enum DomMatrixConstructor {
     ReadOnly,
 }
 
+/// Selects the Window-only CSS string constructor and matrix string operations.
 #[derive(Clone, Copy)]
-enum DomMatrixConstructorRealm {
+pub enum GeometryRealm {
     Window,
     Worker,
 }
 
-pub(super) fn dom_matrix_constructor_callback<'s>(
+pub fn dom_matrix_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -637,11 +641,11 @@ pub(super) fn dom_matrix_constructor_callback<'s>(
         args,
         rv,
         DomMatrixConstructor::Mutable,
-        DomMatrixConstructorRealm::Window,
+        GeometryRealm::Window,
     );
 }
 
-pub(super) fn dom_matrix_readonly_constructor_callback<'s>(
+pub fn dom_matrix_readonly_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -651,11 +655,11 @@ pub(super) fn dom_matrix_readonly_constructor_callback<'s>(
         args,
         rv,
         DomMatrixConstructor::ReadOnly,
-        DomMatrixConstructorRealm::Window,
+        GeometryRealm::Window,
     );
 }
 
-pub(super) fn dom_matrix_worker_constructor_callback<'s>(
+pub fn dom_matrix_worker_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -665,11 +669,11 @@ pub(super) fn dom_matrix_worker_constructor_callback<'s>(
         args,
         rv,
         DomMatrixConstructor::Mutable,
-        DomMatrixConstructorRealm::Worker,
+        GeometryRealm::Worker,
     );
 }
 
-pub(super) fn dom_matrix_readonly_worker_constructor_callback<'s>(
+pub fn dom_matrix_readonly_worker_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -679,7 +683,7 @@ pub(super) fn dom_matrix_readonly_worker_constructor_callback<'s>(
         args,
         rv,
         DomMatrixConstructor::ReadOnly,
-        DomMatrixConstructorRealm::Worker,
+        GeometryRealm::Worker,
     );
 }
 
@@ -688,7 +692,7 @@ fn construct_dom_matrix<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
     constructor: DomMatrixConstructor,
-    realm: DomMatrixConstructorRealm,
+    realm: GeometryRealm,
 ) {
     let name = match constructor {
         DomMatrixConstructor::Mutable => "DOMMatrix",
@@ -716,7 +720,7 @@ fn construct_dom_matrix<'s>(
     rv.set(args.this().into());
 }
 
-pub(in crate::context_bootstrap) fn initialize_dom_point_object<'s>(
+pub fn initialize_dom_point_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     x: f64,
@@ -748,7 +752,7 @@ fn initialize_dom_point_readonly_object<'s>(
         .expect("DOMPointReadOnly declaration should initialize object");
 }
 
-pub(in crate::context_bootstrap) fn build_dom_point_object<'s>(
+pub fn build_dom_point_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     x: f64,
     y: f64,
@@ -764,7 +768,7 @@ pub(in crate::context_bootstrap) fn build_dom_point_object<'s>(
     object
 }
 
-pub(super) fn dom_point_init_from_object<'s>(
+pub fn dom_point_init_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> DomPointInit {
@@ -776,7 +780,7 @@ pub(super) fn dom_point_init_from_object<'s>(
     }
 }
 
-pub(super) fn dom_point_clone_data<'s>(
+pub fn dom_point_clone_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(bool, [f64; 4])> {
@@ -795,13 +799,11 @@ pub(super) fn dom_point_clone_data<'s>(
     ))
 }
 
-pub(in crate::context_bootstrap) fn build_svg_point_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
+pub fn build_svg_point_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
     build_svg_point_object_with_values(scope, 0.0, 0.0)
 }
 
-pub(in crate::context_bootstrap) fn build_svg_point_object_with_values<'s>(
+pub fn build_svg_point_object_with_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     x: f64,
     y: f64,
@@ -817,7 +819,7 @@ pub(in crate::context_bootstrap) fn build_svg_point_object_with_values<'s>(
     object
 }
 
-pub(in crate::context_bootstrap) fn set_svg_point_read_only<'s>(
+pub fn set_svg_point_read_only<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     point: v8::Local<'s, v8::Object>,
     read_only: bool,
@@ -852,7 +854,7 @@ fn build_dom_matrix_identity_object<'s>(
     build_dom_matrix_object(scope, DomMatrixComponents::identity())
 }
 
-pub(in crate::context_bootstrap) fn build_dom_matrix_object<'s>(
+pub fn build_dom_matrix_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     components: DomMatrixComponents,
 ) -> v8::Local<'s, v8::Object> {
@@ -872,14 +874,14 @@ fn build_dom_matrix_readonly_identity_object<'s>(
         .expect("DOMMatrixReadOnly declaration should bind")
 }
 
-pub(in crate::context_bootstrap) fn install_geometry_template_bindings<'s>(
+pub fn install_geometry_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
-    profile: super::exposed_interfaces::TemplateBuildProfile,
+    realm: GeometryRealm,
 ) {
     let prototype = template.prototype_template(scope);
-    let install_window_only = profile == super::exposed_interfaces::TemplateBuildProfile::Window;
+    let install_window_only = matches!(realm, GeometryRealm::Window);
     match interface_name {
         "DOMPointReadOnly" => {
             DomPointReadOnlyConstructorDeclaration::initialize_template(scope, template);
@@ -950,11 +952,10 @@ fn dom_point_setter_callback<'s>(
     if get_private_value(scope, args.this(), DOM_POINT_READ_ONLY_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
     {
-        throw_dom_exception(
+        embedding::throw_dom_exception_value(
             scope,
-            "NoModificationAllowedError",
-            7,
             "The SVG point is read-only.",
+            "NoModificationAllowedError",
         );
         return;
     }
@@ -981,7 +982,7 @@ fn dom_point_setter_callback<'s>(
         slot,
         v8::Number::new(scope, value).into(),
     );
-    super::svg_runtime::reflect_svg_point_mutation(scope, args.this());
+    embedding::reflect_point_mutation(scope, args.this());
     rv.set_undefined();
 }
 
@@ -1328,7 +1329,7 @@ fn dom_point_slot<'s>(
         .unwrap_or(default)
 }
 
-pub(super) fn build_dom_point_clone_object<'s>(
+pub fn build_dom_point_clone_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     mutable: bool,
     [x, y, z, w]: [f64; 4],
@@ -1362,7 +1363,7 @@ fn dom_matrix_require_mutable_receiver<'s>(
     false
 }
 
-pub(super) fn dom_matrix_clone_data<'s>(
+pub fn dom_matrix_clone_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(bool, bool, [f64; DOM_MATRIX_COMPONENT_COUNT])> {
@@ -1407,7 +1408,7 @@ pub(super) fn dom_matrix_clone_data<'s>(
     ))
 }
 
-pub(super) fn build_dom_matrix_clone_object<'s>(
+pub fn build_dom_matrix_clone_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     mutable: bool,
     is_2d: bool,
@@ -2495,7 +2496,7 @@ fn apply_dom_matrix_constructor_init<'s>(
     matrix: v8::Local<'s, v8::Object>,
     init: v8::Local<'s, v8::Value>,
     name: &'static str,
-    realm: DomMatrixConstructorRealm,
+    realm: GeometryRealm,
 ) -> bool {
     let context = webidl::Context::argument(name, 1);
     if let Ok(array) = v8::Local::<v8::Array>::try_from(init) {
@@ -2534,7 +2535,7 @@ fn apply_dom_matrix_constructor_init<'s>(
     };
     // The worker restriction applies to the converted union member, after any
     // author-defined string conversion and its exceptions have run.
-    if matches!(realm, DomMatrixConstructorRealm::Worker) {
+    if matches!(realm, GeometryRealm::Worker) {
         throw_type_error(
             scope,
             &format!("{name} string construction is not available in workers."),
@@ -2550,11 +2551,10 @@ fn apply_dom_matrix_transform_list_string<'s>(
     text: &str,
 ) -> bool {
     let Some((components, is_2d)) = parse_dom_matrix_value_with_dimension(text) else {
-        throw_dom_exception(
+        embedding::throw_dom_exception_value(
             scope,
-            "SyntaxError",
-            12,
             "Failed to parse DOMMatrix transform list.",
+            "SyntaxError",
         );
         return false;
     };
@@ -2603,11 +2603,10 @@ fn dom_matrix_css_text<'s>(
     let Some(css_text) = dom_matrix_components(scope, object)
         .dom_matrix_text_with_dimension(dom_matrix_is_2d(scope, object))
     else {
-        throw_dom_exception(
+        embedding::throw_dom_exception_value(
             scope,
-            "InvalidStateError",
-            11,
             "DOMMatrix contains non-finite values.",
+            "InvalidStateError",
         );
         return None;
     };
@@ -2631,7 +2630,7 @@ fn geometry_number_arg<'s>(
     )
 }
 
-pub(super) fn optional_dom_point_init_arg<'s>(
+pub fn optional_dom_point_init_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
@@ -2647,7 +2646,7 @@ pub(super) fn optional_dom_point_init_arg<'s>(
     )
 }
 
-pub(super) fn dom_point_init_value<'s>(
+pub fn dom_point_init_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,
@@ -2867,7 +2866,7 @@ struct DomMatrix2DInit {
     m42: Option<f64>,
 }
 
-pub(in crate::context_bootstrap) fn dom_matrix_2d_init_arg<'s>(
+pub fn dom_matrix_2d_init_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,

@@ -254,6 +254,13 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         realm.publish_ready(scope, metadata.id, constructor, prototype, constructor)?;
     }
     install_web_api_intrinsic_resolver(scope, resolve_web_api_intrinsic);
+    moli_webapi::install_realm_callbacks(
+        scope,
+        moli_webapi::RealmCallbacks {
+            dom_exception: crate::context_bootstrap::new_most_derived_dom_exception_value,
+            point_mutated: crate::context_bootstrap::svg_runtime::reflect_svg_point_mutation,
+        },
+    );
     Ok(())
 }
 

@@ -23,10 +23,11 @@ pub(crate) use css_fontface_runtime::{
 };
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
-mod dom_quad;
 pub(crate) use moli_webapi::dom_rect;
-mod dom_rect_list;
-mod encoded_video_chunk;
+use moli_webapi::{
+    dom_quad, dom_rect_list, encoded_video_chunk, geometry as geometry_runtime, geometry_clone,
+    image_data, time_ranges,
+};
 mod event_document;
 mod event_legacy;
 pub(crate) mod event_target_dispatch;
@@ -35,18 +36,14 @@ mod events;
 pub(crate) mod exposed_interfaces;
 mod file_api;
 mod form_data_runtime;
-mod geometry_clone;
-mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
 mod picture_in_picture;
 #[cfg(test)]
 pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
-mod time_ranges;
 pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
-mod image_data;
 mod javascript_url;
 pub(crate) use self::idle_detection::{
     apply_idle_override_to_current_context, retire_idle_detectors_in_current_context,
@@ -314,8 +311,19 @@ pub(crate) use self::dom_rect::build_dom_rect_object;
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::encoded_video_chunk::{
     EncodedVideoChunkClonePayload, EncodedVideoChunkType,
-    build_encoded_video_chunk_from_clone_payload, encoded_video_chunk_clone_payload_from_object,
+    encoded_video_chunk_clone_payload_from_object,
 };
+// Exposure belongs to the renderer; the shared binding only allocates native values.
+pub(crate) fn build_encoded_video_chunk_from_clone_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    payload: EncodedVideoChunkClonePayload,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !exposed_interfaces::is_realm_interface_exposed(scope, "EncodedVideoChunk") {
+        return None;
+    }
+    encoded_video_chunk::build_encoded_video_chunk_from_clone_payload(scope, payload)
+}
+
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, construct_original_error_event,

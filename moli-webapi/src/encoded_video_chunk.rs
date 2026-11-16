@@ -1,11 +1,9 @@
 //! Immutable encoded bytes; no encoder or decoder backend is needed.
 
-use crate::{
-    blob::array_buffer_from_bytes,
-    util::{get_private_value, throw_type_error, v8str},
-    web_api_interfaces, webidl,
-};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, throw_type_error, v8str};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 
 const TYPE_SLOT: &str = "__moliEncodedVideoChunkType";
 const TIMESTAMP_SLOT: &str = "__moliEncodedVideoChunkTimestamp";
@@ -14,7 +12,7 @@ const DATA_SLOT: &str = "__moliEncodedVideoChunkData";
 
 #[derive(Clone, Copy, Debug, webidl::WebIdlEnum)]
 #[webidl(name = "EncodedVideoChunkType")]
-pub(crate) enum EncodedVideoChunkType {
+pub enum EncodedVideoChunkType {
     Key,
     Delta,
 }
@@ -86,7 +84,7 @@ struct EncodedVideoChunkPrototypeDeclaration {
     copy_to: (),
 }
 
-pub(in crate::context_bootstrap) fn install_encoded_video_chunk_template_bindings<'s>(
+pub fn install_encoded_video_chunk_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -94,7 +92,7 @@ pub(in crate::context_bootstrap) fn install_encoded_video_chunk_template_binding
     EncodedVideoChunkPrototypeDeclaration::initialize_prototype_template(scope, prototype);
 }
 
-pub(in crate::context_bootstrap) fn encoded_video_chunk_constructor_callback<'s>(
+pub fn encoded_video_chunk_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -223,11 +221,11 @@ fn copy_to_callback<'s>(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct EncodedVideoChunkClonePayload {
-    pub(crate) kind: EncodedVideoChunkType,
-    pub(crate) timestamp: i64,
-    pub(crate) duration: Option<u64>,
-    pub(crate) bytes: Vec<u8>,
+pub struct EncodedVideoChunkClonePayload {
+    pub kind: EncodedVideoChunkType,
+    pub timestamp: i64,
+    pub duration: Option<u64>,
+    pub bytes: Vec<u8>,
 }
 
 fn chunk_declaration<'s>(
@@ -238,8 +236,8 @@ fn chunk_declaration<'s>(
         .duration
         .map(|duration| v8::Number::new(scope, duration as f64).into())
         .unwrap_or_else(|| v8::null(scope).into());
-    let bytes =
-        array_buffer_from_bytes(scope, payload.bytes).expect("EncodedVideoChunk bytes allocate");
+    let backing = v8::ArrayBuffer::new_backing_store_from_vec(payload.bytes).make_shared();
+    let bytes = v8::ArrayBuffer::with_backing_store(scope, &backing);
     EncodedVideoChunkObjectDeclaration::new(
         payload.kind.label(),
         payload.timestamp as f64,
@@ -248,7 +246,7 @@ fn chunk_declaration<'s>(
     )
 }
 
-pub(crate) fn encoded_video_chunk_clone_payload_from_object<'s>(
+pub fn encoded_video_chunk_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<EncodedVideoChunkClonePayload> {
@@ -280,13 +278,10 @@ pub(crate) fn encoded_video_chunk_clone_payload_from_object<'s>(
     })
 }
 
-pub(crate) fn build_encoded_video_chunk_from_clone_payload<'s>(
+pub fn build_encoded_video_chunk_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: EncodedVideoChunkClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if !super::exposed_interfaces::is_realm_interface_exposed(scope, "EncodedVideoChunk") {
-        return None;
-    }
     // Native allocation also works inside V8's no-JavaScript deserializer scope.
     chunk_declaration(scope, payload).bind(scope).ok()
 }
