@@ -21,7 +21,7 @@ pub(crate) struct FetchResponseRequest<'a> {
 
 impl FetchResponseRequest<'_> {
     fn has_null_body(self, status: u16) -> bool {
-        matches!(self.method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
+        response_has_null_body(self.method, status)
     }
 }
 
