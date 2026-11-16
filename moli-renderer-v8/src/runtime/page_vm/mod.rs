@@ -163,6 +163,7 @@ mod resource_search;
 pub use resource_search::{
     RendererMainDocumentResource, RendererResourceContentBody, RendererResourceSearchRequest,
 };
+mod page_object_resource_selection;
 mod page_resource_completion_task_completion;
 mod page_script_preparation_error;
 #[cfg(test)]
@@ -260,6 +261,7 @@ pub(crate) use page_misc_platform_api::AuthorizedCurrentPageMiscPlatformApiTask;
 pub(crate) use page_module_reaction::AuthorizedCurrentPageModuleReaction;
 pub(crate) use page_modulepreload_start::AuthorizedCurrentChildModulepreloadStartTask;
 pub(crate) use page_navigation_api_task::AuthorizedCurrentPageNavigationApiTask;
+pub(crate) use page_object_resource_selection::AuthorizedCurrentPageObjectResourceSelection;
 pub(crate) use page_opfs_task::AuthorizedCurrentPageOpfsTask;
 pub(crate) use page_popup_close::AuthorizedCurrentPagePopupClose;
 pub(crate) use page_popup_document_lifecycle::AuthorizedCurrentPagePopupDocumentLifecycle;

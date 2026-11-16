@@ -3131,6 +3131,28 @@ impl FrameOwnerStore {
         )
     }
 
+    pub(crate) fn acquire_object_resource_selection_load_delay(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<DocumentLoadDelayTokenId> {
+        if !self.document_task_owner_is_current(owner) {
+            return None;
+        }
+        self.acquire_document_load_delay(owner, DocumentLoadDelayReason::ObjectResourceSelection)
+    }
+
+    pub(crate) fn settle_object_resource_selection_load_delay(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        token: DocumentLoadDelayTokenId,
+    ) -> DocumentLoadDelaySettlement {
+        self.release_document_load_delay(
+            owner,
+            token,
+            DocumentLoadDelayReason::ObjectResourceSelection,
+        )
+    }
+
     pub(crate) fn accept_current_main_image_load_delay(
         &mut self,
         owner: FrameDocumentTaskOwner,

@@ -1861,6 +1861,7 @@ impl PageScriptHost {
 
     pub(crate) fn has_pending_lightweight_popup_resource_loads(&self) -> bool {
         self.has_pending_lightweight_popup_document_loads()
+            || self.has_pending_popup_object_resource_selections()
             || !self
                 .pending_lightweight_popup_classic_script_loads
                 .is_empty()
@@ -5427,7 +5428,7 @@ impl PageScriptHost {
         self.publish_lightweight_popup_load_event_if_ready(task.popup_id());
     }
 
-    fn publish_lightweight_popup_load_event_if_ready(&mut self, popup_id: u64) {
+    pub(super) fn publish_lightweight_popup_load_event_if_ready(&mut self, popup_id: u64) {
         let Some(task) = self
             .lightweight_popup_document_record(popup_id)
             .filter(|document| {
@@ -5439,6 +5440,7 @@ impl PageScriptHost {
                     )
                     && document.queued_load_event.is_none()
                     && document.incomplete_child_frame_loads.is_empty()
+                    && !self.object_resource_selection_delays_popup_load(popup_id)
                     && document
                         .stream
                         .as_ref()

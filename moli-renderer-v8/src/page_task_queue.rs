@@ -49,6 +49,7 @@ mod modulepreload_start;
 mod navigation_and_traversal;
 mod navigation_api_task;
 mod networking;
+mod object_resource_selection;
 mod opfs_task;
 mod owner_sources;
 mod parse_time;
@@ -414,6 +415,12 @@ pub(crate) use self::networking::{
 };
 #[cfg(test)]
 pub(crate) use self::networking::{RendererPageNetworkingOwner, RendererPageNetworkingSource};
+pub(crate) use self::object_resource_selection::{
+    PageObjectResourceSelectionTargetEffect, PageObjectResourceSelectionTurnAction,
+    PageObjectResourceSelectionTurnOutcome, RendererPageObjectResourceSelectionOwner,
+    RendererPageObjectResourceSelectionSender, RendererPageObjectResourceSelectionTask,
+    RendererPageObjectResourceSelectionTaskId,
+};
 pub(crate) use self::opfs_task::{
     PageOpfsTaskTargetEffect, PageOpfsTaskTurnAction, PageOpfsTaskTurnOutcome,
     RendererPageOpfsTask, RendererPageOpfsTaskId, RendererPageOpfsTaskOwner,

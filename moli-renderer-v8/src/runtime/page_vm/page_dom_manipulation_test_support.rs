@@ -21,6 +21,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     FileEntryFileCallback,
     ServiceWorkerQuery,
     ScriptPreparationError,
+    ObjectResourceSelection,
     PromiseRejection,
     MainDocumentLifecycle,
     ImageLoadEvent,
@@ -60,6 +61,9 @@ impl PageDomManipulationTestFamily {
             ) | (
                 Self::ScriptPreparationError,
                 RendererPageDomManipulationOwner::ScriptPreparationError(_)
+            ) | (
+                Self::ObjectResourceSelection,
+                RendererPageDomManipulationOwner::ObjectResourceSelection(_)
             ) | (
                 Self::PromiseRejection,
                 RendererPageDomManipulationOwner::PromiseRejection(_)

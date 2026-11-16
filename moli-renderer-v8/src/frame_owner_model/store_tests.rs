@@ -853,6 +853,9 @@ fn stopping_a_document_invalidates_resource_delays_by_exact_identity() {
     let media = store
         .accept_current_main_media_load_delay(owner, handle(4))
         .unwrap();
+    let object_selection = store
+        .acquire_object_resource_selection_load_delay(owner)
+        .unwrap();
     let stylesheet_resource = store
         .accept_current_main_stylesheet_subresource_load_delay(owner)
         .unwrap();
@@ -896,6 +899,7 @@ fn stopping_a_document_invalidates_resource_delays_by_exact_identity() {
         for settlement in [
             store.settle_main_style_load_event(style),
             store.settle_main_image_load_delay(image),
+            store.settle_object_resource_selection_load_delay(owner, object_selection),
             store.settle_main_media_load_delay(media),
             store.settle_stylesheet_subresource_load_delay(stylesheet_resource),
         ] {

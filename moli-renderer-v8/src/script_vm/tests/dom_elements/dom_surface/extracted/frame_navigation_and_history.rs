@@ -4022,6 +4022,65 @@ fn document_named_item_does_not_shadow_legacy_unforgeable_location() {
     );
 }
 
+#[tokio::test]
+async fn embed_and_object_reject_script_scheme_resources_without_child_navigation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://embedded-javascript-attribute.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__embeddedJavascriptAttributeEvents = [];
+  const root = document.body || document.documentElement || document;
+  for (const [tag, attribute] of [["embed", "src"], ["object", "data"]]) {
+    const element = document.createElement(tag);
+    element[attribute] =
+      `javascript:parent.__embeddedJavascriptAttributeEvents.push("executed-${tag}")`;
+    element.onload = () => {
+      __embeddedJavascriptAttributeEvents.push(`load-${tag}`);
+    };
+    if (tag === "object") {
+      element.onerror = event => {
+        __embeddedJavascriptAttributeEvents.push(
+          `error-object:${event.isTrusted}:${element.contentDocument === null}`
+        );
+      };
+    }
+    root.appendChild(element);
+  }
+})()
+"#,
+    )
+    .expect("embedded javascript attribute setup should evaluate");
+
+    assert_eq!(vm.eval("String(frames.length)").unwrap(), "0");
+    assert!(
+        !vm.has_pending_child_frame_realm_materialization(),
+        "resource attributes must not schedule javascript execution in child realms"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ObjectResourceSelection,
+            &loader,
+        )
+        .await
+        .expect("object resource selection task should run")
+    );
+    assert!(
+        !vm._context_host.borrow().has_pending_child_document_loads(),
+        "rejected resources must not start child document loads"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__embeddedJavascriptAttributeEvents)")
+            .expect("embedded javascript attribute events should evaluate"),
+        r#"["error-object:true:true"]"#,
+        "resource failures must not execute javascript or load, and object must enter fallback"
+    );
+}
+
 #[test]
 fn iframe_in_shadow_tree_is_not_a_window_child_property() {
     let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");

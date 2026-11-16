@@ -182,6 +182,7 @@ mod module_error_reporting;
 mod module_reaction;
 mod modulepreload_start_completion;
 mod navigation_api_task;
+mod object_resource_selection;
 mod opfs;
 mod parser_written_script_residence;
 mod popup_autofocus;
