@@ -5,7 +5,7 @@
     try { await callback(); rows.push({name, pass: true}); }
     catch (error) { rows.push({name, pass: false, message: String(error)}); }
   };
-  for (const factory of ['createDelay', 'createStereoPanner']) {
+  for (const factory of ['createGain', 'createDelay', 'createStereoPanner']) {
     for (const automaticPull of [false, true]) {
       await check(factory + '/unsupported processing/' + automaticPull, async () => {
         const context = new OfflineAudioContext(1, 32, 8000);
