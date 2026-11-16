@@ -82,6 +82,40 @@ fn parser_text_buffer_commits_entities_raw_text_errors_and_nulls_once_per_input_
 }
 
 #[test]
+fn parser_text_buffer_keeps_implicit_body_text_pending_after_structural_work() {
+    let (stream, mut host) = fixture("<!doctype html><html><head>");
+    let effects = pump(&stream, &mut host, "</head> \na&amp;b&amp;c");
+    let html = host.document_element_handle().unwrap();
+    let children = host.child_handles(html).collect::<Vec<_>>();
+    assert_eq!(children.len(), 3);
+    assert_eq!(children[0], host.document_head_handle().unwrap());
+    assert_eq!(
+        host.node(children[1])
+            .and_then(Node::as_text)
+            .unwrap()
+            .data(),
+        " \n"
+    );
+    let body = host.document_body_handle().unwrap();
+    assert_eq!(children[2], body);
+    assert_eq!(host.text_content(body).as_deref(), Some("a&b&c"));
+    assert_old_texts(&effects, &[]);
+    stream.restore_parser_stream_dom_host(host);
+}
+
+#[test]
+fn parser_text_buffer_flushes_around_ignored_end_tags_in_body_and_table() {
+    for (prefix, closing) in [("<main>seed", "</main>"), ("seed<table>", "</table>")] {
+        let (stream, mut host) = fixture(&format!("<!doctype html><html><body>{prefix}"));
+        let effects = pump(&stream, &mut host, &format!("x</bogus>y{closing}"));
+        assert_old_texts(&effects, &["seed", "seedx"]);
+        let body = host.document_body_handle().unwrap();
+        assert_eq!(host.text_content(body).as_deref(), Some("seedxy"));
+        stream.restore_parser_stream_dom_host(host);
+    }
+}
+
+#[test]
 fn parser_text_buffer_keeps_non_character_token_and_input_boundaries() {
     let (stream, mut host) = fixture("<!doctype html><html><body><main>seed");
     let effects = pump(&stream, &mut host, "x&amp;</ignored>y&amp;x");
@@ -142,16 +176,21 @@ fn parser_text_buffer_batches_foster_parented_text_with_attached_and_detached_ta
 }
 
 #[test]
-fn parser_text_buffer_does_not_call_observers_with_uncommitted_text() {
+fn parser_text_buffer_finishes_operations_without_committing_later_text() {
     for (prefix, input, expected) in [
         (
             "<!doctype html><html><body><main>seed",
             "x&amp;".repeat(128) + "x",
-            "seed".to_owned() + &"x&".repeat(128) + "x",
+            vec!["seed".to_owned() + &"x&".repeat(128) + "x"],
         ),
-        // Implicit body construction during a character token can itself
-        // require a callback. Its text must be committed before that callback.
-        ("", "seed".to_owned(), "seed".to_owned()),
+        // Implicit body construction is committed before this token's text
+        // starts accumulating. Finish that operation first, then commit text
+        // and finish it separately at the input boundary.
+        (
+            "",
+            "seed".to_owned(),
+            vec![String::new(), "seed".to_owned()],
+        ),
     ] {
         let (stream, mut host) = fixture(prefix);
         let mut effects = DomMutationEffects::default();
@@ -167,11 +206,9 @@ fn parser_text_buffer_does_not_call_observers_with_uncommitted_text() {
             &mut consumer,
         );
         assert_eq!(
-            observed.len(),
-            1,
-            "only committed DOM work may invoke the owner"
+            observed, expected,
+            "each callback sees its committed operation"
         );
-        assert_eq!(observed[0], expected);
         stream.restore_parser_stream_dom_host(host);
     }
 }

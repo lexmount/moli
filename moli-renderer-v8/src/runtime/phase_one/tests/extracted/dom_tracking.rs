@@ -3,6 +3,80 @@ use crate::document_runtime::DevToolsDomMutationFact;
 use crate::live_document_parser::LiveDocumentParserStepOutcome;
 
 #[test]
+fn parser_implicit_body_insertion_does_not_commit_following_character_fragments() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async {
+        let mut page_vm = parse_phase_one_html_into_page_vm_for_test(concat!(
+            r#"<!doctype html><html><head><script>
+window.textRecords = [];
+window.textObserver = new MutationObserver(records => textRecords.push(...records));
+textObserver.observe(document.documentElement, {
+  subtree: true, childList: true, characterData: true, characterDataOldValue: true
+});
+</script></head>"#,
+            " \na&amp;b&amp;c",
+        ))
+        .await;
+        let actual = page_vm.vm_mut().eval(
+            "JSON.stringify({ \
+               children: [...document.documentElement.childNodes].map(n => [n.nodeName, n.nodeValue]), \
+               text: document.body.textContent, \
+               old: textRecords.concat(textObserver.takeRecords()) \
+                 .filter(r => r.type === 'characterData' && r.target.parentNode === document.body) \
+                 .map(r => r.oldValue) \
+             })",
+        ).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!({
+                "children": [["HEAD", null], ["#text", " \n"], ["BODY", null]],
+                "text": "a&b&c",
+                "old": []
+            })
+        );
+    }));
+}
+
+#[test]
+fn parser_custom_element_callbacks_see_text_committed_for_their_insertion() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async {
+        let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+            r#"<!doctype html><html><head><script>
+window.insertionReads = [];
+customElements.define('x-probe', class extends HTMLElement {
+  constructor() {
+    super();
+    insertionReads.push(['constructor', document.querySelector('main').textContent]);
+  }
+  connectedCallback() {
+    insertionReads.push(['connected', this.previousSibling.data, this.textContent]);
+  }
+});
+</script></head><body><main>a&amp;b<x-probe>inside</x-probe>c</main></body></html>"#,
+        )
+        .await;
+        let actual = page_vm.vm_mut().eval(
+            "JSON.stringify(insertionReads.concat([['final', document.querySelector('main').textContent]]))",
+        ).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!([
+                ["constructor", "a&b"],
+                ["connected", "a&b", ""],
+                ["final", "a&binsidec"]
+            ])
+        );
+    }));
+}
+
+#[test]
 fn parser_text_batches_before_inspector_and_mutation_observers() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

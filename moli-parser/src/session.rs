@@ -201,14 +201,15 @@ impl TokenSink for EmbedderPausingTreeBuilder {
         let result = self.process_token_before_callbacks(token, line_number);
         let committed_dom = self.sink().take_committed_dom_mutations();
         let finish_mutations = commits_text || committed_dom;
-        if finish_mutations {
+        if commits_text {
             // Processing this token can itself drain html5ever's pending
             // table characters into a foster-parented insertion point.
             self.sink().flush_pending_text();
             self.sink().take_committed_dom_mutations();
         }
-        // A callback can execute script or inspect the live DOM. Buffered
-        // character fragments must not expose a stale, partially committed run.
+        // A character token can insert structure before buffering its text.
+        // Finish that committed operation without also committing text from
+        // the later tree-builder step (for example, after an implicit body).
         let current_owner_interruption =
             finish_mutations && self.sink().finish_parser_dom_mutations().is_break();
         let deferred_owner_interruption = self.deferred_owner_interruption.replace(false);
