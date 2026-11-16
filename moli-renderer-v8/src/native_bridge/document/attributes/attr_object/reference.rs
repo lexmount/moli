@@ -83,9 +83,8 @@ impl<'s> AttrReference<'s> {
         let prefix = nullable_state_string(scope, self.state, "prefix");
         let value = self.value(scope);
         let document = self.owner_document(scope);
-        let context = document
-            .and_then(|document| document.get_creation_context(scope))
-            .or_else(|| self.object.get_creation_context(scope))?;
+        // Adoption changes the node document while preserving the source realm.
+        let context = self.object.get_creation_context(scope)?;
         let scope = &mut v8::ContextScope::new(scope, context);
         new_attr_object(
             scope,

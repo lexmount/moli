@@ -301,12 +301,11 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
         return;
     };
     with_detached_surface_attribute_reaction_scope(scope, args.this(), element, |scope| {
-        if let Some(has_native_attribute) =
-            read_detached_native_has_attribute_ns(scope, element, namespace.as_deref(), &local_name)
+        if read_detached_native_has_attribute_ns(scope, element, namespace.as_deref(), &local_name)
+            .is_some()
         {
-            if has_native_attribute {
-                clear_live_attr_cache_entry_ns(scope, element, namespace.as_deref(), &local_name);
-            }
+            // Updating a native value preserves its Attr identity. The cached
+            // wrapper reads that value directly and stays associated.
             if sync_detached_surface_set_attribute_ns(
                 scope,
                 args.this(),
@@ -320,25 +319,6 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
             .unwrap_or(false)
             {
                 detached_record_tree_mutation(scope, element);
-            }
-            if let Some(cache) = live_attr_cache_object(scope, element)
-                && let Some(attr) = new_attr_object(
-                    scope,
-                    &qualified_name,
-                    &value,
-                    Some(element),
-                    None,
-                    namespace.as_deref(),
-                    prefix.as_deref(),
-                    &local_name,
-                )
-            {
-                set_attr_cache_entry(
-                    scope,
-                    cache,
-                    &namespace_attr_cache_key(namespace.as_deref(), &local_name),
-                    attr,
-                );
             }
             return;
         }

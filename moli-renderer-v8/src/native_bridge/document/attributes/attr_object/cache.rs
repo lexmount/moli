@@ -1,8 +1,32 @@
 use super::super::attribute_node::{native_attr_object_by_name, native_attr_object_by_namespace};
 use super::*;
+use crate::document_runtime::DomHandle;
+use crate::native_bridge::document::paired_detached_native_object_for_handle;
 use crate::util::{get_private_value, new_null_prototype_object, set_private_value};
 
 const ATTR_OBJECT_CACHE_SLOT: &str = "__moliAttrObjectCache";
+
+// Preserve the current native value before deletion, including detached views.
+pub(crate) fn detach_cached_attr_for_removal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    namespace: Option<&str>,
+    local_name: &str,
+) {
+    let Some(wrapper) = unsafe { &*host_ptr }
+        .native_bridge()
+        .cached_handle_wrapper(scope, handle)
+    else {
+        return;
+    };
+    clear_live_attr_cache_entry_ns(scope, wrapper, namespace, local_name);
+    if let Some(detached) = paired_detached_native_object_for_handle(scope, host_ptr, handle)
+        && !detached.strict_equals(wrapper.into())
+    {
+        clear_live_attr_cache_entry_ns(scope, detached, namespace, local_name);
+    }
+}
 
 fn ensure_object_cache<'s>(
     scope: &mut v8::PinScope<'s, '_>,

@@ -6,12 +6,12 @@ mod attr_object;
 mod attribute_node;
 mod named_node_map;
 
-pub(crate) use attr_object::live_get_attribute_node_object;
 pub(crate) use attr_object::new_attr_object;
 pub(super) use attr_object::{attr_state_object, live_attr_cache_object};
 pub(in crate::native_bridge) use attr_object::{
     clear_live_attr_cache_entry, clear_live_attr_cache_entry_ns,
 };
+pub(crate) use attr_object::{detach_cached_attr_for_removal, live_get_attribute_node_object};
 pub(in crate::native_bridge) use attr_object::{
     is_attr_node_value, live_get_attribute_node_ns_object,
 };
