@@ -65,7 +65,11 @@ pub(crate) fn perform_text_input_with_transfer<'s>(
         return false;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let editing_host = contenteditable_editing_host(runtime, initial_target);
+    let editing_host = if is_text_control(runtime, initial_target) {
+        None
+    } else {
+        contenteditable_editing_host(runtime, initial_target)
+    };
     if !is_text_control(runtime, initial_target) && editing_host.is_none() {
         return false;
     }

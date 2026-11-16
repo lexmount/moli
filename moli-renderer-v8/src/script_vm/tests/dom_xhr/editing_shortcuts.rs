@@ -1,4 +1,5 @@
 use super::*;
+mod clipboard;
 mod history;
 fn key(vm: &mut StandaloneScriptVmHarness, key: &str, code: &str, modifiers: u8) {
     vm.dispatch_key_event("keydown", key, code, "", modifiers, false, false)

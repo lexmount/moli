@@ -15,6 +15,38 @@ use crate::runtime::ClipboardSnapshot;
 use crate::util::utf16_units;
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
+fn selected_text(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &PageScriptHost,
+    target: DomHandle,
+    text_control: bool,
+) -> String {
+    if text_control {
+        let Some(element) = host
+            .dom_host()
+            .node(target)
+            .and_then(|node| node.as_element())
+        else {
+            return String::new();
+        };
+        if element
+            .attribute("type")
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("password"))
+        {
+            String::new()
+        } else {
+            let units = utf16_units(&text_control_value(host, target));
+            let start = (element.selection_start() as usize).min(units.len());
+            let end = (element.selection_end() as usize)
+                .min(units.len())
+                .max(start);
+            String::from_utf16_lossy(&units[start..end])
+        }
+    } else {
+        crate::context_bootstrap::native_editing_selected_text(scope)
+    }
+}
+
 pub(crate) fn perform_clipboard_shortcut(
     scope: &mut v8::PinScope<'_, '_>,
     ptr: *mut PageScriptHost,
@@ -32,36 +64,6 @@ pub(crate) fn perform_clipboard_shortcut(
         return false;
     };
     let browser = host.browser_context_runtime();
-    let text_control = is_text_control(host, target);
-    let editable = if text_control {
-        is_text_control_user_editable(host, target)
-    } else {
-        contenteditable_editing_host(host, target).is_some()
-    };
-    let selected = if text_control {
-        let Some(element) = host
-            .dom_host()
-            .node(target)
-            .and_then(|node| node.as_element())
-        else {
-            return false;
-        };
-        if element
-            .attribute("type")
-            .is_some_and(|kind| kind.eq_ignore_ascii_case("password"))
-        {
-            String::new()
-        } else {
-            let units = utf16_units(&text_control_value(host, target));
-            let start = (element.selection_start() as usize).min(units.len());
-            let end = (element.selection_end() as usize)
-                .min(units.len())
-                .max(start);
-            String::from_utf16_lossy(&units[start..end])
-        }
-    } else {
-        crate::context_bootstrap::native_editing_selected_text(scope)
-    };
     let paste = key == "v";
     let kind = if paste {
         "paste"
@@ -112,9 +114,22 @@ pub(crate) fn perform_clipboard_shortcut(
     let allowed = dispatch_public_event(scope, ptr, target, event).allows_default();
     let still_valid = unsafe { &*ptr }.dom_host().is_connected(target)
         && unsafe { &*ptr }.dom_host().owner_document_handle(target) == Some(document);
+    let host = unsafe { &*ptr };
+    let text_control = is_text_control(host, target);
+    let editable = if text_control {
+        is_text_control_user_editable(host, target)
+    } else {
+        contenteditable_editing_host(host, target) == Some(target)
+    };
     let result = if paste {
         if allowed && editable && still_valid {
             let text = native_data_transfer_get_data(scope, transfer, "text/plain");
+            // An absent or empty plain-text representation has no rich-text
+            // paste default. Text controls still replace their selection.
+            if !text_control && text.is_empty() {
+                finish_drag_data_transfer_view(scope, transfer);
+                return false;
+            }
             super::text_input::perform_text_input_with_transfer(
                 scope,
                 ptr,
@@ -128,6 +143,13 @@ pub(crate) fn perform_clipboard_shortcut(
             false
         }
     } else {
+        // Clipboard listeners can change both the selection and editability.
+        // Read the same live selection that the cutting default will delete.
+        let selected = if allowed && still_valid && (key != "x" || editable) {
+            selected_text(scope, host, target, text_control)
+        } else {
+            String::new()
+        };
         if !allowed {
             browser.set_clipboard_snapshot(ClipboardSnapshot {
                 representations: read_string_drag_data(scope, &store)
