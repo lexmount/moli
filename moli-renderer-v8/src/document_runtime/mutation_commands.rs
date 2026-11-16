@@ -306,6 +306,30 @@ impl DocumentRuntime {
                     )
             })
             .collect::<Vec<_>>();
+        // Bulk textContent replacement bypasses remove_child's followups.
+        // Repair ranges and Selection while the old ancestry is still known.
+        if !unsafe { &mut *host_ptr }.live_ranges_is_empty()
+            && self.dom_host.node(handle).is_some_and(|node| {
+                matches!(
+                    node.node_type(),
+                    NodeType::Element | NodeType::DocumentFragment
+                )
+            })
+        {
+            let children = self.dom_host.child_handles(handle).collect::<Vec<_>>();
+            for (index, child) in children.into_iter().enumerate().rev() {
+                let previous = self.dom_host.node(child).and_then(Node::prev_sibling);
+                context_bootstrap::live_ranges_child_removal(
+                    scope,
+                    host_ptr,
+                    &self.dom_host,
+                    handle,
+                    child,
+                    index as u32,
+                    previous,
+                );
+            }
+        }
         let effects = self.dom_host.set_text_content_effects(handle, value);
         if break_after_character_data_change && effects.did_change() {
             unsafe { &mut *host_ptr }.break_on_dom_debugger_character_data_modified(handle);

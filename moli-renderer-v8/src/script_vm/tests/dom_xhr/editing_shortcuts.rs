@@ -12,6 +12,39 @@ fn text(vm: &mut StandaloneScriptVmHarness, text: &str) {
 }
 
 #[test]
+fn editing_shortcuts_rehome_removed_editable_selection_before_next_character() {
+    for removal in [
+        "editor.textContent=''",
+        "editor.innerHTML=''",
+        "editor.replaceChildren()",
+        "editor.firstChild.remove()",
+    ] {
+        for select_all in [false, true] {
+            let mut vm = new_parsed_test_vm(
+                "https://editing-removal.test/",
+                "<div id=editor contenteditable></div>",
+            );
+            vm.eval("globalThis.editor=document.getElementById('editor');editor.focus()")
+                .unwrap();
+            text(&mut vm, "a");
+            if select_all {
+                vm.eval("getSelection().selectAllChildren(editor.firstChild)")
+                    .unwrap();
+            }
+            vm.eval(removal).unwrap();
+            assert_eq!(
+                vm.eval("getSelection().anchorNode===editor && getSelection().focusNode===editor && getSelection().isCollapsed").unwrap(),
+                "true",
+                "{removal}, select_all={select_all}: {}", vm.eval("JSON.stringify([getSelection().anchorNode?.nodeName,getSelection().anchorOffset,getSelection().focusNode?.nodeName,getSelection().focusOffset,getSelection().isCollapsed,getSelection().rangeCount])").unwrap(),
+            );
+            vm.dispatch_key_event("keydown", "A", "KeyA", "A", 8, false, true)
+                .unwrap();
+            assert_eq!(vm.eval("editor.textContent").unwrap(), "A", "{removal}");
+        }
+    }
+}
+
+#[test]
 fn editing_shortcuts_undo_redo_group_typing_and_preserve_node_identity() {
     let mut vm = new_parsed_test_vm(
         "https://editing-shortcuts.test/",
