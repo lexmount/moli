@@ -3644,6 +3644,7 @@ dependencies = [
  "futures-util",
  "moli-css-parse",
  "moli-dom",
+ "moli-encoding",
  "moli-fetch",
  "moli-owner-queue",
  "moli-page-types",
