@@ -397,6 +397,7 @@ impl PageScriptHost {
             next_scoped_custom_elements_registry_id: 1,
             observers: ObserverStore::default(),
             child_browsing_contexts: IndexMap::new(),
+            embedded_content_csp_admissions: HashMap::new(),
             frame_owner_store,
             inert_document_execution_contexts: None,
             frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore::default(),

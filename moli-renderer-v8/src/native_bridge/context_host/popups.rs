@@ -3012,19 +3012,51 @@ impl PageScriptHost {
                 &violation.report_to_endpoints,
             );
         }
+        let document_target = (violation.effective_directive == "object-src")
+            .then(|| self.lightweight_popup_document_handle(popup_id))
+            .flatten();
+        let target_value = if let Some(document) = document_target {
+            let host_ptr = self as *mut Self;
+            let Ok(value) = crate::host::event_target_value(
+                scope,
+                host_ptr,
+                crate::document_runtime::EventTargetHandle::Node(document),
+            ) else {
+                return;
+            };
+            value
+        } else {
+            window.into()
+        };
         match create_content_security_policy_violation_event(
             scope,
-            window.into(),
-            window.into(),
+            target_value,
+            target_value,
             violation,
         ) {
             Ok(event) => {
-                self.dispatch_lightweight_popup_window_event(
-                    scope,
-                    popup_id,
-                    "securitypolicyviolation",
-                    event,
-                );
+                if let Some(document) = document_target {
+                    let host_ptr = self as *mut Self;
+                    if let Err(error) = self.dispatch_public_event(
+                        scope,
+                        host_ptr,
+                        crate::document_runtime::EventTargetHandle::Node(document),
+                        event,
+                    ) {
+                        tracing::error!(
+                            popup_id,
+                            message = error.as_str(),
+                            "popup object CSP event dispatch failed"
+                        );
+                    }
+                } else {
+                    self.dispatch_lightweight_popup_window_event(
+                        scope,
+                        popup_id,
+                        "securitypolicyviolation",
+                        event,
+                    );
+                }
             }
             Err(error) => {
                 tracing::error!(

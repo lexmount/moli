@@ -883,6 +883,7 @@ pub(crate) struct PageScriptHost {
     observers: ObserverStore,
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,
+    embedded_content_csp_admissions: HashMap<DomHandle, child_frames::EmbeddedContentCspAdmission>,
     frame_owner_store: FrameOwnerStore,
     inert_document_execution_contexts:
         Option<Box<document_execution_context::InertDocumentExecutionContexts>>,
