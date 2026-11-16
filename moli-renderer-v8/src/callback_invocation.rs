@@ -10,38 +10,11 @@ use crate::{
     util::{get_private_value, set_private_value},
 };
 use moli_webidl_callback::{
-    PreparedWebIdlCallbackFunction, PreparedWebIdlCallbackInterface, WebIdlCallbackInvocation,
-    WebIdlCallbackResolutionFailure, invoke_webidl_callback, invoke_webidl_callback_function,
-    with_webidl_callback_contexts,
+    PreparedWebIdlCallbackInterface, WebIdlCallbackInvocation, WebIdlCallbackResolutionFailure,
+    invoke_webidl_callback, with_webidl_callback_contexts,
 };
 
-/// Invokes one synchronous Web IDL callback function while preserving a thrown
-/// V8 exception for the calling Web API algorithm.
-///
-/// This helper does not report exceptions, perform a microtask checkpoint, or
-/// acquire Page/Document authority. The synchronous API owner remains
-/// responsible for receiver/argument construction, abrupt completion, and
-/// result conversion.
-pub(crate) fn invoke_synchronous_webidl_callback_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    callback: &PreparedWebIdlCallbackFunction,
-    receiver: v8::Local<'s, v8::Value>,
-    arguments: &[v8::Local<'s, v8::Value>],
-) -> Option<v8::Global<v8::Value>> {
-    invoke_webidl_callback_function(
-        scope,
-        callback,
-        receiver,
-        arguments,
-        |scope, callback, receiver, arguments| {
-            callback
-                .call(scope, receiver, arguments)
-                .map(|value| v8::Global::new(scope, value))
-                .ok_or(())
-        },
-    )
-    .ok()
-}
+pub(crate) use moli_webapi::callbacks::invoke_synchronous_webidl_callback_function;
 
 /// The synchronous completion of a callback-interface invocation.
 ///

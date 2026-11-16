@@ -1,5 +1,5 @@
-use crate::webidl;
 use moli_url::search_params::{SearchParamPair, parse_search_params};
+use moli_webidl as webidl;
 
 pub(super) fn url_search_params_pairs_from_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,

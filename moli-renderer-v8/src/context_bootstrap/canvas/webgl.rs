@@ -1,4 +1,3 @@
-mod interfaces;
 use super::objects::{build_webgl_debug_renderer_info_object, build_webgl_lose_context_object};
 use super::*;
 use crate::web_api_interfaces;
@@ -7,6 +6,7 @@ use crate::{
     webidl,
 };
 pub(super) use interfaces::install_value_template_bindings;
+use moli_webapi::webgl_values as interfaces;
 use moli_webapi_declare::{WebApiObject, WebApiValue};
 
 const WEBGL_VIEWPORT_SLOT: &str = "__moliWebGlViewport";

@@ -310,6 +310,22 @@ pub fn apply_webidl_constructor_prototype_fallback<'s>(
     let _ = receiver.set_prototype(scope, prototype.into());
 }
 
+/// Materializes the unexposed prototype described by a WebIDL iterator
+/// FunctionTemplate. The temporary constructor is an implementation detail, so
+/// its back-reference must not leak onto the iterator prototype.
+pub fn materialize_hidden_function_template_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let constructor = template.get_function(scope)?;
+    let prototype = constructor
+        .get(scope, v8str(scope, "prototype").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let constructor_key = v8str(scope, "constructor");
+    let _ = prototype.delete(scope, constructor_key.into());
+    Some(prototype)
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::pin;

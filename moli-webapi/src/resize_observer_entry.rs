@@ -1,6 +1,6 @@
-use crate::context_bootstrap::dom_rect::build_dom_rect_readonly_object;
-use crate::util::{callback_data_index_value, callback_data_item, get_private_value};
-use crate::web_api_interfaces;
+use crate::dom_rect::build_dom_rect_readonly_object;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{callback_data_index_value, callback_data_item, get_private_value};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const TARGET_SLOT: &str = "__moliResizeObserverEntryTarget";
@@ -24,16 +24,16 @@ const ATTRIBUTE_SLOTS: &[&str] = &[
 
 // Sampling retains native dimensions. JS wrappers are created only for active
 // observations, in the callback's relevant realm when they are delivered.
-pub(super) struct ResizeObserverEntryData<'s> {
-    pub(super) target: v8::Local<'s, v8::Value>,
-    pub(super) content_rect: (f64, f64, f64, f64),
-    pub(super) content_box_size: (f64, f64),
-    pub(super) border_box_size: (f64, f64),
-    pub(super) device_pixel_content_box_size: (f64, f64),
+pub struct ResizeObserverEntryData<'s> {
+    pub target: v8::Local<'s, v8::Value>,
+    pub content_rect: (f64, f64, f64, f64),
+    pub content_box_size: (f64, f64),
+    pub border_box_size: (f64, f64),
+    pub device_pixel_content_box_size: (f64, f64),
 }
 
 impl<'s> ResizeObserverEntryData<'s> {
-    pub(super) fn into_object(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+    pub fn into_object(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
         let (x, y, width, height) = self.content_rect;
         let content_rect = build_dom_rect_readonly_object(scope, x, y, width, height);
         let content_box_size = frozen_box_size(scope, self.content_box_size);
@@ -116,7 +116,7 @@ struct ResizeObserverSizePrototypeDeclaration {
     block_size: (),
 }
 
-pub(in crate::context_bootstrap) fn install_resize_observer_entry_template_bindings<'s>(
+pub fn install_resize_observer_entry_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,

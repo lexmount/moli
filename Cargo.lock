@@ -3792,14 +3792,17 @@ dependencies = [
 name = "moli-webapi"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cssparser",
  "moli-canvas",
  "moli-geometry",
+ "moli-url",
  "moli-v8-test-util",
  "moli-v8-util",
  "moli-web-errors",
  "moli-webapi-declare",
  "moli-webidl",
+ "moli-webidl-callback",
  "strum",
  "url",
  "v8",

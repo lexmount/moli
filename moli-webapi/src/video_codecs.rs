@@ -1,5 +1,6 @@
-use crate::{web_api_interfaces, webidl};
+use crate::interfaces as web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
@@ -262,7 +263,7 @@ struct VideoSupport<'s> {
     config: v8::Local<'s, v8::Object>,
 }
 
-pub(super) fn install_video_codec_template_bindings<'s>(
+pub fn install_video_codec_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -326,7 +327,7 @@ fn decoder_is_config_supported<'s>(
             .as_ref()
             .is_some_and(|description| description.is_detached(scope))
     {
-        crate::context_bootstrap::throw_type_error(scope, "Invalid VideoDecoderConfig.");
+        moli_v8_util::throw_type_error(scope, "Invalid VideoDecoderConfig.");
         return;
     }
     let Some(clone) = config.to_js_snapshot(scope, SnapshotPrototype::Ordinary) else {
@@ -350,7 +351,7 @@ fn encoder_is_config_supported<'s>(
         || config.display_width.is_some_and(|value| value.0 == 0)
         || config.display_height.is_some_and(|value| value.0 == 0)
     {
-        crate::context_bootstrap::throw_type_error(scope, "Invalid VideoEncoderConfig.");
+        moli_v8_util::throw_type_error(scope, "Invalid VideoEncoderConfig.");
         return;
     }
     let Some(clone) = config.to_js_snapshot(scope, SnapshotPrototype::Ordinary) else {

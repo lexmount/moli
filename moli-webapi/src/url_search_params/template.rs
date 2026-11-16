@@ -7,7 +7,7 @@ use super::callbacks::{
     url_search_params_sort_callback, url_search_params_to_string_callback,
     url_search_params_values_callback,
 };
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 
 #[derive(WebApiFunctionTemplate)]
@@ -58,7 +58,7 @@ struct UrlSearchParamsTemplateDeclaration {
     to_string: (),
 }
 
-pub(in crate::context_bootstrap) fn build_url_search_params_constructor_template<'s>(
+pub fn build_url_search_params_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
     let template = UrlSearchParamsTemplateDeclaration::build(scope);

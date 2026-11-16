@@ -11,7 +11,9 @@ pub(super) fn build_window_lazy_surface<'s>(
             super::super::navigator_runtime::build_window_navigator_for_receiver(scope, window)?
                 .into()
         }
-        WindowLazySurface::External => super::super::external::build_external_object(scope)?.into(),
+        WindowLazySurface::External => super::super::external::build_external_object(scope)
+            .ok_or_else(|| anyhow!("failed to create External"))?
+            .into(),
         WindowLazySurface::Performance => {
             super::super::performance_runtime::build_window_performance_for_receiver(scope, window)
                 .into()

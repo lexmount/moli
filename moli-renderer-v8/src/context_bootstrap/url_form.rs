@@ -1,10 +1,132 @@
-use super::url_search_params_runtime::{new_url_search_params_object, url_query_pairs};
+//! Object URLs are registered by the embedding storage owner; ordinary URL
+//! parsing and all URLSearchParams bindings live in moli-webapi.
+use super::exposed_interfaces::TemplateBuildProfile;
 use super::*;
+use crate::util::{get_private_value, throw_type_error, v8_string};
+use crate::{blob, web_api_interfaces, webidl};
+pub(super) use moli_webapi::url_api::callback_value_string;
+use moli_webapi_declare::WebApiFunctionTemplate;
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "URL.revokeObjectURL")]
+struct UrlRevokeObjectUrlArgs {
+    #[webidl(required)]
+    url: String,
+}
 
-mod attributes;
-mod callbacks;
-mod helpers;
-mod template;
+fn url_create_object_url_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(storage_key) = current_object_url_storage_key(scope) else {
+        rv.set(v8::undefined(scope).into());
+        return;
+    };
+    let Ok(object) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+        throw_type_error(
+            scope,
+            "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not of type 'Blob'.",
+        );
+        return;
+    };
+    let Some(url) = blob::create_object_url_for_object(scope, object, storage_key) else {
+        throw_type_error(
+            scope,
+            "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not of type 'Blob'.",
+        );
+        return;
+    };
+    if let Some(value) = v8_string(scope, &url) {
+        rv.set(value.into());
+    } else {
+        rv.set(v8::undefined(scope).into());
+    }
+}
 
-pub(super) use helpers::{apply_url_update, callback_value_string, url_object_value};
-pub(super) use template::build_url_constructor_template;
+fn current_object_url_storage_key(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<moli_storage_key::MoliStorageKey> {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let active_child_handle = current_child_context_handle(scope)
+            .or_else(|| crate::native_bridge::active_child_window_handle(scope));
+        return Some(
+            unsafe { &mut *host_ptr }
+                .active_storage_context(scope, active_child_handle)
+                .storage_key()
+                .clone(),
+        );
+    }
+    crate::worker::worker_storage_key(scope)
+}
+
+fn current_child_context_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::document_runtime::DomHandle> {
+    let global = scope.get_current_context().global(scope);
+    get_private_value(
+        scope,
+        global,
+        crate::context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
+    )
+    .and_then(|value| dom_handle_from_value(scope, value))
+}
+
+fn dom_handle_from_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Option<crate::document_runtime::DomHandle> {
+    value
+        .number_value(scope)
+        .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
+        .map(|value| crate::document_runtime::DomHandle::new(value as usize))
+}
+
+fn url_revoke_object_url_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<UrlRevokeObjectUrlArgs>(scope, &args) else {
+        return;
+    };
+    if parsed.url.starts_with("blob:")
+        && let Some(storage_key) = current_object_url_storage_key(scope)
+    {
+        blob::revoke_object_url(scope, &parsed.url, storage_key);
+    }
+    rv.set_undefined();
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::URL, enumerable)]
+struct UrlObjectUrlStaticsDeclaration {
+    #[webapi(
+        static_method = "createObjectURL",
+        length = 1,
+        callback = url_create_object_url_callback
+    )]
+    create_object_url: (),
+
+    #[webapi(
+        static_method = "revokeObjectURL",
+        length = 1,
+        callback = url_revoke_object_url_callback
+    )]
+    revoke_object_url: (),
+}
+
+pub(super) fn build_url_constructor_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    profile: TemplateBuildProfile,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    let template = moli_webapi::url_api::build_url_constructor_template(scope);
+    if matches!(
+        profile,
+        TemplateBuildProfile::Window
+            | TemplateBuildProfile::DedicatedWorker
+            | TemplateBuildProfile::SharedWorker
+    ) {
+        UrlObjectUrlStaticsDeclaration::initialize_template(scope, template);
+    }
+    template
+}

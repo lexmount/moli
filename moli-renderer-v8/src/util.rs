@@ -277,21 +277,7 @@ impl RealmValueHandle {
     }
 }
 
-/// Materializes the unexposed prototype described by a WebIDL iterator
-/// FunctionTemplate. The temporary constructor is an implementation detail, so
-/// its back-reference must not leak onto the iterator prototype.
-pub(crate) fn materialize_hidden_function_template_prototype<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor = template.get_function(scope)?;
-    let prototype = constructor
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let constructor_key = v8str(scope, "constructor");
-    let _ = prototype.delete(scope, constructor_key.into());
-    Some(prototype)
-}
+pub(crate) use moli_v8_util::materialize_hidden_function_template_prototype;
 
 // # Why V8 callbacks use `RefCell::as_ptr()` instead of `borrow_mut()`
 //

@@ -5,10 +5,11 @@ use super::storage::{
     url_search_params_pairs,
 };
 use super::*;
-use crate::{callback_invocation::invoke_synchronous_webidl_callback_function, webidl};
+use crate::callbacks::invoke_synchronous_webidl_callback_function;
 use moli_url::search_params::{
     SearchParams, SearchParamsIteratorKind, serialize_search_params_pairs,
 };
+use moli_webidl as webidl;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "URLSearchParams")]
@@ -114,7 +115,11 @@ pub(super) fn url_search_params_get_all_callback<'s>(
     };
     let values =
         SearchParams::from_pairs(url_search_params_pairs(scope, object)).get_all(&parsed.name);
-    let array = crate::util::serialize_v8_array(scope, values.as_slice())
+    use moli_webapi_declare::WebApiValue;
+    let array = values
+        .as_slice()
+        .to_v8_value(scope)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
         .unwrap_or_else(|| v8::Array::new(scope, 0));
     rv.set(array.into());
 }

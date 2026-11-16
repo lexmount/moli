@@ -5,6 +5,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.100"
+moli-url = { path = "../moli-url" }
+moli-webidl-callback = { path = "../moli-webidl-callback" }
 cssparser = "0.38"
 moli-web-errors = { path = "../moli-web-errors" }
 moli-canvas = { path = "../moli-canvas" }
