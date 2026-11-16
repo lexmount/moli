@@ -1,5 +1,37 @@
 use super::*;
 
+fn start_adapter_reply_file_input(
+    ctx: &TestContext,
+    id: u64,
+    params: Value,
+) -> (CdpCommandTaskStep, crate::conn::CommandDispatchContext) {
+    let command = crate::conn::ParsedCdpCommand::from_serializable(json!({
+        "id":id,"method":"DOM.setFileInputFiles","params":params
+    }))
+    .unwrap();
+    let mut context = crate::conn::CommandDispatchContext::default();
+    context.set_terminal_response_delivery_override(
+        moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
+    );
+    let step = ctx.with_fixture(|conn| {
+        conn.start_parsed_command_dispatch_with_context(&command, &mut context)
+    });
+    assert!(
+        matches!(&step, CdpCommandTaskStep::Pending(pending) if pending.kind_name() == "Workflow"),
+        "AdapterReply file admission must leave the protocol turn before filesystem work"
+    );
+    (step, context)
+}
+
+async fn finish_adapter_reply_file_input(
+    ctx: &mut TestContext,
+    (step, mut context): (CdpCommandTaskStep, crate::conn::CommandDispatchContext),
+) -> Vec<Value> {
+    ctx.complete_command_task_step_with_context_for_test(step, &mut context)
+        .await
+        .0
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn directory_upload_crosses_cdp_filelist_clone_and_multipart_boundaries() {
     let scratch = std::env::temp_dir().join(format!(
@@ -15,50 +47,57 @@ async fn directory_upload_crosses_cdp_filelist_clone_and_multipart_boundaries() 
     std::fs::write(directory.join("a.txt"), b"alpha").unwrap();
     std::fs::write(directory.join("nested/b.txt"), b"beta").unwrap();
 
-    for reference in ["nodeId", "backendNodeId", "objectId"] {
-        let mut ctx = TestContext::new();
-        load_bc(&mut ctx, "BID-directory");
-        navigate_to_data_html_async(
+    for adapter_reply in [false, true] {
+        for reference in ["nodeId", "backendNodeId", "objectId"] {
+            let mut ctx = TestContext::new();
+            load_bc(&mut ctx, "BID-directory");
+            navigate_to_data_html_async(
             &mut ctx,
             31000,
             "<!doctype html><form id=form><input id=upload name=files type=file webkitdirectory></form>",
         )
         .await;
-        ctx.process_async(json!({"id":31001,"method":"DOM.getDocument"}))
-            .await;
-        let root = take_response_by_id(&mut ctx, 31001)["result"]["root"]["nodeId"].clone();
-        ctx.process_async(json!({"id":31002,"method":"DOM.querySelector","params":{"nodeId":root,"selector":"#upload"}})).await;
-        let node = take_response_by_id(&mut ctx, 31002)["result"]["nodeId"].clone();
-        let identifier = match reference {
-            "nodeId" => node,
-            "backendNodeId" => {
-                ctx.process_async(
-                    json!({"id":31003,"method":"DOM.describeNode","params":{"nodeId":node}}),
+            ctx.process_async(json!({"id":31001,"method":"DOM.getDocument"}))
+                .await;
+            let root = take_response_by_id(&mut ctx, 31001)["result"]["root"]["nodeId"].clone();
+            ctx.process_async(json!({"id":31002,"method":"DOM.querySelector","params":{"nodeId":root,"selector":"#upload"}})).await;
+            let node = take_response_by_id(&mut ctx, 31002)["result"]["nodeId"].clone();
+            let identifier = match reference {
+                "nodeId" => node,
+                "backendNodeId" => {
+                    ctx.process_async(
+                        json!({"id":31003,"method":"DOM.describeNode","params":{"nodeId":node}}),
+                    )
+                    .await;
+                    take_response_by_id(&mut ctx, 31003)["result"]["node"]["backendNodeId"].clone()
+                }
+                "objectId" => {
+                    ctx.process_async(json!({"id":31004,"method":"Runtime.evaluate","params":{"expression":"document.getElementById('upload')"}})).await;
+                    take_response_by_id(&mut ctx, 31004)["result"]["result"]["objectId"].clone()
+                }
+                _ => unreachable!(),
+            };
+            assert!(!identifier.is_null(), "{reference} must resolve");
+            let mut params = json!({"files":[directory.to_string_lossy()]});
+            params[reference] = identifier;
+            if adapter_reply {
+                let pending = start_adapter_reply_file_input(&ctx, 31005, params);
+                let messages = finish_adapter_reply_file_input(&mut ctx, pending).await;
+                ctx.sent.extend(messages);
+            } else {
+                ctx.process_and_wait_for_response_async(
+                    json!({"id":31005,"method":"DOM.setFileInputFiles","params":params}),
                 )
                 .await;
-                take_response_by_id(&mut ctx, 31003)["result"]["node"]["backendNodeId"].clone()
             }
-            "objectId" => {
-                ctx.process_async(json!({"id":31004,"method":"Runtime.evaluate","params":{"expression":"document.getElementById('upload')"}})).await;
-                take_response_by_id(&mut ctx, 31004)["result"]["result"]["objectId"].clone()
-            }
-            _ => unreachable!(),
-        };
-        assert!(!identifier.is_null(), "{reference} must resolve");
-        let mut params = json!({"files":[directory.to_string_lossy()]});
-        params[reference] = identifier;
-        ctx.process_and_wait_for_response_async(
-            json!({"id":31005,"method":"DOM.setFileInputFiles","params":params}),
-        )
-        .await;
-        assert_eq!(
-            take_response_by_id(&mut ctx, 31005)["result"],
-            json!({}),
-            "{reference}"
-        );
-        ctx.process_and_wait_for_response_async(json!({
-            "id":31006,"method":"Runtime.evaluate","params":{
-                "expression":r#"(async () => {
+            assert_eq!(
+                take_response_by_id(&mut ctx, 31005)["result"],
+                json!({}),
+                "{reference}"
+            );
+            ctx.process_and_wait_for_response_async(json!({
+                "id":31006,"method":"Runtime.evaluate","params":{
+                    "expression":r#"(async () => {
                     const input = document.getElementById('upload');
                     const list = input.files;
                     const files = [...list];
@@ -77,21 +116,22 @@ async fn directory_upload_crosses_cdp_filelist_clone_and_multipart_boundaries() 
                         explicitFilename: body.includes('filename="explicit.txt"')
                     };
                 })()"#,
-                "awaitPromise":true,"returnByValue":true
-            }
-        }))
-        .await;
-        let reply = take_response_by_id(&mut ctx, 31006);
-        assert_eq!(
-            reply["result"]["result"]["value"],
-            json!({
-                "paths":["chosen/a.txt","chosen/nested/b.txt"],
-                "contents":["alpha","beta"],
-                "clone":"chosen/a.txt", "transfer":"chosen/a.txt", "cached":true,
-                "defaultFilename":true,"explicitFilename":true
-            }),
-            "{reference}: {reply}"
-        );
+                    "awaitPromise":true,"returnByValue":true
+                }
+            }))
+            .await;
+            let reply = take_response_by_id(&mut ctx, 31006);
+            assert_eq!(
+                reply["result"]["result"]["value"],
+                json!({
+                    "paths":["chosen/a.txt","chosen/nested/b.txt"],
+                    "contents":["alpha","beta"],
+                    "clone":"chosen/a.txt", "transfer":"chosen/a.txt", "cached":true,
+                    "defaultFilename":true,"explicitFilename":true
+                }),
+                "{reference}: {reply}"
+            );
+        }
     }
     std::fs::remove_dir_all(scratch).unwrap();
 }
@@ -260,5 +300,62 @@ async fn directory_upload_symlink_replacements_reject_blob_and_file_reader_reads
             "parent={replace_parent}: {reply}"
         );
         fs::remove_dir_all(scratch).unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn adapter_reply_file_input_preparation_keeps_its_original_page() {
+    let mut ctx = TestContext::new();
+    load_bc(&mut ctx, "BID-adapter_reply-files");
+    navigate_to_data_html_async(
+        &mut ctx,
+        31500,
+        "<!doctype html><input type=file id=upload>",
+    )
+    .await;
+    ctx.process_async(json!({"id":31501,"method":"DOM.getDocument"}))
+        .await;
+    let root = take_response_by_id(&mut ctx, 31501)["result"]["root"]["nodeId"].clone();
+    ctx.process_async(json!({"id":31502,"method":"DOM.querySelector","params":{"nodeId":root,"selector":"#upload"}})).await;
+    let node = take_response_by_id(&mut ctx, 31502)["result"]["nodeId"].clone();
+    let pending = start_adapter_reply_file_input(&ctx, 31503, json!({"nodeId":node,"files":[]}));
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<!doctype html><input type=file id=upload>",
+        None,
+    )
+    .await;
+    let messages = finish_adapter_reply_file_input(&mut ctx, pending).await;
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == 31503)
+        .expect("old command must settle");
+    assert_eq!(response["error"]["code"], -32000);
+    assert_eq!(response["error"]["message"], "NoDocumentLoaded");
+    ctx.process_async(json!({"id":31504,"method":"Runtime.evaluate","params":{"expression":"document.getElementById('upload').files.length","returnByValue":true}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 31504)["result"]["result"]["value"],
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn adapter_reply_file_input_checks_node_before_reporting_bad_paths() {
+    for field in ["nodeId", "backendNodeId"] {
+        let mut ctx = TestContext::new();
+        load_bc(&mut ctx, "BID-adapter_reply-file-preflight");
+        navigate_to_data_html_async(&mut ctx, 31600, "<!doctype html><input type=file>").await;
+        let mut params = json!({"files":["/moli-nonexistent-directory/upload.txt"]});
+        params[field] = json!(1);
+        let pending = start_adapter_reply_file_input(&ctx, 31601, params);
+        let messages = finish_adapter_reply_file_input(&mut ctx, pending).await;
+        let response = messages
+            .iter()
+            .find(|message| message["id"] == 31601)
+            .expect("preflight response");
+        assert_eq!(response["error"]["code"], -32000);
+        assert_eq!(
+            response["error"]["message"],
+            "Could not find node with given id"
+        );
     }
 }

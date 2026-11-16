@@ -17,17 +17,6 @@ fn start_devtools_dom_command(
     super::start_devtools_dom_command_for_owner(conn, command_id, &owner, command)
 }
 
-fn unique_test_file_path(name: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock should be after UNIX_EPOCH")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "moli-protocol-{name}-{}-{nanos}.txt",
-        std::process::id()
-    ))
-}
-
 #[test]
 fn set_child_nodes_output_preserves_typed_automation_sidecar() {
     let mut out = super::DomCommandOutput::default();
@@ -1372,72 +1361,6 @@ fn devtools_dom_entry_routes_object_reference_command_to_dom_owner() {
     };
     assert_eq!(error.code, -32000);
     assert_eq!(error.message, "NoDocumentLoaded");
-}
-
-#[tokio::test]
-async fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
-    let conn = CdpConnection::new();
-    let file_path = unique_test_file_path("set-file-object");
-    std::fs::write(&file_path, b"upload bytes").expect("test upload file should be writable");
-    let params = json!({
-        "objectId": "remote-file-input",
-        "files": [file_path.to_string_lossy()]
-    });
-    let cmd = Cmd::for_test(
-        Some(104),
-        "DOM.setFileInputFiles",
-        &params,
-        Some("SID-dom"),
-        r#"{"id":104,"method":"DOM.setFileInputFiles"}"#,
-    );
-
-    let command = super::super::set_file_input::build_cdp_set_file_input_files_command(&conn, &cmd);
-    let Ok(Some(command)) = command else {
-        panic!("valid setFileInputFiles object command");
-    };
-
-    assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
-    assert_eq!(
-        command.context.session_id.as_ref().map(|id| id.as_str()),
-        Some("SID-dom")
-    );
-    assert_eq!(command.object_id.as_str(), "remote-file-input");
-    assert_eq!(command.files.len(), 1);
-    assert_eq!(
-        command.files[0].data.read_blocking().unwrap(),
-        b"upload bytes"
-    );
-    assert!(
-        command.files[0]
-            .name
-            .starts_with("moli-protocol-set-file-object-"),
-        "unexpected selected file name: {}",
-        command.files[0].name
-    );
-    assert!(!command.append);
-    let _ = std::fs::remove_file(&file_path);
-}
-
-#[test]
-fn cdp_set_file_input_files_node_reference_falls_back_to_pending_node_reference_path() {
-    let conn = CdpConnection::new();
-    let params = json!({
-        "backendNodeId": 25,
-        "files": ["/tmp/upload.txt"]
-    });
-    let cmd = Cmd::for_test(
-        Some(105),
-        "DOM.setFileInputFiles",
-        &params,
-        Some("SID-dom"),
-        r#"{"id":105,"method":"DOM.setFileInputFiles"}"#,
-    );
-
-    let command = super::super::set_file_input::build_cdp_set_file_input_files_command(&conn, &cmd);
-
-    let Ok(None) = command else {
-        panic!("setFileInputFiles without objectId should use node-reference pending path");
-    };
 }
 
 #[tokio::test(flavor = "multi_thread")]

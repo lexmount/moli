@@ -44,6 +44,7 @@ use node_payload::{collect_flattened_node_snapshot, node_snapshot_to_cdp};
 
 pub(crate) enum DomCommandDispatchStep {
     Pending(Box<PendingDomCommandDispatch>),
+    Workflow(crate::conn::PreparedCommandWorkflow),
     Complete(CommandOutputPlan),
 }
 
@@ -113,6 +114,10 @@ pub(crate) fn try_start_dom_command_dispatch(
             -32000,
             "DOM agent hasn't been enabled",
         )));
+    }
+
+    if action == DomAction::SetFileInputFiles {
+        return Some(resolve::files::start_adapter_reply(conn, cmd));
     }
 
     match action {

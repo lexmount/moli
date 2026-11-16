@@ -7,7 +7,6 @@ use moli_core::{
     RendererPageCommand as Command, RendererPageReply as Reply,
 };
 
-mod files;
 mod mutation;
 mod remote_object;
 
@@ -41,7 +40,7 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
         )));
     }
     if action == DomAction::SetFileInputFiles {
-        return Some(files::try_start(conn, cmd));
+        return Some(super::files::start_native(conn, cmd));
     }
     match prepare(conn, cmd, action) {
         Ok(Some(operation)) => Some(native::start_operation(conn, cmd, operation)),
@@ -504,7 +503,7 @@ fn prepare(
     operation.map(Some)
 }
 
-fn node_not_found() -> Response {
+pub(super) fn node_not_found() -> Response {
     Response::error(-32000, "Could not find node with given id")
 }
 

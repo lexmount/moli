@@ -107,7 +107,8 @@ impl BlobSource for FileSource {
 /// Resolve selected paths without opening or copying file contents. A single
 /// directory is enumerated in stable order; links below it are not traversed.
 /// An explicitly selected directory link retains its chosen display name.
-pub(crate) fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFile>> {
+#[cfg(test)]
+fn selected_files_from_paths(paths: &[String]) -> io::Result<Vec<SelectedFile>> {
     select_files(paths, None)
 }
 
