@@ -12,7 +12,6 @@ use indexmap::IndexMap;
 use moli_fetch::{BrowserRequestMetadata, RawResponse, Request, RequestResourceType, Response};
 use moli_http_cache::{cacheable_response_parts_policy, unix_now_ms};
 use parking_lot::Mutex;
-use tokio::sync::Notify;
 use url::Url;
 
 /// Strong-reference budget for renderer subresources.
@@ -154,7 +153,6 @@ pub(in crate::network) enum ScriptTextCacheLookup {
 
 pub(in crate::network) struct ScriptTextLoad {
     state: Mutex<ScriptTextLoadState>,
-    notify: Notify,
 }
 
 #[derive(Default)]
@@ -170,8 +168,9 @@ struct ScriptTextLoadState {
 
 /// Cancellable registration for one context waiting on a shared script load.
 ///
-/// Dropping one lease removes only that callback. If it was the last pending
-/// consumer, the shared transport is cancelled; other Documents or Workers
+/// Both future and callback waiters own a lease. Dropping one removes only
+/// that consumer. If it was the last pending consumer, the shared transport
+/// is cancelled; other Documents or Workers
 /// are never affected by a sibling consumer retiring.
 pub(in crate::network) struct ScriptTextConsumerLease {
     load: Weak<ScriptTextLoad>,
@@ -196,7 +195,6 @@ impl ScriptTextLoad {
     fn pending() -> SharedScriptTextLoad {
         Arc::new(Self {
             state: Mutex::new(ScriptTextLoadState::default()),
-            notify: Notify::new(),
         })
     }
 
@@ -204,16 +202,13 @@ impl ScriptTextLoad {
         self.state.lock().result.clone()
     }
 
-    pub(in crate::network) async fn wait(&self) -> ScriptTextLoadResult {
-        loop {
-            let notified = self.notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if let Some(result) = self.try_result() {
-                return result;
-            }
-            notified.await;
-        }
+    pub(in crate::network) async fn wait(self: &Arc<Self>) -> ScriptTextLoadResult {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _consumer = self.wait_callback(Box::new(move |result| {
+            let _ = tx.send(result);
+        }));
+        rx.await
+            .expect("a registered script consumer must receive its result")
     }
 
     pub(in crate::network) fn wait_callback(
@@ -291,7 +286,6 @@ impl ScriptTextLoad {
                 Vec::new()
             }
         };
-        self.notify.notify_waiters();
         for callback in callbacks {
             callback(result.clone());
         }
@@ -934,6 +928,43 @@ mod tests {
         assert!(!transport_cancel.is_cancelled());
         second.cancel();
 
+        assert!(transport_cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancelling_callback_keeps_shared_script_future_consumer_alive() {
+        let load = ScriptTextLoad::pending();
+        let callback = load
+            .wait_callback(Box::new(|_| panic!("cancelled consumer must not run")))
+            .expect("pending callback consumer");
+        let mut waiter = Box::pin(load.wait());
+        assert!(futures_util::poll!(waiter.as_mut()).is_pending());
+        let transport_cancel = moli_fetch::FetchCancelHandle::new();
+        load.attach_transport_cancel(transport_cancel.clone());
+
+        callback.cancel();
+        assert!(!transport_cancel.is_cancelled());
+        let expected = response("https://cache.test/app.js", "window.loaded = true;");
+        load.finish(Ok(expected.clone()));
+        let result = waiter.await.unwrap();
+        assert_eq!(result.status, 200);
+        assert_eq!(result.body_text(), expected.body_text());
+    }
+
+    #[tokio::test]
+    async fn dropping_last_shared_script_future_consumer_cancels_transport() {
+        let load = ScriptTextLoad::pending();
+        let callback = load
+            .wait_callback(Box::new(|_| {}))
+            .expect("pending callback consumer");
+        let mut waiter = Box::pin(load.wait());
+        assert!(futures_util::poll!(waiter.as_mut()).is_pending());
+        let transport_cancel = moli_fetch::FetchCancelHandle::new();
+        load.attach_transport_cancel(transport_cancel.clone());
+
+        callback.cancel();
+        assert!(!transport_cancel.is_cancelled());
+        drop(waiter);
         assert!(transport_cancel.is_cancelled());
     }
 
