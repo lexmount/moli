@@ -6,9 +6,9 @@ use crate::LayoutPosition;
 
 use super::{
     model::{
-        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutResolvedGridTracks,
-        LayoutSize, LayoutTransform2D, LayoutUsedSize,
+        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentId,
+        LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
+        LayoutResolvedGridTracks, LayoutSize, LayoutTransform2D, LayoutUsedSize,
     },
     query::{
         LayoutElementMetrics, LayoutNodeOutput, LayoutResizeObserverMetrics,
@@ -390,8 +390,7 @@ where
     }
 
     pub(super) fn client_rects_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
-        output
-            .fragments
+        self.geometry_fragment_ids(output)
             .iter()
             .filter_map(|id| self.fragment(*id))
             .filter(|fragment| {
@@ -424,14 +423,102 @@ where
         })
     }
 
+    /// The element's own fragments, plus the block boxes that block-in-inline
+    /// splitting moved out of an inline element (e.g. `<a><div>..</div></a>`).
+    /// Those blocks are part of the inline's geometry; its zero-width edge
+    /// fragments around them are dropped.
+    fn geometry_fragment_ids<'a>(
+        &self,
+        output: &'a LayoutNodeOutput,
+    ) -> std::borrow::Cow<'a, [LayoutFragmentId]> {
+        let is_inline = |id: &LayoutFragmentId| {
+            self.fragment(*id).is_some_and(|fragment| {
+                matches!(fragment.kind, LayoutFragmentKind::InlineBox { .. })
+            })
+        };
+        // Only a block-in-inline split creates continuation boxes, so ordinary
+        // inlines do no extra work.
+        let Some(principal) = output.principal_box.filter(|principal| {
+            output.fragments.iter().any(|id| {
+                self.fragment(*id).is_some_and(|fragment| {
+                    matches!(fragment.kind, LayoutFragmentKind::InlineBox { box_id, .. } if box_id != *principal)
+                })
+            })
+        }) else {
+            return output.fragments.as_slice().into();
+        };
+        let has_inline_fragment =
+            |layout_box: &FrozenLayoutBox<N>| layout_box.geometry.fragments.iter().any(is_inline);
+        // The box's source ancestry reaches this inline through non-atomic
+        // inlines only (e.g. `<a><span><div>`).
+        let split_from_principal = |layout_box: &FrozenLayoutBox<N>| {
+            let mut parent = layout_box.geometry.structural_parent;
+            while let Some(id) = parent {
+                if id == principal {
+                    return true;
+                }
+                match self.boxes.get(id.index()) {
+                    Some(ancestor) if has_inline_fragment(ancestor) => {
+                        parent = ancestor.geometry.structural_parent;
+                    }
+                    _ => return false,
+                }
+            }
+            false
+        };
+        let split_blocks = self
+            .boxes
+            .iter()
+            .filter(|layout_box| {
+                !has_inline_fragment(layout_box)
+                    && split_from_principal(layout_box)
+                    && layout_box
+                        .geometry
+                        .parent
+                        .and_then(|parent| self.boxes.get(parent.index()))
+                        .is_some_and(|parent| !has_inline_fragment(parent))
+            })
+            .flat_map(|layout_box| layout_box.geometry.fragments.iter().copied())
+            .filter(|id| {
+                self.fragment(*id)
+                    .is_some_and(|fragment| matches!(fragment.kind, LayoutFragmentKind::Box { .. }))
+            })
+            .collect::<Vec<_>>();
+        if split_blocks.is_empty() {
+            return output.fragments.as_slice().into();
+        }
+        let top = |id: &LayoutFragmentId| {
+            self.fragment(*id)
+                .and_then(|fragment| {
+                    self.coordinate_space(fragment.coordinate_space)
+                        .map(|space| {
+                            space
+                                .local_to_viewport
+                                .map_rect(fragment.rect)
+                                .bounding_rect()
+                                .y
+                        })
+                })
+                .unwrap_or_default()
+        };
+        let mut ids = output
+            .fragments
+            .iter()
+            .copied()
+            .filter(|id| !is_inline(id) || self.fragment(*id).is_some_and(|f| f.rect.width > 0.0))
+            .chain(split_blocks)
+            .collect::<Vec<_>>();
+        ids.sort_by(|a, b| top(a).total_cmp(&top(b)));
+        ids.into()
+    }
+
     pub fn content_quads_for_source(&self, source: N) -> Vec<LayoutQuad> {
         self.source_output(source)
             .map_or_else(Vec::new, |output| self.content_quads_for_output(&output))
     }
 
     pub(super) fn content_quads_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
-        output
-            .fragments
+        self.geometry_fragment_ids(output)
             .iter()
             .filter_map(|id| self.fragment(*id))
             .filter(|fragment| {
