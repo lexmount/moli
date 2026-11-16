@@ -1153,6 +1153,7 @@ mod tests {
             BrowserRequestMetadata::Fetch,
             BrowserRequestMetadata::Xhr,
             BrowserRequestMetadata::EventSource,
+            BrowserRequestMetadata::Manifest,
             BrowserRequestMetadata::Audio,
             BrowserRequestMetadata::Video,
         ] {
@@ -1167,6 +1168,7 @@ mod tests {
                 BrowserRequestMetadata::Fetch
                     | BrowserRequestMetadata::Xhr
                     | BrowserRequestMetadata::EventSource
+                    | BrowserRequestMetadata::Manifest
                     | BrowserRequestMetadata::Audio
                     | BrowserRequestMetadata::Video
             ))
@@ -1195,7 +1197,7 @@ mod tests {
             let mut config = FetchConfig::default();
             config.set_web_security_disabled(disabled);
             for (target, expected) in [
-                (source.join("other.css").unwrap(), None),
+                (source.join("other.css").unwrap(), Some("https://page.test")),
                 (
                     url("https://other.test/style.css"),
                     Some(if disabled {
@@ -1215,6 +1217,76 @@ mod tests {
                     .unwrap();
                 let headers = outgoing_request_headers_for_url(&config, &request, &target, None);
                 assert_eq!(header_value(&headers, "origin").as_deref(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn form_redirects_keep_the_selected_origin_independent_of_referrer_policy() {
+        let source = url("https://page.test/form");
+        let first = url("https://other.test/submit");
+        for disabled in [false, true] {
+            let mut config = FetchConfig::default();
+            config.set_web_security_disabled(disabled);
+            for (policy, response_policy) in [
+                ("no-referrer", "unsafe-url"),
+                ("same-origin", "unsafe-url"),
+                ("origin", "unsafe-url"),
+                ("origin", "no-referrer"),
+            ] {
+                for status in [302, 307, 308] {
+                    for target in [first.join("received").unwrap(), source.clone()] {
+                        let mut request = Request::new("POST", first.as_str(), None, Vec::new())
+                            .unwrap()
+                            .with_request_origin(moli_url::WebOrigin::from_url(&source))
+                            .with_initiator_url(&source)
+                            .with_top_level_navigation_cookie_context()
+                            .with_subresource_request_metadata(crate::SubresourceRequestMetadata {
+                                document_referrer_policy: Some(policy.to_owned()),
+                                ..Default::default()
+                            });
+                        let expected = if policy == "origin" {
+                            "https://page.test"
+                        } else {
+                            "null"
+                        };
+                        let headers =
+                            outgoing_request_headers_for_url(&config, &request, &first, None);
+                        assert_eq!(header_value(&headers, "origin").as_deref(), Some(expected));
+                        let mut hop = redirect(&first, &target);
+                        hop.status = status;
+                        hop.headers.push((
+                            "Referrer-Policy".to_owned(),
+                            response_policy.as_bytes().to_vec(),
+                        ));
+                        request
+                            .follow_redirect_with_web_security(hop, disabled)
+                            .unwrap();
+                        for headers in [
+                            outgoing_request_headers_for_url(&config, &request, &target, None),
+                            request
+                                .interception_request_headers_with_web_security(disabled)
+                                .to_byte_strings(),
+                        ] {
+                            assert_eq!(
+                                header_value(&headers, "origin").as_deref(),
+                                (status != 302).then_some(if target == source {
+                                    "null"
+                                } else {
+                                    expected
+                                }),
+                                "{policy}, {response_policy}, {status}, {target}, disabled={disabled}"
+                            );
+                        }
+                        assert_eq!(
+                            request.request_origin().unwrap().ascii_serialization(),
+                            "https://page.test"
+                        );
+                        if policy != "origin" || response_policy == "no-referrer" {
+                            assert!(request.referrer_header_value(&target).is_none());
+                        }
+                    }
+                }
             }
         }
     }

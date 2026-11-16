@@ -69,6 +69,9 @@ pub struct Request {
     pub browser_request_metadata: Option<BrowserRequestMetadata>,
     browser_navigation_kind: BrowserNavigationRequestKind,
     context: RequestContext,
+    /// Non-CORS loaders carry the selected Origin across redirects, independently
+    /// of subsequent referrer policies. The actual request origin is unchanged.
+    redirect_origin_header: Option<String>,
     referrer_source: ReferrerSource,
     /// Retained independently so Fetch can reset an explicit selection to client.
     client_referrer_url: Option<Url>,
@@ -667,6 +670,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             context: RequestContext::Http,
+            redirect_origin_header: None,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
             use_page_network_policy: false,
@@ -706,6 +710,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             context: RequestContext::Http,
+            redirect_origin_header: None,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
             use_page_network_policy: false,
@@ -778,6 +783,7 @@ impl Request {
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             context: RequestContext::Http,
+            redirect_origin_header: None,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
             use_page_network_policy: false,
@@ -1047,6 +1053,9 @@ impl Request {
         response_url: &Url,
         response_headers: &[(String, Vec<u8>)],
     ) {
+        if self.request_mode != RequestMode::Cors {
+            self.redirect_origin_header = self.origin_header_value(response_url, false);
+        }
         self.referrer_source = self
             .referrer_header_value(response_url)
             .and_then(|value| Url::parse(&value).ok())
@@ -1180,6 +1189,7 @@ impl Request {
                     BrowserRequestMetadata::Fetch
                         | BrowserRequestMetadata::Xhr
                         | BrowserRequestMetadata::EventSource
+                        | BrowserRequestMetadata::Manifest
                         | BrowserRequestMetadata::Audio
                         | BrowserRequestMetadata::Video
                 )
@@ -1194,9 +1204,25 @@ impl Request {
         let safe_method =
             self.method.eq_ignore_ascii_case("GET") || self.method.eq_ignore_ascii_case("HEAD");
         if safe_method
-            && (self.request_mode != RequestMode::Cors || !self.has_cross_origin_url(request_url))
+            && (self.request_mode != RequestMode::Cors
+                || (!renderer_cors_origin && !self.has_cross_origin_url(request_url)))
         {
             return None;
+        }
+        // Without a CORS loader, Chromium carries the existing header and makes
+        // it opaque on the first cross-origin redirect, including navigation.
+        if (disabled || self.request_mode != RequestMode::Cors)
+            && self
+                .redirect_chain
+                .iter()
+                .any(|redirect| !same_origin(&redirect.from_url, &redirect.to_url))
+        {
+            return Some("null".to_owned());
+        }
+        if self.request_mode != RequestMode::Cors
+            && let Some(origin) = &self.redirect_origin_header
+        {
+            return Some(origin.clone());
         }
         // Unsafe non-CORS requests (including form submissions) must not
         // disclose an origin that their referrer policy suppresses.
@@ -1215,16 +1241,6 @@ impl Request {
             if suppress_origin {
                 return Some("null".to_owned());
             }
-        }
-        // With the CORS loader bypassed, Chromium's ordinary network redirect
-        // path makes a carried Origin opaque on the first cross-origin hop.
-        if disabled
-            && self
-                .redirect_chain
-                .iter()
-                .any(|redirect| !same_origin(&redirect.from_url, &redirect.to_url))
-        {
-            return Some("null".to_owned());
         }
         Some(self.serialized_origin())
     }
