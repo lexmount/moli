@@ -1,3 +1,6 @@
+#[path = "referrer_policy_inheritance.rs"]
+mod referrer_policy_inheritance;
+
 use super::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
