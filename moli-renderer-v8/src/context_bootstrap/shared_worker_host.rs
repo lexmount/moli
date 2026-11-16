@@ -300,8 +300,14 @@ fn shared_worker_constructor_callback_inner<'s>(
     .with_service_worker_runtime(context.browser_context_runtime.service_worker_runtime())
     .with_indexed_db_manager(context.indexed_db_manager)
     .with_storage_bucket_store(context.storage_bucket_store);
-    let launch_context =
+    let mut launch_context =
         SharedWorkerLaunchContext::new(options.name, context.request_client, execution_policy);
+    if descriptor.extended_lifetime() {
+        launch_context.service_lane_owner = unsafe { &*host_ptr }
+            .page_script_environment()
+            .and_then(|environment| environment.auxiliary_allocator())
+            .and_then(|allocator| allocator.runtime_lease());
+    }
     let params = SharedWorkerLaunchParams::new(
         key,
         script_load,
@@ -313,9 +319,11 @@ fn shared_worker_constructor_callback_inner<'s>(
         context.client_event_realm,
         context.worker_host_bridge_sender,
     );
-    let client_id = context
-        .browser_context_runtime
-        .connect_shared_worker(descriptor, params);
+    let client_id = context.browser_context_runtime.connect_shared_worker(
+        descriptor,
+        params,
+        context.resource_task_runner,
+    );
     set_private_value(
         scope,
         worker,

@@ -171,7 +171,7 @@ use super::resource_store::{
 #[cfg(test)]
 use crate::types::AsyncSubresourceNetworkContext;
 
-const SERVICE_WORKER_DEFAULT_IDLE_DELAY_MS: u64 = 30_000;
+pub(crate) const SERVICE_WORKER_DEFAULT_IDLE_DELAY_MS: u64 = 30_000;
 const SERVICE_WORKER_JOB_ABORTED_ERROR: &str = "service worker job was aborted";
 const SERVICE_WORKER_FORCE_UPDATE_DEVTOOLS_CONSOLE_MESSAGE: &str = concat!(
     "warn: ",
