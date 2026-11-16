@@ -4,7 +4,7 @@ use crate::webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 use moli_webapi_declare::WebApiObject;
 
 mod base;
-mod device;
+use moli_webapi::events::device;
 mod init;
 mod kind;
 mod message;
@@ -17,12 +17,11 @@ pub(crate) use subclasses::initialize_native_security_policy_violation_event;
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 mod submit;
 mod ui;
+use moli_webapi::events::value;
 pub(in crate::context_bootstrap) use ui::initialize_legacy_ui_event;
-mod value;
 mod wrappers;
 
-pub(in crate::context_bootstrap) mod audio;
-pub(in crate::context_bootstrap) mod speech;
+pub(in crate::context_bootstrap) use moli_webapi::events::{audio, speech};
 
 pub(in crate::context_bootstrap) use device::{
     device_motion_event_constructor, device_orientation_event_constructor,

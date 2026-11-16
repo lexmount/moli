@@ -1,16 +1,15 @@
 //! Script-constructed device events. Sensor delivery and permission prompting
 //! are separate from these event payloads.
 
+use super::EventInit;
 use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state,
 };
-use crate::context_bootstrap::events::EventInit;
-use crate::{
-    util::{get_private_value, new_null_prototype_object, throw_type_error, v8str},
-    web_api_interfaces, webidl,
-};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, new_null_prototype_object, throw_type_error, v8str};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 const ALPHA: &str = "__moliDeviceAlpha";
@@ -155,7 +154,7 @@ struct RotationRateInit {
     gamma: Option<f64>,
 }
 
-pub(in crate::context_bootstrap) fn install_device_event_template_bindings<'s>(
+pub fn install_device_event_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -205,11 +204,8 @@ fn acceleration_value<'s>(
     value: &AccelerationInit,
     _: SnapshotPrototype,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "DeviceMotionEventAcceleration",
-    )
-    .ok()?;
+    let prototype =
+        moli_v8_util::global_constructor_prototype(scope, "DeviceMotionEventAcceleration")?;
     let object = AccelerationObject::new(prototype).bind(scope).ok()?;
     value.initialize_snapshot(scope, object)?;
     Some(object.into())
@@ -220,11 +216,8 @@ fn rotation_rate_value<'s>(
     value: &RotationRateInit,
     _: SnapshotPrototype,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "DeviceMotionEventRotationRate",
-    )
-    .ok()?;
+    let prototype =
+        moli_v8_util::global_constructor_prototype(scope, "DeviceMotionEventRotationRate")?;
     let object = RotationRateObject::new(prototype).bind(scope).ok()?;
     value.initialize_snapshot(scope, object)?;
     Some(object.into())
@@ -324,7 +317,7 @@ fn device_event_constructor<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn device_orientation_event_constructor<'s>(
+pub fn device_orientation_event_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -332,7 +325,7 @@ pub(in crate::context_bootstrap) fn device_orientation_event_constructor<'s>(
     device_event_constructor(scope, args, rv, DeviceEventKind::Orientation);
 }
 
-pub(in crate::context_bootstrap) fn device_motion_event_constructor<'s>(
+pub fn device_motion_event_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,

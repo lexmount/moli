@@ -4,11 +4,10 @@ use super::{
     EventInit, define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state,
 };
-use crate::{
-    util::{new_null_prototype_object, throw_type_error, v8str},
-    web_api_interfaces, webidl,
-};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{new_null_prototype_object, throw_type_error, v8str};
 use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 const UTTERANCE: &str = "__moliSpeechEventUtterance";
@@ -19,7 +18,7 @@ const NAME: &str = "__moliSpeechEventName";
 const ERROR: &str = "__moliSpeechEventError";
 
 #[derive(Clone, Copy)]
-pub(in crate::context_bootstrap) enum SpeechEventKind {
+pub enum SpeechEventKind {
     Synthesis,
     Error,
 }
@@ -117,7 +116,7 @@ fn payload_getter<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -138,7 +137,7 @@ pub(in crate::context_bootstrap) fn install<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn build_template<'s>(
+pub fn build_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     kind: SpeechEventKind,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
