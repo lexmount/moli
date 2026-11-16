@@ -1,9 +1,9 @@
 use super::helpers::{require_url_receiver, url_href_slot};
 use super::*;
-use crate::util::{callback_data_index_value, callback_data_item, get_private_value};
-use crate::web_api_interfaces;
-use crate::webidl;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{callback_data_index_value, callback_data_item, get_private_value};
 use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webidl as webidl;
 
 #[derive(Clone, Copy)]
 enum UrlAttribute {
@@ -139,7 +139,7 @@ struct UrlPrototypeAccessorsDeclaration {
     search_params: (),
 }
 
-pub(in crate::context_bootstrap::url_form) fn initialize_url_prototype_accessors<'s>(
+pub(crate) fn initialize_url_prototype_accessors<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     prototype: v8::Local<'s, v8::ObjectTemplate>,
 ) {

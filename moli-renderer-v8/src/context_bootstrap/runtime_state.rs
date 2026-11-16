@@ -1158,7 +1158,8 @@ pub(crate) fn install_lightweight_popup_legacy_objects<'s>(
     window: v8::Local<'s, v8::Object>,
     navigator: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let external = super::external::build_external_object(scope)?;
+    let external = super::external::build_external_object(scope)
+        .ok_or_else(|| anyhow!("failed to create External"))?;
     set_private_value(scope, window, WINDOW_NAVIGATOR_SLOT, navigator.into());
     set_private_value(scope, window, WINDOW_EXTERNAL_SLOT, external.into());
     let navigator_slot = window_surface_callback_data(scope, window, WINDOW_NAVIGATOR_SLOT);

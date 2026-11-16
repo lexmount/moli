@@ -1,8 +1,8 @@
 use super::*;
-use crate::util::{get_private_value, set_private_value};
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, set_private_value};
 
-pub(in crate::context_bootstrap) fn callback_value_string(
+pub fn callback_value_string(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<String> {
@@ -27,7 +27,7 @@ pub(super) fn can_parse_url_input(input: &str, base: Option<&str>) -> bool {
     resolve_url_constructor_input(input, base).is_ok()
 }
 
-pub(in crate::context_bootstrap) fn url_href_slot<'s>(
+pub(crate) fn url_href_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
@@ -36,7 +36,7 @@ pub(in crate::context_bootstrap) fn url_href_slot<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
 }
 
-pub(in crate::context_bootstrap) fn require_url_receiver<'s>(
+pub(crate) fn require_url_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -47,14 +47,14 @@ pub(in crate::context_bootstrap) fn require_url_receiver<'s>(
     None
 }
 
-pub(in crate::context_bootstrap) fn url_object_value<'s>(
+pub(crate) fn url_object_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
     url_href_slot(scope, object).and_then(|href| url::Url::parse(&href).ok())
 }
 
-pub(in crate::context_bootstrap) fn apply_url_update<'s>(
+pub(crate) fn apply_url_update<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     url: &url::Url,

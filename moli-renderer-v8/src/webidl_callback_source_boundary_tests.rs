@@ -54,9 +54,11 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
 const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     // Typed Web IDL callback adapters. API-specific owner/currentness and
     // completion policy remain outside the renderer-neutral callback crate.
+    // The synchronous function adapter moved unchanged to moli-webapi::callbacks;
+    // only the callback-interface adapter remains in this renderer inventory.
     allowed(
         "callback_invocation.rs",
-        2,
+        1,
         DirectCallOwner::TypedWebIdlAdapter,
     ),
     allowed(

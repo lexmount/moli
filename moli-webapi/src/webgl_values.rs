@@ -1,12 +1,13 @@
 //! Shared value interfaces. Resource allocation and shader reflection remain
 //! owned by the WebGL backend; exposing their types does not create GPU objects.
 
-use super::*;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, v8str};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
-pub(super) const PRECISION: &str = "__moliWebGlPrecision";
-pub(super) const RANGE_MIN: &str = "__moliWebGlRangeMin";
-pub(super) const RANGE_MAX: &str = "__moliWebGlRangeMax";
+pub const PRECISION: &str = "__moliWebGlPrecision";
+pub const RANGE_MIN: &str = "__moliWebGlRangeMin";
+pub const RANGE_MAX: &str = "__moliWebGlRangeMax";
 const ACTIVE_SIZE: &str = "__moliWebGlActiveSize";
 const ACTIVE_TYPE: &str = "__moliWebGlActiveType";
 const ACTIVE_NAME: &str = "__moliWebGlActiveName";
@@ -33,7 +34,7 @@ struct ActiveInfoAttributes {
     name: (),
 }
 
-pub(in crate::context_bootstrap::canvas) fn install_value_template_bindings<'s>(
+pub fn install_value_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,

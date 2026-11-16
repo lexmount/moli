@@ -1,5 +1,5 @@
 use super::*;
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 use moli_url::search_params::{SearchParamPair, SearchParams, serialize_search_params_pairs};
 use moli_webapi_declare::WebApiObject;
 
@@ -12,7 +12,7 @@ struct UrlSearchParamsObjectDeclaration<'s> {
     pairs: v8::Local<'s, v8::Array>,
 }
 
-pub(in crate::context_bootstrap) fn new_url_search_params_object<'s>(
+pub(crate) fn new_url_search_params_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: Option<v8::Local<'s, v8::Object>>,
     initial_pairs: Option<Vec<SearchParamPair>>,
@@ -98,7 +98,7 @@ pub(super) fn url_search_params_is_object<'s>(
     web_api_interfaces::URLSearchParams::is_instance(scope, object)
 }
 
-pub(crate) fn url_search_params_request_body<'s>(
+pub fn url_search_params_request_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
@@ -112,7 +112,13 @@ fn new_string_pairs_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     pairs: &[SearchParamPair],
 ) -> v8::Local<'s, v8::Array> {
-    crate::util::serialize_v8_array(scope, pairs).unwrap_or_else(|| v8::Array::new(scope, 0))
+    {
+        use moli_webapi_declare::WebApiValue;
+        pairs
+            .to_v8_value(scope)
+            .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+            .unwrap_or_else(|| v8::Array::new(scope, 0))
+    }
 }
 
 fn string_pairs_from_array(

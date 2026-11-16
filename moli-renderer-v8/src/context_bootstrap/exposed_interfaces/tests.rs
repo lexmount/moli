@@ -607,6 +607,10 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
             secure_context,
         )
         .expect("worker lazy interfaces should install");
+        // This harness omits eager Worker globals and their final capture. Enter
+        // the same native intrinsic registry before author code can replace URL.
+        super::initialize_realm_interface_registry(scope, realm)
+            .expect("worker intrinsic registry should initialize before script");
         let registry = super::template_registry::ExposedInterfaceTemplateRegistry::current(scope)
             .expect("worker template registry");
         assert_eq!(

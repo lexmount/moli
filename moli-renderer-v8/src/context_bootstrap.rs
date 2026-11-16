@@ -4,8 +4,8 @@ mod animation_runtime;
 mod assets;
 mod bar_prop;
 pub(crate) mod bridge_descriptor;
-mod external;
 pub(crate) use bar_prop::install_window_bar_props;
+use moli_webapi::external;
 pub(crate) use runtime_state::{
     install_lightweight_popup_legacy_objects, window_realm_secure_context_available,
 };
@@ -38,9 +38,11 @@ mod file_api;
 mod form_data_runtime;
 mod history_mutation;
 mod history_runtime;
-mod picture_in_picture;
+use moli_webapi::picture_in_picture;
 #[cfg(test)]
-pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
+mod picture_in_picture_tests;
+#[cfg(test)]
+pub(crate) use picture_in_picture_tests::closed_window_for_test as closed_picture_in_picture_window_for_test;
 pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
@@ -231,8 +233,8 @@ pub(crate) mod svg_runtime;
 mod touch_runtime;
 mod trusted_types;
 mod url_form;
-mod url_search_params_runtime;
-mod video_codecs;
+use moli_webapi::url_search_params as url_search_params_runtime;
+use moli_webapi::video_codecs;
 mod view_transition_runtime;
 mod web_audio_runtime;
 mod web_storage;

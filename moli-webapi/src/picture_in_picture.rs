@@ -1,11 +1,9 @@
 //! Picture-in-Picture interface members. Opening a native window still requires
 //! a presentation backend; these bindings do not manufacture a successful request.
 
-use super::media_queries;
-use crate::{
-    util::{get_private_value, v8str},
-    web_api_interfaces,
-};
+use crate::event_target;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, v8str};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 const WIDTH: &str = "__moliPictureInPictureWindowWidth";
@@ -23,7 +21,7 @@ struct PictureInPictureWindowPrototype {
     onresize: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -74,21 +72,5 @@ fn resize_handler_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let window = target(scope, args.this());
-    media_queries::simple_object_event_set_handler(scope, window, "resize", ON_RESIZE, args.get(0));
-}
-
-/// A closed native window for binding tests, never a production PiP request.
-#[cfg(test)]
-pub(crate) fn closed_window_for_test<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    #[derive(Default, moli_webapi_declare::WebApiObject)]
-    #[webapi(interface = web_api_interfaces::PictureInPictureWindow)]
-    struct ClosedWindow {
-        #[webapi(slot = super::shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
-        event_listeners: (),
-    }
-    ClosedWindow::default()
-        .bind(scope)
-        .expect("closed native PiP window")
+    event_target::simple_object_event_set_handler(scope, window, "resize", ON_RESIZE, args.get(0));
 }

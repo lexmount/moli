@@ -1,4 +1,3 @@
-mod entry;
 use super::*;
 use crate::common_runtime::{
     CallbackRegistrationId, CallbackRegistrationKind, CallbackResidence, CommonRuntimeState,
@@ -8,6 +7,7 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use entry::ResizeObserverEntryData;
 pub(super) use entry::install_resize_observer_entry_template_bindings;
+use moli_webapi::resize_observer_entry as entry;
 use moli_webapi_declare::WebApiObject;
 use webidl::WebIdlDictionarySerialize;
 

@@ -1,9 +1,8 @@
 //! HTML's legacy External object. Both operations are specified to do nothing.
 
-use anyhow::Result;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::External)]
@@ -21,7 +20,7 @@ struct ExternalPrototypeDeclaration {
     is_search_provider_installed: (),
 }
 
-pub(super) fn install_external_template_bindings<'s>(
+pub fn install_external_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -34,11 +33,11 @@ pub(super) fn install_external_template_bindings<'s>(
     }
 }
 
-pub(super) fn build_external_object<'s>(
+pub fn build_external_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-) -> Result<v8::Local<'s, v8::Object>> {
-    let prototype = super::ensure_intrinsic_interface_prototype(scope, "External")?;
-    Ok(ExternalObjectDeclaration::new(prototype).bind(scope)?)
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype = moli_v8_util::global_constructor_prototype(scope, "External")?;
+    ExternalObjectDeclaration::new(prototype).bind(scope).ok()
 }
 
 fn external_noop<'s>(
