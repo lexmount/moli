@@ -10,6 +10,7 @@ use style::{
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
     },
     data::ElementStyles,
+    device::Device,
     dom::{TElement, TNode},
     properties::{
         ComputedValues, PropertyId,
@@ -51,6 +52,7 @@ use super::{
     cache::ComputedElementStyleCacheKey,
     document_world::DocumentStyleWorld,
     lazy_invalidation::StyleValidationPathEntry,
+    retained::synchronize_root_style_device,
     source_lifecycle::StyleSourceDocumentContext,
     world_key::StyleWorldKey,
     world_lifecycle::{
@@ -1000,10 +1002,21 @@ fn clear_element_styles_for_resolution<E: TElement>(world: &DocumentStyleWorld, 
 
 fn publish_resolved_element_styles<E: TElement>(
     world: &DocumentStyleWorld,
+    device: &Device,
     element: E,
     styles: ElementStyles,
     required_generation: u64,
 ) {
+    if let Some(root_style) = styles.primary.as_ref().filter(|style| {
+        style
+            .flags
+            .contains(ComputedValueFlags::IS_ROOT_ELEMENT_STYLE)
+    }) {
+        synchronize_root_style_device(device, root_style);
+        world.document_state.with_retained_style_system(|retained| {
+            *retained.root_style.borrow_mut() = Some(root_style.clone());
+        });
+    }
     unsafe {
         let mut data = element.ensure_data();
         data.styles = styles;
@@ -1053,7 +1066,13 @@ fn resolve_element_styles<'dom>(
             .lazy_invalidation_roots
             .required_generation_for_checked_element(target)
             .unwrap_or_default();
-        publish_resolved_element_styles(world, element, styles.clone(), required_generation);
+        publish_resolved_element_styles(
+            world,
+            context.shared.stylist.device(),
+            element,
+            styles.clone(),
+            required_generation,
+        );
         world
             .document_state
             .note_element_style_resolutions(ancestor_resolution_count.saturating_add(1));
@@ -1139,7 +1158,13 @@ pub(super) fn prepare_style_observation_targets(
                             .lazy_invalidation_roots
                             .required_generation_for_checked_element(handle)
                             .unwrap_or_default();
-                        publish_resolved_element_styles(&world, element, styles, generation);
+                        publish_resolved_element_styles(
+                            &world,
+                            context.shared.stylist.device(),
+                            element,
+                            styles,
+                            generation,
+                        );
                         inherited_change = true;
                         resolutions += 1;
                     }
@@ -1198,7 +1223,13 @@ where
         clear_element_styles_for_resolution(world, ancestor);
         let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
         resolution_count = resolution_count.saturating_add(1);
-        publish_resolved_element_styles(world, ancestor, styles, required_generation);
+        publish_resolved_element_styles(
+            world,
+            context.shared.stylist.device(),
+            ancestor,
+            styles,
+            required_generation,
+        );
         force_descendants = true;
     }
     resolution_count
