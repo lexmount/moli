@@ -1,6 +1,6 @@
 //! Native inspection capabilities used by owner-thread embedder tasks.
 
-use super::{focus, rendered_state, styles};
+use super::{focus, styles};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::PageScriptHost;
 
@@ -17,7 +17,5 @@ pub(crate) fn style_property(read: &styles::ComputedStyleRead<'_>, name: &str) -
 }
 
 pub(crate) fn node_has_screenshot_layout(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    let mut scope = styles::StyleObservation::new(runtime);
-    rendered_state::ElementRenderedState::read_in_scope(&mut scope, handle).box_state()
-        == rendered_state::ElementBoxState::Box
+    super::element_is_being_rendered(runtime, handle)
 }

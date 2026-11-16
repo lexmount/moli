@@ -62,9 +62,12 @@ impl PageScriptHost {
         initiator: crate::context_bootstrap::ResourceTimingInitiator,
     ) -> Option<PendingImageLoadEvent> {
         let node = self.dom_host().node(image_handle)?;
-        let element = node
-            .as_element()
-            .filter(|element| element.is_image_resource_element())?;
+        let element = node.as_element()?;
+        if !element.is_image_resource_element()
+            && self.embedded_image_resource(image_handle).is_none()
+        {
+            return None;
+        }
         let owner_document_handle = node.owner_document()?;
         let resource_timing_initiator_type = if element.is_svg_element("image") {
             "image"

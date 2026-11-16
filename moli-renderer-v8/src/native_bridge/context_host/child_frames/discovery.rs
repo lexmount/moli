@@ -221,8 +221,11 @@ impl PageScriptHost {
         if matches!(
             self.child_frame_owner_element_kind(handle),
             Some(ChildFrameOwnerElementKind::Object | ChildFrameOwnerElementKind::Embed)
-        ) && matches!(attribute_name, "data" | "src" | "type")
+        ) && ["data", "src", "type"]
+            .into_iter()
+            .any(|name| attribute_name.eq_ignore_ascii_case(name))
         {
+            self.cancel_embedded_image_resource(handle);
             self.embedded_content_csp_admissions.remove(&handle);
         }
         if self.child_browsing_context_host_is_object_element(handle)
@@ -354,7 +357,7 @@ impl PageScriptHost {
 
         let url = self.resolve_child_frame_owner_attribute_url(handle, raw_url);
         if !kind.always_hosts_document()
-            && (self.embedded_content_is_inside_media_element(handle)
+            && (self.embedded_content_is_suppressed(handle)
                 || !self.embedded_content_selects_nested_document(handle, raw_url, &url))
         {
             return None;
@@ -380,11 +383,18 @@ impl PageScriptHost {
         Some(bootstrap)
     }
 
-    pub(super) fn embedded_content_is_inside_media_element(&self, handle: DomHandle) -> bool {
+    pub(super) fn embedded_content_is_suppressed(&self, handle: DomHandle) -> bool {
         let mut current = self.dom_host().parent_node(handle);
         while let Some(ancestor) = current {
             if self.dom_host().is_html_element_named(ancestor, "audio")
                 || self.dom_host().is_html_element_named(ancestor, "video")
+                || self.dom_host().is_html_element_named(ancestor, "embed")
+            {
+                return true;
+            }
+            if self.dom_host().is_html_element_named(ancestor, "object")
+                && (self.child_browsing_contexts.contains_key(&ancestor)
+                    || self.image_resource_is_ready(ancestor))
             {
                 return true;
             }
@@ -399,21 +409,12 @@ impl PageScriptHost {
         raw_url: &str,
         url: &Url,
     ) -> bool {
-        let declared_type = self
-            .dom_host()
-            .get_attribute(handle, "type")
-            .filter(|value| !value.trim().is_empty());
-        let mime = match declared_type {
-            Some(value) => moli_web_mime::mime_essence(value.trim()),
-            None => moli_web_mime::resource_mime_essence_for_url(raw_url, url.path()),
-        };
+        let mime = self.embedded_content_mime_hint(handle, raw_url, url);
         let Some(mime) = mime else {
             // Blink also defaults an unclassified plug-in element URL to a frame.
             return true;
         };
-        // SVG is an XML document when embedded by object/embed, even though
-        // its MIME type is also in the image family.
-        if moli_web_mime::is_image_mime(&mime) && !moli_web_mime::is_svg_image_mime(&mime) {
+        if moli_web_mime::is_image_mime(&mime) && !moli_web_mime::is_xml_document_mime(&mime) {
             return false;
         }
         moli_web_mime::is_html_document_mime(&mime)
@@ -421,6 +422,22 @@ impl PageScriptHost {
             || moli_web_mime::is_text_mime(&mime)
             || moli_web_mime::is_json_mime(&mime)
             || moli_web_mime::is_javascript_mime(&mime)
+    }
+
+    pub(super) fn embedded_content_mime_hint(
+        &self,
+        handle: DomHandle,
+        raw_url: &str,
+        url: &Url,
+    ) -> Option<String> {
+        let declared_type = self
+            .dom_host()
+            .get_attribute(handle, "type")
+            .filter(|value| !value.trim().is_empty());
+        match declared_type {
+            Some(value) => moli_web_mime::mime_essence(value.trim()),
+            None => moli_web_mime::resource_mime_essence_for_url(raw_url, url.path()),
+        }
     }
 
     pub(in crate::native_bridge::context_host) fn collect_child_browsing_context_host_handles(

@@ -16,6 +16,9 @@ struct EmbeddedContentRequest {
 pub(in crate::native_bridge::context_host) struct EmbeddedContentCspAdmission {
     request: EmbeddedContentRequest,
     allowed: bool,
+    pub(super) image_started: bool,
+    redirect_context: Option<std::sync::Arc<crate::network_host::WindowCspRequestContext>>,
+    source_location: crate::content_security_policy::ContentSecurityPolicySourceLocation,
 }
 
 impl PageScriptHost {
@@ -25,7 +28,7 @@ impl PageScriptHost {
             kind,
             ChildFrameOwnerElementKind::Object | ChildFrameOwnerElementKind::Embed
         ) || !self.child_browsing_context_host_is_active(handle)
-            || self.embedded_content_is_inside_media_element(handle)
+            || self.embedded_content_is_suppressed(handle)
         {
             return None;
         }
@@ -56,6 +59,16 @@ impl PageScriptHost {
         {
             return;
         }
+        let redirect_context = (!self.bypass_content_security_policy())
+            .then(|| {
+                crate::network_host::WindowCspRequestContext::capture_resource_for_owner(
+                    self,
+                    self.owner_dispatch_scope_for_node(handle)?,
+                    crate::content_security_policy::ContentSecurityPolicyResourceKind::DocumentObject,
+                )
+            })
+            .flatten()
+            .map(std::sync::Arc::new);
         let allowed = self.bypass_content_security_policy()
             || !self
                 .check_element_subresource_csp(
@@ -65,8 +78,59 @@ impl PageScriptHost {
                     DocumentSubresourceCspKind::Object,
                 )
                 .blocks_request();
+        self.embedded_content_csp_admissions.insert(
+            handle,
+            EmbeddedContentCspAdmission {
+                request,
+                allowed,
+                image_started: false,
+                redirect_context,
+                source_location:
+                    crate::content_security_policy::ContentSecurityPolicySourceLocation::capture(
+                        scope,
+                    ),
+            },
+        );
+    }
+
+    pub(crate) fn embedded_image_resource_csp_allowed(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        url: &Url,
+    ) -> bool {
+        self.refresh_embedded_content_csp_admission(scope, handle);
         self.embedded_content_csp_admissions
-            .insert(handle, EmbeddedContentCspAdmission { request, allowed });
+            .get(&handle)
+            .is_some_and(|admission| admission.request.url == *url && admission.allowed)
+    }
+
+    pub(crate) fn embedded_image_request_configuration(
+        &self,
+        handle: DomHandle,
+        document_url: &Url,
+        request_url: &Url,
+    ) -> Option<crate::types::EmbeddedImageRequest> {
+        let (_, destination) = self.embedded_image_resource(handle)?;
+        let admission = self.embedded_content_csp_admissions.get(&handle)?;
+        if admission.request.url != *request_url {
+            return None;
+        }
+        let redirect_check = admission.redirect_context.as_ref().and_then(|context| {
+            crate::network_host::window_csp_redirect_check(
+                &context.policy,
+                &context.redirect_state,
+                &context.report_context,
+                document_url,
+                request_url,
+                admission.source_location.clone(),
+                self.resource_completion_sender(),
+            )
+        });
+        Some(crate::types::EmbeddedImageRequest {
+            destination,
+            redirect_check,
+        })
     }
 
     pub(super) fn embedded_content_request_is_csp_blocked(&self, handle: DomHandle) -> bool {

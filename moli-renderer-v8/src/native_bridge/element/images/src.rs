@@ -123,6 +123,13 @@ fn queue_image_load_event(
     request_initiator_type: SubresourceRequestInitiatorType,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
+    if let Some((url, _)) = runtime.embedded_image_resource(handle)
+        && !matches!(url.scheme(), "data" | "blob")
+        && !runtime.embedded_image_network_enabled(handle)
+    {
+        let _ = runtime.cancel_pending_image_load_event(handle);
+        return;
+    }
     let allow_deferred_lazy = matches!(trigger, ImageLoadQueueTrigger::LazyReveal);
     if image_load_is_deferred(runtime, handle) && !allow_deferred_lazy {
         return;
@@ -246,6 +253,9 @@ fn image_request_is_allowed(
     handle: DomHandle,
     request_url: &url::Url,
 ) -> bool {
+    if runtime.embedded_image_resource(handle).is_some() {
+        return runtime.embedded_image_resource_csp_allowed(scope, handle, request_url);
+    }
     !runtime
         .check_element_subresource_csp(
             scope,
@@ -350,7 +360,8 @@ fn queued_image_update_microtask_callback<'s>(
         return;
     }
 
-    if runtime.image_resource_is_ready(handle)
+    if request_key.navigation_destination().is_none()
+        && runtime.image_resource_is_ready(handle)
         && !runtime.has_scanned_image_preload_for_element(handle)
     {
         let followup =
@@ -372,6 +383,10 @@ fn queued_image_update_microtask_callback<'s>(
     match start {
         Ok(crate::network_host::ImageElementResourceFetchStart::Pending) => {}
         Ok(crate::network_host::ImageElementResourceFetchStart::PolicySkipped) => {
+            if request_key.navigation_destination().is_some() {
+                let _ = runtime.cancel_pending_image_load_event_if_matches(handle, sequence);
+                return;
+            }
             let followup = runtime
                 .complete_pending_image_load_local_resource_if_matches(handle, sequence, true);
             queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, sequence, followup);
@@ -462,6 +477,12 @@ fn image_selected_source_candidate(
                 url: href.to_owned(),
                 density: 1.0,
             });
+    }
+    if let Some((url, _)) = runtime.embedded_image_resource(handle) {
+        return Some(SelectedImageSource {
+            url: url.to_string(),
+            density: 1.0,
+        });
     }
     if !element.is_html_element("img") {
         return None;
@@ -592,18 +613,25 @@ pub(crate) fn image_selected_request_key(
     handle: DomHandle,
 ) -> Option<ImageRequestKey> {
     let selected = image_selected_resource(runtime, handle)?;
-    let cors_mode = ImageRequestCorsMode::from_cross_origin_attribute(
-        runtime
-            .dom_host()
-            .node(handle)
-            .and_then(Node::as_element)
-            .and_then(|element| element.attribute_ns("", "crossorigin")),
-    );
-    Some(ImageRequestKey::with_density(
-        selected.url,
-        cors_mode,
-        selected.density,
-    ))
+    let navigation_destination = runtime
+        .embedded_image_resource(handle)
+        .map(|(_, kind)| kind);
+    let cors_mode = if navigation_destination.is_some() {
+        ImageRequestCorsMode::NoCors
+    } else {
+        ImageRequestCorsMode::from_cross_origin_attribute(
+            runtime
+                .dom_host()
+                .node(handle)
+                .and_then(Node::as_element)
+                .and_then(|element| element.attribute_ns("", "crossorigin")),
+        )
+    };
+    let key = ImageRequestKey::with_density(selected.url, cors_mode, selected.density);
+    Some(match navigation_destination {
+        Some(kind) => key.with_navigation_destination(kind),
+        None => key,
+    })
 }
 
 #[derive(Default)]
@@ -888,6 +916,12 @@ fn dispatch_queued_image_load_event(
         return false;
     }
     mark_image_load_dispatched(runtime, handle);
+    if pending
+        .request_key()
+        .is_some_and(|key| key.navigation_destination().is_some())
+    {
+        runtime.sync_child_browsing_context_subtree(scope, handle);
+    }
     if let Some(event) = construct_simple_event(scope, event_type, false, false, false) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
         return true;

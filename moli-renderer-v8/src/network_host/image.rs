@@ -233,10 +233,29 @@ pub(crate) fn start_image_element_resource_fetch(
         .dom_host()
         .node(image_handle)
         .and_then(crate::dom::native::Node::as_element)
-        .filter(|element| element.is_image_resource_element())
+        .filter(|element| {
+            element.is_image_resource_element()
+                || pending
+                    .request_key()
+                    .is_some_and(|key| key.navigation_destination().is_some())
+        })
         .ok_or_else(|| "image element is unavailable".to_owned())?;
     let request_initiator_type = pending.request_initiator_type();
-    let (request_mode, credentials_mode) = image_cross_origin_request_modes(element);
+    let embedded = match pending
+        .request_key()
+        .and_then(|key| key.navigation_destination())
+    {
+        Some(_) => Some(
+            host.embedded_image_request_configuration(image_handle, &document_url, &request_url)
+                .ok_or_else(|| "embedded image admission is no longer current".to_owned())?,
+        ),
+        None => None,
+    };
+    let (request_mode, credentials_mode) = if embedded.is_some() {
+        (RequestMode::Navigate, RequestCredentialsMode::Include)
+    } else {
+        image_cross_origin_request_modes(element)
+    };
     let fetch_priority = FetchPriorityHint::from_attribute(element.attribute("fetchpriority"));
     let request_metadata = SubresourceRequestMetadata {
         referrer_policy: element
@@ -350,12 +369,16 @@ pub(crate) fn start_image_element_resource_fetch(
         .with_fetch_priority_hint(fetch_priority)
         .with_in_document_image_priority_boost(in_document_image_priority_boost)
         .with_subframe_context(frame_id.is_some());
+    let request = match &embedded {
+        Some(embedded) => embedded.apply(request),
+        None => request,
+    };
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);
-    let service_worker_controller = matches!(request_url.scheme(), "http" | "https")
-        .then(|| host.service_worker_controller_for_fetch(client_id, &document_url, &request_url))
-        .flatten();
-    let scanned_preload = service_worker_controller
-        .is_none()
+    let service_worker_controller = (embedded.is_none()
+        && matches!(request_url.scheme(), "http" | "https"))
+    .then(|| host.service_worker_controller_for_fetch(client_id, &document_url, &request_url))
+    .flatten();
+    let scanned_preload = (embedded.is_none() && service_worker_controller.is_none())
         .then(|| host.claim_scanned_image_preload_for_element(image_handle))
         .flatten();
     let cancel_handle = scanned_preload
