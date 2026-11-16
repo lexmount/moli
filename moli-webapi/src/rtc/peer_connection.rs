@@ -1,26 +1,17 @@
-use super::*;
-use crate::util::{
+//! Signaling-only peer connections, channels and codec capability values.
+//! No network transport or native host is retained by these V8-managed bindings.
+use super::session_description::{self, RtcSessionDescriptionInitDeclaration};
+use crate::event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
+    set_resolved_promise, throw_type_error, v8_string, v8str,
 };
-use crate::web_api_interfaces;
-use crate::webidl::{self, WebIdlDictionarySerialize};
-use moli_v8_util::set_resolved_promise;
-use moli_webapi::rtc::{ice_candidate, session_description};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-use session_description::RtcSessionDescriptionInitDeclaration;
+use moli_webidl::{self as webidl, WebIdlDictionarySerialize};
 
 mod configuration;
-pub(crate) mod encoded_frames;
-use moli_webapi::events::ice_error_event;
-use moli_webapi::events::webrtc as events;
 mod peer_options;
-pub(in crate::context_bootstrap) use events::{
-    rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
-    rtc_peer_connection_ice_event_constructor_callback,
-};
-pub(in crate::context_bootstrap) use ice_candidate::rtc_ice_candidate_constructor_callback;
-pub(in crate::context_bootstrap) use ice_error_event::rtc_peer_connection_ice_error_event_constructor;
-pub(in crate::context_bootstrap) use session_description::rtc_session_description_constructor_callback;
 
 const RTC_PEER_CONNECTION_CONFIGURATION_SLOT: &str = "__moliRtcPeerConnectionConfiguration";
 const RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT: &str = "__moliRtcPeerConnectionSignalingState";
@@ -182,41 +173,27 @@ struct RtcDataChannelPrototypeDeclaration {
     send: (),
 }
 
-pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
+pub(super) fn install_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
-    interface_name: &str,
+    interface: &str,
 ) {
     let prototype = template.prototype_template(scope);
-    match interface_name {
-        "RTCEncodedAudioFrame" | "RTCEncodedVideoFrame" => {
-            encoded_frames::install(scope, prototype, interface_name)
-        }
-        "RTCPeerConnectionIceErrorEvent" => ice_error_event::install(scope, prototype),
-        "RTCPeerConnectionIceEvent" | "RTCDataChannelEvent" => {
-            events::install_event_template_bindings(scope, template, interface_name)
-        }
-        "RTCIceCandidate" => {
-            ice_candidate::install_ice_candidate_template_bindings(scope, template)
-        }
-        "RTCSessionDescription" => {
-            session_description::install_session_description_template_bindings(scope, template)
-        }
+    match interface {
         "RTCPeerConnection" => {
-            RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
-        "RTCErrorEvent" => events::install_event_template_bindings(scope, template, interface_name),
         "RTCRtpReceiver" => {
-            RtcRtpReceiverConstructorDeclaration::initialize_template(scope, template);
+            RtcRtpReceiverConstructorDeclaration::initialize_template(scope, template)
         }
         "RTCDataChannel" => {
-            RtcDataChannelPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            RtcDataChannelPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
         _ => {}
     }
 }
 
-pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>(
+pub fn rtc_peer_connection_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -290,11 +267,10 @@ fn ensure_peer_open<'s>(scope: &mut v8::PinScope<'s, '_>, peer: v8::Local<'s, v8
     let closed = get_private_value(scope, peer, RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)
         .is_some_and(|value| value.strict_equals(v8str(scope, "closed").into()));
     if closed {
-        crate::native_bridge::throw_dom_exception(
+        crate::embedding::throw_dom_exception_value(
             scope,
-            "InvalidStateError",
-            11,
             "RTCPeerConnection is closed.",
+            "InvalidStateError",
         );
     }
     !closed
@@ -350,11 +326,10 @@ fn rtc_peer_connection_create_offer_callback<'s>(
     let audio = parsed.options.offer_to_receive_audio.unwrap_or(-1);
     let video = parsed.options.offer_to_receive_video.unwrap_or(-1);
     if !(-1..=1).contains(&audio) || !(-1..=1).contains(&video) {
-        crate::native_bridge::throw_dom_exception(
+        crate::embedding::throw_dom_exception_value(
             scope,
-            "InvalidAccessError",
-            15,
             "Invalid offer receive count.",
+            "InvalidAccessError",
         );
         return;
     }
@@ -513,13 +488,7 @@ fn build_rtc_data_channel<'s>(
     label: v8::Local<'s, v8::String>,
     options: &peer_options::DataChannelInit,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype =
-        exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "RTCDataChannel").ok()?;
-    let channel =
-        exposed_interfaces::build_intrinsic_interface_instance(scope, "RTCDataChannel").ok()?;
-    if channel.set_prototype(scope, prototype.into()) != Some(true) {
-        return None;
-    }
+    let channel = moli_v8_util::new_intrinsic_interface_instance(scope, "RTCDataChannel")?;
     options.initialize_snapshot(scope, channel)?;
     RtcDataChannelObjectDeclaration::new(label)
         .initialize(scope, channel)

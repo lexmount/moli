@@ -1,5 +1,5 @@
 use super::*;
-use crate::webidl;
+use moli_webidl as webidl;
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "RTCOfferAnswerOptions")]

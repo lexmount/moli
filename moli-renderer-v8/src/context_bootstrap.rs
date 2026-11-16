@@ -221,6 +221,7 @@ pub(crate) use selection_surface::{
     sync_selection_owner_document_for_window, window_selection_is_collapsed,
 };
 pub(crate) use shared::{dom_time_since_origin_millis, unix_epoch_millis};
+pub(crate) mod encoded_frames;
 mod specs;
 mod stream_adapter;
 mod stream_objects;
@@ -236,8 +237,6 @@ mod view_transition_runtime;
 mod web_audio_runtime;
 mod web_storage;
 mod webassembly_runtime;
-mod webrtc;
-pub(crate) use webrtc::encoded_frames;
 mod websocket;
 mod window_accessors;
 pub(crate) use window_accessors::{

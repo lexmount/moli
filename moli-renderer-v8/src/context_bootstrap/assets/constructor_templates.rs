@@ -71,12 +71,6 @@ use super::super::{
         offline_audio_context_constructor_callback, oscillator_constructor,
         periodic_wave_constructor, stereo_panner_constructor, wave_shaper_constructor,
     },
-    webrtc::{
-        rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
-        rtc_ice_candidate_constructor_callback, rtc_peer_connection_constructor_callback,
-        rtc_peer_connection_ice_event_constructor_callback,
-        rtc_session_description_constructor_callback,
-    },
     websocket::{
         websocket_constructor_callback, websocket_error_constructor_callback,
         websocket_stream_constructor_callback,
@@ -90,6 +84,12 @@ use crate::{
     xml_serializer,
 };
 use anyhow::{Result, anyhow};
+use moli_webapi::rtc::{
+    rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
+    rtc_ice_candidate_constructor_callback, rtc_peer_connection_constructor_callback,
+    rtc_peer_connection_ice_event_constructor_callback,
+    rtc_session_description_constructor_callback,
+};
 
 pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
@@ -160,7 +160,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::RtcEncodedAudioFrame => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::RTCEncodedAudioFrame,
-                super::super::webrtc::encoded_frames::audio_constructor
+                moli_webapi::rtc::encoded_frames::audio_constructor
             ))
             .length(1)
             .build(scope)
@@ -168,7 +168,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::RtcEncodedVideoFrame => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::RTCEncodedVideoFrame,
-                super::super::webrtc::encoded_frames::video_constructor
+                moli_webapi::rtc::encoded_frames::video_constructor
             ))
             .length(1)
             .build(scope)
@@ -737,7 +737,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::RtcPeerConnectionIceErrorEvent => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::RTCPeerConnectionIceErrorEvent,
-                super::super::webrtc::rtc_peer_connection_ice_error_event_constructor
+                moli_webapi::rtc::rtc_peer_connection_ice_error_event_constructor
             ))
             .length(2)
             .build(scope)
