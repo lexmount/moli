@@ -1,7 +1,9 @@
 mod data;
+mod processing_instruction;
 mod types;
 
 pub use data::NodeData;
+pub use processing_instruction::ProcessingInstructionAttributes;
 pub use types::{CDataSection, Comment, ProcessingInstruction, Text};
 
 use std::fmt;

@@ -790,6 +790,39 @@ impl DomHost {
         value: crate::native::DomStringValue,
         force_mutation_record: bool,
     ) -> DomMutationEffects {
+        self.set_character_data_value_effects_with_attribute_update(
+            handle,
+            value,
+            force_mutation_record,
+            true,
+        )
+    }
+
+    /// Attribute-driven PI serialization replaces CharacterData, but must not
+    /// reparse the attribute map it just serialized (DOM's suppress flag).
+    pub fn set_processing_instruction_attributes_effects(
+        &mut self,
+        handle: DomHandle,
+        attributes: crate::native::ProcessingInstructionAttributes,
+    ) -> DomMutationEffects {
+        let value = attributes.serialize();
+        let Some(instruction) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_processing_instruction_mut())
+        else {
+            return DomMutationEffects::default();
+        };
+        instruction.replace_attributes(attributes);
+        self.set_character_data_value_effects_with_attribute_update(handle, value, true, false)
+    }
+
+    fn set_character_data_value_effects_with_attribute_update(
+        &mut self,
+        handle: DomHandle,
+        value: crate::native::DomStringValue,
+        force_mutation_record: bool,
+        update_processing_instruction_attributes: bool,
+    ) -> DomMutationEffects {
         let Some(node) = self.node(handle) else {
             return DomMutationEffects::default();
         };
@@ -798,11 +831,20 @@ impl DomHost {
         };
         let changed = previous != &value;
         let should_record = self.mutation_records_enabled() && (changed || force_mutation_record);
+        let old_value = should_record.then(|| previous.clone());
+        let is_text = matches!(node.node_type(), NodeType::Text | NodeType::CDataSection);
+        let attributes = (update_processing_instruction_attributes
+            && node.as_processing_instruction().is_some())
+        .then(|| crate::native::ProcessingInstructionAttributes::from_data(&value));
+        if let Some(attributes) = attributes {
+            self.node_mut(handle)
+                .and_then(|node| node.data_mut().as_processing_instruction_mut())
+                .expect("the captured node is a processing instruction")
+                .replace_attributes(attributes);
+        }
         if !changed && !should_record {
             return DomMutationEffects::default();
         }
-        let old_value = should_record.then(|| previous.clone());
-        let is_text = matches!(node.node_type(), NodeType::Text | NodeType::CDataSection);
         let textarea = if changed && is_text {
             self.parent_node(handle).and_then(|parent| {
                 self.textarea_value_excluding_children(parent, &[])

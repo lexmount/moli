@@ -87,20 +87,32 @@ impl Comment {
 
 #[derive(Debug, Clone)]
 pub struct ProcessingInstruction {
-    target: Box<str>,
     data: DomStringValue,
+    metadata: Box<ProcessingInstructionMetadata>,
+}
+
+// Keep PI-only metadata out of the common NodeData arena record.
+#[derive(Debug, Clone)]
+struct ProcessingInstructionMetadata {
+    target: Box<str>,
+    attributes: super::ProcessingInstructionAttributes,
 }
 
 impl ProcessingInstruction {
     pub fn new(target: String, data: impl Into<DomStringValue>) -> Self {
+        let data = data.into();
+        let attributes = super::ProcessingInstructionAttributes::from_data(&data);
         Self {
-            target: target.into_boxed_str(),
-            data: data.into(),
+            data,
+            metadata: Box::new(ProcessingInstructionMetadata {
+                target: target.into_boxed_str(),
+                attributes,
+            }),
         }
     }
 
     pub fn target(&self) -> &str {
-        &self.target
+        &self.metadata.target
     }
 
     pub fn data(&self) -> &str {
@@ -117,5 +129,21 @@ impl ProcessingInstruction {
 
     pub fn set_data(&mut self, data: impl Into<DomStringValue>) {
         self.data = data.into();
+        self.refresh_attributes_from_data();
+    }
+
+    pub fn attributes(&self) -> &super::ProcessingInstructionAttributes {
+        &self.metadata.attributes
+    }
+
+    pub(crate) fn replace_attributes(
+        &mut self,
+        attributes: super::ProcessingInstructionAttributes,
+    ) {
+        self.metadata.attributes = attributes;
+    }
+
+    pub(crate) fn refresh_attributes_from_data(&mut self) {
+        self.metadata.attributes = super::ProcessingInstructionAttributes::from_data(&self.data);
     }
 }

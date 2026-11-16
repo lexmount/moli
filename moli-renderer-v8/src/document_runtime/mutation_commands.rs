@@ -394,6 +394,35 @@ impl DocumentRuntime {
         })
     }
 
+    pub(crate) fn set_processing_instruction_attributes(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        handle: DomHandle,
+        attributes: moli_dom::native::ProcessingInstructionAttributes,
+    ) -> bool {
+        custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+            let break_after_change = unsafe { &*host_ptr }.has_dom_debugger_dom_breakpoints()
+                && self
+                    .dom_host
+                    .node(handle)
+                    .and_then(Node::character_data_value)
+                    .is_some_and(|previous| previous != &attributes.serialize());
+            let effects = self
+                .dom_host
+                .set_processing_instruction_attributes_effects(handle, attributes);
+            if break_after_change && effects.did_change() {
+                unsafe { &mut *host_ptr }.break_on_dom_debugger_character_data_modified(handle);
+            }
+            self.apply_runtime_mutation_effects(
+                scope,
+                host_ptr,
+                effects,
+                RuntimeMutationOptions::js_dom_api(),
+            )
+        })
+    }
+
     fn set_character_data_value_in_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
