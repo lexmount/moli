@@ -691,14 +691,23 @@ impl ControlledResourceLoad {
                 if let Some(stream) = stream.as_deref_mut() {
                     stream.policy_violations(std::mem::take(&mut self.csp_violations));
                 }
+                // Whole-body security checks are needed for opaque responses,
+                // not for every request authored with mode: "no-cors".
+                let opaque_response =
+                    matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
+                        && super::network_response_filter(
+                            self.request
+                                .browser_origin()
+                                .expect("native Fetch has a requesting origin"),
+                            &response.head,
+                            self.request.request_mode,
+                            self.load.request_client().web_security_disabled(),
+                        )
+                        .is_some();
                 let delivered = response
                     .deliver(
                         &self.info,
-                        if is_synthetic
-                            || manual
-                            || (matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
-                                && self.request.request_mode == moli_fetch::RequestMode::NoCors)
-                        {
+                        if is_synthetic || manual || opaque_response {
                             None
                         } else {
                             stream.as_deref_mut()
