@@ -60,6 +60,10 @@ async def read(page: Any, target: str, api: str = 'fetch', init: dict[str, Any] 
 async def worker_read(page: Any, source: str, target: str, api: str, kind: str = 'classic',
                       init: dict[str, Any] | None = None) -> Any:
     script = source + '/web-security/' + ('shared.js' if kind == 'shared' else 'worker.js')
+    if kind == 'shared':
+        # These are independent requests, not SharedWorker reuse tests. Avoid
+        # reconnecting while the preceding observation's worker is closing.
+        script += '?' + urlencode({'request': target})
     return await page.evaluate('''args => new Promise((resolve,reject) => {
       const [script,url,api,kind,init] = args;
       let worker;
