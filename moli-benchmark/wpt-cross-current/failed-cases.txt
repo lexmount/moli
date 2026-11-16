@@ -2235,6 +2235,7 @@ focus/iframe-contentwindow-focus-with-different-site-intermediate-frame.html
 focus/iframe-contentwindow-focus-with-same-as-top-intermediate-frame.html
 font-access/permissions-policy/local-fonts-supported-by-permissions-policy.html
 gyroscope/Gyroscope-supported-by-permissions-policy.html
+html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/back-forward-cache/eligibility/dedicated-worker.html
 html/browsers/browsing-the-web/back-forward-cache/eligibility/shared-worker.html
 html/browsers/browsing-the-web/back-forward-cache/events.html
