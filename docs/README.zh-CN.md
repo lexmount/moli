@@ -290,6 +290,35 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 
 Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源对比只覆盖四个本地引擎。在另一轮 557 道任务的测试中，只统计四个引擎都完成的工作。Moli 单题 CPU 中位数为 **100.6 ms**，内存峰值中位数为 **92 MiB**；Chrome 分别为 **687 ms** 和 **697 MiB**。Moli 的 CPU 时间约为 Chrome 的 15%，内存峰值约为 13%。测试方法和完整数据见 benchmark 的[资源报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)。
 
+### Web Fetch 评测
+
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) 直接访问真实网站，共有 430 道任务，因此通过率同时反映网站能否访问，以及返回内容是否正确。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) 使用 545 份预先保存的 HTML，只比较正文提取质量，不包含真实网站访问。[查看完整评测报告](https://browser.lexmount.com/blog/webfetch-benchmark)。
+
+如需复现这些结果，请在 [Webstone](https://github.com/lexmount/webstone) 中运行 Web Fetch 评测（[指南](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。表格基于数据集的 430 道任务版本（v1.0.0）。
+
+| 方法 | 总成绩 | 静态网页 /100 | 反爬网站 /100 | 热门网站 /100 | 动态网站 /100 | 文档与媒体 /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
+
+单元格均为通过题数。最后一列合并了文档正文、直接媒体文件和网页内嵌媒体；整张表覆盖全部七类任务。
+
+<details>
+<summary><strong>WebMainBench · 545 份网页快照的正文提取质量</strong></summary>
+
+| 方法 | 生成正文 | 综合 | 全文 | 代码 | 公式 | 表格内容 | 表格结构 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
+
 ## 项目范围
 
 在文档所定义的智能体浏览器场景范围内，Moli 已经达到生产可用的水平，并且仍在持续开发中。
