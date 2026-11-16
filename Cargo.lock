@@ -2688,6 +2688,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-command-types"
+version = "0.1.0"
+dependencies = [
+ "moli-dom",
+ "moli-page-types",
+ "serde_json",
+]
+
+[[package]]
 name = "moli-content-type"
 version = "0.1.0"
 dependencies = [
@@ -3427,6 +3436,7 @@ dependencies = [
  "moli-broadcast-channel",
  "moli-browser-profile",
  "moli-canvas",
+ "moli-command-types",
  "moli-content-type",
  "moli-cookie-jar",
  "moli-crypto",

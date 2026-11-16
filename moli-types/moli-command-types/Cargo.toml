@@ -1,0 +1,17 @@
+[package]
+license.workspace = true
+name = "moli-command-types"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+devtools = ["dep:moli-dom", "dep:moli-page-types", "dep:serde_json"]
+
+[dependencies]
+moli-dom = { path = "../../moli-dom", optional = true }
+moli-page-types = { path = "../moli-page-types", optional = true }
+serde_json = { version = "1.0.145", optional = true }
+
+[lints]
+workspace = true

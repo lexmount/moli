@@ -43,6 +43,7 @@ members = [
     "moli-dom",
     "moli-parser",
     "moli-paint",
+    "moli-types/moli-command-types",
     "moli-types/moli-page-types",
     "moli-parkable-image",
     "moli-process-signal",
