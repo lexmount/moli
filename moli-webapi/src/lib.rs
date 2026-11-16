@@ -61,3 +61,8 @@ pub mod webidl_iterator;
 
 pub mod intersection_observer_entry;
 pub mod mutation_record;
+
+pub mod canvas_gradient;
+pub mod image_bitmap;
+pub mod text_metrics;
+pub mod webgl;

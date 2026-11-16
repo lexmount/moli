@@ -22,12 +22,11 @@ use moli_layout::{
     PaintBrush, PaintColor, PaintFragment, PaintLineCap, PaintLineJoin, PaintShape, PaintSnapshot,
     PaintStroke, PaintTransform2D, PaintViewport,
 };
-use moli_webapi_declare::WebApiObject;
+use moli_webapi::text_metrics::CanvasTextMetricsDeclaration;
 use std::str::FromStr;
 
 const DEFAULT_IMAGE_SMOOTHING_QUALITY: &str = "low";
 const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
-const TEXT_METRICS_WIDTH_SLOT: &str = "__moliTextMetricsWidth";
 
 pub(super) fn reset_canvas_context_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -37,30 +36,6 @@ pub(super) fn reset_canvas_context_state<'s>(
     let dash = v8::Array::new(scope, 0);
     set_private_value(scope, context, CANVAS_CONTEXT_LINE_DASH_SLOT, dash.into());
     super::state::reset_canvas_path_state(scope, context);
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::TextMetrics)]
-struct CanvasTextMetricsDeclaration {
-    #[webapi(slot = TEXT_METRICS_WIDTH_SLOT)]
-    width: f64,
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TextMetrics, enumerable)]
-struct TextMetricsPrototypeDeclaration {
-    #[webapi(accessor_property, getter = text_metrics_width_getter)]
-    width: (),
-}
-
-pub(super) fn install_text_metrics_template_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-) {
-    TextMetricsPrototypeDeclaration::initialize_prototype_template(
-        scope,
-        template.prototype_template(scope),
-    );
 }
 
 macro_rules! canvas_rect_declaration {
@@ -99,18 +74,6 @@ pub(crate) fn install_canvas_rect_bindings<'s>(
         }
         _ => unreachable!("only Canvas 2D contexts have rectangle bindings"),
     }
-}
-
-fn text_metrics_width_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(width) = get_private_value(scope, args.this(), TEXT_METRICS_WIDTH_SLOT) else {
-        throw_type_error(scope, "TextMetrics.width called on incompatible receiver.");
-        return;
-    };
-    rv.set(width);
 }
 
 #[derive(
@@ -165,15 +128,6 @@ struct CanvasContextStrokeTextArgs {
 struct CanvasContextMeasureTextArgs {
     #[webidl(required)]
     text: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "CanvasGradient.addColorStop")]
-struct CanvasGradientAddColorStopArgs {
-    #[webidl(required)]
-    offset: f64,
-    #[webidl(required)]
-    _color: String,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -1899,26 +1853,8 @@ pub(crate) fn canvas_context_create_linear_gradient_callback<'s>(
         return;
     }
 
-    let gradient = v8::Object::new(scope);
-    if let Some(prototype) = global_constructor_prototype(scope, "CanvasGradient") {
-        let _ = gradient.set_prototype(scope, prototype.into());
-    }
+    let gradient = moli_webapi::canvas_gradient::build(scope);
     rv.set(gradient.into());
-}
-
-pub(crate) fn canvas_gradient_add_color_stop_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<CanvasGradientAddColorStopArgs>(scope, &args) else {
-        return;
-    };
-    if !(0.0..=1.0).contains(&parsed.offset) {
-        webidl::throw_index_size_error(scope);
-        return;
-    }
-    rv.set_undefined();
 }
 
 pub(crate) fn canvas_context_measure_text_callback<'s>(

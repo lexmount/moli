@@ -3,15 +3,14 @@ use super::backing_store::{
     reset_canvas_like_backing_store, with_canvas_like_pixels_mut,
 };
 use super::image_bitmap::build_image_bitmap_object;
-use super::objects::{
-    build_offscreen_2d_context_object, build_webgl_context_object, build_webgl2_context_object,
-};
+use super::objects::build_offscreen_2d_context_object;
 use super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value, v8str,
 };
 use crate::web_api_interfaces;
 use crate::webidl;
+use moli_webapi::webgl::{build_webgl_context_object, build_webgl2_context_object};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";

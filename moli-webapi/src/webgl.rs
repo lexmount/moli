@@ -1,13 +1,52 @@
-use super::objects::{build_webgl_debug_renderer_info_object, build_webgl_lose_context_object};
-use super::*;
-use crate::web_api_interfaces;
-use crate::{
-    util::{callback_data_item, get_private_value, set_private_value, v8_string, v8str},
-    webidl,
+use crate::interfaces as web_api_interfaces;
+use crate::webgl_values as interfaces;
+use moli_v8_util::{
+    callback_data_index_value, callback_data_item, get_private_value, global_constructor_object,
+    global_constructor_prototype, set_private_value, throw_type_error, v8_string, v8str,
 };
-pub(super) use interfaces::install_value_template_bindings;
-use moli_webapi::webgl_values as interfaces;
-use moli_webapi_declare::{WebApiObject, WebApiValue};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiValue};
+use moli_webidl as webidl;
+const WEBGL_SUPPORTED_EXTENSIONS: &[&str] = &[
+    "ANGLE_instanced_arrays",
+    "EXT_blend_minmax",
+    "EXT_clip_control",
+    "EXT_color_buffer_half_float",
+    "EXT_depth_clamp",
+    "EXT_disjoint_timer_query",
+    "EXT_float_blend",
+    "EXT_frag_depth",
+    "EXT_polygon_offset_clamp",
+    "EXT_shader_texture_lod",
+    "EXT_texture_compression_bptc",
+    "EXT_texture_compression_rgtc",
+    "EXT_texture_filter_anisotropic",
+    "EXT_texture_mirror_clamp_to_edge",
+    "EXT_sRGB",
+    "KHR_parallel_shader_compile",
+    "OES_element_index_uint",
+    "OES_fbo_render_mipmap",
+    "OES_standard_derivatives",
+    "OES_texture_float",
+    "OES_texture_float_linear",
+    "OES_texture_half_float",
+    "OES_texture_half_float_linear",
+    "OES_vertex_array_object",
+    "WEBGL_blend_func_extended",
+    "WEBGL_color_buffer_float",
+    "WEBGL_compressed_texture_astc",
+    "WEBGL_compressed_texture_etc",
+    "WEBGL_compressed_texture_etc1",
+    "WEBGL_compressed_texture_pvrtc",
+    "WEBGL_compressed_texture_s3tc",
+    "WEBGL_compressed_texture_s3tc_srgb",
+    "WEBGL_debug_renderer_info",
+    "WEBGL_debug_shaders",
+    "WEBGL_depth_texture",
+    "WEBGL_draw_buffers",
+    "WEBGL_lose_context",
+    "WEBGL_multi_draw",
+    "WEBGL_polygon_mode",
+];
 
 const WEBGL_VIEWPORT_SLOT: &str = "__moliWebGlViewport";
 const WEBGL_ERROR_SLOT: &str = "__moliWebGlError";
@@ -141,7 +180,7 @@ struct WebGl2ContextObjectDeclaration {
     unpack_color_space: String,
 }
 
-pub(crate) const WEBGL_CONSTANTS: &[(&str, u32)] = &[
+pub const WEBGL_CONSTANTS: &[(&str, u32)] = &[
     ("VIEWPORT", WEBGL_VIEWPORT),
     ("NO_ERROR", 0),
     ("INVALID_VALUE", WEBGL_INVALID_VALUE),
@@ -188,7 +227,7 @@ pub(crate) const WEBGL_CONSTANTS: &[(&str, u32)] = &[
     ("HIGH_INT", 0x8DF5),
 ];
 
-pub(crate) const WEBGL2_CONSTANTS: &[(&str, u32)] = &[
+pub const WEBGL2_CONSTANTS: &[(&str, u32)] = &[
     ("IMPLEMENTATION_COLOR_READ_TYPE", 0x8B9A),
     ("IMPLEMENTATION_COLOR_READ_FORMAT", 0x8B9B),
     ("MAX_3D_TEXTURE_SIZE", 0x8073),
@@ -266,7 +305,7 @@ where
     values.to_v8_value(scope)
 }
 
-pub(crate) fn webgl_get_supported_extensions_callback<'s>(
+pub fn webgl_get_supported_extensions_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -280,7 +319,7 @@ pub(crate) fn webgl_get_supported_extensions_callback<'s>(
     rv.set(value);
 }
 
-pub(crate) fn webgl2_get_supported_extensions_callback<'s>(
+pub fn webgl2_get_supported_extensions_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -290,7 +329,7 @@ pub(crate) fn webgl2_get_supported_extensions_callback<'s>(
     rv.set(value);
 }
 
-pub(crate) fn webgl_get_extension_callback<'s>(
+pub fn webgl_get_extension_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -313,7 +352,7 @@ pub(crate) fn webgl_get_extension_callback<'s>(
     rv.set(value);
 }
 
-pub(crate) fn webgl2_get_extension_callback<'s>(
+pub fn webgl2_get_extension_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -351,7 +390,7 @@ fn build_webgl_extension_object<'s>(
         .map(|_| object)
 }
 
-pub(crate) fn webgl_get_parameter_callback<'s>(
+pub fn webgl_get_parameter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -386,7 +425,7 @@ pub(crate) fn webgl_get_parameter_callback<'s>(
     }
 }
 
-pub(crate) fn webgl2_get_parameter_callback<'s>(
+pub fn webgl2_get_parameter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -440,7 +479,7 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
     }
 }
 
-pub(crate) fn webgl2_get_internalformat_parameter_callback<'s>(
+pub fn webgl2_get_internalformat_parameter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -497,7 +536,7 @@ fn webgl_uint32_array<'s>(
         .into()
 }
 
-pub(crate) fn webgl_create_buffer_callback(
+pub fn webgl_create_buffer_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -508,7 +547,7 @@ pub(crate) fn webgl_create_buffer_callback(
     rv.set(value.into());
 }
 
-pub(crate) fn webgl_create_framebuffer_callback(
+pub fn webgl_create_framebuffer_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -519,7 +558,7 @@ pub(crate) fn webgl_create_framebuffer_callback(
     rv.set(value.into());
 }
 
-pub(crate) fn webgl_create_renderbuffer_callback(
+pub fn webgl_create_renderbuffer_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -530,7 +569,7 @@ pub(crate) fn webgl_create_renderbuffer_callback(
     rv.set(value.into());
 }
 
-pub(crate) fn webgl_check_framebuffer_status_callback(
+pub fn webgl_check_framebuffer_status_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -538,7 +577,7 @@ pub(crate) fn webgl_check_framebuffer_status_callback(
     rv.set(v8::Integer::new(scope, 0x8CD5).into());
 }
 
-pub(crate) fn webgl_create_program_callback(
+pub fn webgl_create_program_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -549,7 +588,7 @@ pub(crate) fn webgl_create_program_callback(
     rv.set(value.into());
 }
 
-pub(crate) fn webgl_create_shader_callback(
+pub fn webgl_create_shader_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -560,7 +599,7 @@ pub(crate) fn webgl_create_shader_callback(
     rv.set(value.into());
 }
 
-pub(crate) fn webgl_uniform_location_callback(
+pub fn webgl_uniform_location_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -571,7 +610,7 @@ pub(crate) fn webgl_uniform_location_callback(
     rv.set(value.into());
 }
 
-pub(crate) fn webgl_get_attrib_location_callback(
+pub fn webgl_get_attrib_location_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -579,7 +618,7 @@ pub(crate) fn webgl_get_attrib_location_callback(
     rv.set(v8::Integer::new(scope, 0).into());
 }
 
-pub(crate) fn webgl_get_error_callback<'s>(
+pub fn webgl_get_error_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -597,7 +636,7 @@ pub(crate) fn webgl_get_error_callback<'s>(
     );
 }
 
-pub(crate) fn webgl_viewport_callback<'s>(
+pub fn webgl_viewport_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -664,7 +703,7 @@ fn return_webgl_viewport<'s>(
     rv.set(webgl_int32_array(scope, &values));
 }
 
-pub(super) fn init_webgl_context_object<'s>(
+pub fn init_webgl_context_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
 ) {
@@ -675,31 +714,7 @@ pub(super) fn init_webgl_context_object<'s>(
         .expect("WebGL context state should initialize");
 }
 
-pub(super) fn initialize_attached_webgl_viewport<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-    context: v8::Local<'s, v8::Object>,
-) {
-    if get_private_value(scope, context, WEBGL_VIEWPORT_SLOT).is_none() {
-        return;
-    }
-    // Only context creation takes the canvas dimensions as the initial
-    // viewport. Resizing the drawing buffer must not reset viewport state.
-    if let Some((width, height)) = super::backing_store::canvas_like_dimensions(scope, canvas) {
-        set_webgl_viewport(
-            scope,
-            context,
-            [
-                0,
-                0,
-                width.min(WEBGL_MAX_VIEWPORT_DIMS[0] as u32) as i32,
-                height.min(WEBGL_MAX_VIEWPORT_DIMS[1] as u32) as i32,
-            ],
-        );
-    }
-}
-
-pub(crate) fn webgl_boolean_callback(
+pub fn webgl_boolean_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -707,7 +722,7 @@ pub(crate) fn webgl_boolean_callback(
     rv.set(v8::Boolean::new(scope, true).into());
 }
 
-pub(crate) fn webgl_get_shader_info_log_callback(
+pub fn webgl_get_shader_info_log_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -715,14 +730,14 @@ pub(crate) fn webgl_get_shader_info_log_callback(
     rv.set(v8::String::empty(scope).into());
 }
 
-pub(crate) fn webgl_noop_callback(
+pub fn webgl_noop_callback(
     _scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
 }
 
-pub(crate) fn webgl_get_context_attributes_callback(
+pub fn webgl_get_context_attributes_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -765,7 +780,7 @@ impl Default for WebGlContextAttributes {
     }
 }
 
-pub(crate) fn webgl_is_context_lost_callback(
+pub fn webgl_is_context_lost_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -773,16 +788,13 @@ pub(crate) fn webgl_is_context_lost_callback(
     rv.set(v8::Boolean::new(scope, false).into());
 }
 
-pub(crate) fn webgl_get_shader_precision_format_callback(
+pub fn webgl_get_shader_precision_format_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
-        scope,
-        "WebGLShaderPrecisionFormat",
-    )
-    .expect("WebGLShaderPrecisionFormat intrinsic prototype should be available");
+    let prototype = global_constructor_prototype(scope, "WebGLShaderPrecisionFormat")
+        .expect("WebGLShaderPrecisionFormat intrinsic prototype should be available");
     let value = WebGlShaderPrecisionFormat::new(prototype, 23, 127, 127)
         .bind(scope)
         .expect("WebGL shader precision format declaration should bind");
@@ -802,14 +814,14 @@ struct WebGlShaderPrecisionFormat<'s> {
     range_max: i32,
 }
 
-pub(crate) fn webgl_lose_context_noop_callback(
+pub fn webgl_lose_context_noop_callback(
     _scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
 }
 
-pub(super) fn init_webgl2_context_object<'s>(
+pub fn init_webgl2_context_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
@@ -826,7 +838,7 @@ fn is_webgl2_context<'s>(
     web_api_interfaces::WebGL2RenderingContext::is_instance(scope, object)
 }
 
-pub(crate) fn webgl2_color_space_getter_callback<'s>(
+pub fn webgl2_color_space_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -855,7 +867,7 @@ pub(crate) fn webgl2_color_space_getter_callback<'s>(
     );
 }
 
-pub(crate) fn webgl2_color_space_setter_callback<'s>(
+pub fn webgl2_color_space_setter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -895,6 +907,406 @@ pub(crate) fn webgl2_color_space_setter_callback<'s>(
         set_private_value(scope, args.this(), slot, value.into());
     }
     rv.set_undefined();
+}
+
+pub fn initialize_viewport<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    dimensions: Option<(u32, u32)>,
+    context: v8::Local<'s, v8::Object>,
+) {
+    if get_private_value(scope, context, WEBGL_VIEWPORT_SLOT).is_none() {
+        return;
+    }
+    // Only context creation takes the canvas dimensions as the initial
+    // viewport. Resizing the drawing buffer must not reset viewport state.
+    if let Some((width, height)) = dimensions {
+        set_webgl_viewport(
+            scope,
+            context,
+            [
+                0,
+                0,
+                width.min(WEBGL_MAX_VIEWPORT_DIMS[0] as u32) as i32,
+                height.min(WEBGL_MAX_VIEWPORT_DIMS[1] as u32) as i32,
+            ],
+        );
+    }
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::WEBGLDebugRendererInfo)]
+struct WebGlDebugRendererInfoObjectDeclaration {
+    #[webapi(data_property = "UNMASKED_VENDOR_WEBGL")]
+    unmasked_vendor_webgl: f64,
+    #[webapi(data_property = "UNMASKED_RENDERER_WEBGL")]
+    unmasked_renderer_webgl: f64,
+}
+
+pub fn webgl_rendering_context_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    init_webgl_context_object(scope, args.this());
+    rv.set(args.this().into());
+}
+pub fn webgl_debug_renderer_info_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    WebGlDebugRendererInfoObjectDeclaration::new(0x9245 as f64, 0x9246 as f64)
+        .initialize(scope, args.this())
+        .expect("WEBGL_debug_renderer_info declaration should initialize object");
+    rv.set(args.this().into());
+}
+pub fn webgl_lose_context_constructor_callback<'s>(
+    _scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(args.this().into());
+}
+
+fn build_constructed_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    constructor_name: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let ctor =
+        v8::Local::<v8::Function>::try_from(global_constructor_object(scope, constructor_name)?)
+            .ok()?;
+    let object = ctor.new_instance(scope, &[])?;
+    Some(object)
+}
+
+pub fn build_webgl_context_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    build_constructed_object(scope, "WebGLRenderingContext")
+}
+pub fn build_webgl2_context_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype = global_constructor_prototype(scope, "WebGL2RenderingContext")?;
+    let object = v8::Object::new(scope);
+    if object.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    init_webgl2_context_object(scope, object);
+    Some(object)
+}
+pub fn build_webgl_debug_renderer_info_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(object) = build_constructed_object(scope, "WEBGL_debug_renderer_info") {
+        return Some(object);
+    }
+
+    // Extension interfaces are not exposed as Worker globals in Chromium.
+    // Construct the extension object directly when WebGL is running in a
+    // worker realm, where no public constructor exists to instantiate.
+    let object = v8::Object::new(scope);
+    for (name, value) in [
+        ("UNMASKED_VENDOR_WEBGL", 0x9245),
+        ("UNMASKED_RENDERER_WEBGL", 0x9246),
+    ] {
+        let name = v8::String::new(scope, name)?;
+        let defined = object.define_own_property(
+            scope,
+            name.into(),
+            v8::Integer::new(scope, value).into(),
+            v8::PropertyAttribute::READ_ONLY
+                | v8::PropertyAttribute::DONT_DELETE
+                | v8::PropertyAttribute::DONT_ENUM,
+        );
+        if defined != Some(true) {
+            return None;
+        }
+    }
+    Some(object)
+}
+pub fn build_webgl_lose_context_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    build_constructed_object(scope, "WEBGL_lose_context")
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::WebGLRenderingContext, enumerable)]
+struct WebGlRenderingContextTemplateMethodsDeclaration {
+    #[webapi(method = "viewport", length = 4, callback = webgl_viewport_callback)]
+    viewport: (),
+
+    #[webapi(method = "clearColor", length = 4, callback = webgl_noop_callback)]
+    clear_color: (),
+
+    #[webapi(method = "enable", length = 1, callback = webgl_noop_callback)]
+    enable: (),
+
+    #[webapi(method = "depthFunc", length = 1, callback = webgl_noop_callback)]
+    depth_func: (),
+
+    #[webapi(method = "clear", length = 1, callback = webgl_noop_callback)]
+    clear: (),
+
+    #[webapi(method = "createBuffer", length = 0, callback = webgl_create_buffer_callback)]
+    create_buffer: (),
+
+    #[webapi(method = "bindBuffer", length = 2, callback = webgl_noop_callback)]
+    bind_buffer: (),
+
+    #[webapi(method = "bufferData", length = 3, callback = webgl_noop_callback)]
+    buffer_data: (),
+
+    #[webapi(method = "createProgram", length = 0, callback = webgl_create_program_callback)]
+    create_program: (),
+
+    #[webapi(method = "deleteProgram", length = 1, callback = webgl_noop_callback)]
+    delete_program: (),
+
+    #[webapi(method = "createShader", length = 1, callback = webgl_create_shader_callback)]
+    create_shader: (),
+
+    #[webapi(method = "shaderSource", length = 2, callback = webgl_noop_callback)]
+    shader_source: (),
+
+    #[webapi(method = "compileShader", length = 1, callback = webgl_noop_callback)]
+    compile_shader: (),
+
+    #[webapi(method = "deleteShader", length = 1, callback = webgl_noop_callback)]
+    delete_shader: (),
+
+    #[webapi(method = "attachShader", length = 2, callback = webgl_noop_callback)]
+    attach_shader: (),
+
+    #[webapi(method = "linkProgram", length = 1, callback = webgl_noop_callback)]
+    link_program: (),
+
+    #[webapi(method = "useProgram", length = 1, callback = webgl_noop_callback)]
+    use_program: (),
+
+    #[webapi(
+        method = "getAttribLocation",
+        length = 2,
+        callback = webgl_get_attrib_location_callback
+    )]
+    get_attrib_location: (),
+
+    #[webapi(
+        method = "getUniformLocation",
+        length = 2,
+        callback = webgl_uniform_location_callback
+    )]
+    get_uniform_location: (),
+
+    #[webapi(
+        method = "enableVertexAttribArray",
+        length = 1,
+        callback = webgl_noop_callback
+    )]
+    enable_vertex_attrib_array: (),
+
+    #[webapi(
+        method = "vertexAttribPointer",
+        length = 6,
+        callback = webgl_noop_callback
+    )]
+    vertex_attrib_pointer: (),
+
+    #[webapi(method = "uniform2f", length = 3, callback = webgl_noop_callback)]
+    uniform2f: (),
+
+    #[webapi(method = "uniform1f", length = 2, callback = webgl_noop_callback)]
+    uniform1f: (),
+
+    #[webapi(method = "uniform2fv", length = 2, callback = webgl_noop_callback)]
+    uniform2fv: (),
+
+    #[webapi(method = "drawArrays", length = 3, callback = webgl_noop_callback)]
+    draw_arrays: (),
+
+    #[webapi(method = "getError", length = 0, callback = webgl_get_error_callback)]
+    get_error: (),
+
+    #[webapi(method = "getShaderParameter", length = 2, callback = webgl_boolean_callback)]
+    get_shader_parameter: (),
+
+    #[webapi(
+        method = "getProgramParameter",
+        length = 2,
+        callback = webgl_boolean_callback
+    )]
+    get_program_parameter: (),
+
+    #[webapi(
+        method = "getShaderInfoLog",
+        length = 1,
+        callback = webgl_get_shader_info_log_callback
+    )]
+    get_shader_info_log: (),
+
+    #[webapi(
+        method = "getProgramInfoLog",
+        length = 1,
+        callback = webgl_get_shader_info_log_callback
+    )]
+    get_program_info_log: (),
+
+    #[webapi(
+        method = "getSupportedExtensions",
+        length = 0,
+        callback = webgl_get_supported_extensions_callback
+    )]
+    get_supported_extensions: (),
+
+    #[webapi(method = "getExtension", length = 1, callback = webgl_get_extension_callback)]
+    get_extension: (),
+
+    #[webapi(method = "getParameter", length = 1, callback = webgl_get_parameter_callback)]
+    get_parameter: (),
+
+    #[webapi(
+        method = "getContextAttributes",
+        length = 0,
+        callback = webgl_get_context_attributes_callback
+    )]
+    get_context_attributes: (),
+
+    #[webapi(method = "isContextLost", length = 0, callback = webgl_is_context_lost_callback)]
+    is_context_lost: (),
+
+    #[webapi(
+        method = "getShaderPrecisionFormat",
+        length = 2,
+        callback = webgl_get_shader_precision_format_callback
+    )]
+    get_shader_precision_format: (),
+
+    #[webapi(method = "readPixels", length = 7, callback = webgl_noop_callback)]
+    read_pixels: (),
+
+    #[webapi(
+        method = "createFramebuffer",
+        length = 0,
+        callback = webgl_create_framebuffer_callback
+    )]
+    create_framebuffer: (),
+
+    #[webapi(method = "bindFramebuffer", length = 2, callback = webgl_noop_callback)]
+    bind_framebuffer: (),
+
+    #[webapi(
+        method = "createRenderbuffer",
+        length = 0,
+        callback = webgl_create_renderbuffer_callback
+    )]
+    create_renderbuffer: (),
+
+    #[webapi(method = "bindRenderbuffer", length = 2, callback = webgl_noop_callback)]
+    bind_renderbuffer: (),
+
+    #[webapi(method = "renderbufferStorage", length = 4, callback = webgl_noop_callback)]
+    renderbuffer_storage: (),
+
+    #[webapi(
+        method = "framebufferRenderbuffer",
+        length = 4,
+        callback = webgl_noop_callback
+    )]
+    framebuffer_renderbuffer: (),
+
+    #[webapi(
+        method = "checkFramebufferStatus",
+        length = 1,
+        callback = webgl_check_framebuffer_status_callback
+    )]
+    check_framebuffer_status: (),
+
+    #[webapi(method = "deleteRenderbuffer", length = 1, callback = webgl_noop_callback)]
+    delete_renderbuffer: (),
+
+    #[webapi(method = "deleteFramebuffer", length = 1, callback = webgl_noop_callback)]
+    delete_framebuffer: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::WebGL2RenderingContext, enumerable)]
+struct WebGl2RenderingContextTemplateDeclaration {
+    #[webapi(
+        method = "getSupportedExtensions",
+        length = 0,
+        callback = webgl2_get_supported_extensions_callback
+    )]
+    get_supported_extensions: (),
+
+    #[webapi(method = "getExtension", length = 1, callback = webgl2_get_extension_callback)]
+    get_extension: (),
+
+    #[webapi(method = "getParameter", length = 1, callback = webgl2_get_parameter_callback)]
+    get_parameter: (),
+
+    #[webapi(
+        method = "getInternalformatParameter",
+        length = 3,
+        callback = webgl2_get_internalformat_parameter_callback
+    )]
+    get_internalformat_parameter: (),
+
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = webgl2_color_space_getter_callback,
+        setter = webgl2_color_space_setter_callback,
+        data = callback_data_index_value(scope, 0)
+    )]
+    drawing_buffer_color_space: (),
+
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = webgl2_color_space_getter_callback,
+        setter = webgl2_color_space_setter_callback,
+        data = callback_data_index_value(scope, 1)
+    )]
+    unpack_color_space: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::WEBGLLoseContext, enumerable)]
+struct WebGlLoseContextTemplateMethodsDeclaration {
+    #[webapi(method = "loseContext", length = 0, callback = webgl_lose_context_noop_callback)]
+    lose_context: (),
+
+    #[webapi(method = "restoreContext", length = 0, callback = webgl_lose_context_noop_callback)]
+    restore_context: (),
+}
+
+pub fn install_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+    name: &str,
+) {
+    interfaces::install_value_template_bindings(scope, template, name);
+    match name {
+        "WebGLRenderingContext" => {
+            let proto = template.prototype_template(scope);
+            WebGlRenderingContextTemplateMethodsDeclaration::initialize_prototype_template(
+                scope, proto,
+            );
+        }
+        "WebGL2RenderingContext" => {
+            let proto = template.prototype_template(scope);
+            WebGlRenderingContextTemplateMethodsDeclaration::initialize_prototype_template(
+                scope, proto,
+            );
+            WebGl2RenderingContextTemplateDeclaration::initialize_prototype_template(scope, proto);
+        }
+        "WEBGL_lose_context" => {
+            let proto = template.prototype_template(scope);
+            WebGlLoseContextTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
