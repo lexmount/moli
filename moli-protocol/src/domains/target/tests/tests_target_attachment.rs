@@ -3974,6 +3974,25 @@ async fn dedicated_worker_existing_target_auto_attach_requires_its_owner_page_se
             .expect("owner Page residence")
     });
     push_dedicated_worker_target(&mut ctx, 2471, "TID-dedicated-worker", owner_page);
+    ctx.with_fixture(|conn| {
+        let url = url::Url::parse("https://example.test/worker.js").unwrap();
+        conn.browser_context_by_id_mut("BID-9")
+            .unwrap()
+            .dedicated_worker_target_mut("TID-dedicated-worker")
+            .unwrap()
+            .record_main_script(
+                url.to_string(),
+                crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(
+                    moli_core::page::NavigationResponse::from_text_body(
+                        url,
+                        200,
+                        Vec::new(),
+                        "".to_owned(),
+                    ),
+                )),
+                false,
+            );
+    });
 
     let worker_only_filter = json!([
         {"type": "worker", "exclude": false},

@@ -247,6 +247,16 @@ pub(super) fn record_dedicated_worker_main_script(
         return outputs;
     };
     let auto_attach_owners = dedicated_worker_auto_attach_owner_sessions(conn, target);
+    let auto_attach_owners = auto_attach_owners
+        .into_iter()
+        .filter(|owner| {
+            !super::super::auto_attach::owner_already_auto_attached_to_exact_target(
+                conn,
+                owner.as_deref(),
+                &target.target_id,
+            )
+        })
+        .collect::<Vec<_>>();
     let attached_sessions = auto_attach_owners
         .into_iter()
         .map(|owner| {

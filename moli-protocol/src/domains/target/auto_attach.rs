@@ -185,7 +185,7 @@ fn owner_already_auto_attached_to_target(
         })
 }
 
-fn owner_already_auto_attached_to_exact_target(
+pub(super) fn owner_already_auto_attached_to_exact_target(
     conn: &CdpConnection,
     owner_session_id: Option<&str>,
     target_id: &str,
@@ -546,7 +546,8 @@ fn prepare_context_sweep(
                 bc.dedicated_worker_targets
                     .values()
                     .filter(|target| {
-                        super::worker_target::dedicated_worker_auto_attach_owner_session_allowed(
+                        target.main_script().is_some()
+                        && super::worker_target::dedicated_worker_auto_attach_owner_session_allowed(
                             conn,
                             owner_session_id,
                             target,
