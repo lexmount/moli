@@ -11,7 +11,8 @@ use crate::webidl_iterator::{
     new_snapshot_webidl_iterator, prepare_webidl_collection_for_each_callback,
 };
 use anyhow::{Result, anyhow};
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
+pub(super) use moli_webapi::performance::legacy::*;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub(super) const EVENT_COUNTS_TRACKED_TYPES: &[&str] = &[
     "auxclick",
@@ -120,35 +121,6 @@ struct PerformanceObserverRuntimeStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigation)]
-struct PerformanceNavigationObjectDeclaration {
-    #[webapi(slot = PERFORMANCE_NAVIGATION_TYPE_SLOT)]
-    navigation_type: f64,
-
-    #[webapi(slot = PERFORMANCE_NAVIGATION_REDIRECT_COUNT_SLOT)]
-    redirect_count: f64,
-
-    #[webapi(method, name = "toJSON", length = 0, callback = performance_navigation_to_json_callback)]
-    to_json: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigation)]
-struct PerformanceNavigationConstantsDeclaration {
-    #[webapi(constant = "TYPE_NAVIGATE", value = 0.0)]
-    type_navigate: (),
-
-    #[webapi(constant = "TYPE_RELOAD", value = 1.0)]
-    type_reload: (),
-
-    #[webapi(constant = "TYPE_BACK_FORWARD", value = 2.0)]
-    type_back_forward: (),
-
-    #[webapi(constant = "TYPE_RESERVED", value = 255.0)]
-    type_reserved: (),
-}
-
-#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::EventCounts)]
 struct EventCountsObjectDeclaration {
     #[webapi(slot = PERFORMANCE_EVENT_COUNTS_VALUES_SLOT)]
@@ -226,24 +198,6 @@ struct PerformancePrototypeWindowAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigation, enumerable)]
-struct PerformanceNavigationPrototypeAccessorsDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_attribute_getter_callback,
-        data = callback_data_index_value(scope, 0)
-    )]
-    r#type: (),
-
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_attribute_getter_callback,
-        data = callback_data_index_value(scope, 1)
-    )]
-    redirect_count: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::EventCounts, enumerable)]
 struct EventCountsPrototypeMethodsDeclaration {
     #[webapi(accessor_property, getter = event_counts_size_getter)]
@@ -271,55 +225,6 @@ struct EventCountsPrototypeMethodsDeclaration {
     iterator: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PerformanceTiming)]
-struct PerformanceTimingObjectDeclaration {
-    #[webapi(data_property, enumerable)]
-    navigation_start: u64,
-    #[webapi(data_property, enumerable)]
-    unload_event_start: u64,
-    #[webapi(data_property, enumerable)]
-    unload_event_end: u64,
-    #[webapi(data_property, enumerable)]
-    redirect_start: u64,
-    #[webapi(data_property, enumerable)]
-    redirect_end: u64,
-    #[webapi(data_property, enumerable)]
-    fetch_start: u64,
-    #[webapi(data_property, enumerable)]
-    domain_lookup_start: u64,
-    #[webapi(data_property, enumerable)]
-    domain_lookup_end: u64,
-    #[webapi(data_property, enumerable)]
-    connect_start: u64,
-    #[webapi(data_property, enumerable)]
-    connect_end: u64,
-    #[webapi(data_property, enumerable)]
-    secure_connection_start: u64,
-    #[webapi(data_property, enumerable)]
-    request_start: u64,
-    #[webapi(data_property, enumerable)]
-    response_start: u64,
-    #[webapi(data_property, enumerable)]
-    response_end: u64,
-    #[webapi(data_property, enumerable)]
-    dom_loading: u64,
-    #[webapi(data_property, enumerable)]
-    dom_interactive: u64,
-    #[webapi(data_property, enumerable)]
-    dom_content_loaded_event_start: u64,
-    #[webapi(data_property, enumerable)]
-    dom_content_loaded_event_end: u64,
-    #[webapi(data_property, enumerable)]
-    dom_complete: u64,
-    #[webapi(data_property, enumerable)]
-    load_event_start: u64,
-    #[webapi(data_property, enumerable)]
-    load_event_end: u64,
-    #[webapi(method, name = "toJSON", length = 0, callback = performance_timing_to_json_callback)]
-    to_json: (),
-}
-
 pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -327,6 +232,7 @@ pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
 ) {
     install_performance_entry_template_bindings(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
+    moli_webapi::performance::legacy::install(scope, template, interface_name);
     match interface_name {
         "Performance" => {
             PerformancePrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
@@ -337,20 +243,7 @@ pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
                 scope, template,
             );
         }
-        "PerformanceNavigation" => {
-            PerformanceNavigationConstantsDeclaration::initialize_template(scope, template);
-            PerformanceNavigationConstantsDeclaration::initialize_prototype_template(
-                scope, prototype,
-            );
-            PerformanceNavigationPrototypeAccessorsDeclaration::initialize_prototype_template(
-                scope, prototype,
-            );
-        }
-        "PerformanceNavigationTiming" => {
-            PerformanceNavigationTimingPrototypeAccessorsDeclaration::initialize_prototype_template(
-                scope, prototype,
-            );
-        }
+
         "EventCounts" => {
             EventCountsPrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
         }
@@ -534,124 +427,6 @@ fn performance_navigation_legacy_type(navigation_type: &str) -> f64 {
         "traverse" => 2.0,
         _ => 0.0,
     }
-}
-
-const NAV_UNLOAD_EVENT_START_SLOT: &str = "__moliPerformanceNavigationTimingUnloadEventStart";
-const NAV_UNLOAD_EVENT_END_SLOT: &str = "__moliPerformanceNavigationTimingUnloadEventEnd";
-const NAV_DOM_INTERACTIVE_SLOT: &str = "__moliPerformanceNavigationTimingDomInteractive";
-const NAV_DOM_CONTENT_LOADED_EVENT_START_SLOT: &str =
-    "__moliPerformanceNavigationTimingDomContentLoadedEventStart";
-const NAV_DOM_CONTENT_LOADED_EVENT_END_SLOT: &str =
-    "__moliPerformanceNavigationTimingDomContentLoadedEventEnd";
-const NAV_DOM_COMPLETE_SLOT: &str = "__moliPerformanceNavigationTimingDomComplete";
-const NAV_LOAD_EVENT_START_SLOT: &str = "__moliPerformanceNavigationTimingLoadEventStart";
-const NAV_LOAD_EVENT_END_SLOT: &str = "__moliPerformanceNavigationTimingLoadEventEnd";
-const NAV_TYPE_SLOT: &str = "__moliPerformanceNavigationTimingType";
-const NAV_REDIRECT_COUNT_SLOT: &str = "__moliPerformanceNavigationTimingRedirectCount";
-
-const PERFORMANCE_NAVIGATION_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
-    NAV_UNLOAD_EVENT_START_SLOT,
-    NAV_UNLOAD_EVENT_END_SLOT,
-    NAV_DOM_INTERACTIVE_SLOT,
-    NAV_DOM_CONTENT_LOADED_EVENT_START_SLOT,
-    NAV_DOM_CONTENT_LOADED_EVENT_END_SLOT,
-    NAV_DOM_COMPLETE_SLOT,
-    NAV_LOAD_EVENT_START_SLOT,
-    NAV_LOAD_EVENT_END_SLOT,
-    NAV_TYPE_SLOT,
-    NAV_REDIRECT_COUNT_SLOT,
-];
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming)]
-struct PerformanceNavigationTimingSlotDeclaration {
-    #[webapi(slot = NAV_UNLOAD_EVENT_START_SLOT, constructor_default)]
-    unload_event_start: f64,
-    #[webapi(slot = NAV_UNLOAD_EVENT_END_SLOT, constructor_default)]
-    unload_event_end: f64,
-    #[webapi(slot = NAV_DOM_INTERACTIVE_SLOT, constructor_default)]
-    dom_interactive: f64,
-    #[webapi(slot = NAV_DOM_CONTENT_LOADED_EVENT_START_SLOT, constructor_default)]
-    dom_content_loaded_event_start: f64,
-    #[webapi(slot = NAV_DOM_CONTENT_LOADED_EVENT_END_SLOT, constructor_default)]
-    dom_content_loaded_event_end: f64,
-    #[webapi(slot = NAV_DOM_COMPLETE_SLOT, constructor_default)]
-    dom_complete: f64,
-    #[webapi(slot = NAV_LOAD_EVENT_START_SLOT, constructor_default)]
-    load_event_start: f64,
-    #[webapi(slot = NAV_LOAD_EVENT_END_SLOT, constructor_default)]
-    load_event_end: f64,
-    #[webapi(slot = NAV_TYPE_SLOT)]
-    navigation_type: &'static str,
-    #[webapi(slot = NAV_REDIRECT_COUNT_SLOT, constructor_default)]
-    redirect_count: f64,
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming, enumerable, receiver)]
-struct PerformanceNavigationTimingPrototypeAccessorsDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 0)
-    )]
-    unload_event_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 1)
-    )]
-    unload_event_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 2)
-    )]
-    dom_interactive: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 3)
-    )]
-    dom_content_loaded_event_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 4)
-    )]
-    dom_content_loaded_event_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 5)
-    )]
-    dom_complete: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 6)
-    )]
-    load_event_start: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 7)
-    )]
-    load_event_end: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 8)
-    )]
-    r#type: (),
-    #[webapi(
-        accessor_property,
-        getter = performance_navigation_timing_attribute_getter_callback,
-        data = callback_data_index_value(scope, 9)
-    )]
-    redirect_count: (),
-    #[webapi(method, name = "toJSON", length = 0, callback = performance_navigation_timing_to_json_callback)]
-    to_json: (),
 }
 
 fn performance_navigation_entry_name<'s>(
@@ -847,13 +622,6 @@ fn update_legacy_timing<'s>(
     }
 }
 
-fn legacy_timing_epoch_millis(epoch_millis: f64) -> u64 {
-    // PerformanceTiming is the legacy Navigation Timing 1 surface. Blink
-    // projects its pseudo-wall timestamps through uint64_t while keeping
-    // PerformanceNavigationTiming as a DOMHighResTimeStamp.
-    epoch_millis as u64
-}
-
 fn navigation_performance_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
@@ -980,60 +748,6 @@ fn performance_lifecycle_timestamps<'s>(
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
 }
 
-#[derive(Default)]
-struct PerformanceTimingSnapshot {
-    navigation_start: u64,
-    unload_event_start: u64,
-    unload_event_end: u64,
-    redirect_start: u64,
-    redirect_end: u64,
-    fetch_start: u64,
-    domain_lookup_start: u64,
-    domain_lookup_end: u64,
-    connect_start: u64,
-    connect_end: u64,
-    secure_connection_start: u64,
-    request_start: u64,
-    response_start: u64,
-    response_end: u64,
-    dom_loading: u64,
-    dom_interactive: u64,
-    dom_content_loaded_event_start: u64,
-    dom_content_loaded_event_end: u64,
-    dom_complete: u64,
-    load_event_start: u64,
-    load_event_end: u64,
-}
-
-impl PerformanceTimingSnapshot {
-    fn new(time_origin: f64) -> Self {
-        let time_origin = legacy_timing_epoch_millis(time_origin);
-        Self {
-            navigation_start: time_origin,
-            unload_event_start: 0,
-            unload_event_end: 0,
-            redirect_start: 0,
-            redirect_end: 0,
-            fetch_start: time_origin,
-            domain_lookup_start: time_origin,
-            domain_lookup_end: time_origin,
-            connect_start: time_origin,
-            connect_end: time_origin,
-            secure_connection_start: 0,
-            request_start: time_origin,
-            response_start: time_origin,
-            response_end: time_origin,
-            dom_loading: time_origin,
-            dom_interactive: 0,
-            dom_content_loaded_event_start: 0,
-            dom_content_loaded_event_end: 0,
-            dom_complete: 0,
-            load_event_start: 0,
-            load_event_end: 0,
-        }
-    }
-}
-
 fn performance_timing_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
@@ -1062,35 +776,6 @@ fn performance_timing_snapshot<'s>(
         snapshot.load_event_end = legacy_timing_epoch_millis(time_origin + timestamp);
     }
     snapshot
-}
-
-impl From<PerformanceTimingSnapshot> for PerformanceTimingObjectDeclaration {
-    fn from(snapshot: PerformanceTimingSnapshot) -> Self {
-        Self {
-            navigation_start: snapshot.navigation_start,
-            unload_event_start: snapshot.unload_event_start,
-            unload_event_end: snapshot.unload_event_end,
-            redirect_start: snapshot.redirect_start,
-            redirect_end: snapshot.redirect_end,
-            fetch_start: snapshot.fetch_start,
-            domain_lookup_start: snapshot.domain_lookup_start,
-            domain_lookup_end: snapshot.domain_lookup_end,
-            connect_start: snapshot.connect_start,
-            connect_end: snapshot.connect_end,
-            secure_connection_start: snapshot.secure_connection_start,
-            request_start: snapshot.request_start,
-            response_start: snapshot.response_start,
-            response_end: snapshot.response_end,
-            dom_loading: snapshot.dom_loading,
-            dom_interactive: snapshot.dom_interactive,
-            dom_content_loaded_event_start: snapshot.dom_content_loaded_event_start,
-            dom_content_loaded_event_end: snapshot.dom_content_loaded_event_end,
-            dom_complete: snapshot.dom_complete,
-            load_event_start: snapshot.load_event_start,
-            load_event_end: snapshot.load_event_end,
-            to_json: (),
-        }
-    }
 }
 
 fn performance_attribute_getter_callback<'s>(
@@ -1130,76 +815,6 @@ const PERFORMANCE_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_NAVIGATION_SLOT,
     PERFORMANCE_EVENT_COUNTS_SLOT,
 ];
-
-pub(super) const PERFORMANCE_TIMING_ATTRIBUTE_NAMES: &[&str] = &[
-    "navigationStart",
-    "unloadEventStart",
-    "unloadEventEnd",
-    "redirectStart",
-    "redirectEnd",
-    "fetchStart",
-    "domainLookupStart",
-    "domainLookupEnd",
-    "connectStart",
-    "connectEnd",
-    "secureConnectionStart",
-    "requestStart",
-    "responseStart",
-    "responseEnd",
-    "domLoading",
-    "domInteractive",
-    "domContentLoadedEventStart",
-    "domContentLoadedEventEnd",
-    "domComplete",
-    "loadEventStart",
-    "loadEventEnd",
-];
-
-const PERFORMANCE_NAVIGATION_JSON_KEYS: &[&str] = &["type", "redirectCount"];
-
-const PERFORMANCE_NAVIGATION_ATTRIBUTE_SLOTS: &[&str] = &[
-    PERFORMANCE_NAVIGATION_TYPE_SLOT,
-    PERFORMANCE_NAVIGATION_REDIRECT_COUNT_SLOT,
-];
-
-fn performance_navigation_timing_attribute_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(slot) = callback_data_item(
-        scope,
-        &args,
-        PERFORMANCE_NAVIGATION_TIMING_ATTRIBUTE_SLOTS,
-        "PerformanceNavigationTiming attribute slots",
-    ) else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(
-        performance_entry_slot_value(scope, args.this(), slot)
-            .unwrap_or_else(|| v8::undefined(scope).into()),
-    );
-}
-
-fn performance_navigation_attribute_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(slot) = callback_data_item(
-        scope,
-        &args,
-        PERFORMANCE_NAVIGATION_ATTRIBUTE_SLOTS,
-        "PerformanceNavigation attribute slots",
-    ) else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(
-        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
-    );
-}
 
 pub(in crate::context_bootstrap) fn event_counts_size_getter(
     scope: &mut v8::PinScope<'_, '_>,
@@ -1495,65 +1110,4 @@ pub(in crate::context_bootstrap) fn performance_to_json_callback<'s>(
     .bind(scope)
     .expect("Performance toJSON snapshot declaration should bind");
     rv.set(output.into());
-}
-
-fn performance_timing_to_json_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(object_json_snapshot(scope, args.this(), PERFORMANCE_TIMING_ATTRIBUTE_NAMES).into());
-}
-
-fn performance_navigation_to_json_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(object_json_snapshot(scope, args.this(), PERFORMANCE_NAVIGATION_JSON_KEYS).into());
-}
-
-fn performance_navigation_timing_to_json_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(output) = super::entries::resource_timing_json_snapshot(scope, args.this()) else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    // Inherited and navigation-only attributes are serialized from the same
-    // native slots used by their getters, without consulting author properties.
-    for (name, slot) in [
-        "unloadEventStart",
-        "unloadEventEnd",
-        "domInteractive",
-        "domContentLoadedEventStart",
-        "domContentLoadedEventEnd",
-        "domComplete",
-        "loadEventStart",
-        "loadEventEnd",
-        "type",
-        "redirectCount",
-    ]
-    .iter()
-    .zip(PERFORMANCE_NAVIGATION_TIMING_ATTRIBUTE_SLOTS)
-    {
-        let value = get_private_value(scope, args.this(), slot)
-            .expect("native PerformanceNavigationTiming should retain its attributes");
-        let _ = output.create_data_property(scope, v8str(scope, name).into(), value);
-    }
-    rv.set(output.into());
-}
-
-fn object_json_snapshot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    keys: &[&str],
-) -> v8::Local<'s, v8::Object> {
-    let output = ObjectLiteralDeclaration::bind(scope);
-    for key in keys {
-        output.copy_string_property(scope, source, key);
-    }
-    output.into_object()
 }

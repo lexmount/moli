@@ -1,10 +1,8 @@
-use super::super::*;
-use crate::web_api_interfaces;
-use crate::{
-    util::{get_private_value, throw_type_error},
-    webidl,
-};
+//! Native PDF plugin and MIME collections.
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, throw_type_error, v8_string, v8str};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "NavigatorPluginCollection.item")]
@@ -141,7 +139,7 @@ struct PluginPrototypeDeclaration {
     iterator: (),
 }
 
-pub(super) fn install_navigator_collection_template_bindings<'s>(
+pub fn install_navigator_collection_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -435,12 +433,12 @@ fn define_collection_indices<'s>(
     Some(())
 }
 
-pub(super) struct NavigatorPluginCollections<'scope> {
-    pub(super) mime_types: v8::Local<'scope, v8::Object>,
-    pub(super) plugins: v8::Local<'scope, v8::Object>,
+pub struct NavigatorPluginCollections<'scope> {
+    pub mime_types: v8::Local<'scope, v8::Object>,
+    pub plugins: v8::Local<'scope, v8::Object>,
 }
 
-pub(super) fn build_navigator_plugin_collections<'s>(
+pub fn build_navigator_plugin_collections<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<NavigatorPluginCollections<'s>> {
     let plugins = build_plugin_array(scope)?;

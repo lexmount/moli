@@ -1,5 +1,5 @@
 use super::*;
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 
 const BIQUAD_FREQUENCY_SLOT: &str = "__moliBiquadFrequency";
 
@@ -27,7 +27,7 @@ struct BiquadFilterNodePrototypeDeclaration {
     get_frequency_response: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -37,7 +37,7 @@ pub(super) fn install<'s>(
     );
 }
 
-pub(super) fn create_biquad_filter<'s>(
+pub fn create_biquad_filter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

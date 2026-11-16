@@ -61,7 +61,7 @@ struct SetOrientationArgs {
     up_z: f32,
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -71,7 +71,7 @@ pub(super) fn install<'s>(
     );
 }
 
-pub(super) fn get<'s>(
+pub fn get<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

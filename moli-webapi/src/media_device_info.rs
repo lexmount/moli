@@ -1,8 +1,10 @@
 //! Device info interface shims. The current media backend enumerates no devices;
 //! exposing these types does not manufacture a camera, microphone or permission.
 
-use super::*;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, v8str};
 use moli_webapi_declare::ObjectLiteralDeclaration;
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 const DEVICE_ID: &str = "__moliMediaDeviceId";
 const KIND: &str = "__moliMediaDeviceKind";
@@ -31,7 +33,7 @@ struct InputDeviceInfoMethods {
     get_capabilities: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,

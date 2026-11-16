@@ -109,7 +109,7 @@ fn declaration<'s>(
     ObjectDeclaration::new(context, real, imag, !constraints.disable_normalization)
 }
 
-pub(in crate::context_bootstrap) fn constructor<'s>(
+pub fn constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -150,7 +150,7 @@ struct CreateArgs {
     imag: webidl::Sequence<webidl::Float>,
 }
 
-pub(super) fn create<'s>(
+pub fn create<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,

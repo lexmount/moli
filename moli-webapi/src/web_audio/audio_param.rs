@@ -1,5 +1,5 @@
 use super::*;
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 
 const DEFAULT_VALUE: &str = "__moliAudioParamDefaultValue";
 const MIN_VALUE: &str = "__moliAudioParamMinValue";
@@ -35,7 +35,7 @@ struct AudioParamPrototypeDeclaration {
     automation_rate: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -45,7 +45,7 @@ pub(super) fn install<'s>(
     );
 }
 
-pub(super) fn audio_param<'s>(
+pub fn audio_param<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: f64,
     min: f64,
@@ -60,7 +60,7 @@ pub(super) fn audio_param<'s>(
     param
 }
 
-pub(super) fn initialize_rate<'s>(
+pub fn initialize_rate<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     param: v8::Local<'s, v8::Object>,
     rate: &'static str,
@@ -120,7 +120,7 @@ fn automation_rate_setter<'s>(
     set_private_value(scope, param, AUTOMATION_RATE, value.into());
 }
 
-pub(super) fn detune_param<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+pub fn detune_param<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
     let limit = (1200.0_f32 * f32::MAX.log2()) as f64;
     audio_param(scope, 0.0, -limit, limit)
 }

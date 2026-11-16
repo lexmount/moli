@@ -34,7 +34,7 @@ struct ConstructorArgs<'s> {
     options: GainOptions,
 }
 
-pub(in crate::context_bootstrap) fn constructor<'s>(
+pub fn constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -51,7 +51,7 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     {
         return;
     }
-    crate::util::apply_webidl_constructor_prototype_fallback(
+    moli_v8_util::apply_webidl_constructor_prototype_fallback(
         scope,
         args.this(),
         args.new_target(),
@@ -60,7 +60,7 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     rv.set(args.this().into());
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -70,7 +70,7 @@ pub(super) fn install<'s>(
     );
 }
 
-pub(super) fn create<'s>(
+pub fn create<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -78,9 +78,7 @@ pub(super) fn create<'s>(
     if !require_base_audio_context(scope, args.this()) {
         return;
     }
-    let Ok(node) =
-        super::super::exposed_interfaces::build_intrinsic_interface_instance(scope, "GainNode")
-    else {
+    let Some(node) = moli_v8_util::new_intrinsic_interface_instance(scope, "GainNode") else {
         return;
     };
     if initialize(scope, node, args.this(), 1.0) {

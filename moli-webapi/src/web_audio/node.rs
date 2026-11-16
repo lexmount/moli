@@ -10,7 +10,7 @@ const INTERPRETATION: &str = "__moliAudioNodeChannelInterpretation";
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "AudioNodeOptions")]
-pub(super) struct AudioNodeOptions {
+pub struct AudioNodeOptions {
     channel_count: Option<u32>,
     #[webidl(converter = "enum")]
     channel_count_mode: Option<ChannelCountMode>,
@@ -18,7 +18,7 @@ pub(super) struct AudioNodeOptions {
     channel_interpretation: Option<ChannelInterpretation>,
 }
 
-pub(super) fn apply_options<'s>(
+pub fn apply_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     options: AudioNodeOptions,
@@ -69,7 +69,7 @@ struct DestinationPrototypeDeclaration {
     max_channel_count: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -86,7 +86,7 @@ pub(super) fn install<'s>(
     }
 }
 
-pub(super) fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) {
+pub fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) {
     let source = web_api_interfaces::AudioScheduledSourceNode::is_instance(scope, node)
         || web_api_interfaces::MediaElementAudioSourceNode::is_instance(scope, node);
     let destination = web_api_interfaces::AudioDestinationNode::is_instance(scope, node);
@@ -110,15 +110,15 @@ pub(super) fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'
     };
     set_private_value(scope, node, CHANNEL_MODE, v8str(scope, mode).into());
     set_private_value(scope, node, INTERPRETATION, v8str(scope, "speakers").into());
-    super::super::media_queries::initialize_simple_event_target(scope, node);
+    crate::event_target::initialize_simple_event_target(scope, node);
 }
 
-pub(super) enum ChannelLayout {
+pub enum ChannelLayout {
     Merger(u32),
     Splitter(u32),
 }
 
-pub(super) fn initialize_channel_layout<'s>(
+pub fn initialize_channel_layout<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     layout: ChannelLayout,
@@ -139,17 +139,11 @@ pub(super) fn initialize_channel_layout<'s>(
     );
 }
 
-pub(super) fn input_count<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) -> u32 {
+pub fn input_count<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) -> u32 {
     web_audio_number_slot(scope, node, INPUT_COUNT).unwrap_or(0.0) as u32
 }
 
-pub(super) fn output_count<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) -> u32 {
+pub fn output_count<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) -> u32 {
     web_audio_number_slot(scope, node, OUTPUT_COUNT).unwrap_or(0.0) as u32
 }
 
@@ -307,7 +301,7 @@ fn set_channel_count<'s>(
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "ChannelCountMode")]
-pub(super) enum ChannelCountMode {
+pub enum ChannelCountMode {
     #[webidl(token = "max")]
     Max,
     #[webidl(token = "clamped-max")]
@@ -376,7 +370,7 @@ fn set_channel_mode<'s>(
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "ChannelInterpretation")]
-pub(super) enum ChannelInterpretation {
+pub enum ChannelInterpretation {
     #[webidl(token = "speakers")]
     Speakers,
     #[webidl(token = "discrete")]
@@ -384,7 +378,7 @@ pub(super) enum ChannelInterpretation {
 }
 
 impl AudioNodeOptions {
-    pub(super) fn apply<'s>(
+    pub fn apply<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         node: v8::Local<'s, v8::Object>,

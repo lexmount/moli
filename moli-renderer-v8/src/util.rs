@@ -347,8 +347,8 @@ where
 }
 
 pub(crate) use moli_v8_util::{
-    apply_webidl_constructor_prototype_fallback, callable_relevant_context,
-    new_target_realm_constructor_prototype, receiver_uses_new_target_realm_object_fallback,
+    callable_relevant_context, new_target_realm_constructor_prototype,
+    receiver_uses_new_target_realm_object_fallback,
 };
 
 pub(super) fn create_script_origin_with_base_url<'s>(

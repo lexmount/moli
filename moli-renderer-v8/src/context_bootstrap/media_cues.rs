@@ -1,3 +1,7 @@
+pub(crate) use moli_webapi::media_error::{
+    media_error_constructor_callback, new_media_error_value,
+};
+
 use super::super::util::{throw_type_error, v8_string};
 use super::context_host_ptr_from_global_bridge;
 use super::{initialize_simple_event_target, simple_object_event_set_handler};
@@ -23,8 +27,6 @@ const TEXT_TRACK_CUE_ALIGN_SLOT: &str = "__moliTextTrackCueAlign";
 const TEXT_TRACK_CUE_ONENTER_SLOT: &str = "__moliTextTrackCueOnEnter";
 const TEXT_TRACK_CUE_ONEXIT_SLOT: &str = "__moliTextTrackCueOnExit";
 const TEXT_TRACK_CUE_TEXT_SLOT: &str = "__moliTextTrackCueText";
-const MEDIA_ERROR_CODE_SLOT: &str = "__moliMediaErrorCode";
-const MEDIA_ERROR_MESSAGE_SLOT: &str = "__moliMediaErrorMessage";
 
 pub(crate) fn text_track_cue_times<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -224,85 +226,6 @@ struct VttCueTemplateDeclaration {
         setter = text_track_cue_text_setter
     )]
     text: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaError, enumerable)]
-struct MediaErrorConstantsDeclaration {
-    #[webapi(constant = "MEDIA_ERR_ABORTED", value = 1u32)]
-    media_err_aborted: (),
-    #[webapi(constant = "MEDIA_ERR_NETWORK", value = 2u32)]
-    media_err_network: (),
-    #[webapi(constant = "MEDIA_ERR_DECODE", value = 3u32)]
-    media_err_decode: (),
-    #[webapi(constant = "MEDIA_ERR_SRC_NOT_SUPPORTED", value = 4u32)]
-    media_err_src_not_supported: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaError, enumerable)]
-struct MediaErrorPrototypeDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = media_error_code_getter_callback,
-        enumerable
-    )]
-    code: (),
-    #[webapi(
-        accessor_property,
-        getter = media_error_message_getter_callback,
-        enumerable
-    )]
-    message: (),
-}
-
-fn media_error_code_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(code) = get_private_value(scope, args.this(), MEDIA_ERROR_CODE_SLOT) else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    rv.set(code);
-}
-
-fn media_error_message_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(message) = get_private_value(scope, args.this(), MEDIA_ERROR_MESSAGE_SLOT) else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    rv.set(message);
-}
-
-pub(crate) fn new_media_error_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    code: u32,
-    message: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype = super::ensure_intrinsic_interface_prototype(scope, "MediaError").ok()?;
-    let object = v8::Object::new(scope);
-    if object.set_prototype(scope, prototype.into()) != Some(true) {
-        return None;
-    }
-    set_private_value(
-        scope,
-        object,
-        MEDIA_ERROR_CODE_SLOT,
-        v8::Integer::new_from_unsigned(scope, code).into(),
-    );
-    set_private_value(
-        scope,
-        object,
-        MEDIA_ERROR_MESSAGE_SLOT,
-        v8_string(scope, message)?.into(),
-    );
-    Some(object)
 }
 
 pub(super) fn text_track_cue_constructor_callback<'s>(
@@ -1155,17 +1078,6 @@ fn set_private_bool(
     set_private_value(scope, object, slot, v8::Boolean::new(scope, value).into());
 }
 
-pub(super) fn media_error_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    throw_type_error(
-        scope,
-        "Failed to construct 'MediaError': Illegal constructor.",
-    );
-}
-
 pub(super) fn install_media_cue_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -1174,9 +1086,7 @@ pub(super) fn install_media_cue_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match interface_name {
         "MediaError" => {
-            MediaErrorConstantsDeclaration::initialize_template(scope, template);
-            MediaErrorConstantsDeclaration::initialize_prototype_template(scope, prototype);
-            MediaErrorPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            moli_webapi::media_error::install(scope, template);
         }
         "TextTrackCue" => {
             TextTrackCueTemplateDeclaration::initialize_prototype_template(scope, prototype)

@@ -1,8 +1,8 @@
-use crate::util::{
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
     throw_type_error,
 };
-use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, Instant};
 
@@ -49,7 +49,7 @@ struct HeapSample {
     sizes: [f64; 3],
 }
 
-pub(super) fn performance_memory_getter<'s>(
+pub fn performance_memory_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

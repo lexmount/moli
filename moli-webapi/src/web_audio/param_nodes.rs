@@ -45,7 +45,7 @@ impl Kind {
     }
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -194,7 +194,7 @@ fn construct<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn delay_constructor<'s>(
+pub fn delay_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s>,
@@ -202,7 +202,7 @@ pub(in crate::context_bootstrap) fn delay_constructor<'s>(
     construct(scope, args, rv, Kind::Delay);
 }
 
-pub(in crate::context_bootstrap) fn stereo_panner_constructor<'s>(
+pub fn stereo_panner_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s>,
@@ -217,9 +217,8 @@ fn create<'s>(
     kind: Kind,
     max_delay: f64,
 ) {
-    let prototype =
-        super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(scope, kind.name())
-            .expect("Audio node prototype should exist");
+    let prototype = moli_v8_util::global_constructor_prototype(scope, kind.name())
+        .expect("Audio node prototype should exist");
     let node = v8::Object::new(scope);
     let _ = node.set_prototype(scope, prototype.into());
     web_api_interfaces::initialize(scope, node, kind.name())
@@ -241,7 +240,7 @@ struct DelayArgs {
     max_delay_time: f64,
 }
 
-pub(super) fn create_delay<'s>(
+pub fn create_delay<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s>,
@@ -252,7 +251,7 @@ pub(super) fn create_delay<'s>(
     create(scope, args, rv, Kind::Delay, parsed.max_delay_time);
 }
 
-pub(super) fn create_stereo_panner<'s>(
+pub fn create_stereo_panner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s>,
