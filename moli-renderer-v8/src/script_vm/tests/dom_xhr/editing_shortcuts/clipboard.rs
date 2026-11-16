@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn editing_shortcuts_cut_follows_focus_changed_by_the_clipboard_callback() {
+    for markup in [
+        "<input id=a value=abc><input id=b value=xyz>",
+        "<textarea id=a>abc</textarea><textarea id=b>xyz</textarea>",
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://editing-cut-focus.test/",
+            &format!("{markup}<textarea id=output></textarea>"),
+        );
+        vm.eval("globalThis.a=document.getElementById('a');globalThis.b=document.getElementById('b');a.focus();a.setSelectionRange(0,2);a.oncut=()=>{b.focus();b.setSelectionRange(0,2)};globalThis.events=[];for(const kind of ['cut','beforeinput','input'])document.addEventListener(kind,e=>events.push(kind+':'+e.target.id))").unwrap();
+        key(&mut vm, "x", "KeyX", 2);
+        assert_eq!(
+            vm.eval("a.value+':'+b.value+':'+events.join(',')").unwrap(),
+            "abc:z:cut:a,beforeinput:b,input:b"
+        );
+        vm.eval("document.getElementById('output').focus()")
+            .unwrap();
+        key(&mut vm, "v", "KeyV", 2);
+        assert_eq!(
+            vm.eval("document.getElementById('output').value").unwrap(),
+            "xy"
+        );
+    }
+}
+
+#[test]
 fn editing_shortcuts_cut_reads_selection_and_editability_after_callbacks() {
     let mut vm = new_parsed_test_vm(
         "https://editing-cut-callback.test/",

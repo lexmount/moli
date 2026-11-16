@@ -112,6 +112,21 @@ pub(crate) fn perform_clipboard_shortcut(
         return false;
     };
     let allowed = dispatch_public_event(scope, ptr, target, event).allows_default();
+    let host = unsafe { &*ptr };
+    let target = if allowed && !paste {
+        host.active_element_handle()
+            .filter(|active| host.dom_host().owner_document_handle(*active) == Some(document))
+            .map(|active| {
+                if is_text_control(host, active) {
+                    active
+                } else {
+                    contenteditable_editing_host(host, active).unwrap_or(active)
+                }
+            })
+            .unwrap_or(target)
+    } else {
+        target
+    };
     let still_valid = unsafe { &*ptr }.dom_host().is_connected(target)
         && unsafe { &*ptr }.dom_host().owner_document_handle(target) == Some(document);
     let host = unsafe { &*ptr };
