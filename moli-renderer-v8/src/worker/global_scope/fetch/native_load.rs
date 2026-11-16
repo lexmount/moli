@@ -31,7 +31,9 @@ pub(super) fn start<'s>(
     let info = PendingSubresourceFetchInfo {
         internal_id: crate::network::interception_control::next_subresource_request_id(),
         network_request_handle: Some(handle),
-        request_headers: request.interception_request_headers(),
+        request_headers: request.interception_request_headers_with_web_security(
+            load.request_client().web_security_disabled(),
+        ),
         request_body: request_body_text(&request.body),
 
         frame_id: None,
@@ -47,15 +49,13 @@ pub(super) fn start<'s>(
     let (fetch_id, completion, control) = {
         let mut state = state.borrow_mut();
         let fetch_id = next_fetch_id(&mut state);
+        let resource_timing =
+            crate::context_bootstrap::FetchResourceTiming::capture(scope, &state.request_origin());
         state.pending_fetches.insert(
             fetch_id,
             PendingWorkerFetch {
                 resolver: v8::Global::new(scope, resolver),
-                resource_timing: crate::context_bootstrap::FetchResourceTiming::capture(
-                    scope,
-                    &(&document_url).into(),
-                ),
-                document_url,
+                resource_timing,
                 credentials_mode: request.credentials_mode,
                 request_mode: request.request_mode,
                 redirect_mode: request.redirect_mode(),

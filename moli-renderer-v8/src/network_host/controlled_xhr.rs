@@ -637,7 +637,9 @@ impl ControlledResourceLoad {
                     .iter()
                     .any(|(name, _)| name.eq_ignore_ascii_case("location"))
             {
-                if self.response_filter.is_none() && !self.load.request_client().web_security_disabled() {
+                if self.response_filter.is_none()
+                    && !self.load.request_client().web_security_disabled()
+                {
                     self.request.validate_cors_response_for_url(
                         &response.head.final_url,
                         &response.head.headers,
@@ -653,7 +655,9 @@ impl ControlledResourceLoad {
                 )?
             } else {
                 advance_subresource_response(
-                    &mut self.request, response.head.clone(), false,
+                    &mut self.request,
+                    response.head.clone(),
+                    false,
                     self.load.request_client().web_security_disabled(),
                 )?
             };

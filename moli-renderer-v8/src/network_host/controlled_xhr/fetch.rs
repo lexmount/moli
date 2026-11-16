@@ -20,6 +20,8 @@ pub(crate) struct ControlledFetchStream {
     completion: mpsc::UnboundedSender<WorkerFetchEvent>,
     fetch_id: u32,
     interception: ResourceInterceptionContext,
+    request_origin: moli_url::WebOrigin,
+    load: crate::network::loads::ResourceLoadLease,
     mode: RequestMode,
     credentials: RequestCredentialsMode,
     policy: SubresourcePolicyContext,
@@ -53,9 +55,13 @@ impl ControlledFetchStream {
         mode: RequestMode,
         credentials: RequestCredentialsMode,
         policy: SubresourcePolicyContext,
+        request_origin: moli_url::WebOrigin,
+        load: crate::network::loads::ResourceLoadLease,
     ) -> Self {
         Self {
             completion,
+            request_origin,
+            load,
             fetch_id,
             interception,
             mode,
@@ -75,12 +81,13 @@ impl ControlledFetchStream {
         body: ResourceInterceptionBody,
     ) -> Result<(), String> {
         super::super::validate_fetch_response_security_policy_with_body_classified(
-            &info.document_url,
+            &self.request_origin,
             &head,
             &[],
             self.mode,
             self.credentials,
             self.policy,
+            self.load.request_client().web_security_disabled(),
         )
         .map_err(|error| error.into_message())?;
         let handle = info
@@ -191,6 +198,11 @@ impl super::ControlledResourceLoad {
         let super::ResourceResponsePolicy::Fetch(policy) = self.response_policy else {
             panic!("Worker fetch requires Fetch response policy");
         };
+        let request_origin = self
+            .request
+            .browser_origin()
+            .expect("native Worker Fetch has a browser origin")
+            .clone();
         let mut stream = super::ControlledResourceStream::WorkerFetch(ControlledFetchStream::new(
             completion.clone(),
             fetch_id,
@@ -198,6 +210,8 @@ impl super::ControlledResourceLoad {
             self.request.request_mode,
             self.request.credentials_mode,
             policy,
+            request_origin.clone(),
+            self.load.clone(),
         ));
         let result = self.run_inner(Some(&mut stream)).await;
         let result = self.normalize_cancellation(result);
@@ -221,12 +235,13 @@ impl super::ControlledResourceLoad {
             && let Ok(delivered) = &result
         {
             match super::super::validate_fetch_response_security_policy_with_body_classified(
-                &self.info.document_url,
+                &request_origin,
                 &delivered.response.head(),
                 delivered.response.body_bytes(),
                 self.request.request_mode,
                 self.request.credentials_mode,
                 policy,
+                self.load.request_client().web_security_disabled(),
             ) {
                 Ok(()) => {}
                 Err(super::super::FetchResponseSecurityViolation::OpaqueResponseBlocked(_)) => {

@@ -825,7 +825,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
     };
 
     let (
-        _loader,
+        loader,
+        request_origin,
         document_url,
         extra_http_headers,
         _network_offline,
@@ -840,6 +841,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         };
         (
             state.loader.clone(),
+            state.request_origin(),
             document_url,
             state.extra_http_headers.clone(),
             state.network_offline,
@@ -848,6 +850,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             state.policy_context,
         )
     };
+
+    let web_security_disabled = loader.request_client().web_security_disabled();
 
     let ResolvedWorkerFetchInput {
         resolved_url,
@@ -951,8 +955,9 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    if let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
-        .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
+    if !web_security_disabled
+        && let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
+            .validate_request_mode(request_mode, &request_origin)
     {
         rv.set(make_rejected_promise(scope, &error.to_string()).into());
         return;
@@ -975,7 +980,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
     }
 
     if let Err(error) = crate::network_host::validate_no_cors_http_redirect_mode(
-        &moli_url::WebOrigin::from_url(&document_url),
+        &request_origin,
         &resolved_url,
         request_mode,
         redirect_mode,
@@ -1003,7 +1008,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             resolved_url.clone(),
             body.clone(),
             headers.clone(),
-            moli_url::WebOrigin::from_url(&document_url),
+            request_origin,
         )
         .with_initiator_url(&document_url)
         .with_request_mode(request_mode)
@@ -1119,6 +1124,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     started: WorkerFetchStreamingStarted,
 ) {
+    let request_origin = state.borrow().request_origin();
     let mut reject = None;
 
     // The native loader admits every hop before dispatch and delivers CSP
@@ -1129,11 +1135,12 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             return;
         };
         if let Err(message) = validate_fetch_response_security_policy(
-            &pending.document_url,
+            &request_origin,
             &started.head,
             pending.request_mode,
             pending.credentials_mode,
             pending.policy_context,
+            pending.load.request_client().web_security_disabled(),
         ) {
             pending.load.cancel();
             reject = Some((pending.resolver.clone(), message));
@@ -1141,15 +1148,19 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         } else {
             let mut observable_head = started.head.clone();
             observable_head.headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
+                &request_origin,
                 &observable_head,
                 pending.credentials_mode,
-                pending.policy_context.cors_disabled,
+                pending.load.request_client().web_security_disabled(),
             );
             pending.streaming_body_source_id = Some(started.body_source_id);
             Some((
                 pending.resolver.clone(),
-                pending.document_url.clone(),
+                started.head.fetch_metadata_with_web_security(
+                    &request_origin,
+                    pending.request_mode,
+                    pending.load.request_client().web_security_disabled(),
+                ),
                 pending.request_mode,
                 pending.request_method.clone(),
                 observable_head,
@@ -1170,7 +1181,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         }
         return;
     }
-    if let Some((resolver, document_url, request_mode, request_method, observable_head)) =
+    if let Some((resolver, metadata, request_mode, request_method, observable_head)) =
         response_input
     {
         let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_metadata(
@@ -1181,7 +1192,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             },
             observable_head,
             started.body_source_id,
-            started.head.fetch_metadata(&(&document_url).into(), request_mode),
+            metadata,
         );
         let resolver = v8::Local::new(scope, &resolver);
         let _ = resolver.resolve(scope, response_obj.into());
@@ -1193,6 +1204,7 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     finished: WorkerFetchStreamingFinished,
 ) {
+    let request_origin = state.borrow().request_origin();
     let Some(pending) = state
         .borrow_mut()
         .pending_fetches
@@ -1200,6 +1212,7 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     else {
         return;
     };
+    let web_security_disabled = pending.load.request_client().web_security_disabled();
     pending.load.finish();
     let head = finished.head;
     match finished.result {
@@ -1208,11 +1221,12 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
                 scope,
                 pending.resource_timing.completed(
                     &pending.request_url,
-                    &(&pending.document_url).into(),
+                    &request_origin,
                     pending.request_mode,
                     &head,
                     body.len(),
                     None,
+                    web_security_disabled,
                 ),
             );
             close_pending_network_body_stream(scope, finished.body_source_id);
@@ -1240,6 +1254,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     state: &Rc<RefCell<WorkerGlobalState>>,
     completion: WorkerFetchCompletion,
 ) {
+    let request_origin = state.borrow().request_origin();
     let Some(pending) = state
         .borrow_mut()
         .pending_fetches
@@ -1247,6 +1262,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     else {
         return;
     };
+    let web_security_disabled = pending.load.request_client().web_security_disabled();
     pending.load.finish();
     let resolver = v8::Local::new(scope, &pending.resolver);
     match completion.result {
@@ -1268,12 +1284,13 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 Ok(())
             } else {
                 validate_fetch_response_security_policy_with_body_classified(
-                    &pending.document_url,
+                    &request_origin,
                     &response_head,
                     response.response.body_bytes(),
                     pending.request_mode,
                     pending.credentials_mode,
                     pending.policy_context,
+                    web_security_disabled,
                 )
             };
             let opaque_response_blocked = match security_validation {
@@ -1299,19 +1316,21 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             } else {
                 pending.resource_timing.completed(
                     &pending.request_url,
-                    &(&pending.document_url).into(),
+                    &request_origin,
                     pending.request_mode,
                     &response_head,
                     response.subresource_response_body().len(),
                     response_filter.as_ref(),
+                    web_security_disabled,
                 )
             };
             crate::context_bootstrap::record_resource_performance_entry(scope, entry);
             let mut metadata = crate::network_host::fetch_response_metadata(
-                &(&pending.document_url).into(),
+                &request_origin,
                 &response_head,
                 pending.request_mode,
                 response_filter.as_ref(),
+                web_security_disabled,
             );
             if opaque_response_blocked {
                 metadata.response_type = crate::types::FetchResponseType::Opaque;
@@ -1324,10 +1343,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 response_head.headers.clone()
             } else {
                 filter_cors_exposed_response_headers(
-                    &pending.document_url,
+                    &request_origin,
                     &response_head,
                     pending.credentials_mode,
-                    pending.policy_context.cors_disabled,
+                    web_security_disabled,
                 )
             };
             let (mut head, body) = response.into_fetch_parts();
