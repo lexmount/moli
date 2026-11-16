@@ -13,10 +13,12 @@ mod mouse_boundary;
 mod touch_tap;
 use drag_source::dispatch_drag_source_event;
 use mouse_boundary::dispatch_mouse_boundary_events;
+#[cfg(feature = "devtools")]
 use touch_tap::dispatch_touch_tap_activation;
 
 use super::input_dispatch_outcome;
 use super::input_helpers::{mouse_button_mask, single_changed_mouse_button};
+#[cfg(feature = "devtools")]
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
 };
@@ -545,6 +547,7 @@ fn pointer_event_name_for_mouse_event(event_name: &str) -> Option<&'static str> 
     }
 }
 
+#[cfg(feature = "devtools")]
 fn pointer_event_name_for_touch_event(event_name: &str) -> Option<&'static str> {
     match event_name {
         "touchstart" => Some("pointerdown"),
@@ -570,6 +573,7 @@ struct PreparedMouseInputDispatch {
     buttons: i32,
 }
 
+#[cfg(feature = "devtools")]
 fn touch_pointer_id(touch_id: i32) -> i32 {
     TOUCH_POINTER_ID.saturating_add(touch_id.max(0))
 }
@@ -578,6 +582,7 @@ fn activates_pointer_capture_for_mouse_event(event_name: &str, buttons: i32) -> 
     matches!(event_name, "mousedown" | "mouseup") || (event_name == "mousemove" && buttons != 0)
 }
 
+#[cfg(feature = "devtools")]
 fn button_for_touch_pointer_event(event_name: &str) -> i32 {
     match event_name {
         "touchstart" | "touchend" => 0,
@@ -585,6 +590,7 @@ fn button_for_touch_pointer_event(event_name: &str) -> i32 {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn buttons_for_touch_pointer_event(event_name: &str) -> i32 {
     match event_name {
         "touchend" | "touchcancel" => 0,
@@ -592,6 +598,7 @@ fn buttons_for_touch_pointer_event(event_name: &str) -> i32 {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn touch_tap_is_live(runtime: &crate::native_bridge::PageScriptHost, tap: PendingTouchTap) -> bool {
     runtime.dom_host().is_connected(tap.target)
         && runtime.dom_host().owner_document_handle(tap.target) == Some(tap.document)
@@ -600,6 +607,7 @@ fn touch_tap_is_live(runtime: &crate::native_bridge::PageScriptHost, tap: Pendin
             .is_some()
 }
 
+#[cfg(feature = "devtools")]
 fn touch_pointer_properties(
     event_name: &str,
     pointer_id: i32,
@@ -747,6 +755,7 @@ fn dispatch_drag_pointer_suppression_boundaries(
     }
 }
 
+#[cfg(feature = "devtools")]
 fn dispatch_touch_pointer_boundary_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
@@ -916,6 +925,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_mouse_event_at_point_with_pointer_and_modifiers(
         &mut self,
         x: f64,
@@ -1941,6 +1951,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn cancel_dragging(&mut self) -> Result<RendererInputDispatchOutcome> {
         let modifiers = self
             .active_drag_session
@@ -2077,6 +2088,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_touch_event_at_points(
         &mut self,
         points: &[RendererTouchPoint],
@@ -2114,6 +2126,7 @@ impl ScriptVm {
         self.dispatch_multi_touch_event_at_points(points, event_name)
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_multi_touch_event_at_points(
         &mut self,
         points: &[RendererTouchPoint],
@@ -2402,6 +2415,7 @@ impl ScriptVm {
         self.finish_input_event_dispatch_turn(result)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_drag_event_at_point(
         &mut self,
         x: f64,
@@ -2504,6 +2518,7 @@ impl ScriptVm {
         self.finish_input_event_dispatch_turn(result)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn clear_active_drag_data_transfer(&mut self) -> Result<()> {
         let modifiers = self
             .active_drag_session
@@ -2514,6 +2529,7 @@ impl ScriptVm {
         self.finish_input_event_dispatch_turn(result)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_file_input_files(
         &mut self,
         handle: DomHandle,
@@ -2560,6 +2576,7 @@ impl ScriptVm {
         self.finish_input_command_checkpoint(result)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn insert_text_into_active_control(&mut self, text: &str) -> Result<bool> {
         let handle = self
             .document_runtime
@@ -2605,6 +2622,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_key_event_with_location(
         &mut self,
         event_name: &str,

@@ -259,10 +259,12 @@ impl ScriptVm {
         let output_journal = environment.output_journal();
         let mut pending = output_journal.take_pending_for_resolution()?;
 
+        #[cfg(feature = "devtools")]
         let current_agent_token = self.page_inspector.agent_token();
         for record in pending.records_mut() {
             record.with_runtime_inspector_batch_mut(|batch| {
                 self.record_runtime_inspector_context_state(&batch.messages);
+                #[cfg(feature = "devtools")]
                 if batch.agent_token == current_agent_token {
                     batch.v8_state_update = self
                         .page_inspector
@@ -303,6 +305,7 @@ impl ScriptVm {
         self.renderer_page_script_environment.is_some()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn renderer_command_output_journal(
         &self,
     ) -> crate::runtime::RendererTurnOutputJournal {
@@ -688,6 +691,7 @@ impl ScriptVm {
         self.document_runtime.take_runtime_binding_calls()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn take_runtime_inspector_messages(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -719,6 +723,7 @@ impl ScriptVm {
         self.page_inspector.agent_token()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_v8_session_state(
         &self,
         inspector_session_id: Option<&str>,
@@ -735,12 +740,20 @@ impl ScriptVm {
         moli_page_types::DevToolsSessionKey,
         moli_page_types::V8InspectorSessionState,
     )> {
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_and_inspector_mut(|_, _| {
-                self.page_inspector.v8_session_states()
-            })
+        #[cfg(feature = "devtools")]
+        {
+            self.renderer_document_isolate
+                .with_renderer_document_isolate_and_inspector_mut(|_, _| {
+                    self.page_inspector.v8_session_states()
+                })
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            Vec::new()
+        }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn reattach_v8_inspector_sessions(
         &self,
         restores: &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
@@ -751,6 +764,7 @@ impl ScriptVm {
             });
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn ensure_runtime_inspector_session(&mut self, inspector_session_id: Option<&str>) {
         let renderer_document_isolate = self.renderer_document_isolate.clone();
         let page_inspector = &self.page_inspector;

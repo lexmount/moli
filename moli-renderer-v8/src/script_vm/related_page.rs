@@ -244,7 +244,7 @@ impl ScriptVm {
         &mut self,
         root_frame_id: Option<String>,
         main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
-        restores: &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
+        _restores: &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
     ) -> Result<()> {
         let environment = self
             .renderer_page_script_environment
@@ -277,7 +277,8 @@ impl ScriptVm {
             .root_document_lifecycle_identity();
         let page_inspector = &mut self.page_inspector;
         isolate.with_renderer_document_isolate_and_inspector_mut(|isolate, backend| {
-            page_inspector.reattach_v8_sessions(backend, restores);
+            #[cfg(feature = "devtools")]
+            page_inspector.reattach_v8_sessions(backend, _restores);
             if let Some(commit) = main_document_commit {
                 journal.append(crate::runtime::PendingRendererOutputRecord::observation(
                     None,

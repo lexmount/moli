@@ -10,16 +10,16 @@ use std::{
 };
 
 use super::RendererInspectorSessionExecutorLocal;
-use crate::{
-    devtools::{
-        ingress::{
-            io::{RendererInspectorInterruptTarget, RendererInspectorIoOwnerWake},
-            main::{RendererInspectorMainOwnerDispatch, RendererInspectorMainOwnerWake},
-        },
-        route::RendererInspectorSessionExecutorRouteId,
-    },
-    inspector_microtasks::with_scoped_inspector_microtasks,
+use crate::devtools::ingress::io::{
+    RendererInspectorInterruptTarget, RendererInspectorIoOwnerWake,
 };
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::main::{
+    RendererInspectorMainOwnerDispatch, RendererInspectorMainOwnerWake,
+};
+use crate::devtools::route::RendererInspectorSessionExecutorRouteId;
+#[cfg(feature = "devtools")]
+use crate::inspector_microtasks::with_scoped_inspector_microtasks;
 
 thread_local! {
     static INSPECTOR_SESSION_EXECUTORS: RefCell<HashMap<RendererInspectorSessionExecutorRouteId, Weak<RendererInspectorSessionExecutorLocal>>> =
@@ -99,9 +99,15 @@ pub(super) unsafe extern "C" fn dispatch_inspector_interrupt(
         return;
     }
     dispatch_environment_notifications(&session_executor, isolate);
+    #[cfg(feature = "devtools")]
     with_scoped_inspector_microtasks(isolate, || {
         session_executor.dispatch_next_io_command_from_interrupt();
     });
+    #[cfg(not(feature = "devtools"))]
+    session_executor
+        .target
+        .io_ref()
+        .acknowledge_environment_wake(true);
 }
 
 struct InspectorPageCloseTermination;
@@ -171,13 +177,22 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
     }
     let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
     dispatch_environment_notifications(&session_executor, isolate);
+    #[cfg(feature = "devtools")]
     let scope = pin!(v8::HandleScope::new(isolate));
+    #[cfg(feature = "devtools")]
     let scope = &mut scope.init();
+    #[cfg(feature = "devtools")]
     with_scoped_inspector_microtasks(scope, || {
         session_executor.dispatch_next_io_command_from_owner();
     });
+    #[cfg(not(feature = "devtools"))]
+    session_executor
+        .target
+        .io_ref()
+        .acknowledge_environment_wake(false);
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn dispatch_inspector_main_owner_wake(
     wake: RendererInspectorMainOwnerWake,
 ) -> Option<RendererInspectorMainOwnerDispatch> {

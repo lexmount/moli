@@ -29,109 +29,109 @@ use crate::{
     },
 };
 
-use super::{
-    clients::{
-        ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
-        ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult,
-        ServiceWorkerClientQueryType, ServiceWorkerClientSnapshot, ServiceWorkerClientType,
-        ServiceWorkerClientVisibilityState, allocate_service_worker_exposed_client_id,
-        service_worker_current_url_for_creation_url, service_worker_exposed_client_id,
-    },
-    diagnostics::{
-        ServiceWorkerMainScriptUpdateCheckDiagnostics, ServiceWorkerRegistrationDiagnostics,
-        ServiceWorkerRuntimeDiagnostics, ServiceWorkerScriptResourceDiagnostics,
-        ServiceWorkerVersionDiagnostics,
-    },
-    errors::ServiceWorkerRegistrationError,
-    events::{
-        MaterializedServiceWorkerFetchResponseHead, ServiceWorkerClientFocus,
-        ServiceWorkerClientFocusError, ServiceWorkerClientFocusResult, ServiceWorkerClientMessage,
-        ServiceWorkerClientNavigate, ServiceWorkerClientNavigateError,
-        ServiceWorkerClientNavigateResult, ServiceWorkerClientsOpenWindow,
-        ServiceWorkerClientsOpenWindowError, ServiceWorkerClientsOpenWindowResult,
-        ServiceWorkerCloseNotification, ServiceWorkerDirectFetchResult,
-        ServiceWorkerFetchCompletion, ServiceWorkerFetchDispatch, ServiceWorkerFetchEvent,
-        ServiceWorkerFetchResponse, ServiceWorkerFetchResult, ServiceWorkerFetchStreamChunk,
-        ServiceWorkerFetchStreamStarted, ServiceWorkerGetNotifications,
-        ServiceWorkerGetNotificationsResult, ServiceWorkerLifecycleCompletion,
-        ServiceWorkerLifecycleEvent, ServiceWorkerLifecycleEventKind,
-        ServiceWorkerMessageCompletion, ServiceWorkerMessageEvent, ServiceWorkerNotificationAction,
-        ServiceWorkerNotificationCompletion, ServiceWorkerNotificationEvent,
-        ServiceWorkerNotificationEventKind, ServiceWorkerNotificationMetadata,
-        ServiceWorkerNotificationSnapshot, ServiceWorkerPeriodicSyncCompletion,
-        ServiceWorkerPeriodicSyncEvent, ServiceWorkerPeriodicSyncGetTags,
-        ServiceWorkerPeriodicSyncGetTagsResult, ServiceWorkerPeriodicSyncRegistration,
-        ServiceWorkerPeriodicSyncRegistrationResult, ServiceWorkerPeriodicSyncUnregistration,
-        ServiceWorkerPeriodicSyncUnregistrationResult, ServiceWorkerPushCompletion,
-        ServiceWorkerPushEvent, ServiceWorkerPushGetSubscription,
-        ServiceWorkerPushGetSubscriptionResult, ServiceWorkerPushSubscribe,
-        ServiceWorkerPushSubscribeResult, ServiceWorkerPushSubscriptionSnapshot,
-        ServiceWorkerPushUnsubscribe, ServiceWorkerPushUnsubscribeResult,
-        ServiceWorkerShowNotification, ServiceWorkerShowNotificationResult,
-        ServiceWorkerSyncCompletion, ServiceWorkerSyncEvent, ServiceWorkerSyncGetTags,
-        ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistration,
-        ServiceWorkerSyncRegistrationResult, ServiceWorkerWorkerMessage,
-    },
-    functional_events::{
-        ServiceWorkerNotificationRecord, ServiceWorkerPeriodicSyncRegistrationRecord,
-        ServiceWorkerSyncRegistrationRecord,
-    },
-    host::{RendererServiceWorkerHost, SharedRendererServiceWorkerHost},
-    ids::{
-        ServiceWorkerClientId, ServiceWorkerEventId, ServiceWorkerRegistrationId,
-        ServiceWorkerVersionId,
-    },
-    jobs::{
-        ServiceWorkerAbortedJob, ServiceWorkerLaunchParams,
-        ServiceWorkerMainScriptUpdateCheckStart, ServiceWorkerPendingMainScriptUpdateCheck,
-        ServiceWorkerPendingRegisterJob, ServiceWorkerQueuedJob, ServiceWorkerQueuedRegisterJob,
-        ServiceWorkerRegisterJob, ServiceWorkerRegistrationKey, ServiceWorkerUnregisterJob,
-        ServiceWorkerUnregisterStart, ServiceWorkerVersionLaunchConfig,
-    },
-    matching::service_worker_scope_matches_url,
-    owner_wake::{ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender},
-    pending_clear::{
-        ServiceWorkerPendingClearAction, execute_pending_clear_locked,
-        pending_clear_phase_for_registration_locked, registration_ready_to_delete_locked,
-    },
-    registration::{
-        ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
-        ServiceWorkerRegistration, ServiceWorkerUpdateViaCache,
-    },
-    resource_store::SharedServiceWorkerResourceStore,
-    run_owner::ServiceWorkerRunOwner,
-    script_loading::{
-        LoadedServiceWorkerScript, ServiceWorkerScriptLoadParams, ServiceWorkerScriptResource,
-        ServiceWorkerScriptUpdateCheckChange, ServiceWorkerScriptUpdateCheckCompletion,
-        ServiceWorkerScriptUpdateCheckFailure, ServiceWorkerScriptUpdateCheckFailureStatus,
-        ServiceWorkerScriptUpdateCheckParams, ServiceWorkerScriptUpdateCheckResult,
-        load_service_worker_script_update_check,
-    },
-    service_lane::ServiceWorkerServiceLane,
-    snapshots::{
-        ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerVersionSnapshot,
-    },
-    start_completion::ServiceWorkerRuntimeCompletion,
-    state::{
-        LifecycleProgress, ServiceWorkerClient, ServiceWorkerClientEndpoint,
-        ServiceWorkerControllerChangeDelivery, ServiceWorkerDevToolsRelatedPauseOnStartPolicy,
-        ServiceWorkerFetchJob, ServiceWorkerLifecycleNotificationDelivery,
-        ServiceWorkerLifecycleStart, ServiceWorkerLifecycleWatcher, ServiceWorkerMessageStart,
-        ServiceWorkerNotificationStart, ServiceWorkerPeriodicSyncStart, ServiceWorkerPushStart,
-        ServiceWorkerQueuedLaunch, ServiceWorkerReadyJob, ServiceWorkerRuntimeInner,
-        ServiceWorkerRuntimeState, ServiceWorkerSyncStart, WeakServiceWorkerRuntimeService,
-    },
-    version::{
-        ServiceWorkerFetchHandlerExistence, ServiceWorkerFetchHandlerType,
-        ServiceWorkerIdleTimeout, ServiceWorkerIdleTimeoutToken, ServiceWorkerPendingStartEvent,
-        ServiceWorkerVersion, ServiceWorkerVersionLifecycleState, ServiceWorkerVersionRunningState,
-        ServiceWorkerVersionStartFailure,
-    },
+use super::clients::{
+    ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
+    ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult, ServiceWorkerClientQueryType,
+    ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerClientVisibilityState,
+    allocate_service_worker_exposed_client_id, service_worker_current_url_for_creation_url,
+    service_worker_exposed_client_id,
+};
+use super::diagnostics::{
+    ServiceWorkerMainScriptUpdateCheckDiagnostics, ServiceWorkerRegistrationDiagnostics,
+    ServiceWorkerRuntimeDiagnostics, ServiceWorkerScriptResourceDiagnostics,
+    ServiceWorkerVersionDiagnostics,
+};
+use super::errors::ServiceWorkerRegistrationError;
+use super::events::{
+    MaterializedServiceWorkerFetchResponseHead, ServiceWorkerClientFocus,
+    ServiceWorkerClientFocusError, ServiceWorkerClientFocusResult, ServiceWorkerClientMessage,
+    ServiceWorkerClientNavigate, ServiceWorkerClientNavigateError,
+    ServiceWorkerClientNavigateResult, ServiceWorkerClientsOpenWindow,
+    ServiceWorkerClientsOpenWindowError, ServiceWorkerClientsOpenWindowResult,
+    ServiceWorkerCloseNotification, ServiceWorkerDirectFetchResult, ServiceWorkerFetchCompletion,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchEvent, ServiceWorkerFetchResponse,
+    ServiceWorkerFetchResult, ServiceWorkerFetchStreamChunk, ServiceWorkerFetchStreamStarted,
+    ServiceWorkerGetNotifications, ServiceWorkerGetNotificationsResult,
+    ServiceWorkerLifecycleCompletion, ServiceWorkerLifecycleEvent, ServiceWorkerLifecycleEventKind,
+    ServiceWorkerMessageCompletion, ServiceWorkerMessageEvent, ServiceWorkerNotificationAction,
+    ServiceWorkerNotificationCompletion, ServiceWorkerNotificationEvent,
+    ServiceWorkerNotificationEventKind, ServiceWorkerNotificationMetadata,
+    ServiceWorkerNotificationSnapshot, ServiceWorkerPeriodicSyncCompletion,
+    ServiceWorkerPeriodicSyncEvent, ServiceWorkerPeriodicSyncGetTags,
+    ServiceWorkerPeriodicSyncGetTagsResult, ServiceWorkerPeriodicSyncRegistration,
+    ServiceWorkerPeriodicSyncRegistrationResult, ServiceWorkerPeriodicSyncUnregistration,
+    ServiceWorkerPeriodicSyncUnregistrationResult, ServiceWorkerPushCompletion,
+    ServiceWorkerPushEvent, ServiceWorkerPushGetSubscription,
+    ServiceWorkerPushGetSubscriptionResult, ServiceWorkerPushSubscribe,
+    ServiceWorkerPushSubscribeResult, ServiceWorkerPushSubscriptionSnapshot,
+    ServiceWorkerPushUnsubscribe, ServiceWorkerPushUnsubscribeResult,
+    ServiceWorkerShowNotification, ServiceWorkerShowNotificationResult,
+    ServiceWorkerSyncCompletion, ServiceWorkerSyncEvent, ServiceWorkerSyncGetTags,
+    ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistration,
+    ServiceWorkerSyncRegistrationResult, ServiceWorkerWorkerMessage,
+};
+use super::functional_events::{
+    ServiceWorkerNotificationRecord, ServiceWorkerPeriodicSyncRegistrationRecord,
+    ServiceWorkerSyncRegistrationRecord,
+};
+use super::host::{RendererServiceWorkerHost, SharedRendererServiceWorkerHost};
+use super::ids::{
+    ServiceWorkerClientId, ServiceWorkerEventId, ServiceWorkerRegistrationId,
+    ServiceWorkerVersionId,
+};
+use super::jobs::{
+    ServiceWorkerAbortedJob, ServiceWorkerLaunchParams, ServiceWorkerMainScriptUpdateCheckStart,
+    ServiceWorkerPendingMainScriptUpdateCheck, ServiceWorkerPendingRegisterJob,
+    ServiceWorkerQueuedJob, ServiceWorkerQueuedRegisterJob, ServiceWorkerRegisterJob,
+    ServiceWorkerRegistrationKey, ServiceWorkerUnregisterJob, ServiceWorkerUnregisterStart,
+    ServiceWorkerVersionLaunchConfig,
+};
+use super::matching::service_worker_scope_matches_url;
+use super::owner_wake::{ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender};
+use super::pending_clear::{
+    ServiceWorkerPendingClearAction, execute_pending_clear_locked,
+    pending_clear_phase_for_registration_locked, registration_ready_to_delete_locked,
+};
+use super::registration::{
+    ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
+    ServiceWorkerRegistration, ServiceWorkerUpdateViaCache,
+};
+use super::resource_store::SharedServiceWorkerResourceStore;
+use super::run_owner::ServiceWorkerRunOwner;
+use super::script_loading::{
+    LoadedServiceWorkerScript, ServiceWorkerScriptLoadParams, ServiceWorkerScriptResource,
+    ServiceWorkerScriptUpdateCheckChange, ServiceWorkerScriptUpdateCheckCompletion,
+    ServiceWorkerScriptUpdateCheckFailure, ServiceWorkerScriptUpdateCheckFailureStatus,
+    ServiceWorkerScriptUpdateCheckParams, ServiceWorkerScriptUpdateCheckResult,
+    load_service_worker_script_update_check,
+};
+use super::service_lane::ServiceWorkerServiceLane;
+use super::snapshots::{
+    ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerVersionSnapshot,
+};
+use super::start_completion::ServiceWorkerRuntimeCompletion;
+#[cfg(feature = "devtools")]
+use super::state::ServiceWorkerDevToolsRelatedPauseOnStartPolicy;
+use super::state::{
+    LifecycleProgress, ServiceWorkerClient, ServiceWorkerClientEndpoint,
+    ServiceWorkerControllerChangeDelivery, ServiceWorkerFetchJob,
+    ServiceWorkerLifecycleNotificationDelivery, ServiceWorkerLifecycleStart,
+    ServiceWorkerLifecycleWatcher, ServiceWorkerMessageStart, ServiceWorkerNotificationStart,
+    ServiceWorkerPeriodicSyncStart, ServiceWorkerPushStart, ServiceWorkerQueuedLaunch,
+    ServiceWorkerReadyJob, ServiceWorkerRuntimeInner, ServiceWorkerRuntimeState,
+    ServiceWorkerSyncStart, WeakServiceWorkerRuntimeService,
+};
+use super::version::{
+    ServiceWorkerFetchHandlerExistence, ServiceWorkerFetchHandlerType, ServiceWorkerIdleTimeout,
+    ServiceWorkerIdleTimeoutToken, ServiceWorkerPendingStartEvent, ServiceWorkerVersion,
+    ServiceWorkerVersionLifecycleState, ServiceWorkerVersionRunningState,
+    ServiceWorkerVersionStartFailure,
 };
 
 mod client_registry;
 mod client_requests;
 mod context_shutdown;
+#[cfg(feature = "devtools")]
 mod devtools_commands;
 mod diagnostics_snapshot;
 mod event_completion;
@@ -145,6 +145,7 @@ mod lifecycle_requests;
 mod registration_jobs;
 mod registration_lookup;
 mod registration_store;
+#[cfg(feature = "devtools")]
 mod runtime_protocol;
 mod service_lane_completions;
 mod worker_completion;
@@ -378,6 +379,7 @@ impl ServiceWorkerRuntimeService {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn running_host_for_version(
         &self,
         version_id: ServiceWorkerVersionId,
@@ -393,6 +395,7 @@ impl ServiceWorkerRuntimeService {
         Some(host.clone())
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn target_output_journal(
         &self,
         version_id: ServiceWorkerVersionId,
@@ -1636,4 +1639,24 @@ mod tests {
     }
 
     mod extracted;
+}
+
+#[cfg(not(feature = "devtools"))]
+impl ServiceWorkerRuntimeService {
+    pub(super) fn should_pause_new_worker_on_start_for_devtools_locked(
+        &self,
+        _state: &ServiceWorkerRuntimeState,
+        _registration: ServiceWorkerRegistrationId,
+        _version: ServiceWorkerVersionId,
+        _script: &Url,
+        _scope: &Url,
+    ) -> bool {
+        false
+    }
+    pub(super) fn version_should_pause_on_start_for_devtools_locked(
+        _state: &ServiceWorkerRuntimeState,
+        _version: ServiceWorkerVersionId,
+    ) -> bool {
+        false
+    }
 }

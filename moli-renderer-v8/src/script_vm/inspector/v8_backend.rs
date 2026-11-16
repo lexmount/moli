@@ -1,3 +1,4 @@
+#[cfg(feature = "devtools")]
 use super::InspectorOutbound;
 use super::context_registry::{
     DocumentInspectorContextGroupId, DocumentInspectorContextRegistrationId,
@@ -10,35 +11,45 @@ mod page_targets;
 
 use page_targets::RendererInspectorPageTargets;
 
-use crate::{
-    devtools::{
-        ingress::{
-            io::{RendererInspectorIoCommand, RendererInspectorIoIngress},
-            main::{
-                RendererInspectorMainCommand, RendererInspectorMainIngress,
-                RendererInspectorMainOwnerDispatch,
-            },
-        },
-        pause::RendererInspectorPauseBridge,
-        route::RendererInspectorSessionExecutorRouteId,
-        target::RendererDevToolsTargetHandle,
-    },
-    inspector_microtasks::with_scoped_inspector_microtasks,
-    inspector_session::InspectorSessionOutput,
-    runtime::{
-        RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
-        RendererDevToolsMainNestedDispatch, RendererOwnerReply, RendererPageCommand,
-        RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
-        RendererRuntimeInspectorResponseSender, dispatch_nested_main_page_command,
-    },
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::io::RendererInspectorIoCommand;
+use crate::devtools::ingress::io::RendererInspectorIoIngress;
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::main::{
+    RendererInspectorMainCommand, RendererInspectorMainIngress, RendererInspectorMainOwnerDispatch,
 };
+use crate::devtools::pause::RendererInspectorPauseBridge;
+use crate::devtools::route::RendererInspectorSessionExecutorRouteId;
+use crate::devtools::target::RendererDevToolsTargetHandle;
+#[cfg(feature = "devtools")]
+use crate::inspector_microtasks::with_scoped_inspector_microtasks;
+#[cfg(feature = "devtools")]
+use crate::inspector_session::InspectorSessionOutput;
+#[cfg(feature = "devtools")]
+use crate::runtime::dispatch_nested_main_page_command;
+#[cfg(feature = "devtools")]
+use crate::runtime::{
+    RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
+    RendererDevToolsMainNestedDispatch,
+};
+#[cfg(feature = "devtools")]
+use crate::runtime::{
+    RendererOwnerReply, RendererPageCommand, RendererRuntimeCommandOutput,
+    RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
+};
+pub(crate) use interrupt::dispatch_inspector_io_owner_wake;
+#[cfg(feature = "devtools")]
+pub(crate) use interrupt::dispatch_inspector_main_owner_wake;
 pub(in crate::script_vm) use interrupt::finish_page_close_termination;
 use interrupt::{
     allocate_session_executor_route_id, dispatch_inspector_interrupt, register_session_executor,
     unregister_session_executor,
 };
-pub(crate) use interrupt::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
-use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
+#[cfg(feature = "devtools")]
+use moli_page_types::V8InspectorSessionState;
+#[cfg(feature = "devtools")]
+use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
+#[cfg(feature = "devtools")]
 use serde_json::json;
 use std::{
     cell::{Cell, OnceCell, RefCell, UnsafeCell},
@@ -55,6 +66,7 @@ struct RendererInspectorClient {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "devtools")]
 struct RendererInspectorSessionRoute {
     session: Weak<v8::inspector::V8InspectorSession>,
     outbound: InspectorOutbound,
@@ -62,6 +74,7 @@ struct RendererInspectorSessionRoute {
     session_key: DevToolsSessionKey,
 }
 
+#[cfg(feature = "devtools")]
 pub(super) struct RendererInspectorSessionExecutorRegistration {
     session_executor: Weak<RendererInspectorSessionExecutorLocal>,
     context_group_id: i32,
@@ -77,12 +90,15 @@ struct RendererInspectorSessionExecutorLocal {
     page_targets: RendererInspectorPageTargets,
     isolate_environment_ingress: Option<RendererInspectorIoIngress>,
     output_journal: RefCell<Option<crate::runtime::RendererTurnOutputJournal>>,
+    #[cfg(feature = "devtools")]
     sessions: RefCell<HashMap<(i32, DevToolsSessionKey), RendererInspectorSessionRoute>>,
+    #[cfg(feature = "devtools")]
     interrupt_sessions: RefCell<
         HashMap<(RendererDevToolsAgentToken, DevToolsSessionKey), RendererInspectorSessionRoute>,
     >,
 }
 
+#[cfg(feature = "devtools")]
 enum RendererInspectorNestedCommand {
     EnvironmentInvalidation(moli_v8_platform::ProcessEnvironmentInvalidation),
     Main(RendererInspectorMainCommand),
@@ -95,6 +111,7 @@ impl Drop for RendererInspectorSessionExecutorLocal {
             environment.unregister_page_pause_wake(self.route_id);
         }
         unregister_session_executor(self.route_id);
+        #[cfg(feature = "devtools")]
         self.target
             .main_ref()
             .close("Inspector session executor was destroyed");
@@ -104,6 +121,7 @@ impl Drop for RendererInspectorSessionExecutorLocal {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for RendererInspectorSessionExecutorRegistration {
     fn drop(&mut self) {
         let Some(session_executor) = self.session_executor.upgrade() else {
@@ -144,13 +162,16 @@ impl RendererInspectorSessionExecutorLocal {
             page_targets,
             isolate_environment_ingress,
             output_journal: RefCell::new(None),
+            #[cfg(feature = "devtools")]
             sessions: RefCell::new(HashMap::new()),
+            #[cfg(feature = "devtools")]
             interrupt_sessions: RefCell::new(HashMap::new()),
         });
         register_session_executor(route_id, &session_executor);
         session_executor
     }
 
+    #[cfg(feature = "devtools")]
     fn register_session(
         self: &Rc<Self>,
         context_group_id: DocumentInspectorContextGroupId,
@@ -185,6 +206,7 @@ impl RendererInspectorSessionExecutorLocal {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn run_message_loop_on_pause(&self, context_group_id: i32) {
         let Some(pause_loop_policy) = self.target.pause_ref().enter_pause() else {
             return;
@@ -288,6 +310,7 @@ impl RendererInspectorSessionExecutorLocal {
             .unwrap_or_else(|| self.target.io_ref())
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_io_command(&self, context_group_id: i32, command: RendererInspectorIoCommand) {
         let session_key = command.ticket().session().clone();
         let session = self
@@ -299,6 +322,7 @@ impl RendererInspectorSessionExecutorLocal {
         self.dispatch_io_command_to_session(command, session);
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_main_command(
         &self,
         context_group_id: i32,
@@ -333,6 +357,7 @@ impl RendererInspectorSessionExecutorLocal {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_native_main_command_to_session(
         &self,
         mut command: RendererInspectorMainCommand,
@@ -387,6 +412,7 @@ impl RendererInspectorSessionExecutorLocal {
         let _ = reply_tx.send(result);
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_next_io_command_from_interrupt(&self) {
         let Some(command) = self.target.io_ref().claim_for_interrupt() else {
             return;
@@ -400,6 +426,7 @@ impl RendererInspectorSessionExecutorLocal {
         self.dispatch_io_command_to_session(command, session);
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_next_io_command_from_owner(&self) {
         let Some(command) = self.target.io_ref().claim_for_owner() else {
             return;
@@ -413,11 +440,13 @@ impl RendererInspectorSessionExecutorLocal {
         self.dispatch_io_command_to_session(command, session);
     }
 
+    #[cfg(feature = "devtools")]
     fn claim_next_main_command_from_owner(&self) -> Option<RendererInspectorMainOwnerDispatch> {
         let command = self.target.main_ref().claim_for_owner()?;
         Some(self.target.main_ref().prepare_owner_dispatch(command))
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_main_command_to_session(
         &self,
         mut command: RendererInspectorMainCommand,
@@ -454,6 +483,7 @@ impl RendererInspectorSessionExecutorLocal {
         );
     }
 
+    #[cfg(feature = "devtools")]
     fn publish_native_response(
         &self,
         agent: RendererDevToolsAgentToken,
@@ -483,6 +513,7 @@ impl RendererInspectorSessionExecutorLocal {
         let _ = response.send(message);
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_io_command_to_session(
         &self,
         mut command: RendererInspectorIoCommand,
@@ -589,11 +620,13 @@ impl RendererInspectorSessionExecutorLocal {
         );
     }
 
+    #[cfg(feature = "devtools")]
     fn quit_message_loop_on_pause(&self) {
         self.target.pause_ref().request_quit();
     }
 }
 
+#[cfg(feature = "devtools")]
 fn send_inspector_dispatch_error(
     response: Option<RendererRuntimeInspectorResponseSender>,
     message: &str,
@@ -704,6 +737,7 @@ impl v8::inspector::V8InspectorClientImpl for RendererInspectorClient {
         super::remote_objects::description(scope, value)
     }
 
+    #[cfg(feature = "devtools")]
     fn run_message_loop_on_pause(&self, context_group_id: i32) {
         // A pause may originate in an ordinary page task, outside the guarded
         // frontend dispatch path. Keep every nested pause-loop command under
@@ -720,6 +754,7 @@ impl v8::inspector::V8InspectorClientImpl for RendererInspectorClient {
         });
     }
 
+    #[cfg(feature = "devtools")]
     fn quit_message_loop_on_pause(&self) {
         if let Some(executor) = self.page_targets.paused_executor() {
             executor.quit_message_loop_on_pause();
@@ -814,6 +849,7 @@ impl RendererInspectorIsolateBackend {
         let pause_bridge = RendererInspectorPauseBridge::default();
         let route_id =
             RendererInspectorSessionExecutorRouteId::new(allocate_session_executor_route_id());
+        #[cfg(feature = "devtools")]
         let main_ingress =
             RendererInspectorMainIngress::new(route_id, pause_bridge.pause_loop_wake());
         let io_ingress = RendererInspectorIoIngress::new(
@@ -824,7 +860,12 @@ impl RendererInspectorIsolateBackend {
                 route_id,
             )),
         );
-        let target = RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress);
+        let target = RendererDevToolsTargetHandle::new(
+            pause_bridge,
+            #[cfg(feature = "devtools")]
+            main_ingress,
+            io_ingress,
+        );
         let page_targets = RendererInspectorPageTargets::new(context_registry.clone());
         let session_executor = RendererInspectorSessionExecutorLocal::new(
             isolate_ptr,
@@ -976,6 +1017,7 @@ impl RendererInspectorIsolateBackend {
 }
 
 impl RendererInspectorIsolateBackendHandle {
+    #[cfg(feature = "devtools")]
     pub(super) fn register_session_executor_route(
         &self,
         context_group_id: DocumentInspectorContextGroupId,
@@ -1012,6 +1054,7 @@ impl RendererInspectorIsolateBackendHandle {
     pub(super) fn new_for_test() -> Self {
         let pause_bridge = RendererInspectorPauseBridge::default();
         let route_id = RendererInspectorSessionExecutorRouteId::new(1);
+        #[cfg(feature = "devtools")]
         let main_ingress =
             RendererInspectorMainIngress::new(route_id, pause_bridge.pause_loop_wake());
         let io_ingress = RendererInspectorIoIngress::new(pause_bridge.pause_loop_wake(), None);
@@ -1019,7 +1062,12 @@ impl RendererInspectorIsolateBackendHandle {
             endpoint: Rc::new(RendererInspectorPageEndpoint {
                 identity: Rc::new(RendererInspectorIsolateBackendIdentity),
                 isolate_environment_ingress: io_ingress.clone(),
-                target: RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress),
+                target: RendererDevToolsTargetHandle::new(
+                    pause_bridge,
+                    #[cfg(feature = "devtools")]
+                    main_ingress,
+                    io_ingress,
+                ),
                 session_executor: None,
                 shutdown_registry: None,
                 _shutdown_registration: None,

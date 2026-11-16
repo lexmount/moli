@@ -1,16 +1,24 @@
+#[cfg(feature = "devtools")]
 use anyhow::Result;
 
 use super::ScriptVm;
-use crate::{
-    document_runtime::DomHandle,
-    dom::{forms::InputType, native::Node},
-    native_bridge::element::{
-        autocomplete_field_name, autofill_related_form_control_elements, construct_simple_event,
-        dispatch_public_event, form_control_is_effectively_disabled,
-    },
-    runtime::{
-        RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
-    },
+#[cfg(feature = "devtools")]
+use crate::document_runtime::DomHandle;
+#[cfg(feature = "devtools")]
+use crate::dom::forms::InputType;
+#[cfg(feature = "devtools")]
+use crate::dom::native::Node;
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::{
+    autocomplete_field_name, autofill_related_form_control_elements,
+};
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::{
+    construct_simple_event, dispatch_public_event, form_control_is_effectively_disabled,
+};
+#[cfg(feature = "devtools")]
+use crate::runtime::{
+    RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
 };
 
 #[derive(Clone, Copy)]
@@ -26,6 +34,7 @@ enum CreditCardField {
     VerificationCode,
 }
 
+#[cfg(feature = "devtools")]
 fn normalized_identity(value: &str) -> String {
     value
         .chars()
@@ -34,6 +43,7 @@ fn normalized_identity(value: &str) -> String {
         .collect()
 }
 
+#[cfg(feature = "devtools")]
 fn explicit_credit_card_field(token: &str) -> Option<CreditCardField> {
     match token {
         "cc-number" => Some(CreditCardField::Number),
@@ -49,6 +59,7 @@ fn explicit_credit_card_field(token: &str) -> Option<CreditCardField> {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn inferred_credit_card_field(identity: &str) -> Option<CreditCardField> {
     match identity {
         "creditcardnumber" | "cardnumber" | "ccnumber" => Some(CreditCardField::Number),
@@ -81,6 +92,7 @@ fn inferred_credit_card_field(identity: &str) -> Option<CreditCardField> {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn credit_card_field(
     runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
@@ -97,6 +109,7 @@ fn credit_card_field(
         .find_map(|identity| inferred_credit_card_field(&normalized_identity(identity)))
 }
 
+#[cfg(feature = "devtools")]
 fn name_component(name: &str, field: CreditCardField) -> String {
     let components = name.split_whitespace().collect::<Vec<_>>();
     match field {
@@ -110,6 +123,7 @@ fn name_component(name: &str, field: CreditCardField) -> String {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn expiry_year_for_control(
     runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
@@ -135,6 +149,7 @@ fn expiry_year_for_control(
     }
 }
 
+#[cfg(feature = "devtools")]
 fn credit_card_value(
     runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
@@ -157,6 +172,7 @@ fn credit_card_value(
     })
 }
 
+#[cfg(feature = "devtools")]
 fn control_value(
     runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
@@ -177,6 +193,7 @@ fn control_value(
     None
 }
 
+#[cfg(feature = "devtools")]
 fn fill_credit_card_control(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
@@ -227,6 +244,7 @@ fn fill_credit_card_control(
     true
 }
 
+#[cfg(feature = "devtools")]
 fn fill_credit_card(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
@@ -245,6 +263,7 @@ fn fill_credit_card(
 }
 
 impl ScriptVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn trigger_autofill(
         &mut self,
         anchor: DomHandle,

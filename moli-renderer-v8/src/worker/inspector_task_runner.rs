@@ -11,12 +11,15 @@ use std::{
     },
 };
 
+#[cfg(feature = "devtools")]
 use moli_protocol_cdp::CdpInspectorTaskMode;
 use moli_v8_platform::{ProcessEnvironmentNotifications, ProcessEnvironmentNotifier};
 use parking_lot::{Condvar, Mutex};
+#[cfg(feature = "devtools")]
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(feature = "devtools")]
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 
 use super::handle::WorkerMessage;
@@ -78,7 +81,15 @@ unsafe extern "C" fn dispatch_worker_inspector_interrupt(
     executor.dispatch_interrupt(isolate);
 }
 
-pub(crate) type WorkerInspectorTaskMode = CdpInspectorTaskMode;
+pub(crate) type WorkerInspectorTaskMode = moli_command_types::RuntimeTaskMode;
+
+#[cfg(feature = "devtools")]
+fn worker_inspector_task_mode(method: &str) -> WorkerInspectorTaskMode {
+    match CdpInspectorTaskMode::for_method(method) {
+        CdpInspectorTaskMode::Interrupt => WorkerInspectorTaskMode::Interrupt,
+        CdpInspectorTaskMode::DontInterrupt => WorkerInspectorTaskMode::DontInterrupt,
+    }
+}
 
 /// One native session incarnation. Wire ids may be reused after attach; tasks
 /// and channels retain this token so retired work cannot address its successor.
@@ -109,6 +120,7 @@ impl WorkerInspectorSessionCompletion {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn subscribe(&mut self) -> oneshot::Receiver<Result<()>> {
         let (tx, rx) = oneshot::channel();
         if let Some(result) = self.result {
@@ -121,6 +133,7 @@ impl WorkerInspectorSessionCompletion {
 }
 
 impl WorkerInspectorSessionLifetime {
+    #[cfg(feature = "devtools")]
     fn new() -> Self {
         Self(Arc::new(WorkerInspectorSessionLifetimeState {
             active: AtomicBool::new(true),
@@ -130,15 +143,18 @@ impl WorkerInspectorSessionLifetime {
         }))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn is_active(&self) -> bool {
         self.0.active.load(Ordering::Acquire)
     }
     pub(crate) fn matches(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+    #[cfg(feature = "devtools")]
     pub(crate) fn mark_native_created(&self) {
         self.0.native_created.store(true, Ordering::Release);
     }
+    #[cfg(feature = "devtools")]
     pub(crate) fn native_was_created(&self) -> bool {
         self.0.native_created.load(Ordering::Acquire)
     }
@@ -155,6 +171,7 @@ impl WorkerInspectorSessionLifetime {
         self.0.retirement.lock().subscribe()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn complete_detachment(
         &self,
         result: std::result::Result<(), WorkerInspectorError>,
@@ -162,6 +179,7 @@ impl WorkerInspectorSessionLifetime {
         self.0.detachment.lock().complete(result);
     }
 
+    #[cfg(feature = "devtools")]
     fn detachment(&self) -> oneshot::Receiver<Result<()>> {
         self.0.detachment.lock().subscribe()
     }
@@ -169,41 +187,50 @@ impl WorkerInspectorSessionLifetime {
 
 pub(crate) enum WorkerInspectorTask {
     EnvironmentInvalidation(moli_v8_platform::ProcessEnvironmentInvalidation),
-    DispatchProtocolMessage {
-        lifetime: WorkerInspectorSessionLifetime,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
-    },
-    AttachSession {
-        lifetime: WorkerInspectorSessionLifetime,
-        inspector_session_id: Option<String>,
-    },
-    DetachSession {
-        lifetime: WorkerInspectorSessionLifetime,
-        inspector_session_id: Option<String>,
-    },
-    RunIfWaitingForDebugger,
+    #[cfg(feature = "devtools")]
+    Devtools(WorkerInspectorProtocolTask),
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) type WorkerInspectorProtocolTask =
+    moli_command_types::devtools::WorkerCommand<WorkerInspectorTaskHandles>;
+
+#[cfg(feature = "devtools")]
+pub(crate) struct WorkerInspectorTaskHandles;
+
+#[cfg(feature = "devtools")]
+impl moli_command_types::devtools::WorkerCommandHandles for WorkerInspectorTaskHandles {
+    type SessionLifetime = WorkerInspectorSessionLifetime;
+    type ResponseSender = RendererRuntimeInspectorResponseSender;
+    type ProtocolResponseSender = oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>;
 }
 
 impl WorkerInspectorTask {
     fn fail(self, error: WorkerInspectorError) {
-        if let Self::DetachSession { lifetime, .. } = &self {
+        #[cfg(not(feature = "devtools"))]
+        let _ = (self, error);
+        #[cfg(feature = "devtools")]
+        self.fail_devtools_task(error);
+    }
+
+    #[cfg(feature = "devtools")]
+    fn fail_devtools_task(self, error: WorkerInspectorError) {
+        if let Self::Devtools(WorkerInspectorProtocolTask::DetachSession { lifetime, .. }) = &self {
             lifetime.complete_detachment(Err(error));
             lifetime.complete_retirement(Err(error));
         }
-        let Self::DispatchProtocolMessage {
+        let Self::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage {
             deferred_response,
             response_tx,
             ..
-        } = self
+        }) = self
         else {
             return;
         };
         Self::fail_protocol_message(deferred_response, response_tx, error);
     }
 
+    #[cfg(feature = "devtools")]
     fn fail_protocol_message(
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
         response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
@@ -348,6 +375,7 @@ impl WorkerInspectorTaskRunner {
         self.shared.environment_notifications.take()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn append_protocol_message(
         &self,
         inspector_session_id: Option<String>,
@@ -368,21 +396,22 @@ impl WorkerInspectorTaskRunner {
                 value
                     .get("method")
                     .and_then(serde_json::Value::as_str)
-                    .map(CdpInspectorTaskMode::for_method)
+                    .map(worker_inspector_task_mode)
             })
             .unwrap_or(WorkerInspectorTaskMode::Interrupt);
         self.append(
             mode,
-            WorkerInspectorTask::DispatchProtocolMessage {
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage {
                 lifetime,
                 inspector_session_id,
                 raw_json,
                 deferred_response,
                 response_tx,
-            },
+            }),
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn session_lifetime(
         &self,
         id: Option<&str>,
@@ -407,6 +436,7 @@ impl WorkerInspectorTaskRunner {
             .ok_or(WorkerInspectorError::Detached)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn attach_lifetime(
         &self,
         id: Option<&str>,
@@ -425,6 +455,7 @@ impl WorkerInspectorTaskRunner {
         Ok(lifetime.clone())
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn retire_lifetime(
         &self,
         id: Option<&str>,
@@ -462,19 +493,21 @@ impl WorkerInspectorTaskRunner {
         lifetime.complete_retirement(Ok(()));
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn append_attach(&self, inspector_session_id: Option<String>) -> bool {
         let Ok(lifetime) = self.attach_lifetime(inspector_session_id.as_deref()) else {
             return false;
         };
         self.append(
             WorkerInspectorTaskMode::Interrupt,
-            WorkerInspectorTask::AttachSession {
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::AttachSession {
                 lifetime,
                 inspector_session_id,
-            },
+            }),
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn append_detach(
         &self,
         inspector_session_id: Option<String>,
@@ -497,21 +530,23 @@ impl WorkerInspectorTaskRunner {
         let receipt = lifetime.detachment();
         self.append(
             WorkerInspectorTaskMode::Interrupt,
-            WorkerInspectorTask::DetachSession {
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DetachSession {
                 lifetime,
                 inspector_session_id,
-            },
+            }),
         );
         receipt
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn append_run_if_waiting_for_debugger(&self) -> bool {
         self.append(
             WorkerInspectorTaskMode::Interrupt,
-            WorkerInspectorTask::RunIfWaitingForDebugger,
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::RunIfWaitingForDebugger),
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn append(&self, mode: WorkerInspectorTaskMode, task: WorkerInspectorTask) -> bool {
         let mut state = self.shared.state.lock();
         if state.disposed {
@@ -609,6 +644,7 @@ impl WorkerInspectorTaskRunner {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn begin_pause_loop(&self) -> bool {
         let mut state = self.shared.state.lock();
         if state.disposed || state.pause_loop_active {
@@ -619,6 +655,7 @@ impl WorkerInspectorTaskRunner {
         true
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn wait_for_pause_task(&self) -> Option<WorkerInspectorTask> {
         let mut state = self.shared.state.lock();
         loop {
@@ -635,17 +672,20 @@ impl WorkerInspectorTaskRunner {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish_pause_loop(&self) {
         let mut state = self.shared.state.lock();
         state.pause_loop_active = false;
         state.quit_pause_loop = false;
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn request_quit_pause_loop(&self) {
         self.shared.state.lock().quit_pause_loop = true;
         self.shared.pause_work.notify_all();
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn request_resume(&self) {
         self.shared.resume_requested.store(true, Ordering::Release);
     }
@@ -701,6 +741,8 @@ impl std::fmt::Debug for WorkerInspectorTaskRunner {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "devtools")]
+    use super::WorkerInspectorProtocolTask;
     use crate::runtime::WorkerInspectorError;
     use anyhow::Result;
     use std::sync::Arc;
@@ -708,7 +750,10 @@ mod tests {
     use parking_lot::Mutex;
     use tokio::sync::{mpsc, oneshot};
 
-    use super::{WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner};
+    use super::{
+        WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
+        worker_inspector_task_mode,
+    };
 
     fn runner() -> (
         WorkerInspectorTaskRunner,
@@ -745,7 +790,7 @@ mod tests {
             "Runtime.runScript",
         ] {
             assert_eq!(
-                WorkerInspectorTaskMode::for_method(method),
+                worker_inspector_task_mode(method),
                 WorkerInspectorTaskMode::DontInterrupt,
                 "{method} should use Chromium's non-interrupting worker path"
             );
@@ -759,7 +804,7 @@ mod tests {
             "Inspector.disable",
         ] {
             assert_eq!(
-                WorkerInspectorTaskMode::for_method(method),
+                worker_inspector_task_mode(method),
                 WorkerInspectorTaskMode::Interrupt,
                 "{method} should interrupt a busy worker"
             );
@@ -786,12 +831,12 @@ mod tests {
         ));
         assert!(matches!(
             runner.claim_task(WorkerInspectorTaskMode::Interrupt),
-            Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
+            Some(WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. }))
                 if raw_json.contains("Runtime.terminateExecution")
         ));
         assert!(matches!(
             runner.claim_task(WorkerInspectorTaskMode::DontInterrupt),
-            Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
+            Some(WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. }))
                 if raw_json.contains("Runtime.evaluate")
         ));
         assert!(
@@ -822,7 +867,7 @@ mod tests {
 
         assert!(matches!(
             interrupt,
-            WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Runtime.terminateExecution")
         ));
         let ordinary = runner
@@ -830,7 +875,7 @@ mod tests {
             .expect("ordinary owner runner must retain DontInterrupt work");
         assert!(matches!(
             ordinary,
-            WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Runtime.evaluate")
         ));
     }
@@ -854,12 +899,12 @@ mod tests {
         );
         assert!(matches!(
             first,
-            WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Debugger.pause")
         ));
         assert!(matches!(
             second,
-            WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }
+            WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Debugger.resume")
         ));
     }
@@ -920,7 +965,9 @@ mod tests {
         ));
         assert!(matches!(
             runner.claim_task(WorkerInspectorTaskMode::Interrupt),
-            Some(WorkerInspectorTask::DispatchProtocolMessage { .. })
+            Some(WorkerInspectorTask::Devtools(
+                WorkerInspectorProtocolTask::DispatchProtocolMessage { .. }
+            ))
         ));
         assert!(matches!(
             wake_rx.try_recv(),
@@ -954,11 +1001,11 @@ mod tests {
         ));
         assert!(matches!(
             runner.wait_for_pause_task(),
-            Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
+            Some(WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. }))
                 if raw_json.contains("Debugger.pause")
         ));
         assert!(matches!(runner.wait_for_pause_task(),
-            Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
+            Some(WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. }))
                 if raw_json.contains("Debugger.resume")));
         notifier.notify(DateTime);
         runner.dispose(WorkerInspectorError::Closed);
@@ -1023,13 +1070,15 @@ mod tests {
             None,
             new_tx
         ));
-        let Some(WorkerInspectorTask::DispatchProtocolMessage { lifetime: old, .. }) =
-            runner.claim_task(WorkerInspectorTaskMode::DontInterrupt)
+        let Some(WorkerInspectorTask::Devtools(
+            WorkerInspectorProtocolTask::DispatchProtocolMessage { lifetime: old, .. },
+        )) = runner.claim_task(WorkerInspectorTaskMode::DontInterrupt)
         else {
             panic!("old execution task")
         };
-        let Some(WorkerInspectorTask::DispatchProtocolMessage { lifetime: new, .. }) =
-            runner.claim_task(WorkerInspectorTaskMode::DontInterrupt)
+        let Some(WorkerInspectorTask::Devtools(
+            WorkerInspectorProtocolTask::DispatchProtocolMessage { lifetime: new, .. },
+        )) = runner.claim_task(WorkerInspectorTaskMode::DontInterrupt)
         else {
             panic!("new execution task")
         };
@@ -1040,8 +1089,10 @@ mod tests {
             matches!(retired.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
             "enqueueing detach has not stopped the native debugger agent"
         );
-        let Some(WorkerInspectorTask::DetachSession { lifetime, .. }) =
-            runner.claim_task(WorkerInspectorTaskMode::Interrupt)
+        let Some(WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DetachSession {
+            lifetime,
+            ..
+        })) = runner.claim_task(WorkerInspectorTaskMode::Interrupt)
         else {
             panic!("detach owner task")
         };
@@ -1091,12 +1142,18 @@ mod tests {
         ));
         let lifetime = runner.retire_lifetime(Some("retiring")).unwrap();
         runner.complete_retirement(Some("retiring"), &lifetime);
-        let Some(task @ WorkerInspectorTask::DispatchProtocolMessage { .. }) =
-            runner.claim_task(WorkerInspectorTaskMode::DontInterrupt)
+        let Some(
+            task @ WorkerInspectorTask::Devtools(
+                WorkerInspectorProtocolTask::DispatchProtocolMessage { .. },
+            ),
+        ) = runner.claim_task(WorkerInspectorTaskMode::DontInterrupt)
         else {
             panic!("queued command retains its original token");
         };
-        if let WorkerInspectorTask::DispatchProtocolMessage { lifetime: old, .. } = &task {
+        if let WorkerInspectorTask::Devtools(
+            WorkerInspectorProtocolTask::DispatchProtocolMessage { lifetime: old, .. },
+        ) = &task
+        {
             assert!(old.matches(&lifetime));
             assert!(!old.is_active());
         }

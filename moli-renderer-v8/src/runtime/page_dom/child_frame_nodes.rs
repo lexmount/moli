@@ -1,6 +1,9 @@
+#[cfg(feature = "devtools")]
 use crate::document_runtime::DomHandle;
+#[cfg(feature = "devtools")]
 use crate::dom::native::DomHost;
 
+#[cfg(feature = "devtools")]
 pub(super) fn child_frame_document_contains_live_handle(
     dom_host: &DomHost,
     document_handle: DomHandle,
@@ -11,6 +14,7 @@ pub(super) fn child_frame_document_contains_live_handle(
         .any(|handle| handle == target)
 }
 
+#[cfg(feature = "devtools")]
 pub(super) fn collect_shadow_including_document_handles(
     dom_host: &DomHost,
     document_handle: DomHandle,
@@ -34,7 +38,9 @@ pub(super) fn collect_shadow_including_document_handles(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dom::native::{DomHost, NativeDom};
+    #[cfg(feature = "devtools")]
+    use crate::dom::native::DomHost;
+    use crate::dom::native::NativeDom;
 
     fn test_url() -> url::Url {
         url::Url::parse("https://example.test/").expect("test URL should parse")

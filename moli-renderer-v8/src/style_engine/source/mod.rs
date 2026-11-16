@@ -203,6 +203,7 @@ impl MoliStyleEngine {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn owner_style_sheet_text_with_host(
         &self,
         host: &DomHost,

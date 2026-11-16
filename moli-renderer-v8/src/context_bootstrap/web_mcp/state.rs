@@ -123,9 +123,11 @@ impl ModelContextStore {
             .find_map(|(id, pending)| (pending.form.as_ref()?.handle == form).then_some(*id))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_object_wrapper(&mut self, wrapper: RendererInspectorObjectWrapper) {
         self.object_wrapper = Some(wrapper);
     }
+    #[cfg(feature = "devtools")]
     pub(crate) fn disable_session(&mut self, session: &DevToolsSessionKey) {
         self.enabled_sessions.remove(session);
     }

@@ -103,6 +103,7 @@ impl PageVm {
 
     /// Publish requested Inspector paths through the same before-response
     /// output journal as DOM mutation snapshots, for native and legacy commands.
+    #[cfg(feature = "devtools")]
     pub(crate) fn queue_document_child_snapshot_events(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -259,6 +260,7 @@ impl PageVm {
         self.sync_devtools_dom_mutation_recording_interest();
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_children_requested(
         &self,
         inspector_session_id: Option<&str>,

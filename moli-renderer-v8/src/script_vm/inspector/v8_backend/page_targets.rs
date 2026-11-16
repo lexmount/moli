@@ -17,6 +17,7 @@ impl RendererInspectorPageTargets {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn has_default_context_for_executor(
         &self,
         route: RendererInspectorSessionExecutorRouteId,
@@ -59,10 +60,12 @@ impl RendererInspectorPageTargets {
         self.groups.borrow().get(&group).and_then(Weak::upgrade)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn paused_executor(&self) -> Option<Rc<RendererInspectorSessionExecutorLocal>> {
         self.paused.borrow().as_ref().and_then(Weak::upgrade)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn enter_pause(
         &self,
         executor: &Rc<RendererInspectorSessionExecutorLocal>,
@@ -87,6 +90,7 @@ impl Drop for InspectorPagePauseGuard {
 }
 
 impl RendererInspectorIsolateBackendHandle {
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn bind_native_output_journal(
         &self,
         journal: crate::runtime::RendererTurnOutputJournal,
@@ -114,6 +118,7 @@ impl RendererInspectorIsolateBackendHandle {
         let pause_bridge = RendererInspectorPauseBridge::default();
         let route_id =
             RendererInspectorSessionExecutorRouteId::new(allocate_session_executor_route_id());
+        #[cfg(feature = "devtools")]
         let main = RendererInspectorMainIngress::new(route_id, pause_bridge.pause_loop_wake());
         let io = RendererInspectorIoIngress::new_for_page(
             pause_bridge.pause_loop_wake(),
@@ -123,7 +128,12 @@ impl RendererInspectorIsolateBackendHandle {
                 route_id,
             ),
         );
-        let target = RendererDevToolsTargetHandle::new(pause_bridge, main, io);
+        let target = RendererDevToolsTargetHandle::new(
+            pause_bridge,
+            #[cfg(feature = "devtools")]
+            main,
+            io,
+        );
         self.endpoint
             .isolate_environment_ingress
             .register_page_pause_wake(route_id, target.pause_ref().pause_loop_wake());

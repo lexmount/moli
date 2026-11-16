@@ -70,19 +70,22 @@ use super::phase_one::{
 };
 use super::*;
 use crate::RendererTopLevelNavigationDispatch;
-use crate::devtools::ingress::{
-    io::RendererInspectorIoOwnerWake,
-    main::{RendererInspectorMainFirstDispatchGuard, RendererInspectorMainOwnerWake},
-};
+use crate::devtools::ingress::io::RendererInspectorIoOwnerWake;
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::main::RendererInspectorMainFirstDispatchGuard;
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::main::RendererInspectorMainOwnerWake;
 use crate::document_runtime::DocumentPolicyContainer;
 use crate::page_task_queue::{
     PostParsePageOwnedWork, RendererOwnerWake, RendererOwnerWakeSender, RendererOwnerWakeSource,
     RendererTopLevelNavigationHandoff,
 };
 use crate::render_runtime::{RenderRuntimeEnvelope, RenderRuntimeHandle, RenderRuntimeOwner};
+#[cfg(feature = "devtools")]
+use crate::script_vm::dispatch_inspector_main_owner_wake;
 use crate::script_vm::{
     PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, RuntimeEvaluateResultMode,
-    dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake,
+    dispatch_inspector_io_owner_wake,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerRuntimeOwnerWake, service_worker_owner_wake_channel,
@@ -260,6 +263,7 @@ pub enum RendererOwnerCommand {
     /// disconnected a DevTools session and suspended both of its ingress lanes.
     /// Replacement frontend work remains queued behind this lifecycle task so
     /// it cannot reuse the V8 session before destruction completes.
+    #[cfg(feature = "devtools")]
     FinalizeRuntimeInspectorSessionDetach {
         token: RendererPageToken,
         inspector_session_id: Option<String>,
@@ -328,6 +332,7 @@ pub enum RendererOwnerReply {
 
 enum RenderRuntimeDispatchOutcome {
     Reply(Box<Result<RendererOwnerReply>>),
+    #[cfg(feature = "devtools")]
     InspectorMainCommandClaimed {
         reply_tx: oneshot::Sender<Result<RendererOwnerReply>>,
         turn: Box<RenderRuntimeTurn>,
@@ -709,11 +714,13 @@ enum RenderRuntimeTurn {
     /// One task posted by the Main DevTools receiver. The command remains
     /// unclaimed until this turn actually runs, so a nested debugger loop can
     /// pump the same receiver while an earlier Page turn is paused in V8.
+    #[cfg(feature = "devtools")]
     RunInspectorMainReceiver {
         wake: RendererInspectorMainOwnerWake,
     },
     /// An owner-claimed Main command carrying its ingress permit until the
     /// concrete Page agent first-dispatch boundary.
+    #[cfg(feature = "devtools")]
     RunDevToolsMainCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
@@ -828,8 +835,9 @@ impl RenderRuntimeTurn {
     /// then trying to commit from the stale previous view.
     fn committed_page_view_command_token(&self) -> Option<RendererPageToken> {
         match self {
-            Self::RunDevToolsMainCommand { token, .. }
-            | Self::RunLivePageCommand { token, .. }
+            #[cfg(feature = "devtools")]
+            Self::RunDevToolsMainCommand { token, .. } => Some(*token),
+            Self::RunLivePageCommand { token, .. }
             | Self::ContinueLivePageRuntimeCommandLifecycle { token, .. }
             | Self::WaitLivePageIdle { token, .. }
             | Self::WaitLivePageDomStable { token, .. }
@@ -966,9 +974,11 @@ fn live_page_command_should_follow_pending_navigation(command: &RendererPageComm
 
 fn live_page_command_requires_materialized_child_realms(command: &RendererPageCommand) -> bool {
     match command {
+        #[cfg(feature = "devtools")]
         RendererPageCommand::Native(command) => {
             live_page_command_requires_materialized_child_realms(&command.operation.command)
         }
+        #[cfg(feature = "devtools")]
         RendererPageCommand::Inspector(envelope) => envelope.requires_materialized_child_realms(),
         _ => false,
     }

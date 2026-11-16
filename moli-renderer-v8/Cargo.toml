@@ -5,9 +5,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["devtools"]
+devtools = ["moli-command-types/devtools", "dep:moli-protocol-cdp"]
 # Native ACE page tasks for embedders. Public browser builds leave this disabled.
-ace-protocol = []
+ace-protocol = ["devtools"]
 # Diagnostic-only page-created global snapshots. Core integration tests enable
 # this through a dev-dependency; normal browser builds leave it compiled out.
 test-support = []
@@ -17,7 +18,7 @@ test-support = []
 wpt-extensions = []
 
 [dependencies]
-moli-command-types = { path = "../moli-types/moli-command-types", features = ["devtools"] }
+moli-command-types = { path = "../moli-types/moli-command-types", default-features = false }
 moli-inspector-json = { path = "../moli-inspector-json" }
 moli-fetch-types = { path = "../moli-types/moli-fetch-types" }
 anyhow = "1.0.100"
@@ -53,7 +54,7 @@ moli-disk-pool = { path = "../moli-disk-pool" }
 moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-types/moli-page-types" }
 moli-parkable-image = { path = "../moli-parkable-image" }
-moli-protocol-cdp = { path = "../moli-protocol-cdp" }
+moli-protocol-cdp = { path = "../moli-protocol-cdp", optional = true }
 moli-protocol-cdp-defs = { path = "../moli-protocol-cdp-defs" }
 moli-selector = { path = "../moli-selector" }
 moli-shared-worker = { path = "../moli-shared-worker" }

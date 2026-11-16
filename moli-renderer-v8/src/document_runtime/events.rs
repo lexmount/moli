@@ -350,6 +350,7 @@ impl DocumentRuntime {
             .listener_callback_ids(target, event_type, capture)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_event_listener_snapshots(
         &self,
         target: EventTargetHandle,

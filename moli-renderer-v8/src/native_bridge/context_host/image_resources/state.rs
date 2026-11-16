@@ -326,6 +326,7 @@ impl ImageResourceStore {
         self.ready_by_request.prune_dead();
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn visual_generation(&self) -> u64 {
         self.visual_generation.current()
     }

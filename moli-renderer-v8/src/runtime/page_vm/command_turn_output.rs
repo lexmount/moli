@@ -8,6 +8,7 @@ use super::*;
 /// registration before a later command can run.
 pub(crate) struct RendererCommandTurnOutputScope {
     recorder: Option<RendererCommandTurnOutputRecorder>,
+    #[cfg(feature = "devtools")]
     pending_dom_mutation_batch_start: usize,
     document_lifecycle: RendererDocumentLifecycleJournalHandle,
     document_lifecycle_registered: bool,
@@ -27,14 +28,16 @@ impl RendererCommandTurnOutputScope {
 
     fn finish(
         mut self,
-        dom_mutation_batches: Vec<RendererDomMutationEventBatch>,
+        #[cfg(feature = "devtools")] dom_mutation_batches: Vec<RendererDomMutationEventBatch>,
     ) -> Vec<PendingRendererOutputRecord> {
         self.close();
         let recorder = self
             .recorder
             .take()
             .expect("renderer command-turn output scope recorder was already consumed");
+        #[allow(unused_mut)]
         let mut records = recorder.finish();
+        #[cfg(feature = "devtools")]
         records.extend(dom_mutation_batches.into_iter().map(|batch| {
             PendingRendererOutputRecord::observation(
                 None,
@@ -63,6 +66,7 @@ impl PageVm {
         let recorder = RendererCommandTurnOutputRecorder::default();
         let mut scope = RendererCommandTurnOutputScope {
             recorder: Some(recorder.clone()),
+            #[cfg(feature = "devtools")]
             pending_dom_mutation_batch_start: self.pending_dom_mutation_event_batches.len(),
             document_lifecycle: self.document_lifecycle.clone(),
             document_lifecycle_registered: false,
@@ -80,14 +84,19 @@ impl PageVm {
         scope: RendererCommandTurnOutputScope,
     ) -> Option<RendererOutputCursor> {
         self.flush_pending_dom_mutation_event_batches();
+        #[cfg(feature = "devtools")]
         assert!(
             scope.pending_dom_mutation_batch_start <= self.pending_dom_mutation_event_batches.len(),
             "renderer command cannot drain the pre-command DOM mutation backlog"
         );
+        #[cfg(feature = "devtools")]
         let dom_mutation_batches = self
             .pending_dom_mutation_event_batches
             .split_off(scope.pending_dom_mutation_batch_start);
-        let records = scope.finish(dom_mutation_batches);
+        let records = scope.finish(
+            #[cfg(feature = "devtools")]
+            dom_mutation_batches,
+        );
         // The Page journal owns ready output even when the command must yield
         // or follow a navigation. Continuations retain only the exact cursor
         // needed by the independent internal completion channel.

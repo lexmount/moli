@@ -695,6 +695,7 @@ impl ScriptVm {
         );
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn eval(&mut self, source: &str) -> Result<String> {
         let context_ptr = self.ensure_main_world()?.context_ptr();
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, false)
@@ -769,6 +770,7 @@ impl ScriptVm {
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, true)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn eval_string_in_context_ptr_runtime_turn(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
@@ -827,6 +829,7 @@ impl ScriptVm {
 
     // Raw string evaluation in a specific context. Keep this private so callers
     // must choose either the runtime-turn facade or the internal snapshot facade.
+    #[cfg(feature = "devtools")]
     fn eval_string_in_context_ptr_without_turn_drain(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,

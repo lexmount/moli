@@ -122,6 +122,7 @@ impl PageIsolatedWorldRegistry {
             .any(|world| world.frame_id.as_deref() == frame_id && world.name == name)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn execution_context_ids_for_devtools_session(
         &self,
         devtools_session: &DevToolsSessionKey,
@@ -144,6 +145,7 @@ impl PageIsolatedWorldRegistry {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn pending_inspector_attachment_ids(&self) -> Vec<i64> {
         self.contexts
             .iter()
@@ -156,6 +158,7 @@ impl PageIsolatedWorldRegistry {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn inspector_execution_context_id(&self, execution_context_id: i64) -> Option<i64> {
         self.contexts
             .get(&execution_context_id)

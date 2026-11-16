@@ -193,9 +193,12 @@ fn closing_running_page_leaves_peer_isolate_usable() {
 #[test]
 fn closing_peer_preserves_debugger_pause_and_its_resume_route() {
     use crate::runtime::{
-        PageId, RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
+        PageId, RendererOutputStreamIdentity, RendererOwnerLocalHostId, RendererTurnOutputJournal,
+    };
+    #[cfg(feature = "devtools")]
+    use crate::runtime::{
+        RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
         RendererInspectorCommandRoute, RendererInspectorIngressTicket,
-        RendererOutputStreamIdentity, RendererOwnerLocalHostId, RendererTurnOutputJournal,
     };
     crate::ensure_v8_for_test();
     let mut isolate = v8::Isolate::new(Default::default());
@@ -277,15 +280,13 @@ fn closing_peer_preserves_debugger_pause_and_its_resume_route() {
 
 #[tokio::test]
 async fn owner_shutdown_seals_all_page_queues_and_rejects_new_page() {
-    use crate::{
-        devtools::{
-            ingress::io::RendererRuntimeInspectorIoCommandClaim,
-            target::RendererDevToolsTargetShutdownRegistry,
-        },
-        runtime::{
-            RendererDevToolsIoCommandEnvelope, RendererInspectorCommandRoute,
-            RendererInspectorIngressTicket,
-        },
+    #[cfg(feature = "devtools")]
+    use crate::devtools::ingress::io::RendererRuntimeInspectorIoCommandClaim;
+    use crate::devtools::target::RendererDevToolsTargetShutdownRegistry;
+    #[cfg(feature = "devtools")]
+    use crate::runtime::{
+        RendererDevToolsIoCommandEnvelope, RendererInspectorCommandRoute,
+        RendererInspectorIngressTicket,
     };
     crate::ensure_v8_for_test();
     let mut isolate = v8::Isolate::new(Default::default());

@@ -379,6 +379,7 @@ impl PageScriptHost {
             .map(|record| record.callback.value(scope))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn event_callback_relevant_context<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,

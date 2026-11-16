@@ -7,11 +7,15 @@ mod value;
 pub(crate) use events::{
     dispatch_text_control_event, queue_text_control_document_selection_change_event,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use selection::replace_text_control_selection_after_beforeinput;
+#[cfg(feature = "devtools")]
 pub(crate) use selection::{
-    is_text_control_user_editable, replace_text_control_selection,
-    replace_text_control_selection_after_beforeinput,
-    replace_text_control_selection_for_insert_html, text_control_set_selection_range_internal,
+    is_text_control_user_editable, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal,
+};
+pub(crate) use selection::{
+    replace_text_control_selection, replace_text_control_selection_for_insert_html,
 };
 pub(in crate::native_bridge) use selection::{
     text_control_select_callback, text_control_selection_direction_getter_function,

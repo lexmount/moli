@@ -60,6 +60,7 @@ struct CapturedDocumentState {
 }
 
 impl PageVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn dom_snapshot_capture_payload(
         &mut self,
         top_frame_id: &str,
@@ -76,6 +77,7 @@ impl PageVm {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     fn dom_snapshot_document_roots(&mut self, top_frame_id: &str) -> Vec<CapturedDocumentRoot> {
         let snapshots = self.document_node_snapshots_for_dom_snapshot(-1, true);
         let mut documents = captured_document_roots(snapshots, self, top_frame_id);
@@ -92,6 +94,7 @@ impl PageVm {
 }
 
 impl CaptureSnapshotState {
+    #[cfg(feature = "devtools")]
     fn new(
         options: RendererDomSnapshotCaptureOptions,
         documents: Vec<CapturedDocumentRoot>,
@@ -122,6 +125,7 @@ impl CaptureSnapshotState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn push_layout_results(&mut self, vm: &ScriptVm) {
         for document in &mut self.documents {
             document.push_layout_results(
@@ -133,6 +137,7 @@ impl CaptureSnapshotState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn into_result(mut self) -> Value {
         let documents = self
             .documents
@@ -147,6 +152,7 @@ impl CaptureSnapshotState {
 }
 
 impl CapturedDocumentState {
+    #[cfg(feature = "devtools")]
     fn new(
         document: CapturedDocumentRoot,
         content_document_indices: &ContentDocumentIndices,
@@ -182,6 +188,7 @@ impl CapturedDocumentState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn push_layout_results(
         &mut self,
         vm: &ScriptVm,
@@ -218,6 +225,7 @@ impl CapturedDocumentState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn into_value(
         self,
         options: &RendererDomSnapshotCaptureOptions,
@@ -252,6 +260,7 @@ impl CapturedDocumentState {
         })
     }
 
+    #[cfg(feature = "devtools")]
     fn layout_value(&self, options: &RendererDomSnapshotCaptureOptions) -> Value {
         let node_index = self
             .nodes
@@ -302,6 +311,7 @@ impl CapturedDocumentState {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn captured_document_roots(
     snapshots: Vec<DocumentNodeObjectSnapshot>,
     page_vm: &PageVm,
@@ -327,6 +337,7 @@ fn captured_document_roots(
         .collect()
 }
 
+#[cfg(feature = "devtools")]
 fn dom_snapshot_parent_frame_id_for_owner_node(
     page_vm: &PageVm,
     top_frame_id: &str,
@@ -345,6 +356,7 @@ fn dom_snapshot_parent_frame_id_for_owner_node(
         .unwrap_or_else(|| top_frame_id.to_owned())
 }
 
+#[cfg(feature = "devtools")]
 fn detached_document_root(
     snapshot: DetachedChildBrowsingContextDocumentSnapshot,
 ) -> Option<CapturedDocumentRoot> {
@@ -379,6 +391,7 @@ struct StringTable {
 }
 
 impl StringTable {
+    #[cfg(feature = "devtools")]
     fn intern(&mut self, value: impl AsRef<str>) -> usize {
         let value = value.as_ref();
         if let Some(index) = self.indices.get(value).copied() {
@@ -390,6 +403,7 @@ impl StringTable {
         index
     }
 
+    #[cfg(feature = "devtools")]
     fn into_strings(self) -> Vec<String> {
         self.strings
     }
@@ -414,6 +428,7 @@ struct NodeTableBuilder {
 }
 
 impl NodeTableBuilder {
+    #[cfg(feature = "devtools")]
     fn push_tree(
         &mut self,
         snapshot: &DocumentNodeSnapshot,
@@ -432,6 +447,7 @@ impl NodeTableBuilder {
         );
     }
 
+    #[cfg(feature = "devtools")]
     fn push_tree_with_budget(
         &mut self,
         snapshot: &DocumentNodeSnapshot,
@@ -506,6 +522,7 @@ impl NodeTableBuilder {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn into_value(self) -> Value {
         let mut nodes = serde_json::Map::new();
         nodes.insert("parentIndex".to_owned(), json!(self.parent_index));
@@ -547,6 +564,7 @@ impl NodeTableBuilder {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn content_document_index_for_node(
     content_document_indices: &ContentDocumentIndices,
     frame_id: &str,
@@ -558,10 +576,12 @@ fn content_document_index_for_node(
         .find_map(|(parent_frame_id, index)| (parent_frame_id == frame_id).then_some(*index))
 }
 
+#[cfg(feature = "devtools")]
 fn lightweight_snapshot_bounds() -> Vec<f64> {
     vec![0.0, 0.0, 1.0, 1.0]
 }
 
+#[cfg(feature = "devtools")]
 fn document_type_values(root: &DocumentNodeSnapshot) -> (String, String) {
     find_document_type(root)
         .map(|doctype| {
@@ -573,6 +593,7 @@ fn document_type_values(root: &DocumentNodeSnapshot) -> (String, String) {
         .unwrap_or_default()
 }
 
+#[cfg(feature = "devtools")]
 fn find_document_type(snapshot: &DocumentNodeSnapshot) -> Option<&DocumentNodeSnapshot> {
     let mut stack = vec![snapshot];
     while let Some(snapshot) = stack.pop() {
@@ -585,10 +606,12 @@ fn find_document_type(snapshot: &DocumentNodeSnapshot) -> Option<&DocumentNodeSn
     None
 }
 
+#[cfg(feature = "devtools")]
 fn document_title(root: &DocumentNodeSnapshot) -> String {
     find_title_node(root).map(text_content).unwrap_or_default()
 }
 
+#[cfg(feature = "devtools")]
 fn find_title_node(snapshot: &DocumentNodeSnapshot) -> Option<&DocumentNodeSnapshot> {
     let mut stack = vec![snapshot];
     while let Some(snapshot) = stack.pop() {
@@ -601,6 +624,7 @@ fn find_title_node(snapshot: &DocumentNodeSnapshot) -> Option<&DocumentNodeSnaps
     None
 }
 
+#[cfg(feature = "devtools")]
 fn text_content(snapshot: &DocumentNodeSnapshot) -> String {
     let mut value = String::new();
     let mut stack = vec![snapshot];

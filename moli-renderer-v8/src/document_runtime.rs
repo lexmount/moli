@@ -79,9 +79,9 @@ use crate::{
     service_worker_runtime::ServiceWorkerClientId,
     types::SubresourceResourceType,
 };
-pub(crate) use devtools_mutations::{
-    DevToolsDomChildListMutationFact, DevToolsDomMutationFact, DevToolsDomPrepublishedRemoval,
-};
+pub(crate) use devtools_mutations::DevToolsDomPrepublishedRemoval;
+#[cfg(feature = "devtools")]
+pub(crate) use devtools_mutations::{DevToolsDomChildListMutationFact, DevToolsDomMutationFact};
 pub(crate) use inspector_issues::PendingInspectorIssue;
 use parser_blocking::{ParserInsertionWork, PendingParserBlockingWork, PendingParserInsertion};
 pub(crate) use parser_modulepreload::MainDocumentModulepreloadFetchOutcome;

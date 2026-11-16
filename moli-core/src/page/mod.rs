@@ -16,6 +16,7 @@ mod document_content_support;
 mod document_cookie_diagnostics;
 mod dom_protocol_support;
 mod history_support;
+#[cfg(feature = "devtools")]
 mod input_support;
 mod js_evaluation;
 mod navigation_diagnostics;
@@ -38,12 +39,12 @@ use crate::renderer::{
     RendererPageState,
 };
 use anyhow::Result;
+#[cfg(feature = "devtools")]
 pub use command_dispatch::{
-    CompletedDevToolsIoCommandDispatch, CompletedPageCommand,
-    CompletedRuntimeInspectorCommandDispatch, PageDocumentCommandTarget,
-    PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
-    PreparedNativeCall,
+    CompletedDevToolsIoCommandDispatch, CompletedRuntimeInspectorCommandDispatch,
+    PendingDevToolsIoCommandDispatch, PendingRuntimeInspectorCommandDispatch, PreparedNativeCall,
 };
+pub use command_dispatch::{CompletedPageCommand, PageDocumentCommandTarget, PendingPageCommand};
 pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 
 #[cfg(all(test, debug_assertions))]
@@ -65,6 +66,7 @@ pub use dom_protocol_support::{
     MAX_DOM_OUTPUT_TREE_DEPTH, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, MAX_JSON_OUTPUT_TREE_DEPTH,
     RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id,
 };
+#[cfg(feature = "devtools")]
 pub use input_support::{
     PageInputExt, decode_element_click_dispatch_completion,
     decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
@@ -110,11 +112,11 @@ pub use moli_renderer_v8::{
     RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload, RendererDownloadBody,
     RendererDragData, RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile,
     RendererFrameToken, RendererHtmlSerializeOptions, RendererInputDispatchOutcome,
-    RendererInspectorCommandRoute, RendererInterceptedDrag, RendererJavaScriptDialogCompletion,
-    RendererJavaScriptDialogId, RendererJavaScriptDialogResult, RendererJavaScriptDialogSource,
-    RendererLayoutMetrics, RendererLifecycleEpoch, RendererLifecycleEventStamp,
-    RendererLifecycleStartReason, RendererLifecycleTerminationStamp, RendererMainDocumentCommit,
-    RendererMainDocumentResource, RendererMarkdownOptions, RendererNavigationInitiator,
+    RendererInterceptedDrag, RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+    RendererJavaScriptDialogResult, RendererJavaScriptDialogSource, RendererLayoutMetrics,
+    RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
+    RendererLifecycleTerminationStamp, RendererMainDocumentCommit, RendererMainDocumentResource,
+    RendererMarkdownOptions, RendererNavigationInitiator,
     RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts,
     RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageReplacementError,
     RendererPageReplacementFailureDisposition, RendererPageWindowIdentity, RendererPdfOptions,
@@ -126,9 +128,7 @@ pub use moli_renderer_v8::{
     RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
     RendererPrintToPdfReply, RendererPrintToPdfRequest, RendererResourceContentBody,
     RendererResourceSearchRequest, RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput,
-    RendererRuntimeHeapUsage, RendererRuntimeInspectorIoCommandClaim,
-    RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
-    RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
+    RendererRuntimeHeapUsage, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorProtocolMessage,
     RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
     RendererRuntimeRealmInfo, RendererScreenshotClip, RendererScreenshotFormat,
@@ -152,6 +152,12 @@ pub use moli_renderer_v8::{
 };
 pub use moli_renderer_v8::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
+};
+#[cfg(feature = "devtools")]
+pub use moli_renderer_v8::{
+    RendererInspectorCommandRoute, RendererRuntimeInspectorIoCommandClaim,
+    RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
+    RendererRuntimeInspectorMainCommandRoute,
 };
 pub use moli_renderer_v8::{
     RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder,
@@ -302,6 +308,7 @@ impl Page {
     /// ordinary V8 Inspector command. Protocol integrations use this boundary
     /// to retire the Page without waiting behind a session lane.
     #[doc(hidden)]
+    #[cfg(feature = "devtools")]
     pub fn crash_devtools_target_from_io(&self) {
         self.handle.crash_devtools_target_from_io();
     }
@@ -355,6 +362,7 @@ impl Page {
     }
 
     #[cfg(all(test, debug_assertions))]
+    #[cfg(feature = "devtools")]
     pub(crate) async fn panic_wait_for_selector_for_testing(
         &mut self,
         loader: &ResourceRequestClient,
@@ -383,6 +391,7 @@ impl Page {
 
     // Input dispatch methods (delegated to by the PageInputExt trait in input_support)
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_mouse_event_at_point_async(
         &mut self,
         x: f64,
@@ -401,6 +410,7 @@ impl Page {
             .handled)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_mouse_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -433,6 +443,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_touch_event_at_point_async(
         &mut self,
         x: f64,
@@ -446,6 +457,7 @@ impl Page {
             .handled)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_drag_event_at_point_async(
         &mut self,
         x: f64,
@@ -460,6 +472,7 @@ impl Page {
             .handled)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_touch_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -481,6 +494,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_drag_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -505,6 +519,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn clear_active_drag_data_transfer_async(&mut self) -> Result<()> {
         let reply = self
             .dispatch_page_command_async(RendererPageCommand::ClearActiveDragDataTransfer)
@@ -517,6 +532,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn insert_text_into_active_control_async(
         &mut self,
         text: &str,
@@ -531,6 +547,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_key_event_async(
         &mut self,
         event_name: &str,
@@ -555,6 +572,7 @@ impl Page {
             .handled)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) async fn dispatch_key_event_with_outcome_async(
         &mut self,
         event_name: &str,

@@ -1,3 +1,4 @@
+pub(crate) use moli_command_types::InspectorPauseEffect as RendererInspectorPauseCommandEffect;
 #[cfg(debug_assertions)]
 use std::thread::ThreadId;
 use std::{
@@ -19,7 +20,9 @@ use crate::{
 };
 use anyhow::{Result, anyhow, ensure};
 use parking_lot::Mutex;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(feature = "devtools")]
+use serde_json::json;
 use tracing::debug;
 use url::Url;
 
@@ -52,6 +55,7 @@ mod javascript_dialog;
 mod lifecycle_decision;
 mod main_document_ready_gate;
 mod navigation;
+#[cfg(feature = "devtools")]
 mod nested_main;
 mod owner;
 mod owner_deadline_index;
@@ -76,8 +80,10 @@ mod page;
 mod page_commands;
 mod page_context_cancel;
 mod page_creation_progress;
+#[cfg(feature = "devtools")]
 mod page_css;
 pub(crate) mod page_dom;
+#[cfg(feature = "devtools")]
 mod page_dom_snapshot;
 mod page_entry_residence;
 mod page_generated_dom;
@@ -313,8 +319,11 @@ pub use self::owner_local::RendererPageReplacementCommit;
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
     RendererDocumentCommandTarget, RendererPageAccessError, RendererPageCommandPending,
-    RendererPageHandle, RendererPageProtocolCommandTarget, RendererPageRequestPolicyUpdate,
-    RendererRuntimeInspectorSessionDetachGuard,
+    RendererPageHandle, RendererPageRequestPolicyUpdate,
+};
+#[cfg(feature = "devtools")]
+pub use self::owner_local::{
+    RendererPageProtocolCommandTarget, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{
@@ -339,7 +348,13 @@ pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;
 pub(crate) use self::page_state::RendererPageSlotHandle;
 pub use self::page_state::{RendererPageState, RendererPageStateRevision};
+#[cfg(feature = "devtools")]
+pub(crate) use self::page_surface::RendererDevToolsSessionOutputHost;
+#[cfg(feature = "devtools")]
+pub(crate) use self::page_surface::RendererInspectorPageCommand;
 use self::page_surface::RendererPageTable;
+#[cfg(feature = "devtools")]
+pub(crate) use self::page_surface::RendererRuntimeInspectorSessionResponseSettlement;
 pub use self::page_surface::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DevToolsSessionKey,
     PendingWorkerRuntimeInspectorSessionResponse, RendererAccessibilityPayloadsForObjectId,
@@ -402,10 +417,9 @@ pub use self::page_surface::{
     RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{
-    RendererCommandTurnOutputRecorder, RendererDevToolsSessionOutputHost,
-    RendererInspectorPageCommand, RendererRuntimeCommandOutputRecorder,
+    RendererCommandTurnOutputRecorder, RendererRuntimeCommandOutputRecorder,
     RendererRuntimeCommandOutputSettlement, RendererRuntimeInspectorResponsePublication,
-    RendererRuntimeInspectorSessionResponseSettlement, RendererRuntimeObservableSourceQueue,
+    RendererRuntimeObservableSourceQueue,
 };
 pub use self::page_surface::{
     RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder,
@@ -442,13 +456,16 @@ pub(in crate::runtime) use self::phase_one::{
     PhaseOneResidenceAdmission, PhaseOneRestoreRequirement,
 };
 pub(crate) use self::protocol_output::{PendingRendererOutputRecord, RendererTurnOutputJournal};
+#[cfg(feature = "devtools")]
 pub use self::protocol_output::{
-    RendererCdpCall, RendererDocumentTitleChanged, RendererNativeCommandAdmission,
-    RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
-    RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
-    RendererNativeProtocolError, RendererNativeProtocolNotification,
-    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererOutputCursor,
-    RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
+    RendererCdpCall, RendererNativeCommandAdmission, RendererNativeCommandReadyResponse,
+    RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
+    RendererNativeOperationStep, RendererNativeProtocolError, RendererNativeProtocolNotification,
+    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate,
+};
+pub use self::protocol_output::{
+    RendererDocumentTitleChanged, RendererOutputCursor, RendererOutputFence,
+    RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
     RendererOutputStreamIdentity, RendererOutputTransportDiagnostics,
@@ -457,18 +474,22 @@ pub use self::protocol_output::{
     RendererProtocolObservation, renderer_output_transport_channel,
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
+#[cfg(feature = "devtools")]
 pub use crate::devtools::command::{
     RendererDevToolsIoCommandEnvelope, RendererDevToolsMainCommandEnvelope,
     RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
     RendererInspectorIngressTicket,
 };
+#[cfg(feature = "devtools")]
 pub(crate) use crate::devtools::command::{
     RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
-    RendererDevToolsMainNestedDispatch, RendererInspectorPauseCommandEffect,
+    RendererDevToolsMainNestedDispatch,
 };
+#[cfg(feature = "devtools")]
 pub use crate::devtools::ingress::io::{
     RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
 };
+#[cfg(feature = "devtools")]
 pub use crate::devtools::ingress::main::{
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
@@ -506,6 +527,7 @@ pub(crate) use crate::service_worker_runtime::{
     ServiceWorkerSyncRegistrationResult, ServiceWorkerVersionId, ServiceWorkerWorkerMessage,
     service_worker_exposed_client_id,
 };
+#[cfg(feature = "devtools")]
 pub(crate) use nested_main::dispatch_nested_main_page_command;
 
 static NEXT_RENDERER_OWNER_LOCAL_HOST_ID: AtomicU64 = AtomicU64::new(1);

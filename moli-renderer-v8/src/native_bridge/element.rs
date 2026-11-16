@@ -106,10 +106,11 @@ use trusted_types::{
     TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
 };
 
+#[cfg(feature = "devtools")]
+pub(crate) use forms::{autocomplete_field_name, autofill_related_form_control_elements};
 pub(crate) use forms::{
-    autocomplete_field_name, autofill_related_form_control_elements, control_has_datalist_ancestor,
-    form_associated_form_owner, form_control_elements, form_data_control_elements,
-    is_valid_submit_button, submit_form_with_submit_event,
+    control_has_datalist_ancestor, form_associated_form_owner, form_control_elements,
+    form_data_control_elements, is_valid_submit_button, submit_form_with_submit_event,
 };
 pub(in crate::native_bridge) use forms::{form_named_control_matches, form_named_image_matches};
 #[cfg(test)]
@@ -154,9 +155,11 @@ use self::shadow_template::*;
 pub(crate) use animations::{
     dispatch_animation_start_scan, queue_animation_start_for_listener_target,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use geometry::scroll_node_into_view_if_needed;
 pub(crate) use geometry::{
     compute_mock_client_rect, compute_mock_intersection_client_rect,
-    compute_mock_intersection_scrollport_client_rect, scroll_node_into_view_if_needed,
+    compute_mock_intersection_scrollport_client_rect,
 };
 pub(crate) use media::{install_text_track_template_bindings, resort_text_track_cues_for_cue};
 pub(crate) use shadow_dom::{
@@ -166,12 +169,14 @@ pub(crate) use shadow_dom::{
     element_internals_validity_for_target_handle, element_internals_will_validate_for_handle,
     ensure_shadow_root_adopted_style_sheets_initialized,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use styles::computed_style_properties_for_inspector_handle;
+#[cfg(feature = "devtools")]
+pub(crate) use styles::computed_style_property_values_for_document_snapshot;
 pub(crate) use styles::{
     ComputedStyleExportValues, ComputedStyleRead, PreparedAnonymousStyleContext, StyleMode,
     active_css_animation_transform_value, computed_style_export_values_for_document_snapshot,
-    computed_style_properties_for_inspector_handle,
-    computed_style_property_values_for_document_snapshot, css_animation_start_applies,
-    cssom_style_entry_requires_structured_parser,
+    css_animation_start_applies, cssom_style_entry_requires_structured_parser,
     cssom_style_property_mutation_affected_names_with_pdb,
     cssom_style_property_mutation_cleanup_names_with_pdb,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,
@@ -190,24 +195,35 @@ use super::document::{
     detached_shadow_root_selection_value, node_shadow_root_element_from_point_callback,
     node_shadow_root_elements_from_point_callback,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use activation::TextInputSource;
 #[cfg(test)]
 pub(crate) use activation::activate_handle_via_click;
 #[cfg(feature = "ace-protocol")]
 pub(crate) use activation::activate_handle_via_click_with_detail_and_modifiers;
 use activation::navigate_form_target_browsing_context;
+#[cfg(feature = "devtools")]
+pub(crate) use activation::perform_text_input;
 pub(crate) use activation::{
-    SpecialBrowsingContextTarget, TextInputSource, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target, perform_text_input,
+    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
+    navigate_named_iframe_target,
 };
+#[cfg(feature = "devtools")]
 pub(crate) use activation::{
     accepts_drop_default_action, activate_handle_after_pointer_release,
+    perform_auxiliary_link_default_action, perform_drop_default_action,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use activation::{
     activate_handle_after_touch_release, activate_handle_via_keyboard,
+    select_contenteditable_contents,
+};
+pub(crate) use activation::{
     activate_handle_via_synthetic_click, dispatched_click_activation_target,
-    finish_legacy_activation_for_dispatched_click, perform_auxiliary_link_default_action,
-    perform_click_default_action_for_dispatched_event, perform_drop_default_action,
+    finish_legacy_activation_for_dispatched_click,
+    perform_click_default_action_for_dispatched_event,
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
     scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
-    select_contenteditable_contents,
 };
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
 use activation::{
@@ -218,6 +234,7 @@ pub(super) use anchors::{
     anchor_text_getter_function, anchor_text_setter_function, anchor_to_string_callback,
     area_to_string_callback,
 };
+#[cfg(feature = "devtools")]
 pub(crate) use attributes::mutate_live_element_attribute_for_inspector;
 pub(super) use attributes::{
     bridge_get_attribute_callback, bridge_remove_attribute_callback, bridge_set_attribute_callback,
@@ -282,30 +299,43 @@ pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
 use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
-    InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
-    construct_command_event, construct_drag_event_with_related_target, construct_drop_input_event,
-    construct_form_data_event, construct_input_event, construct_interest_event,
-    construct_keyboard_event, construct_mouse_event_for_target,
-    construct_mouse_event_with_detail_for_target,
-    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
-    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
-    construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
+    InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
+    construct_command_event, construct_drop_input_event, construct_form_data_event,
+    construct_input_event, construct_interest_event, construct_simple_event,
     construct_simple_event_for_target, construct_submit_event, construct_toggle_event,
-    construct_touch_event_with_points, construct_wheel_event_for_target, dispatch_beforeinput,
-    dispatch_public_event,
+    dispatch_beforeinput, dispatch_public_event,
 };
+#[cfg(any(feature = "devtools", test))]
+pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};
+#[cfg(feature = "devtools")]
+pub(crate) use events::{
+    construct_drag_event_with_related_target, construct_mouse_event_for_target,
+    construct_mouse_event_with_detail_for_target,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event_with_modifiers,
+    construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use events::{
+    construct_keyboard_event, construct_pointer_event, construct_pointer_event_with_related_target,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
+#[cfg(feature = "devtools")]
+pub(crate) use focus::perform_mouse_focus_default_action;
 pub(crate) use focus::{
-    contenteditable_editing_host, focus_element, focus_live_element_for_inspector,
-    initial_contenteditable_caret, perform_access_key_default_action_for_dispatched_event,
-    perform_hover_interest_default_action_for_dispatched_event, perform_mouse_focus_default_action,
+    contenteditable_editing_host, focus_element, initial_contenteditable_caret,
+    perform_access_key_default_action_for_dispatched_event,
+    perform_hover_interest_default_action_for_dispatched_event,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
     process_post_parse_autofocus, reset_focus_from_previous_handle,
     reset_focus_from_previous_handle_with_previous_focus_within, schedule_focus_blur_if_needed,
     update_focus, update_focus_preserving_selection,
 };
 pub(super) use focus::{node_blur_callback, node_focus_callback};
+#[cfg(feature = "devtools")]
+pub(crate) use forms::perform_implicit_submission_from_control;
 pub(super) use forms::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
     button_disabled_getter_function, button_disabled_setter_function,
@@ -412,27 +442,30 @@ pub(crate) use forms::{
 };
 pub(crate) use forms::{control_label_handles, v8_pattern_is_usable};
 pub(crate) use forms::{
-    dispatch_text_control_event, is_text_control, perform_implicit_submission_from_control,
+    dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
-    replace_text_control_selection_for_insert_html, text_control_set_selection_range_internal,
-    text_control_set_selection_range_with_direction_internal, text_control_value,
+    replace_text_control_selection_for_insert_html, text_control_value,
 };
 pub(in crate::native_bridge) use forms::{
     resize_select_options, select_add_insertion_point, select_options_resize_target,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use forms::{
+    text_control_set_selection_range_internal,
+    text_control_set_selection_range_with_direction_internal,
+};
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 
 pub use geometry::ClientRect;
+#[cfg(feature = "devtools")]
+pub(crate) use geometry::observable_input_hit_test;
 #[cfg(test)]
 pub(crate) use geometry::observable_scrollbar_hit_test;
+#[cfg(feature = "devtools")]
 pub(crate) use geometry::{
     InputHit, InputSurfaceHit, apply_scroll_observable_effects, input_surface_hit_test,
-    observable_caret_position, observable_deep_hit_test, observable_document_metrics,
-    observable_event_offset, observable_geometry_batch, observable_geometry_query,
-    observable_hit_test, observable_hit_test_all, observable_input_hit_test,
-    observable_sources_with_fragments, perform_scrollbar_scroll_default_action,
-    perform_wheel_scroll_default_action, published_geometry_batch, queue_scroll_observable_effects,
-    scroll_node_into_view_at_center, scroll_node_into_view_at_start,
+    observable_geometry_query, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action,
 };
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,
@@ -446,6 +479,14 @@ pub(super) use geometry::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
+pub(crate) use geometry::{
+    observable_caret_position, observable_document_metrics, observable_event_offset,
+    observable_geometry_batch, observable_hit_test, observable_hit_test_all,
+    observable_sources_with_fragments, published_geometry_batch, queue_scroll_observable_effects,
+    scroll_node_into_view_at_start,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use geometry::{observable_deep_hit_test, scroll_node_into_view_at_center};
 use global_attributes::canonical_fetch_priority_value;
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
@@ -2124,4 +2165,5 @@ pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_ha
         .and_then(|candidate| runtime.dom_host().resolve_reference_target_chain(candidate))
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) use geometry::read_client_rects;

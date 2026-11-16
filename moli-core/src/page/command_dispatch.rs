@@ -1,8 +1,11 @@
 use super::{
     Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererPageCommand,
-    RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorIoCommandClaim,
-    RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
-    RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
+    RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorMessage,
+};
+#[cfg(feature = "devtools")]
+use super::{
+    RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
+    RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
 use crate::RendererOutputFence;
 use anyhow::{Result, bail};
@@ -34,6 +37,7 @@ impl PageDocumentCommandTarget {
 
 /// The original Page/DevToolsSession admission, held without a Page borrow
 /// while Browser work runs. Dispatch never resolves a replacement active Page.
+#[cfg(feature = "devtools")]
 pub struct PreparedNativeCall {
     target: moli_renderer_v8::RendererPageProtocolCommandTarget,
     attachment: RendererAgentAttachmentId,
@@ -41,6 +45,7 @@ pub struct PreparedNativeCall {
     response: moli_renderer_v8::RendererNativeCommandAdmission,
 }
 
+#[cfg(feature = "devtools")]
 impl PreparedNativeCall {
     pub fn start(self, operation: crate::RendererNativeOperation) -> Result<PendingPageCommand> {
         let mut command = RendererPageCommand::Native(self.response.bind(operation));
@@ -71,22 +76,26 @@ impl PendingPageCommand {
     }
 }
 
+#[cfg(feature = "devtools")]
 pub struct PendingRuntimeInspectorCommandDispatch {
     kind: PendingRuntimeInspectorCommandDispatchKind,
 }
 
 /// One non-V8 renderer agent command admitted through the Page IO
 /// `DevToolsSession` receiver.
+#[cfg(feature = "devtools")]
 pub struct PendingDevToolsIoCommandDispatch {
     route: RendererRuntimeInspectorIoCommandRoute,
 }
 
+#[cfg(feature = "devtools")]
 enum PendingRuntimeInspectorCommandDispatchKind {
     MainIngress(Box<RendererRuntimeInspectorMainCommandRoute>),
     Io(PendingDevToolsIoCommandDispatch),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "devtools")]
 pub enum CompletedDevToolsIoCommandDispatch {
     Dispatched,
     SessionResponse {
@@ -100,6 +109,7 @@ pub enum CompletedDevToolsIoCommandDispatch {
 /// `Inspector` claims complete either in V8's interrupt callback or its nested
 /// message loop while the Page actor is blocked. Callers must not synchronously
 /// re-enter that Page before exposing the Inspector response.
+#[cfg(feature = "devtools")]
 pub enum CompletedRuntimeInspectorCommandDispatch {
     Owner(Box<CompletedPageCommand>),
     OwnerSessionResponse {
@@ -114,6 +124,7 @@ pub enum CompletedRuntimeInspectorCommandDispatch {
     },
 }
 
+#[cfg(feature = "devtools")]
 impl CompletedRuntimeInspectorCommandDispatch {
     pub fn renderer_output_predecessor(&self) -> Option<RendererOutputFence> {
         match self {
@@ -152,17 +163,21 @@ impl CompletedPageCommand {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn into_document_bidi_node_shared_id(
         self,
     ) -> Result<crate::page::RendererDomBidiNodeSharedIdResolution> {
         match self.output.into_reply_and_state().0 {
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentBidiNodeSharedId(result) => Ok(result),
             _ => Err(UnexpectedDocumentCommandReply.into()),
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn into_document_bidi_node_binding(self) -> Result<()> {
         match self.output.into_reply_and_state().0 {
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentBidiNodeBindingRegistered => Ok(()),
             _ => Err(UnexpectedDocumentCommandReply.into()),
         }
@@ -231,6 +246,7 @@ impl CompletedPageCommand {
 }
 
 impl Page {
+    #[cfg(feature = "devtools")]
     pub fn prepare_cdp_call(
         &self,
         command_id: u64,
@@ -269,11 +285,15 @@ impl Page {
 
     pub(crate) fn start_page_command(
         &self,
-        mut command: RendererPageCommand,
+        command: RendererPageCommand,
     ) -> Result<PendingPageCommand> {
+        #[cfg(feature = "devtools")]
+        let mut command = command;
+        #[cfg(feature = "devtools")]
         if let Some(attachment_id) = self.renderer_agent_attachment_id {
             command.bind_inspector_attachment(attachment_id);
         }
+        #[cfg(feature = "devtools")]
         let pending = if self.renderer_agent_attachment_id.is_some() {
             self.handle.enqueue_protocol_command_in_inspector_session(
                 command,
@@ -286,6 +306,8 @@ impl Page {
             // lane that is scoped to a renderer attachment.
             self.handle.enqueue_protocol_command(command)?
         };
+        #[cfg(not(feature = "devtools"))]
+        let pending = self.handle.enqueue_protocol_command(command)?;
         Ok(PendingPageCommand {
             pending,
             renderer_agent_attachment_id: self.renderer_agent_attachment_id,
@@ -298,8 +320,11 @@ impl Page {
 
     pub(super) fn start_full_page_command(
         &self,
-        mut command: RendererPageCommand,
+        command: RendererPageCommand,
     ) -> Result<PendingPageCommand> {
+        #[cfg(feature = "devtools")]
+        let mut command = command;
+        #[cfg(feature = "devtools")]
         if let Some(attachment_id) = self.renderer_agent_attachment_id {
             command.bind_inspector_attachment(attachment_id);
         }
@@ -317,12 +342,14 @@ impl Page {
         completion.output
     }
 
+    #[cfg(feature = "devtools")]
     fn pending_runtime_inspector_command_dispatch(
         kind: PendingRuntimeInspectorCommandDispatchKind,
     ) -> PendingRuntimeInspectorCommandDispatch {
         PendingRuntimeInspectorCommandDispatch { kind }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn pending_io_runtime_inspector_command_dispatch(
         route: RendererRuntimeInspectorIoCommandRoute,
     ) -> PendingRuntimeInspectorCommandDispatch {
@@ -333,12 +360,14 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn pending_devtools_io_command_dispatch(
         route: RendererRuntimeInspectorIoCommandRoute,
     ) -> PendingDevToolsIoCommandDispatch {
         PendingDevToolsIoCommandDispatch { route }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn pending_main_ingress_runtime_inspector_command_dispatch(
         route: RendererRuntimeInspectorMainCommandRoute,
     ) -> PendingRuntimeInspectorCommandDispatch {
@@ -411,28 +440,37 @@ impl Page {
 
     pub(super) fn page_reply_kind(reply: &RendererPageReply) -> &'static str {
         match reply {
+            #[cfg(feature = "devtools")]
             RendererPageReply::WebMcp(_) => "a WebMCP command result",
             RendererPageReply::RuntimeEvaluationResult(_) => "a runtime evaluation result reply",
             RendererPageReply::ElementClickPreparation(_) => "an element click preparation reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::ElementClickDispatch(_) => "an element click dispatch reply",
             RendererPageReply::Bool(_) => "a bool reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalBool(_) => "an optional bool reply",
             #[cfg(feature = "ace-protocol")]
             RendererPageReply::AcePageTask(_) => "AcePageTask",
+            #[cfg(feature = "devtools")]
             RendererPageReply::InputDispatchOutcome(_) => "an input dispatch outcome reply",
             RendererPageReply::RuntimeInspectorProtocolMessages(_) => {
                 "runtime inspector protocol messages"
             }
             RendererPageReply::RuntimeConsoleMessageSnapshots(_) => "runtime console snapshots",
+            #[cfg(feature = "devtools")]
             RendererPageReply::RuntimeHeapUsage(_) => "runtime heap usage",
+            #[cfg(feature = "devtools")]
             RendererPageReply::PerformanceMetricSnapshot(_) => "performance metric snapshot",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DomDebuggerEventListeners(_) => {
                 "a DOMDebugger event listeners resolution"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DomDebuggerDomBreakpoint(_) => {
                 "a DOMDebugger DOM breakpoint resolution"
             }
             RendererPageReply::RuntimeRealmInventory(_) => "runtime realm inventory",
+            #[cfg(feature = "devtools")]
             RendererPageReply::ExecutionContextId(_) => "an execution context reply",
             RendererPageReply::ExecutionContextIds(_) => "execution context replies",
             RendererPageReply::OptionalExecutionContextId(_) => {
@@ -442,6 +480,7 @@ impl Page {
             RendererPageReply::OptionalDocumentNodeObjectSnapshot(_) => {
                 "an optional document node object snapshot"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalDomSnapshotCapturePayload(_) => {
                 "an optional DOMSnapshot capture payload"
             }
@@ -451,58 +490,78 @@ impl Page {
             RendererPageReply::OptionalDocumentChildNodeSnapshotEvents(_) => {
                 "optional document child node snapshot events"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentNodeAttributesResolution(_) => {
                 "a document node attributes resolution"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentNodeTextResolution(_) => "a document node text resolution",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentNodePropertyResolution(_) => {
                 "a document node property resolution"
             }
             RendererPageReply::OptionalAccessibilityNodes(_) => "optional accessibility nodes",
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalAccessibilityPayloads(_) => {
                 "optional accessibility payloads"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalAccessibilityPayload(_) => {
                 "an optional accessibility payload"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalAccessibilityPayloadsForObjectId(_) => {
                 "optional accessibility payloads for object id"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentQuerySelectorResolution(_) => {
                 "a document query selector resolution"
             }
             RendererPageReply::DocumentQuerySelectorNode(_) => "a document query selector node",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentQuerySelectorWithChildNodeSnapshotEvents(_) => {
                 "a document query selector with child node snapshot events reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentPerformSearch(_) => {
                 "a document perform search registration reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentSearchResults { .. } => "a document search results reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentSearchResultsDiscarded => {
                 "a document search results discarded reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentNodeStackTracesEnabled => {
                 "a document node stack traces enabled reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentNodeStackTrace(_) => "a document node stack trace reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentFrontendNodeBinding(_) => {
                 "a document frontend node binding reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentBidiNodeBinding(_) => "a document BiDi node binding reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentBidiNodeSharedId(_) => {
                 "a document BiDi node shared id reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentBidiNodeBindingRegistered => {
                 "a document BiDi node binding registered reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalStyleSheetPayload(_) => "an optional stylesheet payload",
+            #[cfg(feature = "devtools")]
             RendererPageReply::StyleSheetInventory(_) => "stylesheet inventory update",
             RendererPageReply::RuntimeRemoteObjectResolution(_) => {
                 "a runtime remote object resolution reply"
             }
             RendererPageReply::BlobUuid(_) => "a Blob UUID reply",
             RendererPageReply::OptionalBlobBytes(_) => "optional Blob bytes",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DocumentFrontendNodeIds(_) => {
                 "a document frontend node ids resolution reply"
             }
@@ -510,25 +569,36 @@ impl Page {
                 "an optional document node reference reply"
             }
             RendererPageReply::OptionalClientRect(_) => "a client rect reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalDocumentNodeClientRect(_) => {
                 "an optional document node client rect reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalDocumentNodeGeometry(_) => {
                 "an optional document node geometry reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::OptionalDocumentHitTest(_) => "an optional document hit-test reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::ScrollIntoViewResult(_) => "a scroll-into-view reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::ComputedStyleProperties(_) => "computed style properties",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DomAttributeMutationOutcome(_) => {
                 "a DOM attribute mutation outcome reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::DomEditOutcome(_) => "a DOM edit outcome reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::DomFocusOutcome(_) => "a DOM focus outcome reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::AutofillTriggerOutcome(_) => "an Autofill trigger outcome reply",
             RendererPageReply::DocumentStorageKey(_) => "a document storage key reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::ResourceTextSearchOutcome(_) => {
                 "a resource text search outcome reply"
             }
+            #[cfg(feature = "devtools")]
             RendererPageReply::NetworkResourceLoadPreparation(_) => {
                 "a network resource load preparation"
             }
@@ -546,15 +616,15 @@ impl Page {
             RendererPageReply::LayoutMetrics(_) => "a layout metrics reply",
             RendererPageReply::PrintToPdf(_) => "a print to PDF reply",
             RendererPageReply::CaptureScreenshot(_) => "a capture screenshot reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::CaptureScreencastFrame(_) => "a capture screencast frame reply",
             RendererPageReply::Unit => "a unit reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::NativeCommandReady(_) => "an unsettled native frontend reply",
+            #[cfg(feature = "devtools")]
             RendererPageReply::NativeCommandPublished => "a published native frontend reply",
-            // Another dependency may enable the renderer's ACE feature without
-            // enabling this crate's feature. Keep normal replies exhaustive when
-            // ACE is enabled here, and tolerate that mixed configuration otherwise.
-            #[cfg(not(feature = "ace-protocol"))]
-            #[allow(unreachable_patterns)]
+            // Backend capabilities may be enabled by another dependency while
+            // the corresponding facade feature remains disabled.
             _ => "an unknown renderer reply",
         }
     }
@@ -584,7 +654,9 @@ impl PendingPageCommand {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl PendingRuntimeInspectorCommandDispatch {
+    #[cfg(feature = "devtools")]
     pub async fn wait(self) -> Result<CompletedRuntimeInspectorCommandDispatch> {
         match self.kind {
             PendingRuntimeInspectorCommandDispatchKind::MainIngress(route) => {
@@ -665,7 +737,9 @@ impl PendingRuntimeInspectorCommandDispatch {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl PendingDevToolsIoCommandDispatch {
+    #[cfg(feature = "devtools")]
     pub async fn wait(self) -> Result<CompletedDevToolsIoCommandDispatch> {
         match self
             .route

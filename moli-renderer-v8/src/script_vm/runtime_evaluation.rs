@@ -39,6 +39,7 @@ impl ScriptVm {
         self.require_completed_runtime_evaluate(outcome)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn performance_metric_snapshot(
         &mut self,
     ) -> Result<RendererPerformanceMetricSnapshot> {
@@ -452,6 +453,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn remove_runtime_binding_from_default_context(&mut self, name: &str) -> Result<()> {
         self.with_current_main_world_scope(|scope, _| {
             let global = scope.get_current_context().global(scope);
@@ -463,6 +465,7 @@ impl ScriptVm {
         .map(|_| ())
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn remove_runtime_binding_from_isolated_context(
         &mut self,
         execution_context_id: i64,
@@ -484,6 +487,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn remove_runtime_binding_from_child_default_contexts(
         &mut self,
         name: &str,

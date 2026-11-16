@@ -1,12 +1,14 @@
-use super::{
-    InspectorOutbound,
-    agent_sessions::{RendererDevToolsAgentSessions, RendererDevToolsSessionConnection},
-    context_registry::DocumentInspectorContextGroupId,
-    v8_backend::{RendererInspectorIsolateBackend, RendererInspectorIsolateBackendHandle},
-};
+use super::InspectorOutbound;
+#[cfg(feature = "devtools")]
+use super::agent_sessions::RendererInspectorSessionConnection;
+use super::agent_sessions::RendererInspectorSessions;
+use super::context_registry::DocumentInspectorContextGroupId;
+use super::v8_backend::{RendererInspectorIsolateBackend, RendererInspectorIsolateBackendHandle};
 use crate::protocol_types::RuntimeBindingRegistration;
 use crate::runtime::RendererTurnOutputJournal;
-use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
+use moli_page_types::RendererDevToolsAgentToken;
+#[cfg(feature = "devtools")]
+use moli_page_types::{DevToolsSessionKey, V8InspectorSessionState};
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -38,7 +40,7 @@ struct RendererDevToolsAgentState {
     token: RendererDevToolsAgentToken,
     context_group_id: DocumentInspectorContextGroupId,
     isolate_backend: RendererInspectorIsolateBackendHandle,
-    sessions: RendererDevToolsAgentSessions,
+    sessions: RendererInspectorSessions,
     output_journal: Option<RendererTurnOutputJournal>,
 }
 
@@ -62,6 +64,7 @@ pub(crate) struct RendererInspectorObjectWrapper {
 }
 
 impl RendererInspectorObjectWrapper {
+    #[cfg(feature = "devtools")]
     pub(crate) fn wrap<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -104,12 +107,14 @@ impl Drop for RendererDomDebuggerScheduledPause {
 }
 
 impl RendererDomDebuggerPauseScheduler {
+    #[cfg(feature = "devtools")]
     pub(crate) fn debugger_pauses_enabled(&self) -> bool {
         self.state
             .upgrade()
             .is_some_and(|state| state.borrow().debugger_pauses_enabled)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn schedule_pause_on_next_statement(
         &self,
         session_keys: &[DevToolsSessionKey],
@@ -130,6 +135,7 @@ impl RendererDomDebuggerPauseScheduler {
         RendererDomDebuggerScheduledPause { sessions }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn break_program_for_sessions(
         &self,
         pauses: Vec<(DevToolsSessionKey, String)>,
@@ -144,6 +150,7 @@ impl RendererDomDebuggerPauseScheduler {
         );
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn break_program_for_sessions_with_prefaces(
         &self,
         pauses: Vec<(
@@ -173,6 +180,7 @@ impl RendererDomDebuggerPauseScheduler {
 }
 
 impl RendererDevToolsAgent {
+    #[cfg(feature = "devtools")]
     pub(super) fn object_wrapper(&self) -> RendererInspectorObjectWrapper {
         RendererInspectorObjectWrapper {
             state: Rc::downgrade(&self.state),
@@ -187,7 +195,7 @@ impl RendererDevToolsAgent {
                 token: RendererDevToolsAgentToken::allocate(),
                 context_group_id,
                 isolate_backend,
-                sessions: RendererDevToolsAgentSessions::default(),
+                sessions: RendererInspectorSessions::default(),
                 output_journal: None,
             })),
         }
@@ -254,6 +262,7 @@ impl RendererDevToolsAgent {
         dispatch.run(op)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn with_frontend<T>(
         &self,
         backend: &mut RendererInspectorIsolateBackend,
@@ -275,6 +284,7 @@ impl RendererDevToolsAgent {
         dispatch.run(op)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn v8_state(
         &self,
         session_key: &DevToolsSessionKey,
@@ -282,10 +292,12 @@ impl RendererDevToolsAgent {
         self.state.borrow().sessions.v8_state(session_key)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn v8_states(&self) -> Vec<(DevToolsSessionKey, V8InspectorSessionState)> {
         self.state.borrow().sessions.v8_states()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn reattach_frontend(
         &self,
         backend: &mut RendererInspectorIsolateBackend,
@@ -300,6 +312,7 @@ impl RendererDevToolsAgent {
             .reattach_frontend(backend, &connection, session_key, v8_state);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn ensure_frontend(
         &self,
         backend: &mut RendererInspectorIsolateBackend,
@@ -313,6 +326,7 @@ impl RendererDevToolsAgent {
             .ensure_frontend(backend, &connection, session_key);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn set_runtime_bindings(
         &self,
         session_key: DevToolsSessionKey,
@@ -324,6 +338,7 @@ impl RendererDevToolsAgent {
             .set_runtime_bindings(session_key, bindings);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn runtime_bindings(
         &self,
         session_key: &DevToolsSessionKey,
@@ -331,6 +346,7 @@ impl RendererDevToolsAgent {
         self.state.borrow().sessions.runtime_bindings(session_key)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn end_runtime_command_output(&self, session_key: &DevToolsSessionKey) {
         self.state
             .borrow()
@@ -338,6 +354,7 @@ impl RendererDevToolsAgent {
             .end_runtime_command_output(session_key);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn remove_frontend(&self, session_key: &DevToolsSessionKey) -> bool {
         self.state
             .borrow_mut()
@@ -345,6 +362,7 @@ impl RendererDevToolsAgent {
             .remove_frontend(session_key)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn cancel_response_callback(&self, session_key: &DevToolsSessionKey, call_id: i32) {
         self.state
             .borrow()
@@ -359,6 +377,7 @@ impl RendererDevToolsAgent {
             .cancel_internal_runtime_evaluate_response(call_id);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn frontend_routes(&self) -> Vec<(DevToolsSessionKey, InspectorOutbound)> {
         self.state.borrow().sessions.frontend_routes()
     }
@@ -376,8 +395,9 @@ impl RendererDevToolsAgent {
     }
 }
 
-fn session_connection(state: &RendererDevToolsAgentState) -> RendererDevToolsSessionConnection {
-    RendererDevToolsSessionConnection::new(
+#[cfg(feature = "devtools")]
+fn session_connection(state: &RendererDevToolsAgentState) -> RendererInspectorSessionConnection {
+    RendererInspectorSessionConnection::new(
         state.isolate_backend.clone(),
         state.context_group_id,
         state.token,

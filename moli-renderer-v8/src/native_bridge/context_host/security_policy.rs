@@ -822,6 +822,7 @@ impl PageScriptHost {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_connect_csp_allows_for_owner(
         &self,
         owner: OwnerDispatchScope,

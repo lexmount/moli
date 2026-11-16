@@ -71,6 +71,7 @@ impl<C, S> RendererCommandResponseAuthority<C, S> {
         Self::new(Destination::Adapter(tx))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn session() -> Self {
         Self::new(Destination::Session(None))
     }
@@ -185,6 +186,7 @@ impl<C, S> RendererCommandResponseLease<C, S> {
         tx.send(completion)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn take_session_response_settlement_receiver(&self) -> Option<oneshot::Receiver<S>> {
         let mut state = self.lifetime.authority.state.lock();
         if state.active_lease_id != Some(self.lifetime.lease_id) {
@@ -198,6 +200,7 @@ impl<C, S> RendererCommandResponseLease<C, S> {
         Some(receiver)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn claim_session(&self) -> Result<Option<oneshot::Sender<S>>, ()> {
         let mut state = self.lifetime.authority.state.lock();
         if state.active_lease_id != Some(self.lifetime.lease_id)

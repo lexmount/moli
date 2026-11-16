@@ -955,6 +955,7 @@ async fn run_worker_pre_bootstrap_debugger_pause(
             return true;
         }
         match rx.recv().await {
+            Some(WorkerMessage::Start) => return true,
             Some(WorkerMessage::RunEnvironmentNotification) => {
                 if let Some(invalidation) = inspector_task_runner.claim_environment_for_owner() {
                     // Cache invalidation is control work, not a JS turn or a
@@ -2808,6 +2809,8 @@ async fn worker_main(
                     drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                 }
             }
+            // An external debugger may already have released bootstrap.
+            WorkerLoopWake::Message(Some(WorkerMessage::Start)) => {}
             WorkerLoopWake::Message(Some(WorkerMessage::RunEnvironmentNotification)) => {
                 if let Some(invalidation) = inspector_task_runner.claim_environment_for_owner() {
                     invalidation.notify_isolate(worker_isolate.worker_isolate_mut());

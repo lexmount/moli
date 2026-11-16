@@ -1,15 +1,19 @@
+#[cfg(feature = "devtools")]
 use moli_fetch::{
     Request, RequestCacheMode, RequestCredentialsMode, RequestMode, RequestRedirectMode,
 };
+#[cfg(feature = "devtools")]
 use url::Url;
 
 use super::ScriptVm;
+#[cfg(feature = "devtools")]
 use crate::{
     native_bridge::OwnerDispatchScope,
     network::{RendererNetworkResourceLoadPreparation, RendererPreparedNetworkResourceLoad},
 };
 
 impl ScriptVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn prepare_devtools_network_resource_load(
         &self,
         frame_id: &str,

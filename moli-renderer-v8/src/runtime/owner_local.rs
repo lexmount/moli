@@ -142,6 +142,7 @@ pub struct RendererPageHandle {
 
 /// Revocable DevTools command destination for the exact admitted agent. It
 /// carries no Page close authority and cannot follow a replacement Document.
+#[cfg(feature = "devtools")]
 pub struct RendererPageProtocolCommandTarget {
     token: RendererPageToken,
     agent: RendererDevToolsAgentToken,
@@ -149,6 +150,7 @@ pub struct RendererPageProtocolCommandTarget {
     dialogs: RendererJavaScriptDialogBroker,
 }
 
+#[cfg(feature = "devtools")]
 impl RendererPageProtocolCommandTarget {
     pub fn enqueue(
         self,
@@ -198,6 +200,7 @@ pub struct RendererDocumentCommandTarget {
 /// This deliberately grants no Document query or request-settlement access.
 #[derive(Clone, Debug)]
 pub enum RendererPageRequestPolicyUpdate {
+    #[cfg(feature = "devtools")]
     FetchInterception {
         classes: crate::SubresourceInterceptionClasses,
     },
@@ -207,6 +210,7 @@ pub enum RendererPageRequestPolicyUpdate {
 impl RendererPageRequestPolicyUpdate {
     pub(super) fn into_command(self) -> RendererPageCommand {
         match self {
+            #[cfg(feature = "devtools")]
             Self::FetchInterception { classes } => {
                 RendererPageCommand::SetFetchSubresourceInterception { classes }
             }
@@ -258,6 +262,7 @@ impl RendererPageCommandPending {
 
 enum RendererPageCommandPendingDispatch {
     Owner(oneshot::Receiver<anyhow::Result<RendererOwnerReply>>),
+    #[cfg(feature = "devtools")]
     InspectorMain(Box<RendererRuntimeInspectorMainCommandRoute>),
 }
 
@@ -269,6 +274,7 @@ pub struct RendererPageTestingHandle {
 }
 
 #[must_use = "the owner detach command must retain this guard until it drops the V8 session"]
+#[cfg(feature = "devtools")]
 pub struct RendererRuntimeInspectorSessionDetachGuard {
     inspector_pause_bridge: Option<crate::devtools::pause::RendererInspectorPauseBridge>,
     pending_detach: Option<(
@@ -278,6 +284,7 @@ pub struct RendererRuntimeInspectorSessionDetachGuard {
     )>,
 }
 
+#[cfg(feature = "devtools")]
 impl RendererRuntimeInspectorSessionDetachGuard {
     fn new(
         inspector_pause_bridge: crate::devtools::pause::RendererInspectorPauseBridge,
@@ -300,6 +307,7 @@ impl RendererRuntimeInspectorSessionDetachGuard {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for RendererRuntimeInspectorSessionDetachGuard {
     fn drop(&mut self) {
         if let Some((target, _agent_token, _session)) = self.pending_detach.take() {
@@ -321,6 +329,7 @@ impl RendererPageHandle {
             .expect("renderer page handle should remain open while in use")
     }
 
+    #[cfg(feature = "devtools")]
     pub fn protocol_command_target(&self) -> RendererPageProtocolCommandTarget {
         RendererPageProtocolCommandTarget {
             token: self.token(),
@@ -363,6 +372,7 @@ impl RendererPageHandle {
     /// Applies the terminal `Page.crash` IO control without entering either
     /// ordinary DevTools command lane.
     #[doc(hidden)]
+    #[cfg(feature = "devtools")]
     pub fn crash_devtools_target_from_io(&self) {
         self.devtools_target.crash_from_io();
     }
@@ -409,6 +419,7 @@ impl RendererPageHandle {
         self.javascript_dialog_broker.take_pending()
     }
 
+    #[cfg(feature = "devtools")]
     pub fn enqueue_runtime_inspector_io_command(
         &self,
         envelope: RendererInspectorCommandEnvelope,
@@ -420,6 +431,7 @@ impl RendererPageHandle {
     }
 
     #[doc(hidden)]
+    #[cfg(feature = "devtools")]
     pub fn enqueue_performance_get_metrics_io_command(
         &self,
         attachment: Option<RendererAgentAttachmentId>,
@@ -438,6 +450,7 @@ impl RendererPageHandle {
     }
 
     #[doc(hidden)]
+    #[cfg(feature = "devtools")]
     pub fn enqueue_performance_get_metrics_io_command_with_response(
         &self,
         attachment: RendererAgentAttachmentId,
@@ -464,6 +477,7 @@ impl RendererPageHandle {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn enqueue_runtime_inspector_main_command(
         &self,
         envelope: RendererInspectorCommandEnvelope,
@@ -510,6 +524,7 @@ impl RendererPageHandle {
     /// Enqueues the DevTools IO-agent script policy without borrowing the
     /// owner-resident `PageVm` that may currently be executing JavaScript.
     #[doc(hidden)]
+    #[cfg(feature = "devtools")]
     pub fn enqueue_set_script_execution_disabled_io_command(
         &self,
         attachment: Option<RendererAgentAttachmentId>,
@@ -531,6 +546,7 @@ impl RendererPageHandle {
     }
 
     #[doc(hidden)]
+    #[cfg(feature = "devtools")]
     pub fn enqueue_set_script_execution_disabled_io_command_with_response(
         &self,
         attachment: RendererAgentAttachmentId,
@@ -568,6 +584,7 @@ impl RendererPageHandle {
     /// owner-only cleanup whose reply is deliberately detached. The retained
     /// guard also releases a nested debugger loop and holds any replacement
     /// attachment's commands until cleanup reaches the owner.
+    #[cfg(feature = "devtools")]
     pub fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -646,6 +663,8 @@ impl RendererPageHandle {
         route_protocol_main_receiver: bool,
         inspector_session_id: Option<String>,
     ) -> anyhow::Result<RendererPageCommandPending> {
+        #[cfg(not(feature = "devtools"))]
+        let _ = (route_protocol_main_receiver, inspector_session_id);
         let javascript_dialog_watch = command
             .interruptible_by_javascript_dialog()
             .then(|| self.javascript_dialog_broker.watch());
@@ -659,6 +678,7 @@ impl RendererPageHandle {
                 stage = "page_handle_command_dispatch",
             );
         }
+        #[cfg(feature = "devtools")]
         if route_protocol_main_receiver {
             let route = self
                 .devtools_target
@@ -676,6 +696,7 @@ impl RendererPageHandle {
             });
         }
         let command = match command {
+            #[cfg(feature = "devtools")]
             RendererPageCommand::Inspector(envelope) => {
                 let route = self.devtools_target.main_ref().enqueue_owner_command(
                     self.token(),
@@ -852,6 +873,7 @@ impl RendererPageCommandPending {
                         )),
                     }
                 }
+                #[cfg(feature = "devtools")]
                 RendererPageCommandPendingDispatch::InspectorMain(route) => {
                     match route.wait_for_completion().await? {
                         RendererRuntimeInspectorMainCommandCompletion::Owner(output) => Ok(*output),

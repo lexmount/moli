@@ -1,20 +1,23 @@
+#[cfg(feature = "devtools")]
 use crate::runtime::WorkerInspectorError;
+#[cfg(feature = "devtools")]
 use anyhow::Result;
 use std::collections::{HashMap, hash_map::Entry};
 
 use parking_lot::Mutex;
 use url::Url;
 
-use crate::{
-    page_task_queue::RendererPageServiceWorkerTaskSender,
-    runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender},
-    service_worker_runtime::{
-        ServiceWorkerClientFrameType, ServiceWorkerClientId, ServiceWorkerRegistrationId,
-        ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender, ServiceWorkerVersionId,
-    },
-    window_document_identity::WindowDocumentOwner,
-    worker_owner_wake::WorkerOwnerWakeRoutes,
+use crate::page_task_queue::RendererPageServiceWorkerTaskSender;
+#[cfg(feature = "devtools")]
+use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
+use crate::service_worker_runtime::{
+    ServiceWorkerClientFrameType, ServiceWorkerClientId, ServiceWorkerRuntimeOwnerWake,
+    ServiceWorkerRuntimeOwnerWakeSender,
 };
+#[cfg(feature = "devtools")]
+use crate::service_worker_runtime::{ServiceWorkerRegistrationId, ServiceWorkerVersionId};
+use crate::window_document_identity::WindowDocumentOwner;
+use crate::worker_owner_wake::WorkerOwnerWakeRoutes;
 
 use super::RendererBrowserContextRuntime;
 
@@ -34,8 +37,11 @@ enum LazyServiceWorkerRuntimeState {
     Deferred {
         owner_wake_senders: WorkerOwnerWakeRoutes<ServiceWorkerRuntimeOwnerWake>,
         window_clients: HashMap<ServiceWorkerClientId, DeferredServiceWorkerWindowClient>,
+        #[cfg(feature = "devtools")]
         force_update_on_page_load: bool,
+        #[cfg(feature = "devtools")]
         pause_new_workers_on_start: bool,
+        #[cfg(feature = "devtools")]
         related_pause_on_start_policies: Vec<(u64, u64, String, String)>,
     },
     Live(crate::service_worker_runtime::ServiceWorkerRuntimeService),
@@ -69,8 +75,11 @@ impl LazyServiceWorkerRuntime {
             state: Mutex::new(LazyServiceWorkerRuntimeState::Deferred {
                 owner_wake_senders: WorkerOwnerWakeRoutes::default(),
                 window_clients: HashMap::new(),
+                #[cfg(feature = "devtools")]
                 force_update_on_page_load: false,
+                #[cfg(feature = "devtools")]
                 pause_new_workers_on_start: false,
+                #[cfg(feature = "devtools")]
                 related_pause_on_start_policies: Vec::new(),
             }),
             resource_store,
@@ -90,8 +99,11 @@ impl LazyServiceWorkerRuntime {
         let LazyServiceWorkerRuntimeState::Deferred {
             owner_wake_senders,
             window_clients,
+            #[cfg(feature = "devtools")]
             force_update_on_page_load,
+            #[cfg(feature = "devtools")]
             pause_new_workers_on_start,
+            #[cfg(feature = "devtools")]
             related_pause_on_start_policies,
         } = &mut *state
         else {
@@ -99,8 +111,11 @@ impl LazyServiceWorkerRuntime {
         };
         let owner_wake_senders = std::mem::take(owner_wake_senders);
         let window_clients = std::mem::take(window_clients);
+        #[cfg(feature = "devtools")]
         let force_update_on_page_load = *force_update_on_page_load;
+        #[cfg(feature = "devtools")]
         let pause_new_workers_on_start = *pause_new_workers_on_start;
+        #[cfg(feature = "devtools")]
         let related_pause_on_start_policies = std::mem::take(related_pause_on_start_policies);
         let service = crate::service_worker_runtime::
             new_service_worker_runtime_service_with_resource_store_and_browser_resource_runtime_binding(
@@ -114,8 +129,11 @@ impl LazyServiceWorkerRuntime {
         for sender in owner_wake_senders.into_senders() {
             service.add_owner_wake_sender(sender);
         }
+        #[cfg(feature = "devtools")]
         service.set_force_update_on_page_load_for_devtools(force_update_on_page_load);
+        #[cfg(feature = "devtools")]
         service.set_pause_new_workers_on_start_for_devtools(pause_new_workers_on_start);
+        #[cfg(feature = "devtools")]
         service.set_related_pause_on_start_policies_for_devtools(related_pause_on_start_policies);
         for (client_id, client) in window_clients {
             let inserted = service.register_allocated_client_with_storage_key(
@@ -285,23 +303,29 @@ impl LazyServiceWorkerRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn set_force_update_on_page_load(&self, force_update: bool) {
         let mut state = self.state.lock();
         match &mut *state {
             LazyServiceWorkerRuntimeState::Deferred {
+                #[cfg(feature = "devtools")]
                 force_update_on_page_load,
                 ..
             } => *force_update_on_page_load = force_update,
-            LazyServiceWorkerRuntimeState::Live(service) => {
+            LazyServiceWorkerRuntimeState::Live(service) =>
+            {
+                #[cfg(feature = "devtools")]
                 service.set_force_update_on_page_load_for_devtools(force_update)
             }
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn force_update_on_page_load(&self) -> bool {
         let state = self.state.lock();
         match &*state {
             LazyServiceWorkerRuntimeState::Deferred {
+                #[cfg(feature = "devtools")]
                 force_update_on_page_load,
                 ..
             } => *force_update_on_page_load,
@@ -311,23 +335,29 @@ impl LazyServiceWorkerRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn set_pause_new_workers_on_start(&self, pause: bool) {
         let mut state = self.state.lock();
         match &mut *state {
             LazyServiceWorkerRuntimeState::Deferred {
+                #[cfg(feature = "devtools")]
                 pause_new_workers_on_start,
                 ..
             } => *pause_new_workers_on_start = pause,
-            LazyServiceWorkerRuntimeState::Live(service) => {
+            LazyServiceWorkerRuntimeState::Live(service) =>
+            {
+                #[cfg(feature = "devtools")]
                 service.set_pause_new_workers_on_start_for_devtools(pause)
             }
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn pause_new_workers_on_start(&self) -> bool {
         let state = self.state.lock();
         match &*state {
             LazyServiceWorkerRuntimeState::Deferred {
+                #[cfg(feature = "devtools")]
                 pause_new_workers_on_start,
                 ..
             } => *pause_new_workers_on_start,
@@ -337,6 +367,7 @@ impl LazyServiceWorkerRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn set_related_pause_on_start_policies(
         &self,
         policies: Vec<(u64, u64, String, String)>,
@@ -344,10 +375,13 @@ impl LazyServiceWorkerRuntime {
         let mut state = self.state.lock();
         match &mut *state {
             LazyServiceWorkerRuntimeState::Deferred {
+                #[cfg(feature = "devtools")]
                 related_pause_on_start_policies,
                 ..
             } => *related_pause_on_start_policies = policies,
-            LazyServiceWorkerRuntimeState::Live(service) => {
+            LazyServiceWorkerRuntimeState::Live(service) =>
+            {
+                #[cfg(feature = "devtools")]
                 service.set_related_pause_on_start_policies_for_devtools(policies)
             }
         }
@@ -379,6 +413,7 @@ impl RendererBrowserContextRuntime {
             .map_or(0, |runtime| runtime.drain_service_lane())
     }
 
+    #[cfg(feature = "devtools")]
     pub fn attach_service_worker_runtime_inspector_session(
         &self,
         version_id: u64,
@@ -393,6 +428,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_service_worker_runtime_protocol_message(
         &self,
         version_id: u64,
@@ -411,6 +447,7 @@ impl RendererBrowserContextRuntime {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_service_worker_runtime_protocol_message_with_deferred_response(
         &self,
         version_id: u64,
@@ -431,6 +468,7 @@ impl RendererBrowserContextRuntime {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_service_worker_runtime_protocol_message_with_devtools_session_response(
         &self,
         version_id: u64,
@@ -451,6 +489,7 @@ impl RendererBrowserContextRuntime {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub fn detach_service_worker_runtime_inspector_session(
         &self,
         version_id: u64,
@@ -465,6 +504,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn unregister_service_worker_scope_for_devtools(
         &self,
         scope_url: &url::Url,
@@ -475,6 +515,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_service_worker_for_devtools(&self, scope_url: &url::Url) -> Result<bool, String> {
         self.service_worker_runtime_for_existing_registration()
             .map_or(Ok(false), |runtime| {
@@ -482,6 +523,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn stop_service_worker_for_devtools(&self, version_id: u64) -> Result<bool, String> {
         self.service_worker_runtime_for_existing_registration()
             .map_or(Ok(false), |runtime| {
@@ -491,11 +533,13 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn stop_all_service_workers_for_devtools(&self) -> Result<usize, String> {
         self.service_worker_runtime_for_existing_registration()
             .map_or(Ok(0), |runtime| runtime.devtools_stop_all_workers())
     }
 
+    #[cfg(feature = "devtools")]
     pub fn skip_waiting_service_worker_for_devtools(
         &self,
         scope_url: &url::Url,
@@ -506,6 +550,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn update_service_worker_registration_for_devtools(
         &self,
         scope_url: &url::Url,
@@ -516,6 +561,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn set_service_worker_force_update_on_page_load_for_devtools(&self, force_update: bool) {
         self.inner
             .service_worker_runtime
@@ -528,6 +574,7 @@ impl RendererBrowserContextRuntime {
             .force_update_on_page_load()
     }
 
+    #[cfg(feature = "devtools")]
     pub fn controlled_service_worker_window_client_urls_for_devtools(
         &self,
         registration_id: u64,
@@ -542,6 +589,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn controlled_service_worker_window_client_ids_for_devtools(
         &self,
         registration_id: u64,
@@ -556,12 +604,14 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn set_service_worker_pause_on_start_for_devtools(&self, pause: bool) {
         self.inner
             .service_worker_runtime
             .set_pause_new_workers_on_start(pause);
     }
 
+    #[cfg(feature = "devtools")]
     pub fn set_service_worker_related_pause_on_start_policies_for_devtools(
         &self,
         policies: Vec<(u64, u64, String, String)>,
@@ -571,6 +621,7 @@ impl RendererBrowserContextRuntime {
             .set_related_pause_on_start_policies(policies);
     }
 
+    #[cfg(feature = "devtools")]
     pub fn set_service_worker_pause_on_start_for_version_for_devtools(
         &self,
         version_id: u64,
@@ -591,6 +642,7 @@ impl RendererBrowserContextRuntime {
             .pause_new_workers_on_start()
     }
 
+    #[cfg(feature = "devtools")]
     pub fn set_service_worker_devtools_attached(&self, version_id: u64, attached: bool) {
         if let Some(runtime) = self.service_worker_runtime_for_existing_registration() {
             runtime.set_devtools_attached_for_version(
@@ -600,6 +652,7 @@ impl RendererBrowserContextRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn run_service_worker_if_waiting_for_debugger_for_devtools(&self, version_id: u64) -> bool {
         self.service_worker_runtime_for_existing_registration()
             .is_some_and(|runtime| {
@@ -609,6 +662,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn release_all_service_workers_waiting_for_debugger_for_devtools(&self) -> usize {
         self.service_worker_runtime_for_existing_registration()
             .map_or(0, |runtime| {
@@ -616,6 +670,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn deliver_push_message_for_devtools(
         &self,
         origin: &url::Url,
@@ -632,6 +687,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn dispatch_sync_event_for_devtools(
         &self,
         origin: &url::Url,
@@ -650,6 +706,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn dispatch_periodic_sync_event_for_devtools(
         &self,
         origin: &url::Url,
@@ -712,5 +769,15 @@ mod owner_wake_retirement_tests {
             1,
             "closed admission must not reintroduce stale routes"
         );
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl LazyServiceWorkerRuntime {
+    pub(super) fn force_update_on_page_load(&self) -> bool {
+        false
+    }
+    pub(super) fn pause_new_workers_on_start(&self) -> bool {
+        false
     }
 }

@@ -1,7 +1,11 @@
 use anyhow::Result;
 
-use super::{CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnOutput};
-use crate::renderer::{RendererPageCommand, RendererPageReply};
+#[cfg(feature = "devtools")]
+use super::{CompletedPageCommand, RendererCommandTurnOutput};
+use super::{Page, PendingPageCommand};
+use crate::renderer::RendererPageCommand;
+#[cfg(feature = "devtools")]
+use crate::renderer::RendererPageReply;
 
 impl Page {
     pub fn start_child_frame_navigation_to_url(
@@ -15,6 +19,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_child_frame_navigation_to_url(
         &mut self,
         completion: CompletedPageCommand,
@@ -23,6 +28,7 @@ impl Page {
         Ok(completed)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_child_frame_navigation_to_url_command_turn(
         &mut self,
         completion: CompletedPageCommand,

@@ -36,35 +36,49 @@ use crate::script_vm::{PostParseLifecycleAdvance, PostParsePageOwnedTask, Render
 use crate::script_vm::{PreparedScriptExecutionOutcome, RendererDocumentIsolateBootstrap};
 use crate::types::ScriptErrorConstructorKind;
 use crate::types::ScriptSkipReason;
+#[cfg(feature = "devtools")]
+use moli_page_types::V8InspectorSessionAttach;
 use moli_page_types::{
     ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType, InspectorIssueSnapshot,
     InspectorSourceCodeLocationSnapshot, QuirksModeIssueSnapshot, ScriptObservableOutput,
-    ScriptObservableOutputItem, V8InspectorSessionAttach,
+    ScriptObservableOutputItem,
 };
-use std::{
-    collections::{BTreeMap, HashMap},
-    marker::PhantomData,
-    ptr::NonNull,
-    rc::Rc,
-    sync::Arc,
-    time::Instant,
-};
+#[cfg(feature = "devtools")]
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::ptr::NonNull;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Instant;
 use url::Url;
 
 mod auxiliary_page;
 pub(crate) mod backend_node_registry;
 mod command_turn_output;
+#[cfg(feature = "devtools")]
 mod css_agent_state;
 mod document_lifecycle_turn;
+#[cfg(feature = "devtools")]
 pub(crate) mod dom_agent_state;
+#[cfg(not(feature = "devtools"))]
+#[path = "dom_agent_state_disabled.rs"]
+pub(crate) mod dom_agent_state;
+#[cfg(feature = "devtools")]
 mod dom_mutations;
+#[cfg(feature = "devtools")]
 mod dom_search;
 #[cfg(feature = "ace-protocol")]
 mod extension_host;
 mod followed_navigation;
+#[cfg(feature = "devtools")]
 mod frontend_node_bindings;
 mod javascript_navigation_lifecycle;
 mod main_document_lifecycle_completion;
+#[cfg(feature = "devtools")]
+mod page_action_window;
+#[cfg(not(feature = "devtools"))]
+#[path = "page_action_window_disabled.rs"]
 mod page_action_window;
 mod page_broadcast_channel_delivery;
 mod page_callback_task_completion;
@@ -161,6 +175,7 @@ mod page_task_checkpoint;
 mod page_task_completion;
 
 use backend_node_registry::new_shared_renderer_backend_node_registry;
+#[cfg(feature = "devtools")]
 use css_agent_state::RendererCssAgentSessionState;
 use dom_agent_state::RendererDomAgentState;
 pub(in crate::runtime) use followed_navigation::{
@@ -1103,6 +1118,7 @@ pub(crate) struct PageVmEnvConfig {
 }
 
 impl PageVmEnvConfig {
+    #[cfg(feature = "devtools")]
     fn inspector_protocol_configurations(
         &self,
     ) -> BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration> {
@@ -1664,8 +1680,10 @@ pub(crate) struct PageVm {
         Arc<ScriptExecutionReport>,
     )>,
     dom_agent_state: RendererDomAgentState,
+    #[cfg(feature = "devtools")]
     pending_dom_mutation_event_batches: Vec<RendererDomMutationEventBatch>,
     last_published_document_title: String,
+    #[cfg(feature = "devtools")]
     css_agent_sessions: HashMap<Option<String>, RendererCssAgentSessionState>,
     // Page-owned task queue lives on the page VM itself so parse-time turns and later lifecycle
     // turns share one owner-lane carrier. The runtime still uses it in narrow slices today, but
@@ -1690,6 +1708,7 @@ pub(crate) struct PageVm {
     pub(super) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub(super) document_start_scripts: Vec<DocumentStartScript>,
     pub(super) runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
+    #[cfg(feature = "devtools")]
     pub(super) runtime_inspector_protocol_configurations:
         BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration>,
     pub(super) extra_http_headers: moli_fetch::RequestHeaders,
@@ -1876,6 +1895,7 @@ impl PageVm {
     /// Nested Main dispatch cannot end the suspended outer command scope.
     /// Drain its ready prefix, materialize native DOM facts, and use the same
     /// Inspector-state resolution as ordinary owner settlement before replying.
+    #[cfg(feature = "devtools")]
     pub(super) fn publish_nested_command_output_prefix(
         &mut self,
     ) -> Option<super::RendererOutputFence> {
@@ -2437,6 +2457,7 @@ impl PageVm {
             restores.is_empty() || is_on_named_owner_execution_lane_for(&self.local_executor),
             "runtime inspector session restore must execute on the matching named owner lane"
         );
+        #[cfg(feature = "devtools")]
         for restore in restores {
             self.vm_mut().initialize_inspector_session_after_attach(
                 restore.inspector_session_id.as_deref(),
@@ -2452,6 +2473,7 @@ impl PageVm {
         Ok(())
     }
 
+    #[cfg(feature = "devtools")]
     fn runtime_inspector_session_restore_snapshots(
         &self,
     ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
@@ -4025,6 +4047,7 @@ impl PageVm {
     /// A debugger callback already holds the document isolate. The nested
     /// handler can capture native metadata/reports, but must not read JS
     /// location objects or snapshot globals through another isolate borrow.
+    #[cfg(feature = "devtools")]
     pub(super) fn capture_nested_page_state(&mut self) -> Result<PageVmStateCapture> {
         self.capture_page_state_with_policy(super::RendererPageStateCapturePolicy::ProtocolTurn)
     }
@@ -4505,8 +4528,10 @@ impl PageVm {
             report,
             report_snapshot_cache: None,
             dom_agent_state,
+            #[cfg(feature = "devtools")]
             pending_dom_mutation_event_batches: Vec::new(),
             last_published_document_title: String::new(),
+            #[cfg(feature = "devtools")]
             css_agent_sessions: HashMap::new(),
             page_task_queue,
             page_action_window: page_action_window::RendererPageActionWindow::default(),
@@ -4518,6 +4543,7 @@ impl PageVm {
             permission_overrides: env.permission_overrides.clone(),
             document_start_scripts: env.document_start_scripts.clone(),
             runtime_bindings: env.runtime_bindings.clone(),
+            #[cfg(feature = "devtools")]
             runtime_inspector_protocol_configurations: env.inspector_protocol_configurations(),
             extra_http_headers: env.extra_http_headers.clone(),
             document_settings: env.document_settings.clone(),
@@ -4911,6 +4937,7 @@ impl PageVm {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn configure_document_dom_agent_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4924,6 +4951,7 @@ impl PageVm {
         );
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_dom_agent_includes_whitespace(
         &self,
         inspector_session_id: Option<&str>,
@@ -4932,6 +4960,7 @@ impl PageVm {
             .includes_whitespace(inspector_session_id, self.current_dom_agent_document_id())
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn discard_document_frontend_bindings(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4942,6 +4971,7 @@ impl PageVm {
         self.sync_devtools_dom_mutation_recording_interest();
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::runtime::page_vm) fn register_document_search_results(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4977,6 +5007,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_frontend_node_id_for_backend_node_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4990,6 +5021,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_frontend_node_id_for_backend_node_id_in_whitespace_projection(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5007,6 +5039,7 @@ impl PageVm {
         self.document_frontend_node_id_for_backend_node_id(inspector_session_id, backend_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_node_is_published(
         &self,
         inspector_session_id: Option<&str>,
@@ -5019,6 +5052,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn existing_document_frontend_node_id(
         &self,
         inspector_session_id: Option<&str>,
@@ -5032,6 +5066,7 @@ impl PageVm {
             )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_frontend_node_binding(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5046,6 +5081,7 @@ impl PageVm {
     }
 
     /// Resolve an Inspector input without exposing an internal-only binding.
+    #[cfg(feature = "devtools")]
     pub(super) fn published_document_frontend_node_binding(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5061,6 +5097,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn register_document_bidi_node_binding(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5076,6 +5113,7 @@ impl PageVm {
         );
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_bidi_node_binding(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5086,6 +5124,7 @@ impl PageVm {
             .bidi_node_binding(inspector_session_id, document_id, shared_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_bidi_node_shared_id_for_backend_node_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5100,6 +5139,7 @@ impl PageVm {
             )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_search_results(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5117,6 +5157,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn discard_document_search_results(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5127,6 +5168,7 @@ impl PageVm {
             .discard_search_results(inspector_session_id, document_id, search_id);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn set_document_node_stack_traces_enabled(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5140,6 +5182,7 @@ impl PageVm {
         );
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn document_node_stack_trace(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -5178,6 +5221,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn bind_file_chooser_activation_backend_node_id(
         &mut self,
         activation: &mut crate::RendererPendingFileChooserActivation,
@@ -5350,3 +5394,32 @@ pub(crate) fn deferred_page_vm_drop_pending_count_for_testing() -> usize {
 pub(super) mod test_support;
 #[cfg(test)]
 mod tests;
+
+#[cfg(not(feature = "devtools"))]
+impl PageVm {
+    pub(super) fn absorb_pending_dom_mutations_into_output_journal(&mut self) {}
+    pub(crate) fn flush_pending_dom_mutation_event_batches(&mut self) {}
+    pub(super) fn sync_devtools_dom_mutation_recording_interest(&self) {}
+    pub(super) fn prepare_dom_agent_for_main_document_dom_content_loaded(
+        &mut self,
+        document: RendererDocumentLifecycleIdentity,
+    ) -> bool {
+        self.document_lifecycle.identity() == document
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl PageVm {
+    pub(super) fn document_dom_agent_includes_whitespace(&self, _session: Option<&str>) -> bool {
+        false
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl PageVm {
+    fn runtime_inspector_session_restore_snapshots(
+        &self,
+    ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
+        Vec::new()
+    }
+}

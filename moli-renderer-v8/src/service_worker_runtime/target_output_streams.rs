@@ -92,6 +92,7 @@ impl ServiceWorkerTargetOutputStreams {
         journal.publish_record(Self::record(event));
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn journal(
         &self,
         version_id: ServiceWorkerVersionId,

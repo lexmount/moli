@@ -1,8 +1,10 @@
-use super::{CompletedPageCommand, Page, PendingPageCommand};
-use crate::renderer::{
-    RendererAccessibilityPayloadsForObjectId, RendererDomNodeReference, RendererPageCommand,
-    RendererPageReply,
-};
+use super::Page;
+#[cfg(feature = "devtools")]
+use super::{CompletedPageCommand, PendingPageCommand};
+#[cfg(feature = "devtools")]
+use crate::renderer::{RendererAccessibilityPayloadsForObjectId, RendererDomNodeReference};
+use crate::renderer::{RendererPageCommand, RendererPageReply};
+#[cfg(feature = "devtools")]
 use serde_json::Value;
 
 impl Page {
@@ -24,6 +26,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_tree_payloads_for_document(
         &self,
         max_depth: Option<i32>,
@@ -33,6 +36,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_accessibility_tree_payloads(
         &mut self,
         completion: CompletedPageCommand,
@@ -42,6 +46,7 @@ impl Page {
             .unwrap_or_default())
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_accessibility_tree_payloads_optional(
         &mut self,
         completion: CompletedPageCommand,
@@ -55,6 +60,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn accessibility_tree_payloads_for_document_async(
         &mut self,
         max_depth: Option<i32>,
@@ -64,12 +70,14 @@ impl Page {
         self.finish_accessibility_tree_payloads(completion)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_node_payload_for_document(
         &self,
     ) -> anyhow::Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::AccessibilityNodePayloadForDocument)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_accessibility_node_payload(
         &mut self,
         completion: CompletedPageCommand,
@@ -83,6 +91,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_tree_payloads_for_node(
         &self,
         reference: RendererDomNodeReference,
@@ -94,6 +103,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_tree_payloads_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -105,6 +115,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_node_payload_for_node(
         &self,
         reference: RendererDomNodeReference,
@@ -112,6 +123,7 @@ impl Page {
         self.start_page_command(RendererPageCommand::AccessibilityNodePayloadForNode { reference })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_node_payload_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -121,6 +133,7 @@ impl Page {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_node_and_ancestor_payloads_for_node(
         &self,
         reference: RendererDomNodeReference,
@@ -130,6 +143,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_node_and_ancestor_payloads_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -139,6 +153,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_child_node_payloads_for_node(
         &self,
         reference: RendererDomNodeReference,
@@ -148,6 +163,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_child_node_payloads_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -157,6 +173,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_partial_tree_payloads_for_node(
         &self,
         reference: RendererDomNodeReference,
@@ -170,6 +187,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_partial_tree_payloads_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -181,6 +199,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_accessibility_payloads_for_backend_node_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -194,6 +213,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_tree_payloads_for_object_id(
         &self,
         inspector_session_id: Option<String>,
@@ -207,6 +227,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_node_and_ancestor_payloads_for_object_id(
         &self,
         inspector_session_id: Option<String>,
@@ -220,6 +241,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_accessibility_partial_tree_payloads_for_object_id(
         &self,
         inspector_session_id: Option<String>,
@@ -235,6 +257,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_accessibility_payloads_for_object_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -248,6 +271,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn child_frame_accessibility_tree_payloads_async(
         &mut self,
         frame_id: &str,
@@ -258,6 +282,7 @@ impl Page {
         self.finish_child_frame_accessibility_tree_payloads(completion, max_depth)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_child_frame_accessibility_tree_payloads(
         &self,
         frame_id: &str,
@@ -271,6 +296,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_child_frame_accessibility_tree_payloads(
         &mut self,
         completion: CompletedPageCommand,
@@ -281,6 +307,7 @@ impl Page {
             .and_then(|payloads| payloads.payloads))
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_child_frame_accessibility_payloads(
         &mut self,
         completion: CompletedPageCommand,
@@ -294,6 +321,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_child_frame_accessibility_node_payload(
         &self,
         frame_id: &str,
@@ -303,6 +331,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_child_frame_accessibility_node_payload(
         &mut self,
         completion: CompletedPageCommand,

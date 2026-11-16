@@ -1,7 +1,13 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
+#[cfg(feature = "devtools")]
+use anyhow::bail;
 
-use super::{CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnOutput};
-use crate::renderer::{RendererPageCommand, RendererPageReply};
+#[cfg(feature = "devtools")]
+use super::{CompletedPageCommand, RendererCommandTurnOutput};
+use super::{Page, PendingPageCommand};
+use crate::renderer::RendererPageCommand;
+#[cfg(feature = "devtools")]
+use crate::renderer::RendererPageReply;
 
 impl Page {
     pub fn start_top_level_same_document_navigation(
@@ -22,6 +28,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_top_level_same_document_navigation_command_turn(
         &mut self,
         completion: CompletedPageCommand,

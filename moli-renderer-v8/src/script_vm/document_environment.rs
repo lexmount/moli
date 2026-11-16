@@ -176,6 +176,7 @@ impl ScriptVm {
             .set_stored_runtime_bindings(bindings);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_inspector_session_runtime_bindings(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -185,6 +186,7 @@ impl ScriptVm {
             .set_runtime_bindings_for_session(inspector_session_id, bindings);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_session_runtime_bindings(
         &self,
         inspector_session_id: Option<&str>,
@@ -193,6 +195,7 @@ impl ScriptVm {
             .runtime_bindings_for_session(inspector_session_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn detach_runtime_inspector_session(
         &mut self,
         inspector_session_id: Option<&str>,

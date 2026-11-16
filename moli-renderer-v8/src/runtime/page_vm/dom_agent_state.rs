@@ -64,6 +64,7 @@ impl NodeCreationStackTraceStore {
         self.traces.insert(key, trace);
     }
 
+    #[cfg(feature = "devtools")]
     fn get_cloned(
         &self,
         key: &NodeCreationStackTraceKey,
@@ -116,6 +117,7 @@ impl RendererDomAgentState {
         op(state)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn discard_frontend_bindings(
         &self,
         inspector_session_id: Option<&str>,
@@ -132,6 +134,7 @@ impl RendererDomAgentState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_session(&self, inspector_session_id: Option<&str>) {
         self.inner
             .borrow_mut()
@@ -170,6 +173,7 @@ impl RendererDomAgentState {
         keys
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_include_whitespace(
         &self,
         inspector_session_id: Option<&str>,
@@ -384,6 +388,7 @@ impl RendererDomAgentState {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn register_bidi_node_binding(
         &self,
         inspector_session_id: Option<&str>,
@@ -396,6 +401,7 @@ impl RendererDomAgentState {
         });
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn bidi_node_binding(
         &self,
         inspector_session_id: Option<&str>,
@@ -407,6 +413,7 @@ impl RendererDomAgentState {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn bidi_node_shared_id_for_backend_node_id(
         &self,
         inspector_session_id: Option<&str>,
@@ -418,6 +425,7 @@ impl RendererDomAgentState {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn register_search_results(
         &self,
         inspector_session_id: Option<&str>,
@@ -429,6 +437,7 @@ impl RendererDomAgentState {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn search_results_slice(
         &self,
         inspector_session_id: Option<&str>,
@@ -442,6 +451,7 @@ impl RendererDomAgentState {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn discard_search_results(
         &self,
         inspector_session_id: Option<&str>,
@@ -453,6 +463,7 @@ impl RendererDomAgentState {
         });
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_node_stack_traces_enabled(
         &self,
         inspector_session_id: Option<&str>,
@@ -488,6 +499,7 @@ impl RendererDomAgentState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn node_creation_stack_trace(
         &self,
         inspector_session_id: Option<&str>,
@@ -608,12 +620,14 @@ impl RendererDomAgentSessionState {
             .has_backend_node_id(backend_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn register_bidi_node_binding(&mut self, shared_id: String, backend_node_id: u32) {
         self.bidi_node_shared_ids_by_backend_node_id
             .insert(backend_node_id, shared_id.clone());
         self.bidi_node_bindings.insert(shared_id, backend_node_id);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn bidi_node_binding(
         &self,
         shared_id: &str,
@@ -625,6 +639,7 @@ impl RendererDomAgentSessionState {
             .unwrap_or(crate::RendererDomBidiNodeBindingResolution::NotFound)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn bidi_node_shared_id_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -636,6 +651,7 @@ impl RendererDomAgentSessionState {
             .unwrap_or(crate::RendererDomBidiNodeSharedIdResolution::NotFound)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn register_search_results(
         &mut self,
         backend_node_ids: Vec<u32>,
@@ -651,10 +667,12 @@ impl RendererDomAgentSessionState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn discard_search_results(&mut self, search_id: &str) {
         self.search_results.remove(search_id);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn search_results_slice(
         &self,
         search_id: &str,

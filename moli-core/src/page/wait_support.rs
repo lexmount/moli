@@ -2,9 +2,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+#[cfg(feature = "devtools")]
+use super::RendererCommandTurnOutput;
 use super::RendererPageDiagnosticsSnapshot;
 use super::protocol_support::SubresourceResponseWaitCriteria;
-use super::{CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnOutput};
+use super::{CompletedPageCommand, Page, PendingPageCommand};
 use crate::{
     network::ResourceRequestClient,
     renderer::{RendererDocumentQuerySelectorNode, RendererPageCommand, RendererPageReply},
@@ -35,6 +37,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish_complete_child_frame_lifecycle_work_best_effort_command_turn(
         &mut self,
         completion: CompletedPageCommand,
