@@ -4,7 +4,7 @@ use crate::util::{get_private_value, throw_type_error};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-mod info;
+use moli_webapi::media_device_info as info;
 
 const MEDIA_DEVICES_ONDEVICECHANGE_SLOT: &str = "__moliMediaDevicesOndevicechange";
 

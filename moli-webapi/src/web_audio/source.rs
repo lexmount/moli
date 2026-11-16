@@ -4,8 +4,8 @@
 //! sources through the legacy oscillator fingerprint. PCM playback and timed
 //! `ended` dispatch still need a rendering backend.
 
-use super::super::media_queries::simple_object_event_set_handler;
 use super::*;
+use crate::event_target::simple_object_event_set_handler;
 
 const BUFFER: &str = "__moliBufferSourceBuffer";
 const BUFFER_SET: &str = "__moliBufferSourceBufferSet";
@@ -65,7 +65,7 @@ struct ConstantSourcePrototypeDeclaration {
     offset: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -85,7 +85,7 @@ pub(super) fn install<'s>(
     }
 }
 
-pub(super) fn initialize_scheduling<'s>(
+pub fn initialize_scheduling<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) {
@@ -200,7 +200,7 @@ fn constructor_context<'s>(
     context
 }
 
-pub(in crate::context_bootstrap) fn audio_buffer_source_constructor_callback<'s>(
+pub fn audio_buffer_source_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -227,7 +227,7 @@ pub(in crate::context_bootstrap) fn audio_buffer_source_constructor_callback<'s>
     rv.set(node.into());
 }
 
-pub(in crate::context_bootstrap) fn constant_source_constructor_callback<'s>(
+pub fn constant_source_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -307,7 +307,7 @@ fn initialize_constant_source<'s>(
     set_private_value(scope, node, OFFSET, param.into());
 }
 
-pub(super) fn create_buffer_source<'s>(
+pub fn create_buffer_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -319,7 +319,7 @@ pub(super) fn create_buffer_source<'s>(
     rv.set(node.into());
 }
 
-pub(super) fn create_constant_source<'s>(
+pub fn create_constant_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -536,7 +536,7 @@ fn onended_setter<'s>(
     simple_object_event_set_handler(scope, args.this(), "ended", ONENDED, args.get(0));
 }
 
-pub(super) fn needs_rendering_backend<'s>(
+pub fn needs_rendering_backend<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> bool {

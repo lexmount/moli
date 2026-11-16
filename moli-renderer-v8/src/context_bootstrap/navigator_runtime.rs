@@ -1,5 +1,5 @@
 mod clipboard;
-mod collections;
+use moli_webapi::navigator_collections as collections;
 mod credentials;
 mod gamepad;
 mod geolocation;

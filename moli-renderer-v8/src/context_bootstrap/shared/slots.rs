@@ -37,7 +37,7 @@ pub(in crate::context_bootstrap) const WINDOW_PARENT_SLOT: &str = "__moliWindowP
 pub(in crate::context_bootstrap) const WINDOW_TOP_SLOT: &str = "__moliWindowTop";
 pub(in crate::context_bootstrap) const WINDOW_FRAMES_SLOT: &str = "__moliWindowFrames";
 // Each SimpleEventTarget stores its own listener registry directly under this key.
-pub(crate) const SIMPLE_EVENT_TARGET_LISTENERS_SLOT: &str = "__moliEventTargetListeners";
+pub(crate) use moli_webapi::event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 pub(in crate::context_bootstrap) const DOM_IMPLEMENTATION_SINGLETON_SLOT: &str =
     "__moliDOMImplementationSingleton";
 pub(in crate::context_bootstrap) const URL_HREF_SLOT: &str = "__moliUrlHref";
@@ -115,8 +115,6 @@ pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_QUEUE_SLOT: &str =
     "__moliPerformanceObserverQueue";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES_SLOT: &str =
     "__moliPerformanceObserverSupportedEntryTypes";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_LIST_ENTRIES_SLOT: &str =
-    "__moliPerformanceEntryListEntries";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRIES_SLOT: &str = "__moliPerformanceEntries";
 pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_MEDIA_SLOT: &str =
     "__moliMediaQueryListMedia";

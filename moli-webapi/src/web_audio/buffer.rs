@@ -26,7 +26,7 @@ struct BufferPrototypeDeclaration {
     copy_to_channel: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -122,7 +122,7 @@ fn initialize_empty<'s>(
     );
 }
 
-pub(in crate::context_bootstrap) fn constructor<'s>(
+pub fn constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -152,7 +152,7 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     }
 }
 
-pub(super) fn create<'s>(
+pub fn create<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -179,17 +179,14 @@ pub(super) fn create<'s>(
 }
 
 fn new_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
-    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "AudioBuffer",
-    )
-    .expect("AudioBuffer prototype should exist");
+    let prototype = moli_v8_util::global_constructor_prototype(scope, "AudioBuffer")
+        .expect("AudioBuffer prototype should exist");
     let buffer = v8::Object::new(scope);
     let _ = buffer.set_prototype(scope, prototype.into());
     buffer
 }
 
-pub(super) fn rendered<'s>(
+pub fn rendered<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     length: usize,
     sample_rate: f64,
@@ -208,14 +205,11 @@ pub(super) fn rendered<'s>(
     buffer
 }
 
-pub(super) fn sample_rate<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    buffer: v8::Local<'s, v8::Object>,
-) -> f64 {
+pub fn sample_rate<'s>(scope: &mut v8::PinScope<'s, '_>, buffer: v8::Local<'s, v8::Object>) -> f64 {
     web_audio_number_slot(scope, buffer, SAMPLE_RATE).unwrap_or(0.0)
 }
 
-pub(super) fn channel_count<'s>(
+pub fn channel_count<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     buffer: v8::Local<'s, v8::Object>,
 ) -> u32 {
@@ -297,7 +291,7 @@ fn get_channel_data<'s>(
     rv.set(view.into());
 }
 
-pub(super) fn nullable_value<'s>(
+pub fn nullable_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,
@@ -315,7 +309,7 @@ pub(super) fn nullable_value<'s>(
 
 /// Snapshot content before detaching public views. Later writes through a new
 /// getChannelData view affect the buffer, not content already acquired by a node.
-pub(super) fn acquire<'s>(
+pub fn acquire<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     buffer: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Array> {
@@ -377,7 +371,7 @@ fn valid_channel<'s>(
     true
 }
 
-pub(super) fn float32_array_value<'s>(
+pub fn float32_array_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,

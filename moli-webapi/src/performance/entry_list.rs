@@ -1,6 +1,36 @@
 use super::*;
-use crate::util::{get_private_value, serialize_v8_iter_array};
-use crate::webidl;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::get_private_value;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList)]
+struct PerformanceObserverEntryListObjectDeclaration<'scope> {
+    #[webapi(slot = PERFORMANCE_ENTRY_LIST_ENTRIES_SLOT)]
+    entries: v8::Local<'scope, v8::Array>,
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList, enumerable, receiver)]
+struct PerformanceObserverEntryListTemplateMethodsDeclaration {
+    #[webapi(method, length = 0, callback = performance_entry_list_get_entries_callback)]
+    get_entries: (),
+
+    #[webapi(
+        method,
+        length = 1,
+        callback = performance_entry_list_get_entries_by_type_callback
+    )]
+    get_entries_by_type: (),
+
+    #[webapi(
+        method,
+        length = 1,
+        callback = performance_entry_list_get_entries_by_name_callback
+    )]
+    get_entries_by_name: (),
+}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PerformanceObserverEntryList.getEntriesByType")]
@@ -17,7 +47,7 @@ struct PerformanceEntryListGetEntriesByNameArgs {
     entry_type: Option<String>,
 }
 
-pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_callback<'s>(
+pub fn performance_entry_list_get_entries_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -27,7 +57,7 @@ pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_callback<
     rv.set(filtered_entry_list_entries(scope, entries, None, None).into());
 }
 
-pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_by_type_callback<'s>(
+pub fn performance_entry_list_get_entries_by_type_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -41,7 +71,7 @@ pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_by_type_c
     rv.set(filtered_entry_list_entries(scope, entries, Some(&parsed.entry_type), None).into());
 }
 
-pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_by_name_callback<'s>(
+pub fn performance_entry_list_get_entries_by_name_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -63,7 +93,7 @@ pub(in crate::context_bootstrap) fn performance_entry_list_get_entries_by_name_c
     );
 }
 
-pub(in crate::context_bootstrap) fn filtered_entry_list_entries<'s>(
+pub fn filtered_entry_list_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: v8::Local<'s, v8::Array>,
     expected_type: Option<&str>,
@@ -101,11 +131,11 @@ pub(in crate::context_bootstrap) fn filtered_entry_list_entries<'s>(
         },
     );
 
-    serialize_v8_iter_array(
-        scope,
-        filtered_entries.into_iter().map(|(_, _, entry)| entry),
-    )
-    .unwrap_or_else(|| v8::Array::new(scope, 0))
+    let values: Vec<v8::Local<v8::Value>> = filtered_entries
+        .into_iter()
+        .map(|(_, _, entry)| entry.into())
+        .collect();
+    v8::Array::new_with_elements(scope, &values)
 }
 
 fn performance_entry_list_entries<'s>(
@@ -114,4 +144,20 @@ fn performance_entry_list_entries<'s>(
 ) -> Option<v8::Local<'s, v8::Array>> {
     get_private_value(scope, list, PERFORMANCE_ENTRY_LIST_ENTRIES_SLOT)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+}
+
+pub fn build<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entries: v8::Local<'s, v8::Array>,
+) -> Result<v8::Local<'s, v8::Object>, moli_webapi_declare::BindError> {
+    PerformanceObserverEntryListObjectDeclaration::new(entries).bind(scope)
+}
+pub fn install<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    PerformanceObserverEntryListTemplateMethodsDeclaration::initialize_prototype_template(
+        scope,
+        template.prototype_template(scope),
+    );
 }

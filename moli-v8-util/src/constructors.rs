@@ -13,6 +13,8 @@ const ECMASCRIPT_PROTOTYPES_SLOT: &str = "__moliEcmascriptPrototypes";
 pub enum WebApiIntrinsicKind {
     Constructor,
     Prototype,
+    /// Allocate from the embedder's original instance template, without Call.
+    Instance,
 }
 
 pub enum WebApiIntrinsicLookup<'s> {
@@ -186,6 +188,26 @@ pub fn constructor_prototype<'s>(
         .and_then(|ctor| constructor_prototype_object(scope, ctor))
 }
 
+/// Allocates a native instance without invoking an author-visible constructor.
+/// Managed realms use their original instance template. A standalone embedder
+/// can register immutable intrinsic prototypes and initialize native state itself.
+pub fn new_intrinsic_interface_instance<'s>(
+    scope: &mut PinScope<'s, '_>,
+    name: &str,
+) -> Option<Local<'s, Object>> {
+    if let Some(resolver) = scope
+        .get_current_context()
+        .get_slot::<RealmWebApiIntrinsicResolver>()
+        && let WebApiIntrinsicLookup::Managed(instance) =
+            (resolver.0)(scope, name, WebApiIntrinsicKind::Instance)
+    {
+        return instance;
+    }
+    let prototype = global_constructor_prototype(scope, name)?;
+    let object = Object::new(scope);
+    (object.set_prototype(scope, prototype.into()) == Some(true)).then_some(object)
+}
+
 pub fn global_constructor_object<'s>(
     scope: &mut PinScope<'s, '_>,
     name: &str,
@@ -295,10 +317,11 @@ mod tests {
     use moli_v8_test_util::ensure_v8;
 
     use super::{
-        ECMASCRIPT_CONSTRUCTORS_SLOT, ECMASCRIPT_PROTOTYPES_SLOT, global_constructor_object,
-        global_constructor_prototype, initialize_ecmascript_intrinsic_registry,
-        register_ecmascript_intrinsic, registered_ecmascript_constructor,
-        registered_ecmascript_prototype,
+        ECMASCRIPT_CONSTRUCTORS_SLOT, ECMASCRIPT_PROTOTYPES_SLOT, WebApiIntrinsicKind,
+        WebApiIntrinsicLookup, global_constructor_object, global_constructor_prototype,
+        initialize_ecmascript_intrinsic_registry, install_web_api_intrinsic_resolver,
+        new_intrinsic_interface_instance, register_ecmascript_intrinsic,
+        registered_ecmascript_constructor, registered_ecmascript_prototype,
     };
     use crate::strings::v8str;
 
@@ -358,6 +381,36 @@ mod tests {
             global_constructor_prototype(scope, "Sample")
                 .is_some_and(|value| value.strict_equals(intrinsic_prototype.into()))
         );
+        let instance = new_intrinsic_interface_instance(scope, "Sample").unwrap();
+        assert!(
+            instance
+                .get_prototype(scope)
+                .unwrap()
+                .strict_equals(intrinsic_prototype.into())
+        );
+    }
+
+    #[test]
+    fn failed_managed_native_allocation_never_falls_back_to_public_globals() {
+        fn unavailable<'s>(
+            scope: &mut v8::PinScope<'s, '_>,
+            name: &str,
+            kind: WebApiIntrinsicKind,
+        ) -> WebApiIntrinsicLookup<'s> {
+            let _ = (scope, name);
+            assert!(matches!(kind, WebApiIntrinsicKind::Instance));
+            WebApiIntrinsicLookup::Managed(None)
+        }
+
+        ensure_v8();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        // Object is present and callable, so an accidental fallback would succeed.
+        install_web_api_intrinsic_resolver(scope, unavailable);
+        assert!(new_intrinsic_interface_instance(scope, "Object").is_none());
     }
 
     #[test]

@@ -1,15 +1,14 @@
-use crate::{
-    context_bootstrap::events::{
-        EventInit, event_private_value, initialize_event_object_with_type,
-        initialize_event_wrapper, new_event_state,
-    },
-    util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
-        throw_type_error,
-    },
-    web_api_interfaces, webidl,
+use super::{
+    EventInit, event_private_value, initialize_event_object_with_type, initialize_event_wrapper,
+    new_event_state,
+};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
+    apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
+    throw_type_error,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 const ADDRESS_SLOT: &str = "__moliRtcIceErrorAddress";
@@ -72,14 +71,14 @@ struct PrototypeDeclaration {
     error_text: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     prototype: v8::Local<'s, v8::ObjectTemplate>,
 ) {
     PrototypeDeclaration::initialize_prototype_template(scope, prototype);
 }
 
-pub(in crate::context_bootstrap) fn rtc_peer_connection_ice_error_event_constructor<'s>(
+pub fn rtc_peer_connection_ice_error_event_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

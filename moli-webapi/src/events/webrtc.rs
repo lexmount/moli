@@ -1,16 +1,15 @@
-use crate::web_api_interfaces;
-use crate::{
-    context_bootstrap::events::{
-        EventInit, event_private_value, initialize_event_object_with_type,
-        initialize_event_wrapper, new_event_state,
-    },
-    util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
-        throw_type_error,
-    },
-    webidl::{self, WebIdlDictionarySerialize},
+use super::{
+    EventInit, event_private_value, initialize_event_object_with_type, initialize_event_wrapper,
+    new_event_state,
+};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
+    apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
+    throw_type_error,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiInterfaceDescriptor};
+use moli_webidl as webidl;
+use webidl::WebIdlDictionarySerialize;
 
 const ICE_EVENT_CANDIDATE_SLOT: &str = "__moliRtcIceEventCandidate";
 const ICE_EVENT_URL_SLOT: &str = "__moliRtcIceEventUrl";
@@ -106,7 +105,7 @@ struct ErrorEventPrototypeDeclaration {
     error: (),
 }
 
-pub(super) fn install_event_template_bindings<'s>(
+pub fn install_event_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -126,7 +125,7 @@ pub(super) fn install_event_template_bindings<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn rtc_peer_connection_ice_event_constructor_callback<'s>(
+pub fn rtc_peer_connection_ice_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -158,7 +157,7 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_ice_event_constructor_ca
     }
 }
 
-pub(in crate::context_bootstrap) fn rtc_data_channel_event_constructor_callback<'s>(
+pub fn rtc_data_channel_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -190,7 +189,7 @@ pub(in crate::context_bootstrap) fn rtc_data_channel_event_constructor_callback<
     }
 }
 
-pub(in crate::context_bootstrap) fn rtc_error_event_constructor_callback<'s>(
+pub fn rtc_error_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

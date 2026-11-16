@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn validate(
+pub fn validate(
     scope: &mut v8::PinScope<'_, '_>,
     channels: u32,
     length: u32,

@@ -9,22 +9,13 @@ use super::registration::{
     performance_observer_callback_is_current,
 };
 use super::*;
-use crate::web_api_interfaces;
 use crate::webidl::{self, SnapshotPrototype, WebIdlDictionarySerialize};
-use moli_webapi_declare::WebApiObject;
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PerformanceObserverCallbackOptions", snapshot)]
 struct PerformanceObserverCallbackOptions {
     #[webidl(converter = "unsigned_long_long")]
     dropped_entries_count: Option<u64>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList)]
-struct PerformanceObserverEntryListObjectDeclaration<'scope> {
-    #[webapi(slot = PERFORMANCE_ENTRY_LIST_ENTRIES_SLOT)]
-    entries: v8::Local<'scope, v8::Array>,
 }
 
 fn performance_observer_flush_callback<'s>(
@@ -60,8 +51,7 @@ fn performance_observer_flush_callback<'s>(
     let (list, options) = {
         let context = delivery.relevant_context(scope);
         let scope = &mut v8::ContextScope::new(scope, context);
-        let list = PerformanceObserverEntryListObjectDeclaration::new(pending)
-            .bind(scope)
+        let list = moli_webapi::performance::entry_list::build(scope, pending)
             .expect("PerformanceObserverEntryList declaration should bind");
         let options = PerformanceObserverCallbackOptions {
             dropped_entries_count,

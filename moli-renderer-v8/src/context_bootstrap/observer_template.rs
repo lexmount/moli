@@ -2,10 +2,8 @@ use super::media_queries::{
     media_query_list_add_listener_callback, media_query_list_remove_listener_callback,
 };
 use super::performance_runtime::{
-    performance_entry_list_get_entries_by_name_callback,
-    performance_entry_list_get_entries_by_type_callback,
-    performance_entry_list_get_entries_callback, performance_observer_disconnect_callback,
-    performance_observer_observe_callback, performance_observer_take_records_callback,
+    performance_observer_disconnect_callback, performance_observer_observe_callback,
+    performance_observer_take_records_callback,
 };
 use super::resize_observer_runtime::{
     resize_observer_disconnect_callback, resize_observer_observe_callback,
@@ -107,27 +105,6 @@ struct PerformanceObserverTemplateMethodsDeclaration {
     take_records: (),
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList, enumerable, receiver)]
-struct PerformanceObserverEntryListTemplateMethodsDeclaration {
-    #[webapi(method, length = 0, callback = performance_entry_list_get_entries_callback)]
-    get_entries: (),
-
-    #[webapi(
-        method,
-        length = 1,
-        callback = performance_entry_list_get_entries_by_type_callback
-    )]
-    get_entries_by_type: (),
-
-    #[webapi(
-        method,
-        length = 1,
-        callback = performance_entry_list_get_entries_by_name_callback
-    )]
-    get_entries_by_name: (),
-}
-
 pub(super) fn install_observer_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -167,10 +144,7 @@ pub(super) fn install_observer_template_bindings<'s>(
             );
         }
         "PerformanceObserverEntryList" => {
-            let proto = template.prototype_template(scope);
-            PerformanceObserverEntryListTemplateMethodsDeclaration::initialize_prototype_template(
-                scope, proto,
-            );
+            moli_webapi::performance::entry_list::install(scope, template);
         }
         _ => {}
     }

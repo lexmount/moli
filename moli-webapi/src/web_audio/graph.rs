@@ -21,7 +21,7 @@ const RENDERED_INPUT: &str = "__moliAudioNodeRenderedInput";
 const UNSUPPORTED_PROCESSOR: &str = "__moliAudioNodeNeedsProcessingBackend";
 const UNSUPPORTED_GENERATOR: &str = "__moliAudioNodeNeedsGenerationBackend";
 
-pub(super) fn set_unsupported_generator<'s>(
+pub fn set_unsupported_generator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     required: bool,
@@ -34,7 +34,7 @@ pub(super) fn set_unsupported_generator<'s>(
     );
 }
 
-pub(super) fn mark_unsupported_processor<'s>(
+pub fn mark_unsupported_processor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) {
@@ -42,7 +42,7 @@ pub(super) fn mark_unsupported_processor<'s>(
     set_private_value(scope, node, UNSUPPORTED_PROCESSOR, required.into());
 }
 
-pub(super) fn initialize_node<'s>(
+pub fn initialize_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Object>,
@@ -55,15 +55,12 @@ pub(super) fn initialize_node<'s>(
     }
 }
 
-pub(super) fn initialize_source<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) {
+pub fn initialize_source<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) {
     set_web_audio_number_slot(scope, node, START_TIME, f64::INFINITY);
     set_web_audio_number_slot(scope, node, STOP_TIME, f64::INFINITY);
 }
 
-pub(super) fn set_destination<'s>(
+pub fn set_destination<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
     node: v8::Local<'s, v8::Object>,
@@ -71,7 +68,7 @@ pub(super) fn set_destination<'s>(
     set_private_value(scope, context, DESTINATION, node.into());
 }
 
-pub(super) fn node_context<'s>(
+pub fn node_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -215,7 +212,7 @@ struct DisconnectOutputArgs {
     output: u32,
 }
 
-pub(super) fn connect<'s>(
+pub fn connect<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -265,10 +262,7 @@ pub(super) fn connect<'s>(
     Some(destination)
 }
 
-pub(super) fn disconnect<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) {
+pub fn disconnect<'s>(scope: &mut v8::PinScope<'s, '_>, args: &v8::FunctionCallbackArguments<'s>) {
     // Finish all Web IDL conversions before reading graph state or removing edges.
     let Some(selection) = DisconnectSelection::parse(scope, args) else {
         return;
@@ -361,14 +355,14 @@ impl<'s> DisconnectSelection<'s> {
     }
 }
 
-pub(super) fn source_started<'s>(
+pub fn source_started<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_audio_number_slot(scope, node, START_TIME).is_some_and(f64::is_finite)
 }
 
-pub(super) fn start_source<'s>(
+pub fn start_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     when: f64,
@@ -393,7 +387,7 @@ pub(super) fn start_source<'s>(
     true
 }
 
-pub(super) fn stop_source<'s>(
+pub fn stop_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
     when: f64,
@@ -461,7 +455,7 @@ fn has_started_source<'s>(
     Some(has_input)
 }
 
-pub(super) fn prepare_offline_render<'s>(
+pub fn prepare_offline_render<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
     end_time: f64,
@@ -503,7 +497,7 @@ pub(super) fn prepare_offline_render<'s>(
     Some(destination.is_some_and(|node| rendered_with_input(scope, node)))
 }
 
-pub(super) fn rendered_with_input<'s>(
+pub fn rendered_with_input<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> bool {

@@ -7,10 +7,12 @@ use std::rc::Rc;
 
 pub mod audio;
 pub mod device;
+pub mod ice_error_event;
 pub mod init;
 pub mod speech;
 pub mod state;
 pub mod value;
+pub mod webrtc;
 
 use init::EventInit;
 use state::{

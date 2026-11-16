@@ -31,6 +31,7 @@ pub(super) fn resolve_web_api_intrinsic<'s>(
             .ok()
             .map(Into::into),
         WebApiIntrinsicKind::Prototype => ensure_intrinsic_interface_prototype(scope, name).ok(),
+        WebApiIntrinsicKind::Instance => build_intrinsic_interface_instance(scope, name).ok(),
     })
 }
 

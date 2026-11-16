@@ -206,6 +206,14 @@ pub(crate) fn initialize_realm_interface_registry(
 }
 
 fn install_event_runtime(scope: &mut v8::PinScope<'_, '_>) {
+    moli_webapi::event_target::install_runtime(
+        scope,
+        moli_webapi::event_target::EventTargetRuntime {
+            initialize: crate::context_bootstrap::media_queries::initialize_simple_event_target,
+            set_handler: crate::context_bootstrap::media_queries::simple_object_event_set_handler,
+        },
+    );
+    crate::context_bootstrap::web_audio_runtime::install_audio_runtime(scope);
     moli_webapi::events::install_runtime(
         scope,
         moli_webapi::events::EventRuntime {

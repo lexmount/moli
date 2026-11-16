@@ -3,7 +3,7 @@ mod support;
 use moli_v8_test_util::ensure_v8;
 use moli_v8_util::{global_constructor_prototype, set_private_value, v8str};
 use moli_webapi::{
-    events::{self, EventRuntime, audio, device, speech, state, value},
+    events::{self, EventRuntime, audio, device, ice_error_event, speech, state, value, webrtc},
     interfaces,
 };
 use std::{cell::Cell, pin::pin, rc::Rc};
@@ -183,6 +183,39 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         speech::install(scope, template, interface.name());
         finish_template(scope, interface, template);
     }
+    for (interface, template) in [
+        (
+            interfaces::RTCPeerConnectionIceEvent::DESCRIPTOR,
+            v8::FunctionTemplate::new(
+                scope,
+                webrtc::rtc_peer_connection_ice_event_constructor_callback,
+            ),
+        ),
+        (
+            interfaces::RTCDataChannelEvent::DESCRIPTOR,
+            v8::FunctionTemplate::new(scope, webrtc::rtc_data_channel_event_constructor_callback),
+        ),
+        (
+            interfaces::RTCErrorEvent::DESCRIPTOR,
+            v8::FunctionTemplate::new(scope, webrtc::rtc_error_event_constructor_callback),
+        ),
+        (
+            interfaces::RTCPeerConnectionIceErrorEvent::DESCRIPTOR,
+            v8::FunctionTemplate::new(
+                scope,
+                ice_error_event::rtc_peer_connection_ice_error_event_constructor,
+            ),
+        ),
+    ] {
+        template.inherit(event);
+        if interface.name() == "RTCPeerConnectionIceErrorEvent" {
+            let prototype = template.prototype_template(scope);
+            ice_error_event::install(scope, prototype);
+        } else {
+            webrtc::install_event_template_bindings(scope, template, interface.name());
+        }
+        finish_template(scope, interface, template);
+    }
 
     // Native payload brands without a DOM, audio graph, payment or sensor host.
     for (interface, name) in [
@@ -192,6 +225,8 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         (interfaces::Gamepad::DESCRIPTOR, "gamepad"),
         (interfaces::PictureInPictureWindow::DESCRIPTOR, "pip"),
         (interfaces::MIDIPort::DESCRIPTOR, "port"),
+        (interfaces::RTCIceCandidate::DESCRIPTOR, "candidate"),
+        (interfaces::RTCDataChannel::DESCRIPTOR, "channel"),
         (interfaces::AudioBuffer::DESCRIPTOR, "buffer"),
         (
             interfaces::SpeechSynthesisUtterance::DESCRIPTOR,
@@ -508,4 +543,48 @@ fn realm_clock_is_only_read_after_successful_argument_conversion() {
         "new AnimationEvent('ok'); new DeviceMotionEvent('ok'); new AudioProcessingEvent('ok', {inputBuffer: buffer, outputBuffer: buffer, playbackTime: 1}); new SpeechSynthesisEvent('ok', {utterance});",
     );
     assert_eq!(clock.reads.get(), 4);
+}
+
+#[test]
+fn rtc_payloads_keep_native_references_and_string_conversion_kinds() {
+    check(
+        r#"(() => {
+      const ice = new RTCPeerConnectionIceEvent('ice\ud800', {candidate, url: 'stun:\ud800', bubbles: true});
+      assert(ice instanceof Event && ice.candidate === candidate);
+      assert(ice.type === 'ice\ud800' && ice.url === 'stun:\ufffd');
+      assert(ice.bubbles && ice.timeStamp === 37.25 && !ice.isTrusted);
+      assert(new RTCPeerConnectionIceEvent('empty').candidate === null);
+      const data = new RTCDataChannelEvent('data', {channel});
+      assert(data.channel === channel);
+      const error = new RTCError({errorDetail: 'data-channel-failure'}, 'detail');
+      assert(new RTCErrorEvent('error', {error}).error === error);
+      const failure = new RTCPeerConnectionIceErrorEvent('failure', {
+        address: '\ud800', port: 65537, url: 'stun:\ud800', errorCode: 701, errorText: 'x\udfff'
+      });
+      assert(failure.address === '\ud800' && failure.port === 1);
+      assert(failure.url === 'stun:\ufffd' && failure.errorText === 'x\ufffd' && failure.errorCode === 701);
+      Object.defineProperty(failure, 'errorCode', {get() {throw Error('public shadow');}});
+      assert(Object.getOwnPropertyDescriptor(RTCPeerConnectionIceErrorEvent.prototype, 'errorCode').get.call(failure) === 701);
+      return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn rtc_payload_conversion_order_and_native_receiver_checks() {
+    check(
+        r#"(() => {
+      function fails(run) { try {run();} catch (e) {assert(e instanceof TypeError); return;} throw Error('missing TypeError'); }
+      fails(() => new RTCDataChannelEvent('x', {channel: Object.create(RTCDataChannel.prototype)}));
+      fails(() => new RTCErrorEvent('x', {}));
+      fails(() => new RTCPeerConnectionIceErrorEvent('x', {}));
+      const getter = Object.getOwnPropertyDescriptor(RTCPeerConnectionIceEvent.prototype, 'candidate').get;
+      fails(() => getter.call(Object.create(RTCPeerConnectionIceEvent.prototype)));
+      let reads = [];
+      const init = new Proxy({errorCode: 701}, {get(target, key) {reads.push(key); return target[key];}});
+      new RTCPeerConnectionIceErrorEvent('x', init);
+      assert(reads.join(',') === 'bubbles,cancelable,composed,address,errorCode,errorText,port,url');
+      return true;
+    })()"#,
+    );
 }

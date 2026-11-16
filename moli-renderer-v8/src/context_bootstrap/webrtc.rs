@@ -11,8 +11,8 @@ use session_description::RtcSessionDescriptionInitDeclaration;
 
 mod configuration;
 pub(crate) mod encoded_frames;
-mod events;
-mod ice_error_event;
+use moli_webapi::events::ice_error_event;
+use moli_webapi::events::webrtc as events;
 mod peer_options;
 pub(in crate::context_bootstrap) use events::{
     rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,

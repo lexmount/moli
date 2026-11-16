@@ -17,7 +17,7 @@ struct PrototypeDeclaration {
     normalize: (),
 }
 
-pub(super) fn install<'s>(
+pub fn install<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -112,7 +112,7 @@ fn initialize<'s>(
     set_buffer(scope, node, options.buffer)
 }
 
-pub(in crate::context_bootstrap) fn constructor<'s>(
+pub fn constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -142,7 +142,7 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     }
 }
 
-pub(super) fn create<'s>(
+pub fn create<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -152,11 +152,8 @@ pub(super) fn create<'s>(
         .get_creation_context(scope)
         .expect("Audio context should have a creation realm");
     let scope = &mut v8::ContextScope::new(scope, realm);
-    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "ConvolverNode",
-    )
-    .expect("ConvolverNode prototype should exist");
+    let prototype = moli_v8_util::global_constructor_prototype(scope, "ConvolverNode")
+        .expect("ConvolverNode prototype should exist");
     let node = v8::Object::new(scope);
     let _ = node.set_prototype(scope, prototype.into());
     web_api_interfaces::initialize(scope, node, "ConvolverNode")

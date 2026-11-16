@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{get_private_value, set_private_value};
+pub(in crate::context_bootstrap) use moli_webapi::performance::slots::*;
 
 mod entries;
 mod fetch_timing;
@@ -7,8 +8,8 @@ pub(crate) use fetch_timing::FetchResourceTiming;
 mod install;
 mod lazy_subobjects;
 mod marks_measures;
-mod memory;
-mod name;
+use moli_webapi::performance::memory;
+use moli_webapi::performance::name;
 pub(in crate::context_bootstrap) use name::PerformanceEntryName;
 mod resource_buffer;
 mod window_state;
@@ -22,65 +23,7 @@ pub(crate) const PERFORMANCE_TIME_ORIGIN_SLOT: &str = "__moliPerformanceTimeOrig
 pub(in crate::context_bootstrap) const PERFORMANCE_TIMING_SLOT: &str = "__moliPerformanceTiming";
 pub(in crate::context_bootstrap) const PERFORMANCE_NAVIGATION_SLOT: &str =
     "__moliPerformanceNavigation";
-pub(in crate::context_bootstrap) const PERFORMANCE_NAVIGATION_TYPE_SLOT: &str =
-    "__moliPerformanceNavigationType";
-pub(in crate::context_bootstrap) const PERFORMANCE_NAVIGATION_REDIRECT_COUNT_SLOT: &str =
-    "__moliPerformanceNavigationRedirectCount";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_NAME_SLOT: &str =
-    "__moliPerformanceEntryName";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_ID_SLOT: &str = "__moliPerformanceEntryId";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_TYPE_SLOT: &str =
-    "__moliPerformanceEntryType";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_START_TIME_SLOT: &str =
-    "__moliPerformanceEntryStartTime";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DURATION_SLOT: &str =
-    "__moliPerformanceEntryDuration";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT: &str =
-    "__moliPerformanceEntryNavigationId";
-pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DETAIL_SLOT: &str =
-    "__moliPerformanceEntryDetail";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT: &str =
-    "__moliPerformanceResourceInitiatorType";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_URL_SLOT: &str =
-    "__moliResourceInitiatorUrl";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_NEXT_HOP_PROTOCOL_SLOT: &str =
-    "__moliPerformanceResourceNextHopProtocol";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_WORKER_START_SLOT: &str =
-    "__moliPerformanceResourceWorkerStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_REDIRECT_START_SLOT: &str =
-    "__moliPerformanceResourceRedirectStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_REDIRECT_END_SLOT: &str =
-    "__moliPerformanceResourceRedirectEnd";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_FETCH_START_SLOT: &str =
-    "__moliPerformanceResourceFetchStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_DOMAIN_LOOKUP_START_SLOT: &str =
-    "__moliPerformanceResourceDomainLookupStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_DOMAIN_LOOKUP_END_SLOT: &str =
-    "__moliPerformanceResourceDomainLookupEnd";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_CONNECT_START_SLOT: &str =
-    "__moliPerformanceResourceConnectStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_CONNECT_END_SLOT: &str =
-    "__moliPerformanceResourceConnectEnd";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_SECURE_CONNECTION_START_SLOT: &str =
-    "__moliPerformanceResourceSecureConnectionStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_REQUEST_START_SLOT: &str =
-    "__moliPerformanceResourceRequestStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_RESPONSE_START_SLOT: &str =
-    "__moliPerformanceResourceResponseStart";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_RESPONSE_END_SLOT: &str =
-    "__moliPerformanceResourceResponseEnd";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_TRANSFER_SIZE_SLOT: &str =
-    "__moliPerformanceResourceTransferSize";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_ENCODED_BODY_SIZE_SLOT: &str =
-    "__moliPerformanceResourceEncodedBodySize";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_DECODED_BODY_SIZE_SLOT: &str =
-    "__moliPerformanceResourceDecodedBodySize";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_RENDER_BLOCKING_STATUS_SLOT: &str =
-    "__moliPerformanceResourceRenderBlockingStatus";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_RESPONSE_STATUS_SLOT: &str =
-    "__moliPerformanceResourceResponseStatus";
-pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_CONTENT_TYPE_SLOT: &str =
-    "__moliPerformanceResourceContentType";
+
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_SLOT: &str =
     "__moliPerformanceEventCounts";
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_VALUES_SLOT: &str =
@@ -108,11 +51,8 @@ pub(in crate::context_bootstrap) const WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENT
     &[&str] = &["mark", "measure", "resource"];
 
 pub(super) use super::performance_observer_runtime::{
-    performance_entry_list_get_entries_by_name_callback,
-    performance_entry_list_get_entries_by_type_callback,
-    performance_entry_list_get_entries_callback, performance_observer_constructor_callback,
-    performance_observer_disconnect_callback, performance_observer_observe_callback,
-    performance_observer_take_records_callback,
+    performance_observer_constructor_callback, performance_observer_disconnect_callback,
+    performance_observer_observe_callback, performance_observer_take_records_callback,
 };
 use entries::{
     append_performance_entry, create_performance_entry, initialize_resource_timing_slots,
@@ -123,8 +63,7 @@ pub(super) use entries::{
     performance_get_entries_by_type_callback, performance_get_entries_callback,
 };
 pub(in crate::context_bootstrap) use entries::{
-    performance_entry_slot_number, performance_entry_slot_string, performance_entry_slot_value,
-    set_performance_entry_slot_number,
+    performance_entry_slot_string, set_performance_entry_slot_number,
 };
 pub(crate) use install::increment_performance_event_count;
 pub(crate) use install::project_document_lifecycle_timing;
