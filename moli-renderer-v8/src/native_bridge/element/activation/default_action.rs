@@ -282,6 +282,55 @@ fn replace_selected_dom_range<'s>(
     true
 }
 
+fn replace_selected_dom_range_with_plain_lines<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    selection: v8::Local<'s, v8::Object>,
+    text: &str,
+) -> bool {
+    let Some(range) = selected_dom_range(scope, target, selection) else {
+        return false;
+    };
+    let Some(document) = object_property_as_object(scope, target, "ownerDocument") else {
+        return false;
+    };
+    let Some(fragment) = call_object_method(scope, document, "createDocumentFragment", &[])
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return false;
+    };
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut caret = None;
+    for (index, line) in normalized.split('\n').enumerate() {
+        if index != 0 {
+            let br = v8str(scope, "br");
+            let Some(br) = call_object_method(scope, document, "createElement", &[br.into()])
+            else {
+                return false;
+            };
+            if call_object_method(scope, fragment, "appendChild", &[br]).is_none() {
+                return false;
+            }
+        }
+        let Some(node) = create_text_node(scope, line) else {
+            return false;
+        };
+        if call_object_method(scope, fragment, "appendChild", &[node.into()]).is_none() {
+            return false;
+        }
+        caret = Some((node, utf16_len(line) as u32));
+    }
+    if call_object_method(scope, range, "deleteContents", &[]).is_none()
+        || call_object_method(scope, range, "insertNode", &[fragment.into()]).is_none()
+    {
+        return false;
+    }
+    if let Some((node, offset)) = caret {
+        collapse_selection_to(scope, selection, node, offset);
+    }
+    true
+}
+
 fn append_text_to_editing_host(
     scope: &mut v8::PinScope<'_, '_>,
     target: v8::Local<'_, v8::Object>,
@@ -530,13 +579,50 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<
             text_range = Some((node, start, end));
         }
     }
-    let additional_node = original_caret.and(text_range).and_then(|(node, _, _)| {
-        crate::native_bridge::callback_value_dom_handle(scope, node.into())
-    });
+    let multiline_paste = input_type == TextEditInputType::InsertFromPaste
+        && replacement_text.contains(['\n', '\r'])
+        && !element_attribute(unsafe { &*runtime_ptr }, handle, "contenteditable")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("plaintext-only"))
+        && !matches!(
+            super::super::style_property_value(
+                unsafe { &*runtime_ptr },
+                handle,
+                super::super::StyleMode::Computed,
+                "white-space"
+            )
+            .as_str(),
+            "pre" | "pre-wrap" | "pre-line" | "break-spaces"
+        );
+    let additional_node = if multiline_paste {
+        // Inserting line-break nodes can split a selected text node and change
+        // its parent's children, even when both selection endpoints are text.
+        crate::context_bootstrap::native_editing_selection(scope)
+            .and_then(|(anchor, _, _, _)| {
+                unsafe { &*runtime_ptr }
+                    .dom_host()
+                    .node(anchor)
+                    .and_then(Node::parent_node)
+            })
+            .filter(|parent| {
+                unsafe { &*runtime_ptr }
+                    .dom_host()
+                    .dom()
+                    .node(handle)
+                    .is_some_and(|node| {
+                        node.contains(unsafe { &*runtime_ptr }.dom_host().dom(), *parent)
+                    })
+            })
+    } else {
+        original_caret.and(text_range).and_then(|(node, _, _)| {
+            crate::native_bridge::callback_value_dom_handle(scope, node.into())
+        })
+    };
     let undo =
         super::editing_history::capture_edit_including(scope, runtime_ptr, handle, additional_node);
     let inserted = if let Some(selection) = selection {
-        if let Some((node, start, end)) = text_range {
+        if multiline_paste {
+            replace_selected_dom_range_with_plain_lines(scope, target, selection, replacement_text)
+        } else if let Some((node, start, end)) = text_range {
             if !replace_text_node_range(scope, node, start, end, replacement_text) {
                 return false;
             }

@@ -278,6 +278,17 @@ fn append_selection_rendered_text(
                     Some("text" | "all") => false,
                     _ => state.suppressed_by_user_select,
                 };
+                if element.is_html_element("br")
+                    && !next_state.suppressed_by_user_select
+                    && !matches!(
+                        style_property_value(runtime, handle, StyleMode::Computed, "visibility")
+                            .as_str(),
+                        "hidden" | "collapse"
+                    )
+                    && selection_node_may_intersect_range(scope, handle, bounds)?
+                {
+                    out.push('\n');
+                }
                 preformatted_block = element.is_html_element("pre");
             }
             if preformatted_block && selection_node_may_intersect_range(scope, handle, bounds)? {
