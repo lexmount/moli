@@ -251,15 +251,14 @@ Moli wird mit öffentlichen Benchmarks mit festen Aufgaben gemessen. Jede Zeile 
 
 | Bereich | Benchmark | Messgröße | Moli | Details |
 | --- | --- | --- | --- | --- |
-| Web Fetch · Live-Websites | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 Aufgaben auf Live-Websites | Anteil der Aufgaben, bei denen der geforderte Inhalt von einer Live-Website zurückkommt | **89,8 %**, Platz eins von fünf Browsern | [Web Fetch](#web-fetch) |
-| Web Fetch · Gespeicherte Seiten | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 gespeicherte Seiten | Bewertung der Extraktionsqualität gegenüber menschlichen Annotationen (höher ist besser) | **39,27 %**, Platz eins von fünf | [Web Fetch](#web-fetch) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 Aufgaben auf Live-Websites; [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 gespeicherte Seiten | Anteil bestandener Aufgaben auf Live-Websites; Bewertung der Extraktionsqualität auf gespeicherten Seiten | **89,8 %** und **39,27 %**, in beiden Platz eins von fünf Browsern | [Web Fetch](#web-fetch) |
 | Browser-Automatisierung | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1.308 vergleichbare Aufgaben | Anteil gelungener Aufgaben zu CDP, Automatisierungswerkzeugen und der Web-Plattform | **81,9 %**; Chrome 99,8 % | [Browser-Automatisierung](#browser-automatisierung) |
 | Ressourcenverbrauch | Lexbench-Headless-Browser · 557 Aufgaben, die alle lokalen Engines abgeschlossen haben | Median von CPU-Zeit und Spitzenspeicher pro Aufgabe | **15 %** der CPU-Zeit von Chrome, **13 %** seines Speichers | [Ressourcenverbrauch](#ressourcenverbrauch) |
 | Webstandards | Ausgewählte [WPT](https://github.com/web-platform-tests/wpt)-Tests | Bestandene WPT-Tests | **1,612 Millionen** bestandene Tests in einem vollständigen Lauf | — |
 
 ### Web Fetch
 
-[LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) ruft mit 430 Aufgaben Live-Websites auf. Bestehen erfordert daher sowohl den Zugriff auf die Website als auch korrekte Inhalte. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) bewertet die Extraktion des Hauptinhalts auf 545 gespeicherten Seiten, ohne Live-Zugriff. Klicken Sie auf einen Titel, um die Grafik zu wechseln. Jede Zeile vergleicht Moli (blau) mit der Spanne der vier anderen Browser.
+Moli wird mit vier anderen Browsern auf Live-Websites und auf gespeicherten Seiten verglichen. Klicken Sie auf einen Titel, um zu wechseln; jede Zeile zeigt Moli (blau) im Vergleich zur Spanne der vier anderen. [Vollständiger Bericht](https://browser.lexmount.com/blog/webfetch-benchmark) · reproduzierbar mit [Webstone](https://github.com/lexmount/webstone) ([Anleitung](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)).
 
 <details name="web-fetch-chart" open>
 <summary><strong>Live-Websites · LexBench-Web-Fetch, 430 Aufgaben</strong></summary>
@@ -269,19 +268,7 @@ Moli wird mit öffentlichen Benchmarks mit festen Aufgaben gemessen. Jede Zeile 
   <img alt="Erfolgsquote bei 430 Aufgaben auf Live-Websites. Gesamt: Moli 386/430 (89,8 %), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Bot-Schutz: Moli 88/100, bester anderer Browser 37. Beliebte Websites: Moli 91, bester anderer 58. Dynamische Websites: Moli 90, bester anderer 58. Statisch: Moli 97, Chromium 99. Dokumente und Medien: Moli 20/30, bester anderer 17." src="../assets/webfetch-live-light.png" width="100%">
 </picture>
 
-</details>
-
-<details name="web-fetch-chart">
-<summary><strong>Gespeicherte Seiten · WebMainBench, 545 Seiten</strong></summary>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
-  <img alt="Extraktionsqualität auf 545 gespeicherten Seiten. Gesamt: Moli 39,27 %, Lightpanda 35,00 %, Kitesurf 33,43 %, Obscura 31,03 %, Chromium 27,02 %. Code: Moli 91,06 %, beste andere Methode 84,71 %. Bei Text, Formeln, Tabelleninhalt und Tabellenstruktur liegt Moli hinter der jeweils besten anderen Methode." src="../assets/webmainbench-light.png" width="100%">
-</picture>
-
-</details>
-
-Moli liegt in beiden Benchmarks insgesamt vorn. Den größten Vorsprung hat Moli bei Websites mit Bot-Schutz sowie bei beliebten und dynamischen Websites; bei einfachen statischen Seiten liegen alle Browser nah beieinander. [Vollständigen Bericht lesen](https://browser.lexmount.com/blog/webfetch-benchmark). Zum Reproduzieren der Ergebnisse führen Sie den Web-Fetch-Track in [Webstone](https://github.com/lexmount/webstone) aus ([Anleitung](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)); die Ergebnisse verwenden die Edition v1.0.0 des Datensatzes mit 430 Aufgaben.
+Bestehen erfordert sowohl den Zugriff auf die Website als auch korrekte Inhalte ([Datensatz, Edition v1.0.0](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)).
 
 <details>
 <summary>Genaue Werte</summary>
@@ -296,6 +283,23 @@ Moli liegt in beiden Benchmarks insgesamt vorn. Den größten Vorsprung hat Moli
 
 Die Zellen zeigen die Anzahl bestandener Aufgaben. Die letzte Spalte fasst Dokumentinhalte, direkte Mediendateien und in Webseiten eingebettete Medien zusammen.
 
+</details>
+
+</details>
+
+<details name="web-fetch-chart">
+<summary><strong>Gespeicherte Seiten · WebMainBench, 545 Seiten</strong></summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
+  <img alt="Extraktionsqualität auf 545 gespeicherten Seiten. Gesamt: Moli 39,27 %, Lightpanda 35,00 %, Kitesurf 33,43 %, Obscura 31,03 %, Chromium 27,02 %. Code: Moli 91,06 %, beste andere Methode 84,71 %. Bei Text, Formeln, Tabelleninhalt und Tabellenstruktur liegt Moli hinter der jeweils besten anderen Methode." src="../assets/webmainbench-light.png" width="100%">
+</picture>
+
+Die Extraktion des Hauptinhalts wird gegenüber menschlichen Annotationen bewertet, ohne Live-Zugriff ([Datensatz](https://github.com/lexmount/WebMainBench/tree/lex-main)).
+
+<details>
+<summary>Genaue Werte</summary>
+
 | Methode | Hauptinhalt erzeugt | Gesamt | Text | Code | Formeln | Tabelleninhalt | Tabellenstruktur |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Moli | 545/545 | **39,27 %** | 40,73 % | **91,06 %** | 28,20 % | 22,62 % | 13,75 % |
@@ -303,6 +307,8 @@ Die Zellen zeigen die Anzahl bestandener Aufgaben. Die letzte Spalte fasst Dokum
 | Obscura | 543/545 | 31,03 % | **41,88 %** | 81,82 % | **31,39 %** | 0,03 % | 0,00 % |
 | Chromium | 545/545 | 27,02 % | 39,40 % | 35,86 % | 21,12 % | **25,01 %** | 13,73 % |
 | Kitesurf | 524/545 | 33,43 % | 36,99 % | 80,70 % | 19,32 % | 18,25 % | 11,87 % |
+
+</details>
 
 </details>
 
@@ -340,7 +346,8 @@ Der vollständige Aufgabenbestand von [Lexbench-Headless-Browser](https://github
 
 Kitesurf ist ein entfernter Dienst, dessen CPU, Arbeitsspeicher und Prozessanzahl nicht messbar sind. Der Ressourcenvergleich umfasst daher nur die vier lokalen Engines. Ein separater Lauf mit 557 Aufgaben berücksichtigt nur Arbeiten, die alle vier abgeschlossen haben. Molis Median pro Aufgabe lag bei **100,6 ms CPU-Zeit** und **92 MiB Spitzenspeicher**; Chrome erreichte **687 ms** beziehungsweise **697 MiB**. Damit lag Moli bei rund 15 % der CPU-Zeit und 13 % des Spitzenspeichers von Chrome. Methodik und vollständige Daten stehen in der [Ressourcenübersicht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) des Benchmarks.
 
-Ein Beispiel-Workload eines Agenten zeigt dasselbe Muster für eine einzelne Episode:
+<details>
+<summary>Beispiel-Workload eines Agenten · eine Episode, Moli vs. Chromium</summary>
 
 | Metrik | Moli | Chromium |
 | --- | ---: | ---: |
@@ -348,6 +355,8 @@ Ein Beispiel-Workload eines Agenten zeigt dasselbe Muster für eine einzelne Epi
 | Aktive Episodendauer p50 | 33.40 ms | 57.13 ms |
 | PSS-Spitzenwert | 102.46 MiB | 348.82 MiB |
 | Maximale Prozesse / Threads | 1 / 24 | 11 / 123 |
+
+</details>
 
 ## Projektumfang
 
