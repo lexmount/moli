@@ -1,7 +1,7 @@
 use super::entries::validated_header_entry_or_throw;
-use crate::webidl;
+use moli_webidl as webidl;
 
-pub(in crate::network_host) fn headers_entries_from_init<'s>(
+pub fn headers_entries_from_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     init_arg: v8::Local<'s, v8::Value>,
 ) -> Result<Vec<(String, String)>, webidl::WebIdlError> {

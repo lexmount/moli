@@ -1,6 +1,6 @@
 use super::super::store::{get_header_prop, headers_list, normalized_header_name_or_throw};
 use super::*;
-use crate::webidl;
+use moli_webidl as webidl;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Headers.get")]
@@ -9,7 +9,7 @@ struct HeadersNameArgs {
     name: String,
 }
 
-pub(in crate::network_host::headers) fn headers_get_callback<'s>(
+pub fn headers_get_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -31,7 +31,7 @@ pub(in crate::network_host::headers) fn headers_get_callback<'s>(
     }
 }
 
-pub(in crate::network_host::headers) fn headers_has_callback<'s>(
+pub fn headers_has_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -50,7 +50,7 @@ pub(in crate::network_host::headers) fn headers_has_callback<'s>(
     rv.set_bool(get_header_prop(scope, this, &name).is_some());
 }
 
-pub(in crate::network_host::headers) fn headers_get_set_cookie_callback<'s>(
+pub fn headers_get_set_cookie_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,

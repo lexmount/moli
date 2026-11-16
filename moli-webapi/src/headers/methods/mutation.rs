@@ -4,7 +4,7 @@ use super::super::store::{
     validated_header_name_or_throw,
 };
 use super::*;
-use crate::webidl;
+use moli_webidl as webidl;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Headers")]
@@ -33,7 +33,7 @@ fn reject_immutable_headers<'s>(
     true
 }
 
-pub(in crate::network_host::headers) fn headers_set_callback<'s>(
+pub fn headers_set_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -72,7 +72,7 @@ pub(in crate::network_host::headers) fn headers_set_callback<'s>(
     set_headers_entries(scope, this, &entries);
 }
 
-pub(in crate::network_host::headers) fn headers_delete_callback<'s>(
+pub fn headers_delete_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -95,7 +95,7 @@ pub(in crate::network_host::headers) fn headers_delete_callback<'s>(
     set_headers_entries(scope, this, &entries);
 }
 
-pub(in crate::network_host::headers) fn headers_append_callback<'s>(
+pub fn headers_append_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,

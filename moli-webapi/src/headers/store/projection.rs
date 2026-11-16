@@ -3,7 +3,7 @@ use super::entries::{
     HEADERS_ENTRIES_SLOT, HEADERS_GUARD_SLOT, HEADERS_IMMUTABLE_SLOT, HeadersGuard,
     headers_entries_json, headers_list, normalized_header_name_or_throw,
 };
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -17,7 +17,7 @@ struct HeadersStorageDeclaration {
     immutable: bool,
 }
 
-pub(in crate::network_host) fn get_header_prop<'s>(
+pub fn get_header_prop<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
     name: &str,
@@ -34,14 +34,14 @@ pub(in crate::network_host) fn get_header_prop<'s>(
     }
 }
 
-pub(in crate::network_host) fn build_headers_object<'s>(
+pub fn build_headers_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     headers: &[(String, String)],
 ) -> v8::Local<'s, v8::Object> {
     build_headers_object_with_state(scope, headers, HeadersGuard::None, false)
 }
 
-pub(in crate::network_host) fn build_headers_object_with_state<'s>(
+pub fn build_headers_object_with_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     headers: &[(String, String)],
     guard: HeadersGuard,
@@ -52,7 +52,7 @@ pub(in crate::network_host) fn build_headers_object_with_state<'s>(
         .expect("Headers storage declaration should bind")
 }
 
-pub(in crate::network_host) fn initialize_headers_object<'s>(
+pub fn initialize_headers_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     headers: &[(String, String)],

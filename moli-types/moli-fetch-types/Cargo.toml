@@ -6,6 +6,7 @@ edition = "2024"
 description = "Transport-independent Fetch request and response types"
 
 [dependencies]
+moli-web-mime = { path = "../../moli-web-mime" }
 serde = { version = "1.0.228", features = ["derive"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = { version = "2.5.7", features = ["serde"] }

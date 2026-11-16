@@ -11,7 +11,7 @@ mod event_source;
 mod fetch;
 mod fetch_surface;
 mod font_face;
-mod headers;
+use moli_webapi::headers;
 mod image;
 mod js_values;
 mod loaded_response;

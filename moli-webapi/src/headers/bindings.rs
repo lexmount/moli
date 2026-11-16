@@ -1,8 +1,8 @@
 use super::store::{headers_entries_from_init, initialize_headers_object};
 use super::*;
-use crate::webidl;
+use moli_webidl as webidl;
 
-pub(crate) fn headers_constructor_callback<'s>(
+pub fn headers_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,

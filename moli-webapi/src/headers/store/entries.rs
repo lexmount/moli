@@ -1,13 +1,13 @@
 use super::super::*;
-use crate::util::{get_private_value, set_private_value};
 use http::header::HeaderName;
+use moli_v8_util::{get_private_value, set_private_value};
 
 pub(super) const HEADERS_ENTRIES_SLOT: &str = "__lmHeadersEntriesJson";
 pub(super) const HEADERS_IMMUTABLE_SLOT: &str = "__lmHeadersImmutable";
 pub(super) const HEADERS_GUARD_SLOT: &str = "__lmHeadersGuard";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HeadersGuard {
+pub enum HeadersGuard {
     None,
     Request,
     RequestNoCors,
@@ -34,10 +34,7 @@ impl HeadersGuard {
     }
 }
 
-pub(in crate::network_host) fn mark_headers_immutable(
-    scope: &mut v8::PinScope<'_, '_>,
-    obj: v8::Local<'_, v8::Object>,
-) {
+pub fn mark_headers_immutable(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<'_, v8::Object>) {
     set_private_value(
         scope,
         obj,
@@ -46,7 +43,7 @@ pub(in crate::network_host) fn mark_headers_immutable(
     );
 }
 
-pub(in crate::network_host::headers) fn headers_are_immutable<'s>(
+pub fn headers_are_immutable<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
 ) -> bool {
@@ -54,7 +51,7 @@ pub(in crate::network_host::headers) fn headers_are_immutable<'s>(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-pub(in crate::network_host::headers) fn headers_guard<'s>(
+pub fn headers_guard<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
 ) -> HeadersGuard {
@@ -64,27 +61,31 @@ pub(in crate::network_host::headers) fn headers_guard<'s>(
         .unwrap_or(HeadersGuard::None)
 }
 
-pub(in crate::network_host::headers) fn header_allowed_by_guard(
-    guard: HeadersGuard,
-    name: &str,
-    value: &str,
-) -> bool {
+pub fn header_allowed_by_guard(guard: HeadersGuard, name: &str, value: &str) -> bool {
     match guard {
         HeadersGuard::None => true,
         HeadersGuard::Request => {
-            !moli_fetch::is_forbidden_request_header_name(name)
-                && !moli_fetch::is_forbidden_request_header_override_value(name, value)
+            !moli_fetch_types::header_policy::is_forbidden_request_header_name(name)
+                && !moli_fetch_types::header_policy::is_forbidden_request_header_override_value(
+                    name, value,
+                )
         }
         HeadersGuard::RequestNoCors => {
-            !moli_fetch::is_forbidden_request_header_name(name)
-                && !moli_fetch::is_forbidden_request_header_override_value(name, value)
-                && moli_fetch::is_no_cors_safelisted_request_header(name, value)
+            !moli_fetch_types::header_policy::is_forbidden_request_header_name(name)
+                && !moli_fetch_types::header_policy::is_forbidden_request_header_override_value(
+                    name, value,
+                )
+                && moli_fetch_types::header_policy::is_no_cors_safelisted_request_header(
+                    name, value,
+                )
         }
-        HeadersGuard::Response => !moli_fetch::is_forbidden_response_header_name(name),
+        HeadersGuard::Response => {
+            !moli_fetch_types::header_policy::is_forbidden_response_header_name(name)
+        }
     }
 }
 
-pub(crate) fn filter_headers_for_guard(
+pub fn filter_headers_for_guard(
     entries: &[(String, String)],
     guard: HeadersGuard,
 ) -> Vec<(String, String)> {
@@ -97,7 +98,7 @@ pub(crate) fn filter_headers_for_guard(
     filtered
 }
 
-pub(in crate::network_host::headers) fn header_append_allowed_by_guard(
+pub fn header_append_allowed_by_guard(
     guard: HeadersGuard,
     name: &str,
     value: &str,
@@ -131,7 +132,7 @@ pub(in crate::network_host::headers) fn header_append_allowed_by_guard(
     }
 }
 
-pub(in crate::network_host) fn set_headers_entries(
+pub fn set_headers_entries(
     scope: &mut v8::PinScope<'_, '_>,
     obj: v8::Local<'_, v8::Object>,
     entries: &[(String, String)],
@@ -143,7 +144,7 @@ pub(in crate::network_host) fn set_headers_entries(
     set_private_value(scope, obj, HEADERS_ENTRIES_SLOT, json.into());
 }
 
-pub(in crate::network_host) fn headers_entries_json(entries: &[(String, String)]) -> String {
+pub fn headers_entries_json(entries: &[(String, String)]) -> String {
     // Keep the underlying header list intact. Request construction can refill
     // this list under a different guard, which must see each original entry.
     let entries = normalized_header_list(entries);
@@ -169,7 +170,7 @@ fn normalized_header_list(entries: &[(String, String)]) -> Vec<(String, String)>
 
 /// Combine values for network dispatch without losing the first field spelling.
 /// Keep Set-Cookie separate and retain the existing case-insensitive name order.
-pub(crate) fn combined_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
+pub fn combined_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
     for (name, value) in normalized_header_list(entries) {
         if name.eq_ignore_ascii_case("set-cookie") {
@@ -192,7 +193,7 @@ pub(crate) fn combined_headers_entries(entries: &[(String, String)]) -> Vec<(Str
 
 // Public iteration and XHR's serialized response headers use sorted-lowercase
 // names; the internal list and network projection retain their original case.
-pub(crate) fn normalized_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
+pub fn normalized_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = combined_headers_entries(entries);
     for (name, _) in &mut normalized {
         name.make_ascii_lowercase();
@@ -200,18 +201,18 @@ pub(crate) fn normalized_headers_entries(entries: &[(String, String)]) -> Vec<(S
     normalized
 }
 
-pub(in crate::network_host::headers) fn normalize_header_value(value: &str) -> String {
+pub fn normalize_header_value(value: &str) -> String {
     value.trim_matches(is_http_whitespace).to_owned()
 }
 
-pub(in crate::network_host::headers) fn normalized_header_name_or_throw(
+pub fn normalized_header_name_or_throw(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
 ) -> Option<String> {
     validated_header_name_or_throw(scope, name).map(str::to_ascii_lowercase)
 }
 
-pub(in crate::network_host::headers) fn validated_header_name_or_throw<'a>(
+pub fn validated_header_name_or_throw<'a>(
     scope: &mut v8::PinScope<'_, '_>,
     name: &'a str,
 ) -> Option<&'a str> {
@@ -223,7 +224,7 @@ pub(in crate::network_host::headers) fn validated_header_name_or_throw<'a>(
     }
 }
 
-pub(in crate::network_host::headers) fn normalized_header_value_or_throw(
+pub fn normalized_header_value_or_throw(
     scope: &mut v8::PinScope<'_, '_>,
     value: &str,
 ) -> Option<String> {
@@ -257,7 +258,7 @@ fn is_http_whitespace(ch: char) -> bool {
 }
 
 /// The sorted, combined view used by public iteration and header consumers.
-pub(crate) fn headers_entries<'s>(
+pub fn headers_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
 ) -> Vec<(String, String)> {
@@ -265,7 +266,7 @@ pub(crate) fn headers_entries<'s>(
 }
 
 /// The internal header list, before the public sort-and-combine projection.
-pub(in crate::network_host) fn headers_list<'s>(
+pub fn headers_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
 ) -> Vec<(String, String)> {

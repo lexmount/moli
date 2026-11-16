@@ -5,6 +5,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+http = "1"
+serde_json = "1.0.145"
+moli-fetch-types = { path = "../moli-types/moli-fetch-types" }
 anyhow = "1.0.100"
 moli-url = { path = "../moli-url" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
