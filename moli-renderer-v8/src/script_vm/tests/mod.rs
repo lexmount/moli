@@ -31,6 +31,7 @@ mod native_drag_pointer_suppression;
 mod native_drag_source_events;
 mod offline_audio_float;
 mod picture_in_picture_interfaces;
+mod processing_instruction_attributes;
 mod touch_native_receivers;
 #[cfg(feature = "devtools")]
 mod touch_snapshot;

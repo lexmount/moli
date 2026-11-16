@@ -5,6 +5,7 @@ use super::*;
 mod data;
 mod edits;
 mod helpers;
+mod processing_instruction;
 mod prototype;
 mod text;
 
