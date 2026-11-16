@@ -29,6 +29,29 @@ fn adopting_inert_template_styles_does_not_prepare_unused_sources() {
 }
 
 #[test]
+fn parser_inline_style_shares_dom_and_processed_source_backing() {
+    let css = format!(
+        ".parser-backing {{ color: red; }} /*{}*/",
+        "shared-backing ".repeat(4096),
+    );
+    let host = moli_parser::HtmlParser::SCRIPTING_ENABLED.parse_dom_host(
+        url::Url::parse("https://parser-backing.test/").unwrap(),
+        format!("<!doctype html><html><head><style>{css}</style></head></html>"),
+    );
+    let document = host.document_handle();
+    let owner = host.dom().elements_by_tag_name(document, "style", false)[0];
+    assert!(!host.is_style_element_parsing_children(owner));
+    let dom_text = host.shared_text_content(owner).unwrap();
+    let mut engine = MoliStyleEngine::new();
+    engine.initialize_style_element_sources_with_host(&host, document);
+    let processed = engine.owner_style_sheet_processing_source(owner).unwrap();
+    let source_text = processed.source().input_css_text().unwrap();
+
+    assert_eq!(source_text, css);
+    assert_eq!(dom_text.as_ptr(), source_text.as_ptr());
+}
+
+#[test]
 fn style_element_initialization_waits_for_parser_and_preserves_prepared_sources() {
     let mut host = test_host();
     let document = host.document_handle();
@@ -1852,8 +1875,8 @@ fn owner_style_sheet_sources_share_one_cached_text_allocation() {
     let mut owner_sources = super::source_owner_text::OwnerStyleSheetSources::default();
     let base_url = url::Url::parse("https://example.test/").expect("valid test url");
     let css_text = ".card:has(.item) { color: red; }";
-    owner_sources.set_source(first_owner, css_text.to_owned(), base_url.clone());
-    owner_sources.set_source(second_owner, css_text.to_owned(), base_url);
+    owner_sources.set_source(first_owner, css_text.into(), base_url.clone());
+    owner_sources.set_source(second_owner, css_text.into(), base_url);
 
     let first = owner_sources
         .source(first_owner)
@@ -1949,7 +1972,7 @@ fn linked_source_store_lifecycle_records_drive_retained_record_construction() {
     let mut owner_sources = super::source_owner_text::OwnerStyleSheetSources::default();
     owner_sources.set_source(
         style,
-        ".owner { color: green; }".to_owned(),
+        ".owner { color: green; }".into(),
         url::Url::parse("https://example.test/").unwrap(),
     );
     let linked_url = url::Url::parse("https://example.test/linked.css").unwrap();
