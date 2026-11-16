@@ -4571,17 +4571,7 @@ mod renderer_runtime_inspector_response_channel_tests {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RendererRuntimeRealmInfo {
-    pub context_id: i64,
-    pub realm_id: Option<String>,
-    pub frame_id: Option<String>,
-    pub origin: String,
-    pub name: String,
-    pub is_default: bool,
-    pub context_type: String,
-    pub grant_universal_access: Option<bool>,
-}
+pub use moli_command_types::RuntimeRealmInfo as RendererRuntimeRealmInfo;
 
 /// A native DOM-agent reference, resolved against the current Page document.
 /// CDP frontend IDs must be published in their Inspector session. Internal
@@ -4877,114 +4867,16 @@ pub enum RendererDomDebuggerDomBreakpointResolution {
     UnknownType(String),
 }
 
-pub(crate) enum RendererInspectorPageCommand {
-    DispatchRuntimeProtocolMessage {
-        raw_json: String,
-    },
-    DispatchRuntimeProtocolMessageWithDeferredResponse {
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    },
-    DispatchRuntimeProtocolMessageWithContextResolution {
-        action: String,
-        raw_json: String,
-    },
-    DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
-        action: String,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    },
-    RuntimeEnableEvents,
-    RuntimeDisableEvents,
-    RuntimeBindingEvents {
-        binding: crate::protocol_types::RuntimeBindingRegistration,
-        remove: bool,
-    },
-    /// The V8 session already executed removal. Only native restore metadata
-    /// remains to be committed before publishing the original native terminal.
-    CommitRuntimeBindingRemoval {
-        name: String,
-        output: Result<RendererRuntimeCommandOutput, String>,
-    },
-    ApplyRuntimeProtocolState {
-        session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
-        stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-    },
-    DetachRuntimeInspectorSession {
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    },
-    AddRuntimeBinding {
-        name: String,
-        execution_context_name: Option<String>,
-        execution_context_id: Option<i64>,
-    },
-    DomDebuggerGetEventListeners {
-        object_id: String,
-        depth: i32,
-        pierce: bool,
-    },
-    ComputedStylePropertiesForObjectId {
-        object_id: String,
-    },
-    PrepareElementClick {
-        object_id: String,
-    },
-    ScrollObjectNodeIntoViewIfNeeded {
-        object_id: String,
-        rect: Option<moli_page_types::DomScrollIntoViewRect>,
-    },
-    ClientRectForObjectId {
-        object_id: String,
-    },
-    DocumentGeometryForObjectId {
-        object_id: String,
-    },
-    NodeHasGeometryForObjectId {
-        object_id: String,
-    },
-    FocusDocumentNodeForObjectId {
-        object_id: String,
-    },
-    SetFileInputFilesForObjectId {
-        object_id: String,
-        files: Vec<crate::dom::native::SelectedFile>,
-        append: bool,
-    },
-    DocumentNodeSnapshotForObjectId {
-        include_whitespace: bool,
-        object_id: String,
-        depth: i32,
-        pierce: bool,
-        bind_frontend_nodes: bool,
-    },
-    RequestDocumentNodeForObjectId {
-        include_whitespace: bool,
-        object_id: String,
-    },
-    AccessibilityTreePayloadsForObjectId {
-        object_id: String,
-    },
-    AccessibilityNodeAndAncestorPayloadsForObjectId {
-        object_id: String,
-    },
-    AccessibilityPartialTreePayloadsForObjectId {
-        object_id: String,
-        fetch_relatives: bool,
-    },
-    OuterHtmlForObjectId {
-        object_id: String,
-        include_shadow_dom: bool,
-    },
-    ResolveRuntimeObjectForBackendNodeId {
-        backend_node_id: u32,
-        execution_context_id: Option<i64>,
-        object_group: Option<String>,
-    },
-    ResolveBlobObject {
-        object_id: String,
-    },
+pub(crate) type RendererInspectorPageCommand =
+    moli_command_types::devtools::InspectorCommand<RendererInspectorCommandHandles>;
+
+/// Execution capabilities stay in the renderer rather than the command DTO crate.
+pub(crate) struct RendererInspectorCommandHandles;
+
+impl moli_command_types::devtools::InspectorCommandHandles for RendererInspectorCommandHandles {
+    type ResponseSender = RendererRuntimeInspectorResponseSender;
+    type RuntimeOutput = RendererRuntimeCommandOutput;
+    type SessionDetachGuard = RendererRuntimeInspectorSessionDetachGuard;
 }
 
 #[non_exhaustive]

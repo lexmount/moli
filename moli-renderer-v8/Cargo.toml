@@ -17,6 +17,7 @@ test-support = []
 wpt-extensions = []
 
 [dependencies]
+moli-command-types = { path = "../moli-types/moli-command-types", features = ["devtools"] }
 moli-inspector-json = { path = "../moli-inspector-json" }
 moli-fetch-types = { path = "../moli-types/moli-fetch-types" }
 anyhow = "1.0.100"
