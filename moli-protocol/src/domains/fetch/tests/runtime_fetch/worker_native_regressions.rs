@@ -242,3 +242,156 @@ async fn check_worker_redirect_extra_info(shared: bool) {
     .await;
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_continue_response_preserves_wire_info_without_creating_a_redirect() {
+    let next_hits = Arc::new(AtomicUsize::new(0));
+    let hits = next_hits.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new()
+            .route("/page", get(|| async { axum::response::Html("<!doctype html>response provenance") }))
+            .route("/worker.js", get(|| async { ([("content-type", "text/javascript")], r#"
+                onmessage = async event => {
+                    try {
+                        const r = await fetch(event.data.url, {redirect: event.data.redirect || 'follow'});
+                        postMessage({status:r.status, type:r.type, body:await r.text()});
+                    } catch(error) { postMessage({error:error.name}); }
+                };
+                postMessage('ready');
+            "#) }))
+            .route("/probe", get(|| async { ([("content-type","text/plain"),("x-wire","original")], "network") }))
+            .route("/empty", get(|| async { (axum::http::StatusCode::FOUND, [("location", "")], "empty-location-body") }))
+            .route("/next", get(move || { let hits = hits.clone(); async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                "next"
+            } }))
+        ).await.unwrap();
+    });
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &format!("{origin}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
+    enable_runtime_async(&mut ctx, "SID-1", 57_000).await;
+    command(&mut ctx, 57_001, "Network.enable", json!({})).await;
+    let ready = command(&mut ctx,57_002,"Runtime.evaluate",json!({
+        "expression":"new Promise(resolve=>{globalThis.wireWorker=new Worker('/worker.js');wireWorker.onmessage=e=>resolve(e.data);})",
+        "awaitPromise":true,"returnByValue":true
+    })).await;
+    assert_eq!(ready["result"]["result"]["value"], "ready");
+    command(
+        &mut ctx,
+        57_003,
+        "Fetch.enable",
+        json!({"patterns":[{"urlPattern":"*/probe*","requestStage":"Response"}]}),
+    )
+    .await;
+    for (index, fulfill) in [false, true].into_iter().enumerate() {
+        let id = 57_010 + index as u64 * 10;
+        let url = format!("{origin}/probe?fulfill={fulfill}");
+        command(&mut ctx,id,"Runtime.evaluate",json!({"expression":format!(
+            "globalThis.wireResult=new Promise(resolve=>{{wireWorker.onmessage=e=>resolve(e.data);wireWorker.postMessage({{url:{url:?}}});}});'started'"
+        )})).await;
+        let pause = wait_for_request_paused(&mut ctx, &url, "response provenance pause").await;
+        let network_id = pause["params"]["networkId"].clone();
+        wait_until_scheduler_message(
+            &mut ctx,
+            "wire ExtraInfo before continueResponse",
+            |event| {
+                event["method"] == "Network.responseReceivedExtraInfo"
+                    && event["params"]["requestId"] == network_id
+            },
+        )
+        .await;
+        let raw = ctx
+            .sent
+            .iter()
+            .find(|event| {
+                event["method"] == "Network.responseReceivedExtraInfo"
+                    && event["params"]["requestId"] == network_id
+            })
+            .unwrap();
+        assert_eq!(raw["params"]["statusCode"], 200);
+        assert_eq!(raw["params"]["headers"]["x-wire"], "original");
+        let mut params = json!({"requestId":pause["params"]["requestId"],"responseCode":302,
+            "responseHeaders":[{"name":"Location","value":"/next"},{"name":"X-Wire","value":"rewritten"}]
+        });
+        if fulfill {
+            params["body"] = json!("c3ludGhldGlj");
+        }
+        command(
+            &mut ctx,
+            id + 1,
+            if fulfill {
+                "Fetch.fulfillRequest"
+            } else {
+                "Fetch.continueResponse"
+            },
+            params,
+        )
+        .await;
+        let response = command(
+            &mut ctx,
+            id + 2,
+            "Runtime.evaluate",
+            json!({
+                "expression":"wireResult","awaitPromise":true,"returnByValue":true
+            }),
+        )
+        .await;
+        assert_eq!(
+            response["result"]["result"]["value"],
+            if fulfill {
+                json!({"status":200,"type":"basic","body":"next"})
+            } else {
+                json!({"status":302,"type":"basic","body":"network"})
+            }
+        );
+        wait_until_scheduler_message(&mut ctx, "response provenance terminal", |event| {
+            event["method"] == "Network.loadingFinished"
+                && event["params"]["requestId"] == network_id
+        })
+        .await;
+        assert_eq!(next_hits.load(Ordering::SeqCst), usize::from(fulfill));
+        let extras = ctx
+            .sent
+            .iter()
+            .filter(|e| {
+                e["method"] == "Network.responseReceivedExtraInfo"
+                    && e["params"]["requestId"] == network_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            extras.len(),
+            if fulfill { 2 } else { 1 },
+            "one wire response fact per hop: {extras:?}"
+        );
+        assert!(
+            extras.iter().all(|e| e["params"]["statusCode"] == 200),
+            "CDP edits must never replace wire metadata: {extras:?}"
+        );
+    }
+    command(&mut ctx, 57_040, "Fetch.disable", json!({})).await;
+    for (index, redirect) in ["error", "follow", "manual"].into_iter().enumerate() {
+        let response = command(&mut ctx,57_050+index as u64,"Runtime.evaluate",json!({
+            "expression":format!("new Promise(resolve=>{{wireWorker.onmessage=e=>resolve(e.data);wireWorker.postMessage({{url:'/empty',redirect:{redirect:?}}});}})"),
+            "awaitPromise":true,"returnByValue":true
+        })).await;
+        assert_eq!(
+            response["result"]["result"]["value"],
+            if redirect == "manual" {
+                json!({"status":0,"type":"opaqueredirect","body":""})
+            } else {
+                json!({"status":302,"type":"basic","body":"empty-location-body"})
+            }
+        );
+    }
+    command(
+        &mut ctx,
+        57_060,
+        "Runtime.evaluate",
+        json!({"expression":"wireWorker.terminate()"}),
+    )
+    .await;
+    server.abort();
+}

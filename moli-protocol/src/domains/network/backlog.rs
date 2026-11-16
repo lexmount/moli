@@ -24,8 +24,10 @@ use super::output_queue::{
     TargetSubresourceCompleteNetworkDeliveryOutput, TargetSubresourceDataNetworkDeliveryOutput,
     TargetSubresourceEventSourceMessageNetworkDeliveryOutput, TargetSubresourceMetadataOutcome,
     TargetSubresourceNetworkDeliveryOutput, TargetSubresourceRequestExtraInfoNetworkDeliveryOutput,
-    TargetSubresourceRequestNetworkDeliveryOutput, TargetSubresourceResponseNetworkDeliveryOutput,
-    TargetWebSocketDeliveryRecord, TargetWebSocketLifecycleDeliveryKind,
+    TargetSubresourceRequestNetworkDeliveryOutput,
+    TargetSubresourceResponseExtraInfoNetworkDeliveryOutput,
+    TargetSubresourceResponseNetworkDeliveryOutput, TargetWebSocketDeliveryRecord,
+    TargetWebSocketLifecycleDeliveryKind,
 };
 
 pub(crate) struct NetworkBacklogProjectionContext<'a> {
@@ -198,6 +200,9 @@ fn emit_subresource_network_delivery_record(
         }
         TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(output) => {
             emit_staged_subresource_request_extra_info(conn, out, output, owner, base_timestamp)
+        }
+        TargetSubresourceNetworkDeliveryOutput::ResponseExtraInfo(output) => {
+            emit_staged_subresource_response_extra_info(conn, out, output, owner)
         }
         TargetSubresourceNetworkDeliveryOutput::ResponseStarted(output) => {
             emit_staged_subresource_response_started(
@@ -531,15 +536,17 @@ fn emit_staged_subresource_request_started(
         }
     }
     if let Some(redirect) = output.redirect() {
-        emit_subresource_response_extra_info(
-            out,
-            &extra_info_sessions,
-            request_id,
-            &redirect.headers,
-            redirect.status,
-            &redirect.cookie_set_reports,
-            redirect.network_extra_info_available,
-        );
+        if !output.redirect_extra_info_reported {
+            emit_subresource_response_extra_info(
+                out,
+                &extra_info_sessions,
+                request_id,
+                &redirect.headers,
+                redirect.status,
+                &redirect.cookie_set_reports,
+                redirect.network_extra_info_available,
+            );
+        }
         if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
             slot.record_fetch_pause_announced_redirect(request_id);
         }
@@ -574,6 +581,26 @@ fn emit_staged_subresource_request_extra_info(
         );
     }
     out.len() > initial_output_len
+}
+
+fn emit_staged_subresource_response_extra_info(
+    conn: &CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    delivery: &TargetSubresourceResponseExtraInfoNetworkDeliveryOutput,
+    owner: &CommandOwnerScope,
+) -> bool {
+    let initial = out.len();
+    let info = &delivery.output().info;
+    emit_subresource_response_extra_info(
+        out,
+        &conn.network_extra_info_event_session_ids_for_owner(owner),
+        delivery.request_id(),
+        &info.headers,
+        info.status,
+        &info.cookie_set_reports,
+        true,
+    );
+    out.len() != initial
 }
 
 fn emit_staged_subresource_response_started(
@@ -646,15 +673,17 @@ fn emit_staged_subresource_response_started(
             fetch_request_id.as_deref(),
         );
     }
-    emit_subresource_response_extra_info(
-        out,
-        &extra_info_sessions,
-        request_id,
-        output.response_headers(),
-        output.status(),
-        output.cookie_set_reports(),
-        output.network_request_headers().is_some(),
-    );
+    if !output.response_extra_info_reported {
+        emit_subresource_response_extra_info(
+            out,
+            &extra_info_sessions,
+            request_id,
+            output.response_headers(),
+            output.status(),
+            output.cookie_set_reports(),
+            output.network_request_headers().is_some(),
+        );
+    }
     out.len() > initial_output_len
 }
 

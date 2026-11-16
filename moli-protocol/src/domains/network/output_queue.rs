@@ -20,6 +20,7 @@ pub(crate) struct TargetNetworkOutputQueue {
     next_delivery_order_index: usize,
     completed_subresource_handles: HashSet<SubresourceNetworkRequestHandle>,
     staged_request_extra_info: HashSet<SubresourceNetworkRequestHandle>,
+    staged_response_extra_info: HashSet<SubresourceNetworkRequestHandle>,
     websocket_handshake_recorded_socket_ids: HashSet<u64>,
     pending_websocket_lifecycle_events: HashMap<u64, Vec<WebSocketLifecycleEvent>>,
     staged_subresource_requests:
@@ -1256,6 +1257,7 @@ pub(crate) enum TargetSubresourcePlanOutput {
     Complete(Box<TargetSubresourceMetadataOutput>),
     RequestStarted(Arc<TargetSubresourceRequestStartedOutput>),
     RequestExtraInfo(TargetSubresourceRequestExtraInfoOutput),
+    ResponseExtraInfo(TargetSubresourceResponseExtraInfoOutput),
     ResponseStarted(Arc<TargetSubresourceResponseStartedOutput>),
     DataReceived(TargetSubresourceDataReceivedOutput),
     EventSourceMessageReceived(Box<TargetSubresourceEventSourceMessageReceivedOutput>),
@@ -1268,6 +1270,7 @@ impl TargetSubresourcePlanOutput {
             Self::Complete(output) => output.index(),
             Self::RequestStarted(output) => output.index(),
             Self::RequestExtraInfo(output) => output.index(),
+            Self::ResponseExtraInfo(output) => output.index(),
             Self::ResponseStarted(output) => output.index(),
             Self::DataReceived(output) => output.index(),
             Self::EventSourceMessageReceived(output) => output.index(),
@@ -1279,6 +1282,7 @@ impl TargetSubresourcePlanOutput {
         match self {
             Self::Complete(output) => output.websocket_socket_id(),
             Self::RequestStarted(_)
+            | Self::ResponseExtraInfo(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -1292,6 +1296,7 @@ impl TargetSubresourcePlanOutput {
             Self::Complete(output) => output.request_handle(),
             Self::RequestStarted(output) => Some(output.handle()),
             Self::RequestExtraInfo(output) => Some(output.handle()),
+            Self::ResponseExtraInfo(output) => Some(output.handle()),
             Self::ResponseStarted(output) => Some(output.handle()),
             Self::DataReceived(output) => Some(output.handle()),
             Self::EventSourceMessageReceived(output) => Some(output.handle()),
@@ -1310,6 +1315,11 @@ impl TargetSubresourcePlanOutput {
             Self::RequestExtraInfo(output) => {
                 TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(
                     TargetSubresourceRequestExtraInfoNetworkDeliveryOutput::new(output, request_id),
+                )
+            }
+            Self::ResponseExtraInfo(output) => {
+                TargetSubresourceNetworkDeliveryOutput::ResponseExtraInfo(
+                    TargetSubresourceResponseExtraInfoNetworkDeliveryOutput { request_id, output },
                 )
             }
             Self::ResponseStarted(output) => {
@@ -1340,6 +1350,7 @@ impl TargetSubresourcePlanOutput {
         match self {
             Self::Complete(output) => Some(output),
             Self::RequestStarted(_)
+            | Self::ResponseExtraInfo(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -1353,6 +1364,7 @@ impl TargetSubresourcePlanOutput {
         match self {
             Self::Complete(output) => Some(output),
             Self::RequestStarted(_)
+            | Self::ResponseExtraInfo(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -1365,6 +1377,7 @@ impl TargetSubresourcePlanOutput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetSubresourceRequestStartedOutput {
     redirect: Option<Box<moli_core::page::NavigationRedirect>>,
+    pub(crate) redirect_extra_info_reported: bool,
     delivery_order_index: usize,
     index: usize,
     loader_id: String,
@@ -1390,6 +1403,7 @@ impl TargetSubresourceRequestStartedOutput {
     ) -> Self {
         Self {
             redirect: request.redirect().cloned().map(Box::new),
+            redirect_extra_info_reported: false,
             delivery_order_index,
             index,
             loader_id: loader_id.to_owned(),
@@ -1515,7 +1529,27 @@ impl TargetSubresourceRequestExtraInfoOutput {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TargetSubresourceResponseExtraInfoOutput {
+    delivery_order_index: usize,
+    index: usize,
+    handle: SubresourceNetworkRequestHandle,
+    pub(crate) info: Box<moli_fetch::NetworkResponseExtraInfo>,
+}
+impl TargetSubresourceResponseExtraInfoOutput {
+    pub(crate) fn delivery_order_index(&self) -> usize {
+        self.delivery_order_index
+    }
+    pub(crate) fn index(&self) -> usize {
+        self.index
+    }
+    pub(crate) fn handle(&self) -> SubresourceNetworkRequestHandle {
+        self.handle
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetSubresourceResponseStartedOutput {
+    pub(crate) response_extra_info_reported: bool,
     delivery_order_index: usize,
     index: usize,
     request: Arc<TargetSubresourceRequestStartedOutput>,
@@ -1538,6 +1572,7 @@ impl TargetSubresourceResponseStartedOutput {
         response: &SubresourceResponseStarted,
     ) -> Self {
         Self {
+            response_extra_info_reported: false,
             delivery_order_index,
             index,
             request,
@@ -1896,6 +1931,7 @@ pub(crate) enum TargetSubresourceNetworkDeliveryOutput {
     Complete(Box<TargetSubresourceCompleteNetworkDeliveryOutput>),
     RequestStarted(TargetSubresourceRequestNetworkDeliveryOutput),
     RequestExtraInfo(TargetSubresourceRequestExtraInfoNetworkDeliveryOutput),
+    ResponseExtraInfo(TargetSubresourceResponseExtraInfoNetworkDeliveryOutput),
     ResponseStarted(TargetSubresourceResponseNetworkDeliveryOutput),
     DataReceived(TargetSubresourceDataNetworkDeliveryOutput),
     EventSourceMessageReceived(Box<TargetSubresourceEventSourceMessageNetworkDeliveryOutput>),
@@ -1975,6 +2011,23 @@ impl TargetSubresourceRequestExtraInfoNetworkDeliveryOutput {
     }
 
     pub(crate) fn output(&self) -> &TargetSubresourceRequestExtraInfoOutput {
+        &self.output
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TargetSubresourceResponseExtraInfoNetworkDeliveryOutput {
+    request_id: String,
+    output: TargetSubresourceResponseExtraInfoOutput,
+}
+impl TargetSubresourceResponseExtraInfoNetworkDeliveryOutput {
+    pub(crate) fn request_id(&self) -> &str {
+        &self.request_id
+    }
+    pub(crate) fn delivery_order_index(&self) -> usize {
+        self.output.delivery_order_index()
+    }
+    pub(crate) fn output(&self) -> &TargetSubresourceResponseExtraInfoOutput {
         &self.output
     }
 }
@@ -2082,6 +2135,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
             Self::Complete(output) => output.request_id(),
             Self::RequestStarted(output) => output.request_id(),
             Self::RequestExtraInfo(output) => output.request_id(),
+            Self::ResponseExtraInfo(output) => output.request_id(),
             Self::ResponseStarted(output) => output.request_id(),
             Self::DataReceived(output) => output.request_id(),
             Self::EventSourceMessageReceived(output) => output.request_id(),
@@ -2094,6 +2148,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
             Self::Complete(output) => output.delivery_order_index(),
             Self::RequestStarted(output) => output.delivery_order_index(),
             Self::RequestExtraInfo(output) => output.delivery_order_index(),
+            Self::ResponseExtraInfo(output) => output.delivery_order_index(),
             Self::ResponseStarted(output) => output.delivery_order_index(),
             Self::DataReceived(output) => output.delivery_order_index(),
             Self::EventSourceMessageReceived(output) => output.delivery_order_index(),
@@ -2106,6 +2161,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
         match self {
             Self::Complete(output) => output.metadata(),
             Self::RequestStarted(_)
+            | Self::ResponseExtraInfo(_)
             | Self::RequestExtraInfo(_)
             | Self::ResponseStarted(_)
             | Self::DataReceived(_)
@@ -2122,6 +2178,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
             Self::Complete(output) => output.index(),
             Self::RequestStarted(output) => output.output().index(),
             Self::RequestExtraInfo(output) => output.output().index(),
+            Self::ResponseExtraInfo(output) => output.output().index(),
             Self::ResponseStarted(output) => output.output().index(),
             Self::DataReceived(output) => output.output().index(),
             Self::EventSourceMessageReceived(output) => output.output().index(),
@@ -2701,6 +2758,24 @@ impl TargetNetworkOutputQueue {
                     *subresource_index += 1;
                 }
             }
+            ScriptNetworkOutputItem::SubresourceResponseExtraInfo { handle, info } => {
+                if self.staged_subresource_requests.contains_key(handle) {
+                    self.staged_response_extra_info.insert(*handle);
+                    let delivery_order_index = self.next_delivery_order_index();
+                    self.delivery_outputs.push_subresource(
+                        TargetSubresourcePlanOutput::ResponseExtraInfo(
+                            TargetSubresourceResponseExtraInfoOutput {
+                                delivery_order_index,
+                                index: *subresource_index,
+                                handle: *handle,
+                                info: info.clone(),
+                            },
+                        ),
+                    );
+                    self.subresource_record_count = *subresource_index + 1;
+                    *subresource_index += 1;
+                }
+            }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
                 self.append_missing_subresource_request_extra_info(
                     *subresource_index,
@@ -2883,14 +2958,17 @@ impl TargetNetworkOutputQueue {
             self.staged_request_extra_info.remove(&request.handle());
         }
         let delivery_order_index = self.next_delivery_order_index();
-        let output = Arc::new(
-            TargetSubresourceRequestStartedOutput::from_page_request_started(
-                delivery_order_index,
-                index,
-                document_loader_id,
-                request,
-            ),
+        let mut output = TargetSubresourceRequestStartedOutput::from_page_request_started(
+            delivery_order_index,
+            index,
+            document_loader_id,
+            request,
         );
+        if request.redirect().is_some() {
+            output.redirect_extra_info_reported =
+                self.staged_response_extra_info.remove(&request.handle());
+        }
+        let output = Arc::new(output);
         self.staged_subresource_requests
             .insert(output.handle(), output.clone());
         self.delivery_outputs
@@ -2911,14 +2989,15 @@ impl TargetNetworkOutputQueue {
             return false;
         };
         let delivery_order_index = self.next_delivery_order_index();
-        let output = Arc::new(
-            TargetSubresourceResponseStartedOutput::from_page_response_started(
-                delivery_order_index,
-                index,
-                request,
-                response,
-            ),
+        let mut output = TargetSubresourceResponseStartedOutput::from_page_response_started(
+            delivery_order_index,
+            index,
+            request,
+            response,
         );
+        output.response_extra_info_reported =
+            self.staged_response_extra_info.contains(&response.handle());
+        let output = Arc::new(output);
         self.staged_subresource_responses
             .insert(output.handle(), output.clone());
         self.delivery_outputs
@@ -3028,6 +3107,7 @@ impl TargetNetworkOutputQueue {
         let response = self.staged_subresource_responses.remove(&body.handle());
         self.completed_subresource_handles.insert(body.handle());
         self.staged_request_extra_info.remove(&body.handle());
+        self.staged_response_extra_info.remove(&body.handle());
         let delivery_order_index = self.next_delivery_order_index();
         let output = TargetSubresourceBodyFinishedOutput::from_page_body_finished(
             delivery_order_index,

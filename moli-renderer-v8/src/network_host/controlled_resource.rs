@@ -547,6 +547,34 @@ impl ControlledResourceLoad {
                     );
                 }
             }
+            if body_from_network
+                && self.interception.is_worker()
+                && let Some(headers) = &network_request_headers
+            {
+                // The wire response is an immutable transport fact, available
+                // before auth/response interception can block or rewrite it.
+                self.interception.publish_network(
+                    crate::types::ScriptNetworkOutputItem::SubresourceResponseExtraInfo {
+                        handle: self
+                            .info
+                            .network_request_handle
+                            .expect("native request handle"),
+                        info: Box::new(moli_fetch::NetworkResponseExtraInfo {
+                            request_extra_info: moli_fetch::NetworkRequestExtraInfo {
+                                headers: headers.clone(),
+                                cookie_report: response
+                                    .head
+                                    .request_cookie_report
+                                    .clone()
+                                    .unwrap_or_default(),
+                            },
+                            status: response.head.status,
+                            headers: response.head.headers.clone(),
+                            cookie_set_reports: response.head.cookie_set_reports.clone(),
+                        }),
+                    },
+                );
+            }
             let mut response = response;
             let mut body_from_network = body_from_network;
             let mut continued_final_response = false;

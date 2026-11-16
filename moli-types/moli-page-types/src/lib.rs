@@ -631,6 +631,10 @@ pub enum ScriptNetworkOutputItem {
         handle: SubresourceNetworkRequestHandle,
         info: Box<NetworkRequestExtraInfo>,
     },
+    SubresourceResponseExtraInfo {
+        handle: SubresourceNetworkRequestHandle,
+        info: Box<moli_fetch::NetworkResponseExtraInfo>,
+    },
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
     SubresourceBodyFinished(Box<SubresourceBodyFinished>),
@@ -1016,7 +1020,8 @@ impl ScriptExecutionReport {
                 state.bodies.insert(handle, *body);
                 self.try_materialize_staged_subresource_record(handle);
             }
-            ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
+            ScriptNetworkOutputItem::SubresourceResponseExtraInfo { .. }
+            | ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
             | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_) => {}
             ScriptNetworkOutputItem::WebSocketNetworkEvent(event) => {

@@ -70,6 +70,12 @@ impl ScriptNetworkOutputItem {
             Self::SubresourceResponseStarted(response) => response_started_charge(response),
             Self::SubresourceRequestExtraInfo { info, .. } => headers_charge(&info.headers)
                 .saturating_add(cookie_query_charge(&info.cookie_report)),
+            Self::SubresourceResponseExtraInfo { info, .. } => {
+                headers_charge(&info.request_extra_info.headers)
+                    .saturating_add(cookie_query_charge(&info.request_extra_info.cookie_report))
+                    .saturating_add(headers_charge(&info.headers))
+                    .saturating_add(info.cookie_set_reports.len().saturating_mul(256))
+            }
             Self::SubresourceDataReceived(_) => 0,
             Self::SubresourceEventSourceMessageReceived(message) => [
                 message.event_name.as_str(),
