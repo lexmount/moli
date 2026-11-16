@@ -883,6 +883,7 @@ impl PageScriptHost {
                 .pending_child_classic_script_network_loads
                 .remove(handle)
                 .expect("collected child classic request must remain pending until retirement");
+            load.cancel();
             load.finish();
             self.record_subresource_body_finished(crate::types::SubresourceBodyFinished::failed(
                 *handle,

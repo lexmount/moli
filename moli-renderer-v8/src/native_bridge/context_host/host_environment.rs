@@ -698,6 +698,10 @@ impl PageScriptHost {
             .document_resource_loaders
             .get(retired_owner)
             .expect("document.open() requires its exact source resource authority");
+        // Parser source loads belong to the discarded parser, unlike Window
+        // Fetch/XHR consumers that survive document.open(). Cancel them before
+        // transferring the surviving loads to the replacement registry.
+        self.retire_child_classic_script_network_loads(retired.load_diagnostics().registry_id);
         let replacement = DocumentResourceLoader::for_committed_document(context, source);
         let transferred_loads = retired.transfer_existing_loads_to(&replacement);
         self.retire_document_resource_loader(retired_owner)

@@ -14,6 +14,7 @@ enum ScriptLifecycle {
     ReplaceFrame,
     ReplaceTop,
     CancelSrcdoc,
+    OpenDocument,
 }
 
 async fn check_child_parser_script_network_progress(
@@ -181,7 +182,10 @@ async fn check_child_parser_script_network_progress(
 
     if matches!(
         lifecycle,
-        ScriptLifecycle::RemoveFrame | ScriptLifecycle::ReplaceFrame | ScriptLifecycle::ReplaceTop
+        ScriptLifecycle::RemoveFrame
+            | ScriptLifecycle::ReplaceFrame
+            | ScriptLifecycle::ReplaceTop
+            | ScriptLifecycle::OpenDocument
     ) {
         let method = if matches!(lifecycle, ScriptLifecycle::ReplaceTop) {
             "Page.navigate"
@@ -194,6 +198,9 @@ async fn check_child_parser_script_network_progress(
                 json!({"expression": format!("child.src = '{base_url}/fresh'")})
             }
             ScriptLifecycle::ReplaceTop => json!({"url": format!("{base_url}/fresh")}),
+            ScriptLifecycle::OpenDocument => {
+                json!({"expression": "const d = child.contentDocument; d.open(); d.write('<p>replacement</p>'); d.close();"})
+            }
             _ => unreachable!(),
         };
         messages.extend(
@@ -226,6 +233,18 @@ async fn check_child_parser_script_network_progress(
                 timeout(Duration::from_secs(10), recv_until_match(&mut socket, idle))
                     .await
                     .expect("a retired child request must not block top-level networkIdle"),
+            );
+        }
+        if matches!(lifecycle, ScriptLifecycle::OpenDocument) {
+            assert_eq!(
+                cdp_runtime_evaluate_string(
+                    &mut socket,
+                    &session.session_id,
+                    93,
+                    "child.contentDocument.body.textContent",
+                )
+                .await,
+                "replacement"
             );
         }
         let _ = release.send(true);
@@ -468,6 +487,16 @@ async fn websocket_cdp_cancelled_srcdoc_keeps_child_script_network_completion() 
         false,
         ScriptResponse::Success,
         ScriptLifecycle::CancelSrcdoc,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_child_document_open_retires_old_parser_script_before_response() {
+    check_child_parser_script_network_progress(
+        false,
+        ScriptResponse::Success,
+        ScriptLifecycle::OpenDocument,
     )
     .await;
 }
