@@ -246,55 +246,44 @@ Moli は、Chromium を外から操作するだけの仕組みではなく、独
 
 ## 検証結果
 
-以下の実測値は、Moli が現在対応できる範囲を示しています。検証対象には、実在する Web サイト、自動操作クライアント、Chromium/WPT の動作、大規模な nextest 回帰テストを含みます。
+Moli は、タスクが固定された公開ベンチマークで測定しています。各行に、何をもって合格とするかと、結果を再現できる場所を示します。
 
-### 公開 Web サイトの横断取得試験
+| 分野 | ベンチマーク | 合格の条件 | Moli | 詳細 |
+| --- | --- | --- | --- | --- |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 実サイト 430 タスク | 必要な内容を実サイトから取得できる | **89.8%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
+| 本文抽出 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 保存済み 545 ページ | 本文が人手によるアノテーションと一致する | **39.27%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
+| ブラウザ自動操作 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 比較可能な 1,308 タスク | CDP、自動操作ツール、Web プラットフォームのタスクが成功する | **81.9%**、Chrome は 99.8% | [ブラウザ自動操作](#ブラウザ自動操作) |
+| リソース使用量 | Lexbench-Headless-Browser · すべてのローカルエンジンが完了した 557 タスク | タスクあたりの CPU 時間とピークメモリの中央値 | Chrome の CPU 時間の **15%**、メモリの **13%** | [リソース使用量](#リソース使用量) |
+| Web 標準 | 選定した [WPT](https://github.com/web-platform-tests/wpt) テスト | WPT テストに合格する | 1 回の全件実行で **161万2,000件** が合格 | — |
 
-中国国内および世界の主要サイトから、192 件の公開 URL を対象としました。JavaScript の実行後に、本文に相当する内容を取得できた場合だけを成功としています。HTTP 200 が返るだけの場合や、自動アクセス対策の確認画面、ログインが必要な画面、空の応答、内容がなく外枠だけの画面は、成功に含めません。
+### Web Fetch
 
-| ブラウザ | 取得できたページ | 成功率 | 所要時間の中央値 | RSS 中央値 |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+[LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) は実サイトに対して 430 タスクを実行するため、合格にはサイトへのアクセスと正しい内容の両方が必要です。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) は保存済みの 545 ページを使い、実サイトへアクセスせずに本文抽出を評価します。タイトルをクリックするとグラフが切り替わります。各行では、Moli（青）を他の 4 ブラウザの範囲と比べています。
 
-### AI エージェント処理の測定例
-
-| 指標 | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP が利用可能になるまで | 34.85 ms | 169.37 ms |
-| 1 回の処理時間（p50） | 33.40 ms | 57.13 ms |
-| PSS 最大値 | 102.46 MiB | 348.82 MiB |
-| 最大プロセス数／最大スレッド数 | 1 / 24 | 11 / 123 |
-
-### WPT テスト
-
-Moli のエージェント向けブラウザとしての対応範囲を検証する現在の WPT テストセットでは、1 回の全件実行で **161万2,000件のテストに合格**しました。
-
-### Lexbench-Headless-Browser における Moli の結果
-
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) の全タスクセットは 1,928 件で、生 CDP、Playwright・Puppeteer・Selenium などバージョンを固定した 13 種類の自動操作ツール、および Web プラットフォームのセマンティクスを対象とします。リモートエンドポイントとしてのみ提供される Kitesurf を含めるため、下のグラフではこのうち比較可能な 1,308 件を使用しています。すべてのブラウザに同じタスク選定ルールを適用しています。
+<details name="web-fetch-chart" open>
+<summary><strong>実サイト · LexBench-Web-Fetch、430 タスク</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
-  <img alt="5 種類のヘッドレスブラウザによる 1,308 件の比較可能なタスクの成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.png">
+  <img alt="実サイト 430 タスクの成功率。総合：Moli 386/430（89.8%）、Chromium 234、Lightpanda 228、Obscura 223、Kitesurf 192。ボット対策：Moli 88/100、他ブラウザの最高 37。人気サイト：Moli 91、他ブラウザの最高 58。動的サイト：Moli 90、他ブラウザの最高 58。静的ページ：Moli 97、Chromium 99。文書・メディア：Moli 20/30、他ブラウザの最高 17。" src="../assets/webfetch-live-light.png" width="100%">
 </picture>
 
-**Moli 0.1.1 は 1,071 件に合格し、成功率は 81.88% でした**。Kitesurf は 62.08%、Lightpanda は 53.29%、Obscura は 44.88%、参照エンジンの Chrome は 99.85% でした。Kitesurf は k=1 で実行され、未実行のタスクは不合格として数えられます。また、リモートサービスの再現条件はローカルバイナリとは異なります。全結果はベンチマークの[5 エンジンレポート](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)を参照してください。
+</details>
+
+<details name="web-fetch-chart">
+<summary><strong>保存済みページ · WebMainBench、545 ページ</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
-  <img alt="4 つのローカルエンジンにおけるタスク成功率とタスクあたりピークメモリ中央値の関係：Chrome 99.9%・697 MiB、Moli 80.7%・92 MiB、Lightpanda 43.8%・34 MiB、Obscura 39.5%・39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
+  <img alt="保存済み 545 ページの抽出品質。総合：Moli 39.27%、Lightpanda 35.00%、Kitesurf 33.43%、Obscura 31.03%、Chromium 27.02%。コード：Moli 91.06%、他方式の最高 84.71%。全文、数式、表の内容、表の構造では、Moli は他方式の最高値を下回ります。" src="../assets/webmainbench-light.png" width="100%">
 </picture>
 
-Kitesurf はリモートサービスのため、CPU、メモリ、プロセス数を測定できません。リソース比較は 4 つのローカルエンジンのみを対象とします。別に実施した 557 タスクの測定では、4 エンジンすべてが完了した処理だけを集計しています。Moli のタスクあたり中央値は **CPU 100.6 ms**、**ピークメモリ 92 MiB** でした。Chrome はそれぞれ **687 ms**、**697 MiB** でした。Moli の CPU 時間は Chrome の約 15%、ピークメモリは約 13% です。測定方法と全データはベンチマークの[リソースカード](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)を参照してください。
+</details>
 
-### Web Fetch ベンチマーク
+Moli は両ベンチマークの総合で首位です。差が最も大きいのはボット対策のあるサイト、人気サイト、動的サイトで、単純な静的ページではどのブラウザも大差ありません。詳しくは[ベンチマークの詳細](https://browser.lexmount.com/blog/webfetch-benchmark)をご覧ください。結果を再現するには、[Webstone](https://github.com/lexmount/webstone) の Web Fetch トラックを実行してください（[ガイド](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。結果はデータセットの 430 タスク版（v1.0.0）に基づきます。
 
-[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) は実サイトに対して 430 タスクを実行するため、成功率にはサイトへのアクセスと正しい本文抽出の両方が含まれます。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) は保存済みの HTML 545 ページを使い、実サイトへのアクセスを除いた抽出品質だけを評価します。[ベンチマークの詳細](https://browser.lexmount.com/blog/webfetch-benchmark)。
-
-結果を再現するには、[Webstone](https://github.com/lexmount/webstone) の Web Fetch トラックを実行してください（[ガイド](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。表はデータセットの 430 タスク版（v1.0.0）に基づきます。
+<details>
+<summary>詳細な数値</summary>
 
 | 方式 | 総合 | 静的ページ /100 | ボット対策 /100 | 人気サイト /100 | 動的サイト /100 | 文書・メディア /30 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -304,10 +293,7 @@ Kitesurf はリモートサービスのため、CPU、メモリ、プロセス�
 | Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
 | Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
 
-各セルは合格タスク数です。最後の列は文書の内容、直接配信されるメディア、Web ページに埋め込まれたメディアをまとめたもので、表全体で 7 分類を網羅しています。
-
-<details>
-<summary><strong>WebMainBench · 保存済み 545 ページの抽出品質</strong></summary>
+各セルは合格タスク数です。最後の列は文書の内容、直接配信されるメディア、Web ページに埋め込まれたメディアをまとめたものです。
 
 | 方式 | 本文を生成 | 総合 | 全文 | コード | 数式 | 表の内容 | 表の構造 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -318,6 +304,49 @@ Kitesurf はリモートサービスのため、CPU、メモリ、プロセス�
 | Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
 
 </details>
+
+<details>
+<summary>公開 Web サイトの横断取得試験 · 公開 URL 192 件</summary>
+
+JavaScript の実行後に、本文に相当する内容を取得できた場合だけを成功としています。HTTP 200 が返るだけの場合や、自動アクセス対策の確認画面、ログインが必要な画面、空の応答、内容がなく外枠だけの画面は、成功に含めません。
+
+| ブラウザ | 取得できたページ | 成功率 | 所要時間の中央値 | RSS 中央値 |
+| --- | ---: | ---: | ---: | ---: |
+| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
+| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
+| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
+| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+
+</details>
+
+### ブラウザ自動操作
+
+[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) の全タスクセットは 1,928 件で、生 CDP、Playwright・Puppeteer・Selenium などバージョンを固定した 13 種類の自動操作ツール、および Web プラットフォームのセマンティクスを対象とします。リモートエンドポイントとしてのみ提供される Kitesurf を含めるため、下のグラフではこのうち比較可能な 1,308 件を使用しています。すべてのブラウザに同じタスク選定ルールを適用しています。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="5 種類のヘッドレスブラウザによる 1,308 件の比較可能なタスクの成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+</picture>
+
+**Moli 0.1.1 は 1,071 件に合格し、成功率は 81.88% でした**。Kitesurf は 62.08%、Lightpanda は 53.29%、Obscura は 44.88%、参照エンジンの Chrome は 99.85% でした。Kitesurf は k=1 で実行され、未実行のタスクは不合格として数えられます。また、リモートサービスの再現条件はローカルバイナリとは異なります。全結果はベンチマークの[5 エンジンレポート](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)を参照してください。
+
+### リソース使用量
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="4 つのローカルエンジンにおけるタスク成功率とタスクあたりピークメモリ中央値の関係：Chrome 99.9%・697 MiB、Moli 80.7%・92 MiB、Lightpanda 43.8%・34 MiB、Obscura 39.5%・39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+</picture>
+
+Kitesurf はリモートサービスのため、CPU、メモリ、プロセス数を測定できません。リソース比較は 4 つのローカルエンジンのみを対象とします。別に実施した 557 タスクの測定では、4 エンジンすべてが完了した処理だけを集計しています。Moli のタスクあたり中央値は **CPU 100.6 ms**、**ピークメモリ 92 MiB** でした。Chrome はそれぞれ **687 ms**、**697 MiB** でした。Moli の CPU 時間は Chrome の約 15%、ピークメモリは約 13% です。測定方法と全データはベンチマークの[リソースカード](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)を参照してください。
+
+AI エージェント処理の測定例でも、1 回の処理について同じ傾向が見られます。
+
+| 指標 | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP が利用可能になるまで | 34.85 ms | 169.37 ms |
+| 1 回の処理時間（p50） | 33.40 ms | 57.13 ms |
+| PSS 最大値 | 102.46 MiB | 348.82 MiB |
+| 最大プロセス数／最大スレッド数 | 1 / 24 | 11 / 123 |
 
 ## 対応範囲
 

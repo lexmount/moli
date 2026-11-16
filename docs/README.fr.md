@@ -248,55 +248,44 @@ Le document et les styles n'ont qu'une seule source de vérité : le DOM natif, 
 
 ## Données de test
 
-Les mesures ci-dessous illustrent les capacités actuelles de Moli. Elles couvrent des sites réels, des clients d'automatisation, des vérifications du comportement Chromium/WPT et une large suite de régression nextest.
+Moli est mesuré sur des suites publiques aux tâches fixes. Chaque ligne indique ce que signifie une réussite et où reproduire le résultat.
 
-### Test d'exploration mixte du Web public
+| Domaine | Suite | Une réussite signifie | Moli | Détails |
+| --- | --- | --- | --- | --- |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 tâches sur des sites en ligne | Le contenu demandé est obtenu depuis un site en ligne | **89,8 %**, premier des cinq navigateurs | [Web Fetch](#web-fetch) |
+| Extraction de contenu | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 pages figées | Le contenu principal correspond à l'annotation humaine | **39,27 %**, premier des cinq | [Web Fetch](#web-fetch) |
+| Automatisation du navigateur | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1 308 tâches comparables | Une tâche CDP, d'outil d'automatisation ou de plateforme Web réussit | **81,9 %** ; Chrome 99,8 % | [Automatisation du navigateur](#automatisation-du-navigateur) |
+| Consommation de ressources | Lexbench-Headless-Browser · 557 tâches terminées par tous les moteurs locaux | Temps CPU et mémoire de pointe médians par tâche | **15 %** du temps CPU de Chrome, **13 %** de sa mémoire | [Consommation de ressources](#consommation-de-ressources) |
+| Standards du Web | Tests [WPT](https://github.com/web-platform-tests/wpt) sélectionnés | Un test WPT réussit | **1 612 000** tests réussis en une exécution complète | — |
 
-Le test porte sur 192 URL publiques issues de grands sites chinois et internationaux. Pour compter comme réussie, une page doit produire un contenu réellement exploitable après exécution du JavaScript : un simple code HTTP 200, une page de vérification, un mur de connexion, une réponse vide ou une coquille d'application vide ne suffisent pas.
+### Web Fetch
 
-| Navigateur | Pages utiles | Taux de réussite | Temps médian | RSS médiane |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+[LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) exécute 430 tâches sur des sites en ligne : une réussite exige donc à la fois l'accès au site et un contenu correct. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) évalue l'extraction du contenu principal sur 545 pages figées, sans accès aux sites en ligne. Cliquez sur un titre pour changer de graphique. Chaque ligne compare Moli (en bleu) à l'intervalle des quatre autres navigateurs.
 
-### Exemple de charge de travail d'un agent
-
-| Mesure | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP prêt | 34.85 ms | 169.37 ms |
-| Durée active d'un épisode p50 | 33.40 ms | 57.13 ms |
-| PSS maximal | 102.46 MiB | 348.82 MiB |
-| Nombre maximal de processus / threads | 1 / 24 | 11 / 123 |
-
-### Tests WPT
-
-Dans la sélection WPT actuelle qui valide le périmètre de Moli comme navigateur pour agents, une exécution complète a réussi **1 612 000 tests**.
-
-### Performances de Moli dans Lexbench-Headless-Browser
-
-Le corpus complet de [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) contient 1 928 tâches couvrant le CDP brut, 13 outils d'automatisation aux versions épinglées, dont Playwright, Puppeteer et Selenium, ainsi que la sémantique de la plateforme Web. Pour inclure Kitesurf, disponible uniquement sous forme de point d'accès distant, le graphique ci-dessous utilise 1 308 tâches comparables. Tous les navigateurs suivent les mêmes règles de sélection.
+<details name="web-fetch-chart" open>
+<summary><strong>Sites en ligne · LexBench-Web-Fetch, 430 tâches</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
-  <img alt="Taux de réussite de cinq navigateurs headless sur 1 308 tâches comparables : Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.png">
+  <img alt="Taux de réussite sur 430 tâches en ligne. Global : Moli 386/430 (89,8 %), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Anti-bot : Moli 88/100, meilleur des autres 37. Sites populaires : Moli 91, meilleur des autres 58. Sites dynamiques : Moli 90, meilleur des autres 58. Pages statiques : Moli 97, Chromium 99. Documents et médias : Moli 20/30, meilleur des autres 17." src="../assets/webfetch-live-light.png" width="100%">
 </picture>
 
-**Moli 0.1.1 a réussi 1 071 tâches, soit un taux de 81,88 %**, devant Kitesurf à 62,08 %, Lightpanda à 53,29 % et Obscura à 44,88 % ; Chrome, utilisé comme référence, a atteint 99,85 %. Kitesurf a été exécuté avec k=1, les tâches non couvertes comptent comme non réussies et les conditions de reproduction d'un service distant diffèrent de celles des binaires locaux. Les résultats complets figurent dans le [rapport à cinq moteurs](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md) du benchmark.
+</details>
+
+<details name="web-fetch-chart">
+<summary><strong>Pages figées · WebMainBench, 545 pages</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
-  <img alt="Taux de réussite en fonction de la mémoire de pointe médiane par tâche pour les quatre moteurs locaux : Chrome à 99,9 % et 697 MiB, Moli à 80,7 % et 92 MiB, Lightpanda à 43,8 % et 34 MiB, Obscura à 39,5 % et 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
+  <img alt="Qualité d'extraction sur 545 pages figées. Global : Moli 39,27 %, Lightpanda 35,00 %, Kitesurf 33,43 %, Obscura 31,03 %, Chromium 27,02 %. Code : Moli 91,06 %, meilleure autre méthode 84,71 %. Moli reste derrière la meilleure autre méthode pour le texte, les formules, le contenu des tableaux et leur structure." src="../assets/webmainbench-light.png" width="100%">
 </picture>
 
-Kitesurf est un service distant, dont le CPU, la mémoire et le nombre de processus ne sont pas mesurables. La comparaison des ressources ne couvre donc que les quatre moteurs locaux. Une exécution distincte de 557 tâches ne comptabilise que le travail terminé par les quatre. La médiane de Moli par tâche était de **100,6 ms de CPU** et **92 MiB de mémoire de pointe** ; Chrome a enregistré respectivement **687 ms** et **697 MiB**. Moli a utilisé environ 15 % du temps CPU et 13 % de la mémoire de pointe de Chrome. La méthodologie et les données complètes figurent dans la [fiche de ressources](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) du benchmark.
+</details>
 
-### Benchmarks Web Fetch
+Moli arrive en tête du classement global sur les deux suites. Ses plus grands écarts concernent les sites anti-bot, populaires et dynamiques, tandis que sur les pages statiques simples tous les navigateurs sont proches. [Lire le rapport complet](https://browser.lexmount.com/blog/webfetch-benchmark). Pour reproduire ces résultats, lancez le parcours Web Fetch de [Webstone](https://github.com/lexmount/webstone) ([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)) ; les résultats utilisent l'édition v1.0.0 du jeu de données, à 430 tâches.
 
-[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) exécute 430 tâches sur des sites en ligne. Son taux de réussite couvre donc l'accès au site et l'extraction correcte du contenu. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) traite 545 pages HTML figées et mesure uniquement la qualité d'extraction. [Lire le rapport du benchmark](https://browser.lexmount.com/blog/webfetch-benchmark).
-
-Pour reproduire ces résultats, lancez le parcours Web Fetch de [Webstone](https://github.com/lexmount/webstone) ([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)). Le tableau utilise l'édition v1.0.0 du jeu de données, à 430 tâches.
+<details>
+<summary>Chiffres exacts</summary>
 
 | Méthode | Global | Pages statiques /100 | Anti-bot /100 | Sites populaires /100 | Sites dynamiques /100 | Documents et médias /30 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -306,10 +295,7 @@ Pour reproduire ces résultats, lancez le parcours Web Fetch de [Webstone](https
 | Obscura | 223/430 · 51,9 % | 94 | 16 | 53 | 43 | 17 |
 | Kitesurf | 192/430 · 44,7 % | 90 | 10 | 40 | 41 | 11 |
 
-Les cellules indiquent le nombre de tâches réussies. La dernière colonne regroupe le contenu des documents, les fichiers multimédias directs et les médias intégrés aux pages Web ; le tableau couvre ainsi les sept catégories.
-
-<details>
-<summary><strong>WebMainBench · qualité d'extraction sur 545 pages figées</strong></summary>
+Les cellules indiquent le nombre de tâches réussies. La dernière colonne regroupe le contenu des documents, les fichiers multimédias directs et les médias intégrés aux pages Web.
 
 | Méthode | Contenu principal produit | Global | Texte | Code | Formules | Contenu des tableaux | Structure des tableaux |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -320,6 +306,49 @@ Les cellules indiquent le nombre de tâches réussies. La dernière colonne regr
 | Kitesurf | 524/545 | 33,43 % | 36,99 % | 80,70 % | 19,32 % | 18,25 % | 11,87 % |
 
 </details>
+
+<details>
+<summary>Test d'exploration mixte du Web public · 192 URL publiques</summary>
+
+Pour compter comme réussie, une page doit produire un contenu réellement exploitable après exécution du JavaScript : un simple code HTTP 200, une page de vérification, un mur de connexion, une réponse vide ou une coquille d'application vide ne suffisent pas.
+
+| Navigateur | Pages utiles | Taux de réussite | Temps médian | RSS médiane |
+| --- | ---: | ---: | ---: | ---: |
+| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
+| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
+| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
+| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+
+</details>
+
+### Automatisation du navigateur
+
+Le corpus complet de [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) contient 1 928 tâches couvrant le CDP brut, 13 outils d'automatisation aux versions épinglées, dont Playwright, Puppeteer et Selenium, ainsi que la sémantique de la plateforme Web. Pour inclure Kitesurf, disponible uniquement sous forme de point d'accès distant, le graphique ci-dessous utilise 1 308 tâches comparables. Tous les navigateurs suivent les mêmes règles de sélection.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="Taux de réussite de cinq navigateurs headless sur 1 308 tâches comparables : Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+</picture>
+
+**Moli 0.1.1 a réussi 1 071 tâches, soit un taux de 81,88 %**, devant Kitesurf à 62,08 %, Lightpanda à 53,29 % et Obscura à 44,88 % ; Chrome, utilisé comme référence, a atteint 99,85 %. Kitesurf a été exécuté avec k=1, les tâches non couvertes comptent comme non réussies et les conditions de reproduction d'un service distant diffèrent de celles des binaires locaux. Les résultats complets figurent dans le [rapport à cinq moteurs](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md) du benchmark.
+
+### Consommation de ressources
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="Taux de réussite en fonction de la mémoire de pointe médiane par tâche pour les quatre moteurs locaux : Chrome à 99,9 % et 697 MiB, Moli à 80,7 % et 92 MiB, Lightpanda à 43,8 % et 34 MiB, Obscura à 39,5 % et 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+</picture>
+
+Kitesurf est un service distant, dont le CPU, la mémoire et le nombre de processus ne sont pas mesurables. La comparaison des ressources ne couvre donc que les quatre moteurs locaux. Une exécution distincte de 557 tâches ne comptabilise que le travail terminé par les quatre. La médiane de Moli par tâche était de **100,6 ms de CPU** et **92 MiB de mémoire de pointe** ; Chrome a enregistré respectivement **687 ms** et **697 MiB**. Moli a utilisé environ 15 % du temps CPU et 13 % de la mémoire de pointe de Chrome. La méthodologie et les données complètes figurent dans la [fiche de ressources](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) du benchmark.
+
+Un exemple de charge de travail d'un agent montre la même tendance sur un seul épisode :
+
+| Mesure | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP prêt | 34.85 ms | 169.37 ms |
+| Durée active d'un épisode p50 | 33.40 ms | 57.13 ms |
+| PSS maximal | 102.46 MiB | 348.82 MiB |
+| Nombre maximal de processus / threads | 1 / 24 | 11 / 123 |
 
 ## Périmètre du projet
 
