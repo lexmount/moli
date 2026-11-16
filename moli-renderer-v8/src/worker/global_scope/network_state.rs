@@ -69,15 +69,34 @@ impl WorkerFetchStreamingChunk {
     pub(crate) fn publish(&self, end: usize, sender: &mpsc::UnboundedSender<WorkerFetchEvent>) {
         let mut pending = self.pending.lock();
         pending.end = end;
-        if !pending.queued {
+        self.enqueue(&mut pending, sender);
+    }
+    fn enqueue(
+        &self,
+        pending: &mut PendingBodyDelivery,
+        sender: &mpsc::UnboundedSender<WorkerFetchEvent>,
+    ) {
+        if pending.offset < pending.end && !pending.queued {
             pending.queued = true;
             let _ = sender.send(WorkerFetchEvent::StreamingChunk(self.clone()));
         }
     }
+    pub(crate) fn requeue(&self, sender: &mpsc::UnboundedSender<WorkerFetchEvent>) {
+        self.enqueue(&mut self.pending.lock(), sender);
+    }
+    pub(crate) fn has_pending(&self) -> bool {
+        let pending = self.pending.lock();
+        pending.offset < pending.end
+    }
+    pub(crate) fn discard(&self) {
+        let mut pending = self.pending.lock();
+        pending.offset = pending.end;
+    }
     pub(crate) fn take_range(&self) -> std::ops::Range<usize> {
         let mut pending = self.pending.lock();
-        let range = pending.offset..pending.end;
-        pending.offset = pending.end;
+        let end = pending.offset.saturating_add(64 * 1024).min(pending.end);
+        let range = pending.offset..end;
+        pending.offset = end;
         pending.queued = false;
         range
     }
@@ -85,9 +104,25 @@ impl WorkerFetchStreamingChunk {
 
 pub(crate) struct WorkerFetchStreamingFinished {
     pub(crate) fetch_id: u32,
+    pub(crate) delivery: WorkerFetchStreamingChunk,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) head: ResponseHead,
     pub(crate) result: Result<SubresourceResponseBody, String>,
+}
+
+impl WorkerFetchStreamingFinished {
+    pub(crate) fn after_body_delivery(
+        self,
+        sender: &mpsc::UnboundedSender<WorkerFetchEvent>,
+    ) -> Option<Self> {
+        if self.result.is_ok() && self.delivery.has_pending() {
+            self.delivery.requeue(sender);
+            let _ = sender.send(WorkerFetchEvent::StreamingFinished(self));
+            None
+        } else {
+            Some(self)
+        }
+    }
 }
 
 pub(crate) struct WorkerFetchResponse {
@@ -221,5 +256,79 @@ mod body_delivery_tests {
             !body.cancellation_handle().is_cancelled(),
             "JS exit cannot cancel a keepalive transfer"
         );
+    }
+    #[test]
+    fn pending_body_delivery_yields_and_defers_close_until_the_last_data_turn() {
+        let bytes = vec![42; 3 * 64 * 1024];
+        let capture = SubresourceResponseBody::from_bytes(bytes.clone());
+        let delivery = WorkerFetchStreamingChunk::new(
+            crate::network_host::new_network_body_source_id(),
+            crate::network::ResourceInterceptionBody::from_complete(capture.clone()),
+        );
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        delivery.publish(bytes.len(), &sender);
+        sender
+            .send(WorkerFetchEvent::StreamingFinished(
+                WorkerFetchStreamingFinished {
+                    fetch_id: 1,
+                    body_source_id: delivery.body_source_id,
+                    delivery: delivery.clone(),
+                    head: ResponseHead {
+                        final_url: "https://worker.test/body".parse().unwrap(),
+                        status: 200,
+                        status_text: None,
+                        headers: Vec::new(),
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: false,
+                        redirect_chain: Vec::new(),
+                        from_cache: false,
+                        cache_state: Default::default(),
+                        negotiated_http_version: None,
+                    },
+                    result: Ok(capture),
+                },
+            ))
+            .unwrap_or_else(|_| panic!("live Worker queue"));
+        // This stands for a runnable task/microtask after the first body turn.
+        sender
+            .send(WorkerFetchEvent::PolicyViolations(Vec::new()))
+            .unwrap_or_else(|_| panic!("live Worker queue"));
+        let mut delivered = Vec::new();
+        let mut turns = 0;
+        let mut finished = false;
+        while let Ok(event) = receiver.try_recv() {
+            match event {
+                WorkerFetchEvent::StreamingChunk(chunk) => {
+                    assert!(!finished);
+                    let range = chunk.take_range();
+                    assert_eq!(range.start, delivered.len());
+                    assert!(range.len() <= 64 * 1024);
+                    delivered.extend(
+                        chunk
+                            .body
+                            .read_captured_chunk(range.start, range.len())
+                            .unwrap(),
+                    );
+                    turns += 1;
+                    chunk.requeue(&sender);
+                }
+                WorkerFetchEvent::PolicyViolations(_) => assert_eq!(
+                    delivered.len(),
+                    64 * 1024,
+                    "other runnable work gets a turn before the remaining body"
+                ),
+                WorkerFetchEvent::StreamingFinished(completion) => {
+                    if completion.after_body_delivery(&sender).is_some() {
+                        assert_eq!(delivered, bytes);
+                        assert!(!finished);
+                        finished = true;
+                    }
+                }
+                _ => panic!("body delivery test event"),
+            }
+        }
+        assert!(finished);
+        assert_eq!(turns, 3);
     }
 }

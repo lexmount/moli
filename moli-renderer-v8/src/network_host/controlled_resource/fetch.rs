@@ -173,6 +173,7 @@ impl ControlledFetchStream {
             WorkerFetchStreamingFinished {
                 fetch_id: self.fetch_id,
                 body_source_id: started.delivery.body_source_id,
+                delivery: started.delivery,
                 head: started.head,
                 result: result.map(|()| body),
             },
@@ -382,19 +383,38 @@ mod delivery_tests {
                 let WorkerFetchEvent::StreamingChunk(chunk) = receiver.try_recv().unwrap() else {
                     panic!("one coalesced body wake")
                 };
-                assert_eq!(chunk.take_range(), 0..LENGTH);
-                for value in 0..4 {
+                let mut delivered = 0;
+                let mut chunk = chunk;
+                loop {
+                    let range = chunk.take_range();
+                    assert_eq!(range.start, delivered);
+                    assert!(range.len() <= 64 * 1024);
                     let bytes = chunk
                         .body
-                        .read_captured_chunk(value * LENGTH / 4, LENGTH / 4)
+                        .read_captured_chunk(range.start, range.len())
                         .unwrap();
-                    assert_eq!(bytes, vec![value as u8; LENGTH / 4]);
+                    assert_eq!(bytes, vec![(range.start / (LENGTH / 4)) as u8; range.len()]);
+                    delivered = range.end;
+                    chunk.requeue(&stream.completion);
+                    match receiver.try_recv().unwrap() {
+                        WorkerFetchEvent::StreamingChunk(next) => chunk = next,
+                        WorkerFetchEvent::StreamingFinished(finished) => {
+                            if let Some(finished) = finished.after_body_delivery(&stream.completion)
+                            {
+                                assert_eq!(delivered, LENGTH);
+                                assert_eq!(finished.result.unwrap().len(), LENGTH);
+                                break;
+                            }
+                            let WorkerFetchEvent::StreamingChunk(next) =
+                                receiver.try_recv().unwrap()
+                            else {
+                                panic!("next bounded data turn")
+                            };
+                            chunk = next;
+                        }
+                        _ => panic!("data or completion"),
+                    }
                 }
-                let WorkerFetchEvent::StreamingFinished(finished) = receiver.try_recv().unwrap()
-                else {
-                    panic!("network terminal does not wait for JS")
-                };
-                assert_eq!(finished.result.unwrap().len(), LENGTH);
                 assert!(receiver.try_recv().is_err());
             }
         }
