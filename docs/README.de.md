@@ -251,8 +251,8 @@ Moli wird mit öffentlichen Benchmarks mit festen Aufgaben gemessen. Jede Zeile 
 
 | Bereich | Benchmark | Messgröße | Moli | Details |
 | --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 Aufgaben auf Live-Websites | Anteil der Aufgaben, bei denen der geforderte Inhalt von einer Live-Website zurückkommt | **89,8 %**, Platz eins von fünf Browsern | [Web Fetch](#web-fetch) |
-| Inhaltsextraktion | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 gespeicherte Seiten | Bewertung der Extraktionsqualität gegenüber menschlichen Annotationen (höher ist besser) | **39,27 %**, Platz eins von fünf | [Web Fetch](#web-fetch) |
+| Web Fetch · Live-Websites | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 Aufgaben auf Live-Websites | Anteil der Aufgaben, bei denen der geforderte Inhalt von einer Live-Website zurückkommt | **89,8 %**, Platz eins von fünf Browsern | [Web Fetch](#web-fetch) |
+| Web Fetch · Gespeicherte Seiten | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 gespeicherte Seiten | Bewertung der Extraktionsqualität gegenüber menschlichen Annotationen (höher ist besser) | **39,27 %**, Platz eins von fünf | [Web Fetch](#web-fetch) |
 | Browser-Automatisierung | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1.308 vergleichbare Aufgaben | Anteil gelungener Aufgaben zu CDP, Automatisierungswerkzeugen und der Web-Plattform | **81,9 %**; Chrome 99,8 % | [Browser-Automatisierung](#browser-automatisierung) |
 | Ressourcenverbrauch | Lexbench-Headless-Browser · 557 Aufgaben, die alle lokalen Engines abgeschlossen haben | Median von CPU-Zeit und Spitzenspeicher pro Aufgabe | **15 %** der CPU-Zeit von Chrome, **13 %** seines Speichers | [Ressourcenverbrauch](#ressourcenverbrauch) |
 | Webstandards | Ausgewählte [WPT](https://github.com/web-platform-tests/wpt)-Tests | Bestandene WPT-Tests | **1,612 Millionen** bestandene Tests in einem vollständigen Lauf | — |
