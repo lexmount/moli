@@ -263,8 +263,8 @@ Moli 在真实网站和网页快照上与其他四个浏览器对比。点击标
 <summary><strong>真实网站 · LexBench-Web-Fetch，430 道任务</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.png">
-  <img alt="430 道真实网站任务的通过率。总成绩：Moli 386/430（89.8%），Chromium 234，Lightpanda 228，Obscura 223，Kitesurf 192。反爬网站：Moli 88/100，其他浏览器最高 37。热门网站：Moli 91，其他浏览器最高 58。动态网站：Moli 90，其他浏览器最高 58。静态网页：Moli 97，Chromium 99。文档与媒体：Moli 20/30，其他浏览器最高 17。" src="../assets/webfetch-live-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.svg">
+  <img alt="430 道真实网站任务的通过率。总成绩：Moli 386/430（89.8%），Chromium 234，Lightpanda 228，Obscura 223，Kitesurf 192。反爬网站：Moli 88/100，其他浏览器最高 37。热门网站：Moli 91，其他浏览器最高 58。动态网站：Moli 90，其他浏览器最高 58。静态网页：Moli 97，Chromium 99。文档与媒体：Moli 20/30，其他浏览器最高 17。" src="../assets/webfetch-live-light.svg" width="100%">
 </picture>
 
 通过既要求网站能够访问，也要求返回内容正确（[数据集，v1.0.0 版本](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)）。
@@ -290,8 +290,8 @@ Moli 在真实网站和网页快照上与其他四个浏览器对比。点击标
 <summary><strong>网页快照 · WebMainBench，545 份页面</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
-  <img alt="545 份网页快照的正文提取质量。综合：Moli 39.27%，Lightpanda 35.00%，Kitesurf 33.43%，Obscura 31.03%，Chromium 27.02%。代码：Moli 91.06%，其他方法最高 84.71%。在全文、公式、表格内容和表格结构上，Moli 低于其他方法中的最高分。" src="../assets/webmainbench-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.svg">
+  <img alt="545 份网页快照的正文提取质量。综合：Moli 39.27%，Lightpanda 35.00%，Kitesurf 33.43%，Obscura 31.03%，Chromium 27.02%。代码：Moli 91.06%，其他方法最高 84.71%。在全文、公式、表格内容和表格结构上，Moli 低于其他方法中的最高分。" src="../assets/webmainbench-light.svg" width="100%">
 </picture>
 
 对照人工标注评估正文提取质量，不包含真实网站访问（[数据集](https://github.com/lexmount/WebMainBench/tree/lex-main)）。

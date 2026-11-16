@@ -322,8 +322,8 @@ Moli를 실제 사이트와 저장된 페이지에서 다른 브라우저 네 �
 <summary><strong>실제 사이트 · LexBench-Web-Fetch, 과제 430개</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.png">
-  <img alt="실제 사이트 과제 430개의 통과율. 종합: Moli 386/430(89.8%), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. 봇 차단: Moli 88/100, 나머지 중 최고 37. 인기 사이트: Moli 91, 나머지 중 최고 58. 동적 사이트: Moli 90, 나머지 중 최고 58. 정적 페이지: Moli 97, Chromium 99. 문서 및 미디어: Moli 20/30, 나머지 중 최고 17." src="../assets/webfetch-live-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.svg">
+  <img alt="실제 사이트 과제 430개의 통과율. 종합: Moli 386/430(89.8%), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. 봇 차단: Moli 88/100, 나머지 중 최고 37. 인기 사이트: Moli 91, 나머지 중 최고 58. 동적 사이트: Moli 90, 나머지 중 최고 58. 정적 페이지: Moli 97, Chromium 99. 문서 및 미디어: Moli 20/30, 나머지 중 최고 17." src="../assets/webfetch-live-light.svg" width="100%">
 </picture>
 
 통과하려면 사이트 접근과 정확한 콘텐츠가 모두 필요합니다([데이터셋, v1.0.0 버전](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)).
@@ -349,8 +349,8 @@ Moli를 실제 사이트와 저장된 페이지에서 다른 브라우저 네 �
 <summary><strong>저장된 페이지 · WebMainBench, 페이지 545개</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
-  <img alt="저장된 페이지 545개의 추출 품질. 종합: Moli 39.27%, Lightpanda 35.00%, Kitesurf 33.43%, Obscura 31.03%, Chromium 27.02%. 코드: Moli 91.06%, 나머지 중 최고 84.71%. 본문, 수식, 표 내용, 표 구조에서는 Moli가 나머지 방법 중 최고 점수보다 낮습니다." src="../assets/webmainbench-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.svg">
+  <img alt="저장된 페이지 545개의 추출 품질. 종합: Moli 39.27%, Lightpanda 35.00%, Kitesurf 33.43%, Obscura 31.03%, Chromium 27.02%. 코드: Moli 91.06%, 나머지 중 최고 84.71%. 본문, 수식, 표 내용, 표 구조에서는 Moli가 나머지 방법 중 최고 점수보다 낮습니다." src="../assets/webmainbench-light.svg" width="100%">
 </picture>
 
 사람이 표시한 정답을 기준으로 본문 추출을 평가하며, 실제 사이트에는 접근하지 않습니다([데이터셋](https://github.com/lexmount/WebMainBench/tree/lex-main)).

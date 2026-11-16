@@ -265,8 +265,8 @@ Moli se compara con otros cuatro navegadores en sitios activos y en páginas gua
 <summary><strong>Sitios activos · LexBench-Web-Fetch, 430 tareas</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.png">
-  <img alt="Tasa de éxito en 430 tareas sobre sitios activos. Global: Moli 386/430 (89,8 %), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Antibot: Moli 88/100, el mejor de los demás 37. Sitios populares: Moli 91, el mejor de los demás 58. Sitios dinámicos: Moli 90, el mejor de los demás 58. Estáticas: Moli 97, Chromium 99. Documentos y medios: Moli 20/30, el mejor de los demás 17." src="../assets/webfetch-live-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.svg">
+  <img alt="Tasa de éxito en 430 tareas sobre sitios activos. Global: Moli 386/430 (89,8 %), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Antibot: Moli 88/100, el mejor de los demás 37. Sitios populares: Moli 91, el mejor de los demás 58. Sitios dinámicos: Moli 90, el mejor de los demás 58. Estáticas: Moli 97, Chromium 99. Documentos y medios: Moli 20/30, el mejor de los demás 17." src="../assets/webfetch-live-light.svg" width="100%">
 </picture>
 
 Superar una tarea exige tanto acceder al sitio como obtener el contenido correcto ([conjunto de datos, edición v1.0.0](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)).
@@ -292,8 +292,8 @@ Las celdas muestran las tareas superadas. La última columna reúne el contenido
 <summary><strong>Páginas guardadas · WebMainBench, 545 páginas</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
-  <img alt="Calidad de extracción en 545 páginas guardadas. Global: Moli 39,27 %, Lightpanda 35,00 %, Kitesurf 33,43 %, Obscura 31,03 %, Chromium 27,02 %. Código: Moli 91,06 %, el mejor de los demás métodos 84,71 %. En texto, fórmulas, contenido de tablas y estructura de tablas, Moli queda por detrás del mejor de los demás métodos." src="../assets/webmainbench-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.svg">
+  <img alt="Calidad de extracción en 545 páginas guardadas. Global: Moli 39,27 %, Lightpanda 35,00 %, Kitesurf 33,43 %, Obscura 31,03 %, Chromium 27,02 %. Código: Moli 91,06 %, el mejor de los demás métodos 84,71 %. En texto, fórmulas, contenido de tablas y estructura de tablas, Moli queda por detrás del mejor de los demás métodos." src="../assets/webmainbench-light.svg" width="100%">
 </picture>
 
 Se puntúa la extracción del contenido principal frente a anotaciones humanas, sin acceso a sitios activos ([conjunto de datos](https://github.com/lexmount/WebMainBench/tree/lex-main)).
