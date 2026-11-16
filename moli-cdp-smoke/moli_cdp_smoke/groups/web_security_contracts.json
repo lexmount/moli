@@ -1202,6 +1202,30 @@
         "referrer": null
       }
     ],
+    "form-retained-origin-307-top": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
     "form-hidden-origin-308-top": [
       {
         "path": "/web-security/redirect",
@@ -1218,6 +1242,30 @@
         "path": "/web-security/echo",
         "method": "POST",
         "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "form-retained-origin-308-top": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
         "cookie": {
           "hidden": "1"
         },
@@ -1276,6 +1324,30 @@
         "referrer": null
       }
     ],
+    "form-retained-origin-307-iframe": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
     "form-hidden-origin-308-iframe": [
       {
         "path": "/web-security/redirect",
@@ -1292,6 +1364,30 @@
         "path": "/web-security/echo",
         "method": "POST",
         "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "form-retained-origin-308-iframe": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
         "cookie": {
           "hidden": "1"
         },
@@ -2946,6 +3042,30 @@
         "referrer": null
       }
     ],
+    "form-retained-origin-307-top": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
     "form-hidden-origin-308-top": [
       {
         "path": "/web-security/redirect",
@@ -2962,6 +3082,30 @@
         "path": "/web-security/echo",
         "method": "POST",
         "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "form-retained-origin-308-top": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
         "cookie": {
           "hidden": "1"
         },
@@ -3020,6 +3164,30 @@
         "referrer": null
       }
     ],
+    "form-retained-origin-307-iframe": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
     "form-hidden-origin-308-iframe": [
       {
         "path": "/web-security/redirect",
@@ -3036,6 +3204,30 @@
         "path": "/web-security/echo",
         "method": "POST",
         "origin": "null",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "form-retained-origin-308-iframe": [
+      {
+        "path": "/web-security/redirect",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {
+          "hidden": "1"
+        },
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
         "cookie": {
           "hidden": "1"
         },

@@ -22,15 +22,17 @@ async def observe_forms(page: Any, context: Any, source: str, peer: FixtureServe
             observed[name] = peer.web_security.requests(key)
 
         for status in (307, 308):
-            name = f'form-hidden-origin-{status}-' + ('iframe' if framed else 'top')
-            key = mode + '-' + name
-            await context.clear_cookies()
-            await page.goto(resource(source, 'page', key + '-page', policy='no-referrer'), wait_until='load')
-            destination = resource(peer.url, 'echo', key, witness_referrer=1)
-            redirect = resource(peer.url, 'redirect', key, status=status, to=destination,
-                                policy='unsafe-url', witness_referrer=1)
-            await submit(page, redirect, framed)
-            observed[name] = peer.web_security.requests(key)
+            for initial, changed in (('no-referrer', 'unsafe-url'), ('origin', 'no-referrer')):
+                kind = 'hidden' if initial == 'no-referrer' else 'retained'
+                name = f'form-{kind}-origin-{status}-' + ('iframe' if framed else 'top')
+                key = mode + '-' + name
+                await context.clear_cookies()
+                await page.goto(resource(source, 'page', key + '-page', policy=initial), wait_until='load')
+                destination = resource(peer.url, 'echo', key, witness_referrer=1)
+                redirect = resource(peer.url, 'redirect', key, status=status, to=destination,
+                                    policy=changed, witness_referrer=1)
+                await submit(page, redirect, framed)
+                observed[name] = peer.web_security.requests(key)
     await page.goto(source + '/web-security/page', wait_until='load')
     return observed
 
