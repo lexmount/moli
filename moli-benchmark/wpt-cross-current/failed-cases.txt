@@ -2235,7 +2235,6 @@ focus/iframe-contentwindow-focus-with-different-site-intermediate-frame.html
 focus/iframe-contentwindow-focus-with-same-as-top-intermediate-frame.html
 font-access/permissions-policy/local-fonts-supported-by-permissions-policy.html
 gyroscope/Gyroscope-supported-by-permissions-policy.html
-html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/back-forward-cache/eligibility/dedicated-worker.html
 html/browsers/browsing-the-web/back-forward-cache/eligibility/shared-worker.html
 html/browsers/browsing-the-web/back-forward-cache/events.html
@@ -2370,8 +2369,6 @@ html/semantics/embedded-content/the-area-element/area-processing.html
 html/semantics/embedded-content/the-area-element/area-shape.html
 html/semantics/embedded-content/the-embed-element/embed-change-src-2.html
 html/semantics/embedded-content/the-embed-element/embed-dimension.html
-html/semantics/embedded-content/the-embed-element/embed-in-object-fallback-2.html
-html/semantics/embedded-content/the-embed-element/embed-in-object-fallback.html
 html/semantics/embedded-content/the-embed-element/embed-represent-nothing-04.html
 html/semantics/embedded-content/the-embed-element/embed-svg-navigation-resets-size.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-adopt-lazy-iframe-from-script-disabled-document.html
@@ -2410,7 +2407,6 @@ html/semantics/embedded-content/the-img-element/update-the-image-data/not-broken
 html/semantics/embedded-content/the-img-element/update-the-image-data/src-then-lazy-load.html
 html/semantics/embedded-content/the-img-element/usemap-casing.html
 html/semantics/embedded-content/the-object-element/object-in-display-none-load-event.html
-html/semantics/embedded-content/the-object-element/object-in-object-fallback-2.html
 html/semantics/embedded-content/the-object-element/usemap-casing.html
 html/semantics/forms/form-submission-0/form-double-submit-requestsubmit.html
 html/semantics/forms/the-fieldset-element/disabled-003.html

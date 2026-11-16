@@ -4872,7 +4872,6 @@ dom/nodes/Node-removeChild.html
 dom/nodes/Node-replaceChild.html
 dom/nodes/Node-textContent.html
 dom/nodes/NodeList-Iterable.html
-dom/nodes/NodeList-static-length-getter-tampered-1.html
 dom/nodes/NodeList-static-length-getter-tampered-2.html
 dom/nodes/NodeList-static-length-getter-tampered-3.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
@@ -7241,6 +7240,8 @@ html/semantics/embedded-content/the-embed-element/embed-document-under-content-v
 html/semantics/embedded-content/the-embed-element/embed-document-under-content-visibility-gbcr.html
 html/semantics/embedded-content/the-embed-element/embed-document.html
 html/semantics/embedded-content/the-embed-element/embed-ignored-in-media-element.html
+html/semantics/embedded-content/the-embed-element/embed-in-object-fallback-2.html
+html/semantics/embedded-content/the-embed-element/embed-in-object-fallback.html
 html/semantics/embedded-content/the-embed-element/embed-javascript-url.html
 html/semantics/embedded-content/the-embed-element/embed-named-attribute-detached-context-crash.html
 html/semantics/embedded-content/the-embed-element/historical.html
@@ -7423,6 +7424,7 @@ html/semantics/embedded-content/the-object-element/object-construct-in-document-
 html/semantics/embedded-content/the-object-element/object-handler.html
 html/semantics/embedded-content/the-object-element/object-ignored-in-media-element.html
 html/semantics/embedded-content/the-object-element/object-image-display-none-loading.html
+html/semantics/embedded-content/the-object-element/object-in-object-fallback-2.html
 html/semantics/embedded-content/the-object-element/object-javascript-url.html
 html/semantics/embedded-content/the-object-element/object-remove-param-crash.html
 html/semantics/embedded-content/the-object-element/object-setcustomvalidity.html
@@ -9451,7 +9453,6 @@ resource-timing/content-type-minimization.html
 resource-timing/document-domain-no-impact-opener.html
 resource-timing/event-source-timing.html
 resource-timing/iframe-non-html.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/iframe-with-download.html
 resource-timing/image-sequence-of-events.html
 resource-timing/initiator-type-for-script.html
@@ -9643,6 +9644,7 @@ service-workers/service-worker/controller-with-no-fetch-event-handler.https.html
 service-workers/service-worker/data-iframe.html
 service-workers/service-worker/dedicated-worker-service-worker-interception.https.html
 service-workers/service-worker/detached-register-crash.https.html
+service-workers/service-worker/embed-and-object-are-not-intercepted.https.html
 service-workers/service-worker/extendable-event-waituntil.https.html
 service-workers/service-worker/fetch-cors-exposed-header-names.https.html
 service-workers/service-worker/fetch-error.https.html
@@ -11202,7 +11204,6 @@ xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
 xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
-xhr/setrequestheader-header-forbidden.htm
 xhr/setrequestheader-open-setrequestheader.htm
 xhr/status-async.htm
 xhr/status-basic.htm
