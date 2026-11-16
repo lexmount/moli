@@ -253,19 +253,6 @@ pub enum FetchedDocument {
     Raw(Box<RawDocument>),
 }
 
-// Browser's public page-loading API starts a new navigation without a caller
-// Document. An HTTP request supplied here enters browser semantics with that
-// opaque initiator; renderer subresources must already carry their environment.
-fn initial_navigation_request(request: Request) -> Request {
-    if request.request_origin().is_none() {
-        request
-            .with_request_origin(moli_url::WebOrigin::Opaque)
-            .with_request_mode(moli_fetch::RequestMode::Navigate)
-    } else {
-        request
-    }
-}
-
 impl Browser {
     /// Subscribe to future diagnostics from this Browser's Pages and Workers.
     ///
@@ -281,6 +268,22 @@ impl Browser {
         self.js_runtime
             .browser_context_runtime()
             .subscribe_diagnostics()
+    }
+
+    // Browser's public page-loading API starts a new navigation without a caller
+    // Document. An HTTP request supplied here enters browser semantics with that
+    // opaque initiator; renderer subresources must already carry their environment.
+    // The embedder chose this URL, so it may open a file when the browser grants it.
+    fn initial_navigation_request(&self, request: Request) -> Request {
+        let request = request
+            .with_local_file_navigation_access(self.config.fetch().local_file_navigation_access());
+        if request.request_origin().is_none() {
+            request
+                .with_request_origin(moli_url::WebOrigin::Opaque)
+                .with_request_mode(moli_fetch::RequestMode::Navigate)
+        } else {
+            request
+        }
     }
 
     /// Returns a client for subresource requests in this browser's network session.
@@ -623,7 +626,7 @@ impl Browser {
         lifecycle_decider: Option<RendererLifecycleDecider>,
         raw_document_policy: RawDocumentFetchPolicy,
     ) -> Result<FetchedDocument> {
-        let request = initial_navigation_request(request);
+        let request = self.initial_navigation_request(request);
         let timeout = deadline.timeout();
         let stage = wait_until.base_stage();
 
@@ -1003,7 +1006,7 @@ impl Browser {
     }
 
     async fn fetch_internal(&self, request: Request, stage: PageVmInitStage) -> Result<Page> {
-        let request = initial_navigation_request(request);
+        let request = self.initial_navigation_request(request);
         let raw_url = request.url.as_str().to_owned();
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
@@ -1074,7 +1077,7 @@ impl Browser {
         request: Request,
         stage: PageVmInitStage,
     ) -> Result<Page> {
-        let request = initial_navigation_request(request);
+        let request = self.initial_navigation_request(request);
         let raw_url = request.url.as_str().to_owned();
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
@@ -1140,7 +1143,7 @@ impl Browser {
         stage: PageVmInitStage,
         reply_boundary: RendererReplyBoundary,
     ) -> Result<FetchedDocument> {
-        let request = initial_navigation_request(request);
+        let request = self.initial_navigation_request(request);
         let raw_url = request.url.as_str().to_owned();
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {

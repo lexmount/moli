@@ -73,7 +73,7 @@ pub(crate) use self::body_source::{
     pending_network_body_stream, retain_pending_network_body_state_in_retired_realm,
 };
 pub(crate) use self::browser_response::{
-    LocalUrlError, local_url_response, local_url_response_result,
+    LocalUrlError, file_url_response, local_url_response, local_url_response_result,
 };
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,

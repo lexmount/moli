@@ -1,5 +1,5 @@
 use super::*;
-use moli_web_mime::data_url_body_and_mime_type;
+use moli_web_mime::{data_url_body_and_mime_type, selected_file_mime_type};
 use std::fmt;
 
 #[derive(Debug)]
@@ -7,6 +7,7 @@ pub(crate) enum LocalUrlError {
     BlobMethod { method: String },
     BlobUnavailable { url: url::Url },
     InvalidData { url: url::Url },
+    FileUnreadable { url: url::Url, reason: String },
 }
 
 impl fmt::Display for LocalUrlError {
@@ -15,6 +16,9 @@ impl fmt::Display for LocalUrlError {
             Self::BlobMethod { method } => write!(f, "blob URL fetch requires GET, got `{method}`"),
             Self::BlobUnavailable { url } => write!(f, "blob URL `{url}` is unavailable"),
             Self::InvalidData { url } => write!(f, "data URL `{url}` is invalid"),
+            Self::FileUnreadable { url, reason } => {
+                write!(f, "file URL `{url}` cannot be read: {reason}")
+            }
         }
     }
 }
@@ -58,6 +62,43 @@ pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
                 moli_fetch::header_value_from_byte_string(&mime_type)
                     .expect("serialized MIME types contain ByteStrings"),
             )],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: Default::default(),
+            negotiated_http_version: None,
+        },
+        body_bytes,
+    ))
+}
+
+/// Reads a file URL from disk. The caller decides whether the request may
+/// read files at all; this only maps the path and its type, as Chromium's file
+/// loader does from the extension.
+pub(crate) fn file_url_response(url: &url::Url) -> Result<Response, LocalUrlError> {
+    let unreadable = |reason: String| LocalUrlError::FileUnreadable {
+        url: url.clone(),
+        reason,
+    };
+    let path = url
+        .to_file_path()
+        .map_err(|()| unreadable("not a local path".to_owned()))?;
+    let body_bytes = std::fs::read(&path).map_err(|error| unreadable(error.to_string()))?;
+    let mut headers = vec![("Content-Length".to_owned(), body_bytes.len().to_string())];
+    let mime_type = selected_file_mime_type(&path.to_string_lossy());
+    if !mime_type.is_empty() {
+        headers.push(("Content-Type".to_owned(), mime_type.to_owned()));
+    }
+    let headers = moli_fetch::headers_from_byte_strings(&headers)
+        .expect("file response headers contain ByteStrings");
+    Ok(Response::from_head_and_lossy_body_bytes(
+        moli_fetch::ResponseHead {
+            status_text: None,
+            final_url: url.clone(),
+            status: 200,
+            headers,
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,

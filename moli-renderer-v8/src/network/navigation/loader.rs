@@ -8,7 +8,7 @@ use moli_cookie_jar::BrowserCookieFacadeContext;
 use moli_fetch::{
     FetchCancelHandle, NetworkFetchResult, RawResponse, Request, Response, StreamingRawResponse,
 };
-use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
+use moli_url_policy::route_navigation_url;
 use parking_lot::Mutex;
 
 use crate::network::{RendererResourceTaskRunner, ResourceRequestClient};
@@ -373,7 +373,10 @@ impl NavigationResourceLoader {
     }
 
     fn begin_fetch(&self) -> Result<()> {
-        route_navigation_url(&self.requested_url, LocalFileNavigationAccess::Denied)?;
+        route_navigation_url(
+            &self.requested_url,
+            self.request_client.local_file_navigation_access(),
+        )?;
         let mut state = self.inner.state.lock();
         ensure!(
             *state == NavigationResourceLoaderState::Created,

@@ -23,6 +23,7 @@ use moli_fetch::{
     RequestMode, RequestResourceType, ResponseHead, ScriptFetchRequestMetadata,
     StreamingRawResponse, cookie_header_for_request,
 };
+use moli_url_policy::LocalFileNavigationAccess;
 
 use super::{
     FetchConfig, Request, ResourceRequestClient, raw_subresource_memory_cache_key,
@@ -1348,6 +1349,96 @@ async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Re
         );
         assert_eq!(data.body_text(), "payload");
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_urls_need_the_capability_and_a_file_document_or_browser_navigation() -> Result<()> {
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let dir = std::env::temp_dir().join(format!("moli-file-urls-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("page.css"), "body { color: green; }")?;
+    std::fs::write(dir.join("page.html"), "<p>local</p>")?;
+    let stylesheet = Url::from_file_path(dir.join("page.css")).expect("absolute path");
+    let missing = Url::from_file_path(dir.join("missing.css")).expect("absolute path");
+    let file_document = Url::from_file_path(dir.join("page.html")).expect("absolute path");
+    let web_document = Url::parse("https://web.test/page")?;
+    let subresource = |url: &Url, initiator: Option<&Url>| -> Result<Request> {
+        let request = browser_navigation_request(url.as_str())?
+            .with_resource_type(RequestResourceType::CssStyleSheet);
+        Ok(match initiator {
+            Some(initiator) => request.with_initiator_url(initiator),
+            None => request,
+        })
+    };
+
+    let denied = ResourceRequestClient::new(&FetchConfig::default())?;
+    let error = denied
+        .fetch_text_stream(subresource(&stylesheet, Some(&file_document))?)
+        .await
+        .expect_err("file URLs stay with the HTTP transport without the capability");
+    assert!(!error.to_string().contains("file URL"), "{error}");
+
+    let mut config = FetchConfig::default();
+    config.set_allow_file_urls(true);
+    let granted = ResourceRequestClient::new(&config)?;
+    let response = granted
+        .fetch_text_stream(subresource(&stylesheet, Some(&file_document))?)
+        .await?;
+    assert_eq!(response.status, 200);
+    assert!(
+        response
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("content-type") && value == b"text/css")
+    );
+    assert_eq!(response.body_text(), "body { color: green; }");
+
+    let navigation = |access: LocalFileNavigationAccess| -> Result<Request> {
+        Ok(browser_navigation_request(file_document.as_str())?
+            .with_request_mode(RequestMode::Navigate)
+            .with_local_file_navigation_access(access))
+    };
+    let response = granted
+        .fetch_text_stream(navigation(LocalFileNavigationAccess::BrowserGranted)?)
+        .await?;
+    assert_eq!(response.body_text(), "<p>local</p>");
+
+    // A navigation the browser did not grant, such as a popup a web page
+    // opened, is refused like a web page's subresource.
+    let refused = [
+        (
+            stylesheet.clone(),
+            subresource(&stylesheet, Some(&web_document))?,
+        ),
+        (stylesheet.clone(), subresource(&stylesheet, None)?),
+        (
+            file_document.clone(),
+            navigation(LocalFileNavigationAccess::Denied)?,
+        ),
+    ];
+    for (url, request) in refused {
+        let error = granted
+            .fetch_text_stream(request)
+            .await
+            .expect_err("only file documents and browser navigations may read files");
+        assert_eq!(
+            error.to_string(),
+            format!("file URL `{url}` is not accessible from this request")
+        );
+    }
+    let error = granted
+        .fetch_text_stream(subresource(&missing, Some(&file_document))?)
+        .await
+        .expect_err("a missing file fails locally");
+    assert!(
+        error
+            .to_string()
+            .starts_with(&format!("file URL `{missing}` cannot be read: ")),
+        "{error}"
+    );
+
+    std::fs::remove_dir_all(dir)?;
     Ok(())
 }
 
