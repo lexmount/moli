@@ -28,24 +28,13 @@ impl DocumentRuntime {
         if !element.is_html_option() {
             return false;
         }
-        if let Some(select) = self.owner_select_for_option(handle) {
+        if let Some(select) = self.dom_host.option_nearest_ancestor_select(handle) {
             return self
                 .dom_host
                 .select_selected_option_elements(select)
                 .contains(&handle);
         }
         element.selected()
-    }
-
-    fn owner_select_for_option(&self, handle: DomHandle) -> Option<DomHandle> {
-        let mut current = self.dom_host.parent_node(handle);
-        while let Some(parent) = current {
-            if self.dom_host.is_html_element_named(parent, "select") {
-                return Some(parent);
-            }
-            current = self.dom_host.parent_node(parent);
-        }
-        None
     }
 
     fn preserve_selectedness_for_options_removed_from_select(
@@ -55,7 +44,12 @@ impl DocumentRuntime {
         selectedness: &[(DomHandle, bool)],
     ) {
         for &(option, was_selected) in selectedness {
-            if was_selected && self.owner_select_for_option(option).is_none() {
+            if was_selected
+                && self
+                    .dom_host
+                    .option_nearest_ancestor_select(option)
+                    .is_none()
+            {
                 let _ = self.set_selected_state_with_dirty(scope, host_ptr, option, true, false);
             }
         }
