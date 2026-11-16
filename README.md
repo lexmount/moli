@@ -381,6 +381,35 @@ about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
 [resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
 for the methodology and full data.
 
+### Web Fetch benchmarks
+
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) sends 430 tasks to live websites, so its pass rate reflects both site access and correct content extraction. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) processes 545 saved HTML pages and scores extraction quality without live-site access. [Read the benchmark report](https://browser.lexmount.com/blog/webfetch-benchmark).
+
+To reproduce these results, run the Web Fetch track in [Webstone](https://github.com/lexmount/webstone) ([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)). The table uses the 430-task v1.0.0 edition of the dataset.
+
+| Method | Overall | Static /100 | Anti-bot /100 | Popular /100 | Dynamic /100 | Documents and media /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
+
+Cells show tasks passed. The last column combines document content, direct media, and media embedded in web pages; together, the table covers all seven task families.
+
+<details>
+<summary><strong>WebMainBench · extraction quality on 545 saved pages</strong></summary>
+
+| Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
+
 ## Project scope
 
 Within the agent-browser scenarios defined in its documentation, Moli is ready
