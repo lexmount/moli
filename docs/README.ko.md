@@ -304,15 +304,76 @@ Moli는 Chromium 래퍼가 아닌 독립형 브라우저 커널입니다. Rust�
 
 ## 벤치마크
 
-Moli는 작업이 고정된 공개 벤치마크로 측정합니다. 각 행은 무엇을 측정하는지 보여 주고
-자세한 내용으로 연결됩니다.
+다음 측정값은 Moli의 현재 기능 범위를 보여 줍니다. 실제 웹사이트, 자동화 클라이언트,
+Chromium/WPT 동작 검사, 대규모 nextest 회귀 테스트 모음을 다룹니다.
 
-| 영역 | 벤치마크 | 측정 항목 | Moli | 자세히 |
-| --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 실제 사이트 과제 430개; [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 저장된 페이지 545개 | 실제 사이트 과제 통과 비율, 저장된 페이지의 추출 품질 점수 | **89.8%**와 **39.27%**, 두 벤치마크 모두 브라우저 5개 중 1위 | [Web Fetch](#web-fetch) |
-| 브라우저 자동화 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 비교 가능한 작업 1,308개 | CDP, 자동화 도구, 웹 플랫폼 작업의 성공 비율 | **81.9%**, Chrome 99.8% | [브라우저 자동화](#브라우저-자동화) |
-| 리소스 사용량 | Lexbench-Headless-Browser · 모든 로컬 엔진이 완료한 작업 557개 | 작업당 중앙 CPU 시간과 최대 메모리 | Chrome CPU 시간의 **15%**, 메모리의 **13%** | [리소스 사용량](#리소스-사용량) |
-| 웹 표준 | 선별한 [WPT](https://github.com/web-platform-tests/wpt) 테스트 | 통과한 WPT 테스트 수 | 전체 실행 한 번에 **161만 2천 개** 테스트 통과 | — |
+| 테스트 | 측정 항목 | Moli |
+| --- | --- | --- |
+| [혼합 공개 웹 크롤 테스트](#혼합-공개-웹-크롤-테스트) | 공개 URL 192개에서 얻은 유효 페이지 | 103페이지(53.6%), 중앙 RSS 73 MiB |
+| [에이전트 워크로드 예시](#에이전트-워크로드-예시) | 에이전트 에피소드 한 번의 시작·지연·메모리 | CDP 준비 34.85 ms(Chromium 169.37 ms) |
+| [WPT 테스트](#wpt-테스트) | 선별한 웹 플랫폼 테스트 | 161만 2천 개 통과 |
+| [Lexbench-Headless-Browser에서의 Moli 성능](#lexbench-headless-browser에서의-moli-성능) | 자동화 과제 1,308개, CPU와 메모리 | 성공률 81.9%, Chrome 대비 CPU 시간 15%, 메모리 13% |
+| [Web Fetch](#web-fetch) | 실제 사이트 과제 430개, 저장된 페이지 545개 | 89.8%와 39.27%, 두 벤치마크 모두 브라우저 5개 중 1위 |
+
+### 혼합 공개 웹 크롤 테스트
+
+이 테스트는 중국과 국제 주요 사이트의 공개 URL 192개를 다룹니다. JavaScript 실행 뒤
+의미 있는 콘텐츠를 생성해야만 페이지를 성공으로 계산합니다. HTTP 200, 챌린지 페이지,
+로그인 차단벽, 빈 응답, 셸만 있는 애플리케이션은 성공으로 계산하지 않습니다.
+
+| 브라우저 | 유효 페이지 | 성공률 | 중앙 시간 | 중앙 RSS |
+| --- | ---: | ---: | ---: | ---: |
+| **Moli** | **103** | **53.6%** | **1.43초** | **73 MiB** |
+| Chrome Headless | 101 | 52.6% | 1.43초 | 773 MiB |
+| Lightpanda | 85 | 44.3% | 0.97초 | 40 MiB |
+| Obscura | 57 | 29.7% | 1.30초 | 39 MiB |
+
+### 에이전트 워크로드 예시
+
+| 지표 | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP 준비 | 34.85 ms | 169.37 ms |
+| 에피소드 활성 p50 | 33.40 ms | 57.13 ms |
+| 최대 PSS | 102.46 MiB | 348.82 MiB |
+| 최대 프로세스 / 스레드 수 | 1 / 24 | 11 / 123 |
+
+### WPT 테스트
+
+Moli의 에이전트 브라우저 범위를 검증하는 현재 WPT 선택 항목에서, 전체 실행 한 번이
+**161만 2천 개 테스트**를 통과했습니다.
+
+### Lexbench-Headless-Browser에서의 Moli 성능
+
+전체 [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)
+코퍼스에는 원시 CDP, Playwright·Puppeteer·Selenium을 포함한 13개 고정 자동화 도구,
+웹 플랫폼 의미 체계를 다루는 1,928개 작업이 있습니다. 원격 엔드포인트로만 제공되는
+Kitesurf를 포함하기 위해, 아래 차트는 비교 가능한 1,308개 작업을 사용합니다. 모든
+브라우저는 같은 작업 선택 규칙을 따릅니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="1,308개 비교 작업에서의 다섯 헤드리스 브라우저 작업 성공률: Chrome 99.8%, Moli 81.9%, Kitesurf 62.1%, Lightpanda 53.3%, Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+</picture>
+
+**Moli 0.1.1은 1,071개 작업을 통과해 성공률 81.88%를 기록했으며**, 62.08%의
+Kitesurf, 53.29%의 Lightpanda, 44.88%의 Obscura보다 앞섰습니다. 기준 엔진인 Chrome은
+99.85%에 도달했습니다. Kitesurf는 k=1로 실행했고, 다루지 못한 작업은 통과하지 못한
+것으로 계산했습니다. 원격 서비스의 재현 조건은 로컬 바이너리와 다릅니다. 전체 결과는
+벤치마크의 [다섯 엔진 보고서](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)를
+참조하세요.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="네 가지 로컬 엔진의 작업당 중앙 최대 메모리와 작업 성공률: Chrome 99.9%, 697 MiB; Moli 80.7%, 92 MiB; Lightpanda 43.8%, 34 MiB; Obscura 39.5%, 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+</picture>
+
+Kitesurf는 원격 서비스이므로 CPU, 메모리, 프로세스 수를 측정할 수 없습니다. 따라서
+리소스 비교에는 로컬 엔진 네 개만 포함합니다. 별도의 557개 작업 실행에는 네 엔진이
+모두 완료한 작업만 들어갑니다. Moli의 중앙 CPU 시간은 **100.6 ms**이고 중앙 최대
+메모리는 **92 MiB**였습니다. Chrome은 각각 **687 ms**, **697 MiB**를 기록했습니다.
+Moli는 Chrome CPU 시간의 약 15%, 최대 메모리의 약 13%를 사용했습니다. 방법론은
+[리소스 카드](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)를
+참조하세요.
 
 ### Web Fetch
 
@@ -367,68 +428,6 @@ Moli를 실제 사이트와 저장된 페이지에서 다른 브라우저 네 �
 | Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
 
 </details>
-
-</details>
-
-<details>
-<summary>혼합 공개 웹 크롤 테스트 · 공개 URL 192개</summary>
-
-JavaScript 실행 뒤 의미 있는 콘텐츠를 생성해야만 페이지를 성공으로 계산합니다. HTTP 200,
-챌린지 페이지, 로그인 차단벽, 빈 응답, 셸만 있는 애플리케이션은 성공으로 계산하지 않습니다.
-
-| 브라우저 | 유효 페이지 | 성공률 | 중앙 시간 | 중앙 RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43초** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43초 | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97초 | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30초 | 39 MiB |
-
-</details>
-
-### 브라우저 자동화
-
-전체 [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)
-코퍼스에는 원시 CDP, Playwright·Puppeteer·Selenium을 포함한 13개 고정 자동화 도구,
-웹 플랫폼 의미 체계를 다루는 1,928개 작업이 있습니다. 원격 엔드포인트로만 제공되는
-Kitesurf를 포함하기 위해, 아래 차트는 비교 가능한 1,308개 작업을 사용합니다. 모든
-브라우저는 같은 작업 선택 규칙을 따릅니다.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
-  <img alt="1,308개 비교 작업에서의 다섯 헤드리스 브라우저 작업 성공률: Chrome 99.8%, Moli 81.9%, Kitesurf 62.1%, Lightpanda 53.3%, Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
-</picture>
-
-**Moli 0.1.1은 1,071개 작업을 통과해 성공률 81.88%를 기록했으며**, 62.08%의
-Kitesurf, 53.29%의 Lightpanda, 44.88%의 Obscura보다 앞섰습니다. 기준 엔진인 Chrome은
-99.85%에 도달했습니다. Kitesurf는 k=1로 실행했고, 다루지 못한 작업은 통과하지 못한
-것으로 계산했습니다. 원격 서비스의 재현 조건은 로컬 바이너리와 다릅니다. 전체 결과는
-벤치마크의 [다섯 엔진 보고서](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)를
-참조하세요.
-
-### 리소스 사용량
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
-  <img alt="네 가지 로컬 엔진의 작업당 중앙 최대 메모리와 작업 성공률: Chrome 99.9%, 697 MiB; Moli 80.7%, 92 MiB; Lightpanda 43.8%, 34 MiB; Obscura 39.5%, 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
-</picture>
-
-Kitesurf는 원격 서비스이므로 CPU, 메모리, 프로세스 수를 측정할 수 없습니다. 따라서
-리소스 비교에는 로컬 엔진 네 개만 포함합니다. 별도의 557개 작업 실행에는 네 엔진이
-모두 완료한 작업만 들어갑니다. Moli의 중앙 CPU 시간은 **100.6 ms**이고 중앙 최대
-메모리는 **92 MiB**였습니다. Chrome은 각각 **687 ms**, **697 MiB**를 기록했습니다.
-Moli는 Chrome CPU 시간의 약 15%, 최대 메모리의 약 13%를 사용했습니다. 방법론은
-[리소스 카드](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)를
-참조하세요.
-
-<details>
-<summary>에이전트 워크로드 예시 · 단일 에피소드, Moli 대 Chromium</summary>
-
-| 지표 | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP 준비 | 34.85 ms | 169.37 ms |
-| 에피소드 활성 p50 | 33.40 ms | 57.13 ms |
-| 최대 PSS | 102.46 MiB | 348.82 MiB |
-| 최대 프로세스 / 스레드 수 | 1 / 24 | 11 / 123 |
 
 </details>
 
