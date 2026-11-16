@@ -144,7 +144,7 @@ impl ControlledFetchStream {
         Ok(())
     }
 
-    pub(super) fn finish(&mut self, result: Result<(), String>) {
+    pub(super) fn finish(&mut self, result: Result<(), super::super::FetchError>) {
         let (info, head, source) = *self
             .response
             .take()
@@ -155,7 +155,10 @@ impl ControlledFetchStream {
             Ok(()) => SubresourceBodyFinished::ready_after_streaming(handle, body.clone()),
             Err(error) => SubresourceBodyFinished::failed_with_partial_body(
                 handle,
-                network_error(error),
+                error
+                    .network_error_text
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| network_error(&error.message)),
                 body.clone(),
             ),
         };
@@ -168,7 +171,7 @@ impl ControlledFetchStream {
                 fetch_id: self.fetch_id,
                 body_source_id: self.body_source_id.unwrap(),
                 head,
-                result: result.map(|()| body),
+                result: result.map(|()| body).map_err(Into::into),
             },
         ));
     }
@@ -232,12 +235,25 @@ impl super::ControlledResourceLoad {
                 Err(super::super::FetchResponseSecurityViolation::OpaqueResponseBlocked(_)) => {
                     blocked_opaque = true
                 }
-                Err(error) => result = Err(error.into_message()),
+                Err(error) => result = Err(error.into_message().into()),
             }
         }
-        let mut record = super::result::XhrLoadResult::new(self.info.clone(), result, headers);
+        let network_error_text = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.network_error_text);
+        let mut record = super::result::XhrLoadResult::new(
+            self.info.clone(),
+            result.map_err(Into::into),
+            headers,
+        );
         if let Err(error) = &record.result {
-            record.network_record = failure_record(&self.info, network_error(error));
+            record.network_record = failure_record(
+                &self.info,
+                network_error_text
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| network_error(error)),
+            );
         } else if blocked_opaque {
             record.network_record =
                 failure_record(&self.info, super::super::ABORTED_ERROR_TEXT.to_owned());

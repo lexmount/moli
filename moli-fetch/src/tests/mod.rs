@@ -7,6 +7,7 @@ mod corp;
 mod fetch_metadata;
 mod header_bytes;
 mod header_eof;
+mod manual_redirects;
 mod mixed_transport;
 mod redirect_auth;
 mod redirect_policy;

@@ -179,6 +179,8 @@ pub fn fetch_subresource_interception_config_for_patterns(
 pub enum ResponseStageUrlMatchPolicy {
     AlreadyMatched,
     MatchFinalUrl,
+    /// The client requested a response pause for this individual request.
+    ExplicitlyRequested,
 }
 
 impl ResponseStageUrlMatchPolicy {
@@ -1751,7 +1753,8 @@ pub struct PendingSubresourceFetchResponseRequest {
     pub request_headers: moli_fetch::RequestHeaders,
     pub request_body: Option<String>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
-    pub response_status: u16,
+    pub response_status: Option<u16>,
+    pub response_error_reason: Option<String>,
     pub response_headers: Vec<(String, Vec<u8>)>,
     pub response_head_overridden: bool,
     pub response_body_taken_as_stream: bool,
@@ -1779,7 +1782,8 @@ impl PendingSubresourceFetchResponseRequest {
         response_status: u16,
         response_headers: Vec<(String, Vec<u8>)>,
     ) {
-        self.response_status = response_status;
+        self.response_status = Some(response_status);
+        self.response_error_reason = None;
         self.response_headers = response_headers;
         self.response_head_overridden = true;
     }

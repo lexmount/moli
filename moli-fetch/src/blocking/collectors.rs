@@ -25,7 +25,7 @@ use crate::RedirectInfo;
 
 use super::{
     StreamingHtmlResponseStart, create_streaming_cache_body_writer_for_response_parts,
-    next_redirect_url_from_parts, store_response_cookies,
+    next_redirect_url_from_parts, store_response_cookies, validate_network_redirect_location,
 };
 
 fn is_interim_response_status(status: u16) -> bool {
@@ -133,6 +133,8 @@ pub(crate) struct ResponseCollector {
     status: u16,
     status_text: Option<String>,
     stop_at_redirect: bool,
+    current_url: Option<Url>,
+    callback_error: Option<Error>,
     header_terminated: bool,
     max_response_size: Option<usize>,
     response_too_large: bool,
@@ -157,6 +159,7 @@ impl ResponseCollector {
 
     pub(crate) fn begin_request(
         &mut self,
+        current_url: &Url,
         max_response_size: Option<usize>,
         stop_at_redirect: bool,
     ) {
@@ -168,6 +171,8 @@ impl ResponseCollector {
         self.status = 0;
         self.status_text = None;
         self.stop_at_redirect = stop_at_redirect;
+        self.current_url = Some(current_url.clone());
+        self.callback_error = None;
         self.header_terminated = false;
         self.max_response_size = max_response_size;
         self.response_too_large = false;
@@ -183,6 +188,10 @@ impl ResponseCollector {
 
     pub(crate) fn body(&self) -> &[u8] {
         &self.body
+    }
+
+    pub(crate) fn take_callback_error(&mut self) -> Option<Error> {
+        self.callback_error.take()
     }
 
     pub(crate) fn header_terminated(&self) -> bool {
@@ -214,7 +223,7 @@ pub struct StreamingResponseCollector {
     response_credentials_allowed: bool,
     redirect_chain: Vec<RedirectInfo>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
-    callback_error: Option<String>,
+    callback_error: Option<Error>,
     client_hint_response_policy: Option<ClientHintResponsePolicy>,
     client_hint_restart_requested: bool,
     cancel_handle: FetchCancelHandle,
@@ -288,7 +297,7 @@ pub struct RawStreamingResponseCollector {
     redirect_chain: Vec<RedirectInfo>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
     defer_not_modified_start: bool,
-    callback_error: Option<String>,
+    callback_error: Option<Error>,
     client_hint_response_policy: Option<ClientHintResponsePolicy>,
     client_hint_restart_requested: bool,
     cancel_handle: FetchCancelHandle,
@@ -452,6 +461,10 @@ impl StreamingResponseCollector {
     }
 
     pub fn take_callback_error(&mut self) -> Option<String> {
+        self.take_callback_failure().map(|error| error.to_string())
+    }
+
+    pub(crate) fn take_callback_failure(&mut self) -> Option<Error> {
         self.callback_error.take()
     }
 
@@ -475,8 +488,8 @@ impl StreamingResponseCollector {
         // the empty separator. Run the usual cookie/cache/client-hint policy
         // before the owner decides whether to publish or retry this response.
         self.finalize_headers();
-        if let Some(error) = &self.callback_error {
-            return Err(Error::msg(error.clone()));
+        if let Some(error) = self.callback_error.take() {
+            return Err(error);
         }
         Ok(())
     }
@@ -498,7 +511,7 @@ impl StreamingResponseCollector {
         if self.response_credentials_allowed {
             let Some(request_context) = self.current_cookie_context.as_ref() else {
                 self.callback_error =
-                    Some("response cookie context was not initialized".to_owned());
+                    Some(Error::msg("response cookie context was not initialized"));
                 return false;
             };
             match store_response_cookies(
@@ -511,7 +524,7 @@ impl StreamingResponseCollector {
                     self.cookie_set_reports = reports;
                 }
                 Err(error) => {
-                    self.callback_error = Some(error.to_string());
+                    self.callback_error = Some(error);
                     return false;
                 }
             }
@@ -532,6 +545,14 @@ impl StreamingResponseCollector {
         if let Some(origin) = &self.corp_origin
             && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
             && let Err(error) = policy.check(origin, &current_url)
+        {
+            self.callback_error = Some(Error::msg(error));
+            return false;
+        }
+        // Reject malformed redirects before publishing a head or committing
+        // response progress, including when no redirect will be followed.
+        if let Err(error) =
+            validate_network_redirect_location(&current_url, self.status, &self.headers)
         {
             self.callback_error = Some(error);
             return false;
@@ -869,7 +890,7 @@ impl RawStreamingResponseCollector {
         self.cache_body_writer.take()
     }
 
-    pub fn take_callback_error(&mut self) -> Option<String> {
+    pub(crate) fn take_callback_failure(&mut self) -> Option<Error> {
         self.callback_error.take()
     }
 
@@ -892,8 +913,8 @@ impl RawStreamingResponseCollector {
         // A deferred redirect or 304 has not started either, so track header
         // finalization separately to avoid applying its response policy twice.
         self.finalize_headers();
-        if let Some(error) = &self.callback_error {
-            return Err(Error::msg(error.clone()));
+        if let Some(error) = self.callback_error.take() {
+            return Err(error);
         }
         Ok(())
     }
@@ -915,7 +936,7 @@ impl RawStreamingResponseCollector {
         if self.response_credentials_allowed {
             let Some(request_context) = self.current_cookie_context.as_ref() else {
                 self.callback_error =
-                    Some("response cookie context was not initialized".to_owned());
+                    Some(Error::msg("response cookie context was not initialized"));
                 return false;
             };
             match store_response_cookies(
@@ -928,7 +949,7 @@ impl RawStreamingResponseCollector {
                     self.cookie_set_reports = reports;
                 }
                 Err(error) => {
-                    self.callback_error = Some(error.to_string());
+                    self.callback_error = Some(error);
                     return false;
                 }
             }
@@ -952,20 +973,23 @@ impl RawStreamingResponseCollector {
             && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
             && let Err(error) = policy.check(origin, &current_url)
         {
-            self.callback_error = Some(error);
+            self.callback_error = Some(Error::msg(error));
             return false;
         }
+        let is_redirect_response =
+            match validate_network_redirect_location(&current_url, self.status, &self.headers) {
+                Ok(is_redirect) => is_redirect,
+                Err(error) => {
+                    self.callback_error = Some(error);
+                    return false;
+                }
+            };
         let declared_body_length = identity_encoded_content_length(&self.headers);
         self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
         if declared_body_length == Some(0) {
             self.response_progress.commit();
         }
         self.maybe_create_cache_body_writer();
-        let is_redirect_response =
-            next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
-                .ok()
-                .flatten()
-                .is_some();
         self.maybe_emit_start(is_redirect_response);
         if self.started && (response_body_ends_at_headers(self.status) || is_redirect_response) {
             // Manual redirects expose their head with an empty body. Stop the
@@ -1117,6 +1141,14 @@ impl Handler for ResponseCollector {
         let line = line.trim_end_matches(['\r', '\n']);
 
         if line.is_empty() {
+            if let Some(url) = &self.current_url
+                && let Err(error) =
+                    validate_network_redirect_location(url, self.status, &self.headers)
+            {
+                self.callback_error = Some(error);
+                return false;
+            }
+
             if self.stop_at_redirect
                 && matches!(self.status, 301 | 302 | 303 | 307 | 308)
                 && self.headers.iter().any(|(name, _)| name == "location")
@@ -1362,7 +1394,7 @@ mod tests {
     #[test]
     fn buffered_status_message_tracks_final_response_and_resets_between_requests() {
         let mut collector = ResponseCollector::new(None);
-        collector.begin_request(None, false);
+        collector.begin_request(&Url::parse("https://example.test/").unwrap(), None, false);
         assert!(collector.header(b"HTTP/1.1 103 Early Hints\r\n"));
         assert!(collector.header(b"Link: </early.css>; rel=preload\r\n"));
         assert!(collector.header(b"\r\n"));
@@ -1371,7 +1403,7 @@ mod tests {
         assert_eq!(collector.status_text(), Some("\u{a0}caf\u{e9}\u{ff}"));
         assert!(collector.headers().is_empty());
 
-        collector.begin_request(None, false);
+        collector.begin_request(&Url::parse("https://example.test/").unwrap(), None, false);
         assert_eq!(collector.status_text(), None);
         assert!(collector.header(b"HTTP/1.1 200 \r\n"));
         assert_eq!(collector.status_text(), Some(""));
@@ -1380,7 +1412,7 @@ mod tests {
     #[test]
     fn buffered_single_hop_stops_at_redirect_headers_but_preserves_auth_and_final_bodies() {
         let mut collector = ResponseCollector::new(None);
-        collector.begin_request(None, true);
+        collector.begin_request(&Url::parse("https://example.test/").unwrap(), None, true);
         assert!(collector.header(b"HTTP/1.1 401 Unauthorized\r\n"));
         assert!(collector.header(b"WWW-Authenticate: Digest realm=\"test\"\r\n"));
         assert!(collector.header(b"\r\n"));
@@ -1392,21 +1424,21 @@ mod tests {
         assert!(collector.header_terminated());
         assert!(collector.body().is_empty());
 
-        collector.begin_request(None, true);
+        collector.begin_request(&Url::parse("https://example.test/").unwrap(), None, true);
         assert!(collector.header(b"HTTP/1.1 200 OK\r\n"));
         assert!(collector.header(b"\r\n"));
         assert_eq!(collector.write(b"final").unwrap(), 5);
         assert!(!collector.header_terminated());
         assert_eq!(collector.body(), b"final");
 
-        collector.begin_request(None, false);
+        collector.begin_request(&Url::parse("https://example.test/").unwrap(), None, false);
         assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
         assert!(collector.header(b"Location: /next\r\n"));
         assert!(collector.header(b"\r\n"));
         assert_eq!(collector.write(b"redirect body").unwrap(), 13);
         assert!(!collector.header_terminated());
 
-        collector.begin_request(None, true);
+        collector.begin_request(&Url::parse("https://example.test/").unwrap(), None, true);
         assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
         assert!(collector.header(b"\r\n"));
         assert_eq!(collector.write(b"no Location").unwrap(), 11);

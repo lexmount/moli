@@ -2536,6 +2536,16 @@ pub struct ChildDocumentFetchRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubresourceResponseError {
+    /// Protocol classification of the failed response.
+    pub reason: String,
+    /// Original diagnostic retained for the fetch continuation.
+    pub message: String,
+    /// Browser network code retained for terminal network observation.
+    pub network_error_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingSubresourceResponseInfo {
     pub internal_id: u64,
     pub url: Url,
@@ -2546,7 +2556,9 @@ pub struct PendingSubresourceResponseInfo {
     pub resource_type: SubresourceResourceType,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub network_request_headers: Option<Vec<(String, String)>>,
-    pub response_status: u16,
+    pub response_status: Option<u16>,
+    /// Failure retained intact across Worker/parent response pauses.
+    pub response_error: Option<SubresourceResponseError>,
     pub response_headers: Vec<(String, Vec<u8>)>,
     /// Captured body for renderer-owned continuations. Native network pauses
     /// carry their pending body capability separately; this is empty there.

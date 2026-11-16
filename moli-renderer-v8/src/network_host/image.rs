@@ -376,7 +376,9 @@ pub(crate) fn start_image_element_resource_fetch(
                     response_filter: None,
                     network_error_text: None,
                     result: AsyncSubresourceFetchResult::Failure(
-                        "service worker image fetch dispatch failed".to_owned(),
+                        "service worker image fetch dispatch failed"
+                            .to_owned()
+                            .into(),
                     ),
                 },
             );

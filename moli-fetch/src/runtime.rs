@@ -944,6 +944,7 @@ impl RuntimeOwner {
             .buffered_mut()
             .expect("buffered request should use buffered collector")
             .begin_request(
+                &job.current_url,
                 self.config.http_max_response_size(),
                 job.request.redirect_handling() == crate::RequestRedirectHandling::FollowByCaller
                     && matches!(&job.response_tx, RuntimeResponseTx::Raw(_)),
@@ -1550,6 +1551,27 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled during shutdown"),
             ));
         }
+        if let Some(error) = easy
+            .as_mut()
+            .and_then(|easy| easy.get_mut().buffered_mut())
+            .and_then(ResponseCollector::take_callback_error)
+        {
+            // Header rejection must not discard HTTP side effects. These
+            // cookies belong to the received response even when Location is
+            // invalid, and must be handled before waiting for any body bytes.
+            if job.request.allows_credentials_for_url(&job.current_url)
+                && let Some(collector) = easy.as_ref().and_then(|easy| easy.get_ref().buffered())
+                && let Err(error) = store_response_cookies(
+                    &self.cookie_store,
+                    &job.current_url,
+                    collector.headers(),
+                    &job.current_cookie_context,
+                )
+            {
+                return Err((job.response_tx, error));
+            }
+            return Err((job.response_tx, error));
+        }
         let header_terminated = easy
             .as_ref()
             .and_then(|easy| easy.get_ref().buffered())
@@ -1937,8 +1959,7 @@ impl RuntimeOwner {
                 let error = easy
                     .get_mut()
                     .streaming_mut()
-                    .and_then(StreamingResponseCollector::take_callback_error)
-                    .map(anyhow::Error::msg)
+                    .and_then(StreamingResponseCollector::take_callback_failure)
                     .unwrap_or(error);
                 fail_streaming_job_with_easy(job, Some(easy), error);
                 return;
@@ -2259,8 +2280,7 @@ impl RuntimeOwner {
                 let error = easy
                     .get_mut()
                     .raw_streaming_mut()
-                    .and_then(RawStreamingResponseCollector::take_callback_error)
-                    .map(anyhow::Error::msg)
+                    .and_then(RawStreamingResponseCollector::take_callback_failure)
                     .unwrap_or(error);
                 fail_raw_streaming_job_with_easy(job, Some(easy), error);
                 return;

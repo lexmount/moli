@@ -310,7 +310,14 @@ fn start_devtools_continue_intercepted_request_command(
         let handle_auth_requests = conn.target_fetch_handle_auth_requests_for_owner(owner);
         let should_register =
             pending.resource_type != SubresourceResourceType::WebSocket || intercept_response;
-        let correlation = match if configured_response_stage && !command.intercept_response {
+        let correlation = match if command.intercept_response {
+            PreparedSubresourceCorrelation::prepare_explicit_response_stage(
+                conn,
+                owner,
+                &request_id,
+                &pending,
+            )
+        } else if configured_response_stage {
             PreparedSubresourceCorrelation::prepare_deferred_response_stage(
                 conn,
                 owner,
@@ -1417,9 +1424,10 @@ fn start_devtools_continue_intercepted_response_command(
             .response_stage_pause_state()
             .is_some_and(|chain| !chain.remaining_sessions.is_empty());
         if has_remaining_response_stage_chain && command.auth_credentials.is_none() {
-            if response_code.is_none()
-                && response_headers.is_none()
-                && command.response_phrase.is_none()
+            if pending.response_error_reason.is_some()
+                || (response_code.is_none()
+                    && response_headers.is_none()
+                    && command.response_phrase.is_none())
             {
                 let Some(event) = super::subresource::next_chained_subresource_response_pause_event(
                     conn, pending,
@@ -1469,8 +1477,11 @@ fn start_devtools_continue_intercepted_response_command(
             && response_code.is_none()
             && response_headers.is_none()
             && command.auth_credentials.is_none();
-        let continue_response_code = response_code
-            .or_else(|| accumulated_response_head_override.then_some(pending.response_status));
+        let continue_response_code = response_code.or_else(|| {
+            accumulated_response_head_override
+                .then_some(pending.response_status)
+                .flatten()
+        });
         let continue_response_headers = if accumulated_response_head_override {
             Some(pending.response_headers.clone())
         } else {
@@ -1985,7 +1996,8 @@ mod protocol_neutral_tests {
             request_headers: vec![("accept".to_owned(), "application/json".to_owned())].into(),
             request_body: None,
             request_cookie_report: None,
-            response_status: 200,
+            response_status: Some(200),
+            response_error_reason: None,
             response_headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
             response_head_overridden: false,
             response_body_taken_as_stream: false,
@@ -2086,7 +2098,7 @@ mod protocol_neutral_tests {
             .expect("next Fetch session should own the chained response");
         assert_eq!(chained.owner_session_id.as_deref(), Some("SID-attached"));
         assert_eq!(chained.action_session_id.as_deref(), Some("SID-attached"));
-        assert_eq!(chained.response_status, 200);
+        assert_eq!(chained.response_status, Some(200));
     }
 
     #[test]

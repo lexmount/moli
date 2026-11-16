@@ -223,6 +223,38 @@ fn blob_file_underlying_url_accepts_response_cookie_like_chromium_site_for_cooki
 }
 
 #[test]
+fn response_cookie_context_uses_blob_workers_inherited_site() {
+    let request_url = parse("https://app.example.test/redirect");
+    for (initiator, accepted) in [
+        ("https://app.example.test/worker.js", true),
+        ("blob:https://app.example.test/id", true),
+        ("blob:https://sub.example.test/id", true),
+        ("blob:http://app.example.test/id", false),
+        ("blob:https://other.test/id", false),
+        ("blob:null/id", false),
+    ] {
+        let context = NetworkCookieRequestContext::subresource("GET")
+            .with_initiator_url(&request_url, &parse(initiator));
+        let mut store = BrowserCookieStore::default();
+        let reports = store.store_response_headers_with_context_reports(
+            &request_url,
+            &[(
+                "set-cookie".to_owned(),
+                b"worker_cookie=kept; Path=/".to_vec(),
+            )],
+            &context,
+        );
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            reports[0].is_accepted(),
+            accepted,
+            "{initiator}: {reports:?}"
+        );
+        assert_eq!(store.cookie_header(&request_url).is_some(), accepted);
+    }
+}
+
+#[test]
 fn store_response_headers_accepts_mixed_case_set_cookie_name() {
     let mut store = BrowserCookieStore::default();
     let url = parse("https://example.com/app/index.html");

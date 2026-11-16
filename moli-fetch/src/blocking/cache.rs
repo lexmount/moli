@@ -161,8 +161,9 @@ pub(crate) fn next_followed_redirect_url_from_parts(
             .map_err(anyhow::Error::msg)?;
     }
     if request.redirect_mode() == crate::RequestRedirectMode::Manual {
-        // A filtered manual response never consumes a redirect target. In
-        // particular, an invalid Location must not fail buffered delivery.
+        // Validate network Location syntax before a manual response can be
+        // filtered. Do not follow it or apply automatic redirect limits/policy.
+        super::validate_network_redirect_location(final_url, status, headers)?;
         return Ok(None);
     }
     // A browser may follow redirects itself, preserving the full URL list for
@@ -230,8 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_redirect_skips_location_parsing_and_limits_after_response_security_checks()
-    -> Result<()> {
+    fn manual_redirect_validates_location_without_following_or_applying_limits() -> Result<()> {
         let origin = Url::parse("https://origin.test/page")?;
         let current = Url::parse("https://other.test/redirect")?;
         let request =
@@ -239,7 +239,7 @@ mod tests {
                 .with_credentials_mode(crate::RequestCredentialsMode::Omit)
                 .with_redirect_mode(crate::RequestRedirectMode::Manual);
         let headers = vec![
-            ("location".to_owned(), b"http://[".to_vec()),
+            ("location".to_owned(), b"/next".to_vec()),
             (
                 "access-control-allow-origin".to_owned(),
                 b"https://origin.test".to_vec(),
@@ -259,9 +259,21 @@ mod tests {
             next_followed_redirect_url_from_parts(&request, &current, 302, &headers[..1], 0)
                 .expect_err("manual redirects still require CORS permission");
         assert!(denied.to_string().contains("CORS"));
+        let mut invalid = headers.clone();
+        invalid[0].1 = b"http://[".to_vec();
+        for count in [0, super::super::MAX_REDIRECTS] {
+            let error =
+                next_followed_redirect_url_from_parts(&request, &current, 302, &invalid, count)
+                    .expect_err("manual network redirects must reject malformed Location");
+            assert!(
+                error
+                    .to_string()
+                    .contains("failed to resolve redirect location")
+            );
+        }
         let follow = request.with_redirect_mode(crate::RequestRedirectMode::Follow);
         assert!(
-            next_followed_redirect_url_from_parts(&follow, &current, 302, &headers, 0).is_err()
+            next_followed_redirect_url_from_parts(&follow, &current, 302, &invalid, 0).is_err()
         );
         Ok(())
     }

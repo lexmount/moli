@@ -63,13 +63,13 @@ impl ScriptVm {
                 )
                 .await
             };
-            result.map(|observed| {
+            AsyncSubresourceFetchResult::from_network_result(result.map(|observed| {
                 let (response, request_observation) = observed.into_parts();
                 crate::protocol_types::NavigationResponse::from(response)
                     .with_network_request_headers(
                         request_observation.map(|observation| observation.into_headers()),
                     )
-            })
+            }))
         };
         self.spawn_running_subresource_response(state, response);
     }
@@ -115,7 +115,7 @@ impl ScriptVm {
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
-        network_error_text: Option<String>,
+        mut network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result =
@@ -125,7 +125,11 @@ impl ScriptVm {
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error) => {
+                network_error_text =
+                    network_error_text.or_else(|| error.network_error_text.map(str::to_owned));
+                (None, Err(error.message))
+            }
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
                 unreachable!("body bound above")
             }
@@ -244,46 +248,25 @@ impl ScriptVm {
                         trace_fields,
                         trace_started,
                     );
-                    let info = PendingSubresourceResponseInfo {
-                        internal_id,
-                        url: request_url.clone(),
-                        final_url: response.final_url.clone(),
-                        method: request_method.clone(),
-                        request_headers: request_headers.clone(),
-                        request_body: request_body.clone(),
-                        resource_type,
-                        request_cookie_report: response.request_cookie_report.clone(),
-                        network_request_headers: response
-                            .network_request_headers()
-                            .map(|headers| headers.to_vec()),
-                        response_status: response.status,
-                        response_headers: response.headers.clone(),
-                        response_body: encoded.as_ref().map_or_else(
-                            || SubresourceResponseBody::from_navigation_response(&response),
-                            |image| SubresourceResponseBody::from_parkable_image(image.clone()),
-                        ),
-                        from_cache: response.from_cache,
-                        cache_state: response.cache_state,
+                    let state = PendingSubresourceResponseState {
+                        pending,
+                        request_url,
+                        request_method,
+                        request_headers,
+                        request_body,
+                        result: Ok(response),
+                        network_error_text: None,
+                        encoded,
+                        response_status_text,
+                        skip_fetch_security_validation,
+                        response_filter,
                     };
-                    self._context_host
-                        .borrow_mut()
-                        .record_pending_subresource_response(PendingSubresourceResponseState {
-                            pending,
-                            request_url,
-                            request_method,
-                            request_headers,
-                            request_body,
-                            response,
-                            encoded,
-                            response_status_text,
-                            skip_fetch_security_validation,
-                            response_filter,
-                        });
-                    self._context_host
-                        .borrow_mut()
-                        .record_pending_subresource_continue_event(
-                            PendingSubresourceContinueEvent::ResponsePaused(info),
-                        );
+                    let info = state.response_info();
+                    let mut host = self._context_host.borrow_mut();
+                    host.record_pending_subresource_response(state);
+                    host.record_pending_subresource_continue_event(
+                        PendingSubresourceContinueEvent::ResponsePaused(info),
+                    );
                     return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
                 }
 
@@ -307,6 +290,29 @@ impl ScriptVm {
                 activity?
             }
             Err(error) => {
+                if intercept_response {
+                    let state = PendingSubresourceResponseState {
+                        pending,
+                        request_url,
+                        request_method,
+                        request_headers,
+                        request_body,
+                        result: Err(error),
+                        network_error_text,
+                        encoded: None,
+                        response_status_text: None,
+                        skip_fetch_security_validation,
+                        response_filter,
+                    };
+                    let info = state.response_info();
+                    let mut host = self._context_host.borrow_mut();
+                    host.record_pending_subresource_response(state);
+                    host.record_pending_subresource_continue_event(
+                        PendingSubresourceContinueEvent::ResponsePaused(info),
+                    );
+                    return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+                }
+
                 let activity = self.resolve_pending_subresource_fetch_body(
                     pending,
                     request_url,

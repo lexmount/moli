@@ -416,7 +416,7 @@ impl ScriptVm {
         self.spawn_running_subresource_response(state, async move {
             match prepared {
                 Ok(()) => response.await,
-                Err(error) => AsyncSubresourceFetchResult::Failure(error),
+                Err(error) => AsyncSubresourceFetchResult::Failure(error.into()),
             }
         });
     }
@@ -718,41 +718,23 @@ impl ScriptVm {
             Some(headers) => response.with_network_request_headers(Some(headers)),
             None => response,
         };
-        let response_info = PendingSubresourceResponseInfo {
-            internal_id,
-            url: request_url.clone(),
-            final_url: response.final_url.clone(),
-            method: request_method.clone(),
-            request_headers: request_headers.clone(),
-            request_body: request_body.clone(),
-            resource_type: pending.info.resource_type,
-            request_cookie_report: response.request_cookie_report.clone(),
-            network_request_headers: response
-                .network_request_headers()
-                .map(|headers| headers.to_vec()),
-            response_status: response.status,
-            response_headers: response.headers.clone(),
-            response_body: encoded.as_ref().map_or_else(
-                || SubresourceResponseBody::from_navigation_response(&response),
-                |image| SubresourceResponseBody::from_parkable_image(image.clone()),
-            ),
-            from_cache: response.from_cache,
-            cache_state: response.cache_state,
+        let state = PendingSubresourceResponseState {
+            pending,
+            request_url,
+            request_method,
+            request_headers,
+            request_body,
+            result: Ok(response),
+            network_error_text: None,
+            encoded,
+            response_status_text,
+            skip_fetch_security_validation,
+            response_filter,
         };
+        let response_info = state.response_info();
         self._context_host
             .borrow_mut()
-            .record_pending_subresource_response(PendingSubresourceResponseState {
-                pending,
-                request_url,
-                request_method,
-                request_headers,
-                request_body,
-                response,
-                encoded,
-                response_status_text,
-                skip_fetch_security_validation,
-                response_filter,
-            });
+            .record_pending_subresource_response(state);
         if intercept_response {
             self._context_host
                 .borrow_mut()
@@ -997,11 +979,18 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
-
+        let response = match &pending.result {
+            Ok(response) => response,
+            Err(error) => {
+                let error = error.clone();
+                let network_error_text = pending.network_error_text.clone();
+                return self.settle_failed_subresource_response(pending, error, network_error_text);
+            }
+        };
         let response = crate::protocol_types::NavigationResponse::with_status_headers_from(
-            &pending.response,
-            response_code.unwrap_or(pending.response.status),
-            response_headers.unwrap_or_else(|| pending.response.headers.clone()),
+            response,
+            response_code.unwrap_or(response.status),
+            response_headers.unwrap_or_else(|| response.headers.clone()),
         );
         let response_status_text = if response_code.is_none() {
             pending.response_status_text
@@ -1044,7 +1033,15 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
+        self.settle_failed_subresource_response(pending, error_text, None)
+    }
 
+    fn settle_failed_subresource_response(
+        &mut self,
+        pending: PendingSubresourceResponseState,
+        error_text: String,
+        network_error_text: Option<String>,
+    ) -> Result<AsyncSubresourceCommandExecution<()>> {
         let activity = self.resolve_pending_subresource_fetch_body(
             pending.pending,
             pending.request_url,
@@ -1054,7 +1051,7 @@ impl ScriptVm {
             None,
             false,
             None,
-            None,
+            network_error_text,
             Err(error_text),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))
@@ -1103,6 +1100,16 @@ impl ScriptVm {
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
 
+        let response = pending.result.as_ref().ok();
+        let final_url =
+            response.map_or_else(|| pending.request_url.clone(), |r| r.final_url.clone());
+        let cookie_report = response.map_or_else(
+            || pending.pending.info.request_cookie_report.clone(),
+            |r| r.request_cookie_report.clone(),
+        );
+        let from_cache = response.is_some_and(|r| r.from_cache);
+        let cache_state = response.map_or_else(Default::default, |r| r.cache_state);
+        let negotiated_http_version = response.and_then(|r| r.negotiated_http_version);
         if let PendingSubresourceContinuation::ChildDocument(fetch) =
             &mut pending.pending.continuation
         {
@@ -1122,16 +1129,16 @@ impl ScriptVm {
             Ok(
                 response_body.into_navigation_response(moli_fetch::ResponseHead {
                     status_text: None,
-                    final_url: pending.response.final_url,
+                    final_url,
                     status: response_code,
                     headers: response_headers,
-                    request_cookie_report: pending.response.request_cookie_report,
+                    request_cookie_report: cookie_report,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),
-                    from_cache: pending.response.from_cache,
-                    cache_state: pending.response.cache_state,
-                    negotiated_http_version: pending.response.negotiated_http_version,
+                    from_cache,
+                    cache_state,
+                    negotiated_http_version,
                 }),
             ),
         )?;

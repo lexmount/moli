@@ -215,7 +215,7 @@ pub(crate) fn prepare_subresource_continue_action(
             let mut pending_response = pending_response_request(&in_flight.pending, &response_info);
             let mut response_event_session_id = fetch_event_session_id.map(str::to_owned);
             let mut response_event_blocked_intercepts = blocked_intercepts.clone();
-            let response_stage_sessions = conn
+            let mut response_stage_sessions = conn
                 .target_fetch_subresource_interception_snapshot_for_target(
                     &in_flight.pending.frame_id,
                 )
@@ -229,7 +229,41 @@ pub(crate) fn prepare_subresource_continue_action(
                         &response_info.final_url,
                     )
                 })
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                // BiDi beforeResponseSent requires response headers. A network
+                // error is only pausable by CDP Fetch; otherwise continue it to
+                // the ordinary fetchError notification instead of stranding it.
+                .filter(|stage| {
+                    response_info.response_error.is_none()
+                        || stage.owner_kind == PendingSubresourceFetchOwnerKind::Fetch
+                })
+                .collect::<Vec<_>>();
+            if in_flight.response_stage_url_match_policy
+                == crate::conn::ResponseStageUrlMatchPolicy::ExplicitlyRequested
+                && !response_stage_sessions.iter().any(|stage| {
+                    stage.owner_kind == PendingSubresourceFetchOwnerKind::Fetch
+                        && stage.session_id == in_flight.pending.action_session_id
+                })
+            {
+                response_stage_sessions.insert(
+                    0,
+                    crate::conn::TargetFetchResponseStageSession {
+                        session_id: in_flight.pending.action_session_id.clone(),
+                        owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
+                        blocked_intercepts: Vec::new(),
+                    },
+                );
+            }
+            if response_info.response_error.is_some() && response_stage_sessions.is_empty() {
+                return PreparedSubresourceContinueWait::prepare(
+                    conn,
+                    out,
+                    command_owner,
+                    in_flight.pending,
+                    SubresourceContinuationKind::Response(response_info.internal_id),
+                );
+            }
             if let Some(first_pause_session) = response_stage_sessions.first().cloned() {
                 pending_response.owner_session_id = routable_stage_owner_session_id(
                     conn,
@@ -470,6 +504,10 @@ fn pending_response_request(
         request_body: response_info.request_body.clone(),
         request_cookie_report: response_info.request_cookie_report.clone(),
         response_status: response_info.response_status,
+        response_error_reason: response_info
+            .response_error
+            .as_ref()
+            .map(|error| error.reason.clone()),
         response_headers: response_info.response_headers.clone(),
         response_head_overridden: false,
         response_body_taken_as_stream: false,

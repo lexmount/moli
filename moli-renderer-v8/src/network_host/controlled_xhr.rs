@@ -51,6 +51,7 @@ pub(crate) struct ControlledResourceLoad {
     request_initiator_type: SubresourceRequestInitiatorType,
 }
 
+use super::FetchError;
 use super::loaded_response::LoadedResponse;
 
 impl LoadedResponse {
@@ -154,7 +155,7 @@ impl ControlledResourceLoad {
             return ControlledXhrCompletion::Streamed {
                 internal_id: self.info.internal_id,
                 body_source_id,
-                result: result.map(|_| ()),
+                result: result.map(|_| ()).map_err(Into::into),
             };
         }
         let (result, network_headers) = match result {
@@ -164,7 +165,11 @@ impl ControlledResourceLoad {
             }
             Err(error) => (Err(error), None),
         };
-        let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
+        let mut completed = XhrLoadResult::new(
+            self.info.clone(),
+            result.map_err(Into::into),
+            network_headers,
+        );
         completed.csp_violations = std::mem::take(&mut self.csp_violations);
         completed.network_record = completed
             .network_record
@@ -183,7 +188,7 @@ impl ControlledResourceLoad {
         ControlledXhrCompletion::Buffered(Box::new(completed))
     }
 
-    fn normalize_cancellation<T>(&self, result: Result<T, String>) -> Result<T, String> {
+    fn normalize_cancellation<T>(&self, result: Result<T, FetchError>) -> Result<T, FetchError> {
         if result.is_err() && (self.cancel.is_cancelled() || self.load.is_cancelled()) {
             Err("net::ERR_ABORTED".into())
         } else {
@@ -386,7 +391,7 @@ impl ControlledResourceLoad {
     async fn run_inner(
         &mut self,
         mut stream: Option<&mut ControlledResourceStream>,
-    ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
+    ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), FetchError> {
         use ResourceInterceptionDecision as D;
         let mut next_request_pause = self.initial_decision.is_some()
             || self
@@ -461,7 +466,7 @@ impl ControlledResourceLoad {
                         intercept_response = response;
                         handle_auth_requests = auth;
                     }
-                    D::Fail(error) => return Err(error),
+                    D::Fail(error) => return Err(error.into()),
                     D::Fulfill {
                         request_overrides,
                         status,
@@ -511,10 +516,22 @@ impl ControlledResourceLoad {
                         self.preflight_headers.clone(),
                         Some(&preflight_observer),
                     )
-                    .await?;
-                    let (response, observation) = observed.into_parts();
-                    let headers = observation.map(|observation| observation.into_headers());
-                    (response, false, headers)
+                    .await;
+                    match observed {
+                        Ok(observed) => {
+                            let (response, observation) = observed.into_parts();
+                            let headers = observation.map(|observation| observation.into_headers());
+                            (response, false, headers)
+                        }
+                        Err(error) if intercept_response => {
+                            let response = self.intercept_failed_response(error).await?;
+                            // The failed hop already crossed its response pause.
+                            // Deliver its replacement through the normal validation path.
+                            intercept_response = false;
+                            (response, true, None)
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             };
             if network_request_headers.is_none() {
@@ -563,7 +580,7 @@ impl ControlledResourceLoad {
                         continue;
                     }
                     D::CancelAuth => {}
-                    D::Fail(error) => return Err(error),
+                    D::Fail(error) => return Err(error.into()),
                     _ => unreachable!("auth pause accepts only auth decisions"),
                 }
             }
@@ -582,7 +599,8 @@ impl ControlledResourceLoad {
                             resource_type: self.info.resource_type,
                             request_cookie_report: response.head.request_cookie_report.clone(),
                             network_request_headers: network_request_headers.clone(),
-                            response_status: response.head.status,
+                            response_status: Some(response.head.status),
+                            response_error: None,
                             response_headers: response.head.headers.clone(),
                             response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                             from_cache: response.head.from_cache,
@@ -616,7 +634,7 @@ impl ControlledResourceLoad {
                         self.response_filter = None;
                         is_synthetic = true;
                     }
-                    D::Fail(error) => return Err(error),
+                    D::Fail(error) => return Err(error.into()),
                     _ => unreachable!("response pause accepts only response decisions"),
                 }
             }
@@ -709,6 +727,54 @@ impl ControlledResourceLoad {
                 .page_network_policy()
                 .should_intercept_subresource(self.info.resource_type);
             announce_request = self.interception.is_worker();
+        }
+    }
+
+    async fn intercept_failed_response(
+        &self,
+        error: FetchError,
+    ) -> Result<LoadedResponse, FetchError> {
+        use ResourceInterceptionDecision as D;
+        let (pause, rx) = self.pause(InterceptionPhase::Response);
+        if !self.interception.publish_continue(
+            PendingSubresourceContinueEvent::ResponsePaused(PendingSubresourceResponseInfo {
+                internal_id: self.info.internal_id,
+                url: self.request.url.clone(),
+                final_url: self.request.url.clone(),
+                method: self.request.method.clone(),
+                request_headers: self.request.request_headers.clone(),
+                request_body: self.info.request_body.clone(),
+                resource_type: self.info.resource_type,
+                request_cookie_report: None,
+                network_request_headers: None,
+                response_status: None,
+                response_error: Some(moli_page_types::SubresourceResponseError {
+                    reason: super::response_error_reason(error.network_error_text).to_owned(),
+                    message: error.message.clone(),
+                    network_error_text: error.network_error_text.map(str::to_owned),
+                }),
+                response_headers: Vec::new(),
+                response_body: SubresourceResponseBody::from_bytes(Vec::new()),
+                from_cache: false,
+                cache_state: Default::default(),
+            }),
+            Some(pause),
+        ) && !self.interception.worker_control_closed()
+        {
+            return Err("network response output owner is closed".into());
+        }
+        match self.decision(rx, InterceptionPhase::Response).await? {
+            D::ContinueResponse { .. } => Err(error),
+            D::Fulfill {
+                status,
+                headers,
+                body,
+                ..
+            } => Ok(LoadedResponse::from_response(
+                self.synthetic_response(status, headers, body),
+            )),
+            D::Fail(error) => Err(error.into()),
+            _ => unreachable!("failed response pause accepts only response decisions"),
         }
     }
 }

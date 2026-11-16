@@ -1,5 +1,7 @@
 mod cache;
 mod collectors;
+mod redirect_location;
+pub(crate) use redirect_location::validate_network_redirect_location;
 
 use std::{
     ffi::{c_char, c_long},

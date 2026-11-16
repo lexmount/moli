@@ -498,7 +498,7 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
     };
     assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(info.resource_type, SubresourceResourceType::Xhr);
-    assert_eq!(info.response_status, 200);
+    assert_eq!(info.response_status, Some(200));
     assert_eq!(
         handle
             .native_response_body(info.internal_id)

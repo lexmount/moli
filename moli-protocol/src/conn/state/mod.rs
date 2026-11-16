@@ -74,7 +74,8 @@ pub(crate) use runtime_slot::{FinishedRendererDocumentNavigation, TargetRuntimeS
 
 pub use fetch::TargetFetchConfig;
 pub(crate) use fetch::{
-    DrainedFetchRequests, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
+    DrainedFetchRequests, TargetFetchOwner, TargetFetchResponseStageSession,
+    TargetFetchSubresourceInterceptionSnapshot,
 };
 
 pub(crate) use inspector::InspectorCommandDispatch;

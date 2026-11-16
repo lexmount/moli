@@ -15,7 +15,7 @@ async fn check_worker_fetch_redirect_modes(service_worker: bool) {
     let mut cases = Vec::new();
     for status in [301, 302, 303, 307, 308] {
         for mode in ["manual", "error"] {
-            for location in [None, Some("http://[")] {
+            for location in [None, Some("http://["), Some("/not-followed")] {
                 cases.push((mode, status, location, true));
             }
         }
@@ -104,7 +104,8 @@ async fn check_worker_fetch_redirect_modes(service_worker: bool) {
     assert_eq!(rows.as_array().unwrap().len(), cases.len());
     for (index, (mode, status, location, cors_allowed)) in cases.into_iter().enumerate() {
         let row = &rows[index];
-        if !cors_allowed || (mode == "error" && status != 200) {
+        let invalid_location = status != 200 && location == Some("http://[");
+        if !cors_allowed || invalid_location || (mode == "error" && status != 200) {
             assert_eq!(
                 row,
                 &serde_json::json!({"error":"TypeError"}),

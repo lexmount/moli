@@ -1033,6 +1033,9 @@ pub fn fetch_request_paused_params(network_event: &NetworkRequestEvent) -> Value
             params["responseStatusText"] = json!(status_text);
         }
     }
+    if let Some(reason) = network_event.error_text.as_deref() {
+        params["responseErrorReason"] = json!(reason);
+    }
     if !network_event.blocked_intercepts.is_empty() {
         params["__moliBlockedInterceptors"] = Value::Array(
             network_event

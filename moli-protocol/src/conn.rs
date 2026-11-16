@@ -1,5 +1,6 @@
 use anyhow::Result;
 pub(crate) use state::DrainedFetchRequests;
+pub(crate) use state::TargetFetchResponseStageSession;
 
 use std::{
     cell::{OnceCell, RefCell},

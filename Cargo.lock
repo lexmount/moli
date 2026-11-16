@@ -2942,6 +2942,7 @@ dependencies = [
  "curl-sys",
  "h2",
  "http",
+ "idna",
  "moli-browser-profile",
  "moli-cookie-jar",
  "moli-curl",

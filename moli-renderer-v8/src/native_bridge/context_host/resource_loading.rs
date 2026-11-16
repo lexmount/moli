@@ -1929,23 +1929,23 @@ impl PageScriptHost {
             pending.pending.continuation,
             PendingSubresourceContinuation::ChildDocument(_)
         );
-        if let Some(handle) = pending.pending.info.network_request_handle
+        if let Ok(response) = &pending.result
+            && let Some(handle) = pending.pending.info.network_request_handle
             && !child_document
         {
             self.record_subresource_response_started(
                 SubresourceResponseStarted::new(
                     handle,
-                    pending.response.redirect_chain.clone(),
-                    pending.response.final_url.clone(),
-                    pending.response.status,
-                    pending.response.headers.clone(),
-                    pending.response.cookie_set_reports.clone(),
+                    response.redirect_chain.clone(),
+                    response.final_url.clone(),
+                    response.status,
+                    response.headers.clone(),
+                    response.cookie_set_reports.clone(),
                 )
-                .with_from_cache(pending.response.from_cache)
-                .with_negotiated_http_version(pending.response.negotiated_http_version)
+                .with_from_cache(response.from_cache)
+                .with_negotiated_http_version(response.negotiated_http_version)
                 .with_network_request_headers(
-                    pending
-                        .response
+                    response
                         .network_request_headers()
                         .map(|headers| headers.to_vec()),
                 ),
@@ -1954,7 +1954,7 @@ impl PageScriptHost {
                 SubresourceBodyFinished::failed_with_partial_body(
                     handle,
                     error_text,
-                    SubresourceResponseBody::from_navigation_response(&pending.response),
+                    SubresourceResponseBody::from_navigation_response(response),
                 ),
             );
         } else {
