@@ -1,0 +1,467 @@
+{
+  "default": {
+    "file-xhr-null": {
+      "result": {
+        "status": 200,
+        "body": "payload",
+        "error": null
+      },
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "OPTIONS",
+          "origin": "null",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        },
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": "null",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "file-xhr-file": {
+      "result": {
+        "status": 0,
+        "body": "",
+        "error": "NetworkError"
+      },
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "OPTIONS",
+          "origin": "null",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "file-xhr-self": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "file-xhr-other": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "http-canvas-no-cors": {
+      "loaded": true,
+      "pixels": "SecurityError",
+      "dataURL": "SecurityError",
+      "blob": "SecurityError"
+    },
+    "http-canvas-cors": {
+      "loaded": false
+    },
+    "file-canvas-no-cors": {
+      "loaded": true,
+      "pixels": "SecurityError",
+      "dataURL": "SecurityError",
+      "blob": "SecurityError"
+    },
+    "file-canvas-cors": {
+      "loaded": false
+    },
+    "sandbox-file-image": {
+      "loaded": false
+    },
+    "sw-get-cross": {
+      "error": "SecurityError"
+    },
+    "sw-register-cross": {
+      "error": "SecurityError"
+    },
+    "sw-storage-key": {
+      "error": "SecurityError",
+      "target": [
+        "{target}/web-security/"
+      ]
+    },
+    "sw-unregister": true,
+    "sw-update": "updated",
+    "sw-reject-filesystem": {
+      "error": "TypeError"
+    },
+    "sw-reject-file": {
+      "error": "TypeError"
+    },
+    "sw-reject-data": {
+      "error": "TypeError"
+    },
+    "sw-insecure-document": {
+      "secure": false,
+      "serviceWorker": "undefined"
+    },
+    "orb-disable-blocking": {
+      "result": {
+        "status": 0,
+        "body": "",
+        "error": "NetworkError"
+      },
+      "requests": [
+        {
+          "path": "/web-security/orb",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "data-svg-background": {
+      "access": false,
+      "before": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "after": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    "origin-agent-cluster": {
+      "cluster": true,
+      "parentAccess": "SecurityError",
+      "origin": "{target}"
+    },
+    "reject-fetch-chrome": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-chrome-untrusted": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-chrome-extension": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-filesystem": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-view-source": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-script-chrome-untrusted": "blocked",
+    "reject-navigation-iframe-chrome": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-chrome": {
+      "opened": false,
+      "targets": 0,
+      "blocked": true
+    },
+    "reject-navigation-self-chrome": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-iframe-chrome-untrusted": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-chrome-untrusted": {
+      "opened": true,
+      "targets": 1,
+      "blocked": true
+    },
+    "reject-navigation-self-chrome-untrusted": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-iframe-file": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-file": {
+      "opened": false,
+      "targets": 0,
+      "blocked": true
+    },
+    "reject-navigation-self-file": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-iframe-view-source": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-view-source": {
+      "opened": false,
+      "targets": 0,
+      "blocked": true
+    },
+    "reject-navigation-self-view-source": {
+      "frames": 1,
+      "blocked": true
+    },
+    "local-network-request": {
+      "secure": true,
+      "result": "payload",
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": "{source}",
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    }
+  },
+  "disabled": {
+    "file-xhr-null": {
+      "result": {
+        "status": 200,
+        "body": "payload",
+        "error": null
+      },
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "file-xhr-file": {
+      "result": {
+        "status": 200,
+        "body": "payload",
+        "error": null
+      },
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "file-xhr-self": {
+      "status": 200,
+      "body": "<!doctype html><title>file probe</title><body>file-page</body>",
+      "error": null
+    },
+    "file-xhr-other": {
+      "status": 200,
+      "body": "file-payload",
+      "error": null
+    },
+    "http-canvas-no-cors": {
+      "loaded": true,
+      "pixels": "readable",
+      "dataURL": "readable",
+      "blob": "readable"
+    },
+    "http-canvas-cors": {
+      "loaded": true,
+      "pixels": "readable",
+      "dataURL": "readable",
+      "blob": "readable"
+    },
+    "file-canvas-no-cors": {
+      "loaded": true,
+      "pixels": "readable",
+      "dataURL": "readable",
+      "blob": "readable"
+    },
+    "file-canvas-cors": {
+      "loaded": true,
+      "pixels": "readable",
+      "dataURL": "readable",
+      "blob": "readable"
+    },
+    "sandbox-file-image": {
+      "loaded": true,
+      "pixels": "readable",
+      "dataURL": "readable",
+      "blob": "readable"
+    },
+    "sw-get-cross": {
+      "found": false
+    },
+    "sw-register-cross": {
+      "scope": "{target}/web-security/"
+    },
+    "sw-storage-key": {
+      "scope": "{target}/web-security/",
+      "own": [],
+      "target": [
+        "{target}/web-security/"
+      ]
+    },
+    "sw-unregister": true,
+    "sw-update": "updated",
+    "sw-reject-filesystem": {
+      "error": "TypeError"
+    },
+    "sw-reject-file": {
+      "error": "TypeError"
+    },
+    "sw-reject-data": {
+      "error": "TypeError"
+    },
+    "sw-insecure-document": {
+      "secure": false,
+      "serviceWorker": "undefined"
+    },
+    "orb-disable-blocking": {
+      "result": {
+        "status": 200,
+        "body": "{\"secret\":\"payload\"}",
+        "error": null
+      },
+      "requests": [
+        {
+          "path": "/web-security/orb",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "data-svg-background": {
+      "access": true,
+      "background": "green",
+      "before": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "after": [
+        0,
+        128,
+        0,
+        255
+      ]
+    },
+    "origin-agent-cluster": {
+      "cluster": false,
+      "parentAccess": "SecurityError",
+      "origin": "{target}"
+    },
+    "reject-fetch-chrome": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-chrome-untrusted": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-chrome-extension": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-filesystem": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-fetch-view-source": {
+      "status": 0,
+      "body": "",
+      "error": "NetworkError"
+    },
+    "reject-script-chrome-untrusted": "blocked",
+    "reject-navigation-iframe-chrome": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-chrome": {
+      "opened": true,
+      "targets": 1,
+      "blocked": true
+    },
+    "reject-navigation-self-chrome": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-iframe-chrome-untrusted": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-chrome-untrusted": {
+      "opened": true,
+      "targets": 1,
+      "blocked": true
+    },
+    "reject-navigation-self-chrome-untrusted": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-iframe-file": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-file": {
+      "opened": true,
+      "targets": 1,
+      "blocked": true
+    },
+    "reject-navigation-self-file": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-iframe-view-source": {
+      "frames": 1,
+      "blocked": true
+    },
+    "reject-navigation-popup-view-source": {
+      "opened": true,
+      "targets": 1,
+      "blocked": true
+    },
+    "reject-navigation-self-view-source": {
+      "frames": 1,
+      "blocked": true
+    },
+    "local-network-request": {
+      "secure": true,
+      "result": "payload",
+      "requests": [
+        {
+          "path": "/web-security/echo",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    }
+  }
+}

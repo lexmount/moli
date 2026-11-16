@@ -141,6 +141,12 @@ class WebSecurityFixture:
             payload = f"onmessage=()=>{{const worker=new Worker({child});worker.onmessage=e=>{{postMessage({{parentOrigin:self.origin,parentScriptOrigin:location.origin,child:e.data}});worker.terminate();close();}};worker.onerror=e=>{{e.preventDefault();postMessage({{error:'ChildWorkerError'}});close();}};}};"
         elif route == 'nested-child.js':
             mime, payload = 'text/javascript', "postMessage({origin:self.origin,scriptOrigin:location.origin});close();"
+        if 'oac' in query:
+            extra['Origin-Agent-Cluster'] = query['oac'][0]
+        if 'allow' in query:
+            extra.update({'Access-Control-Allow-Origin':query['allow'][0],
+                          'Access-Control-Allow-Methods':'GET, OPTIONS',
+                          'Access-Control-Allow-Headers':'X-NotSimple'})
         if query.get('cors') == ['1']:
             extra.update({'Access-Control-Allow-Origin':headers.get('origin','*'),
                           'Access-Control-Allow-Credentials':'true',
