@@ -263,8 +263,8 @@ Moli を実サイトと保存済みページの両方で、他の 4 ブラウザ
 <summary><strong>実サイト · LexBench-Web-Fetch、430 タスク</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.png">
-  <img alt="実サイト 430 タスクの成功率。総合：Moli 386/430（89.8%）、Chromium 234、Lightpanda 228、Obscura 223、Kitesurf 192。ボット対策：Moli 88/100、他ブラウザの最高 37。人気サイト：Moli 91、他ブラウザの最高 58。動的サイト：Moli 90、他ブラウザの最高 58。静的ページ：Moli 97、Chromium 99。文書・メディア：Moli 20/30、他ブラウザの最高 17。" src="../assets/webfetch-live-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webfetch-live-dark.svg">
+  <img alt="実サイト 430 タスクの成功率。総合：Moli 386/430（89.8%）、Chromium 234、Lightpanda 228、Obscura 223、Kitesurf 192。ボット対策：Moli 88/100、他ブラウザの最高 37。人気サイト：Moli 91、他ブラウザの最高 58。動的サイト：Moli 90、他ブラウザの最高 58。静的ページ：Moli 97、Chromium 99。文書・メディア：Moli 20/30、他ブラウザの最高 17。" src="../assets/webfetch-live-light.svg" width="100%">
 </picture>
 
 合格にはサイトへのアクセスと正しい内容の両方が必要です（[データセット、v1.0.0 版](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0)）。
@@ -290,8 +290,8 @@ Moli を実サイトと保存済みページの両方で、他の 4 ブラウザ
 <summary><strong>保存済みページ · WebMainBench、545 ページ</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.png">
-  <img alt="保存済み 545 ページの抽出品質。総合：Moli 39.27%、Lightpanda 35.00%、Kitesurf 33.43%、Obscura 31.03%、Chromium 27.02%。コード：Moli 91.06%、他方式の最高 84.71%。全文、数式、表の内容、表の構造では、Moli は他方式の最高値を下回ります。" src="../assets/webmainbench-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/webmainbench-dark.svg">
+  <img alt="保存済み 545 ページの抽出品質。総合：Moli 39.27%、Lightpanda 35.00%、Kitesurf 33.43%、Obscura 31.03%、Chromium 27.02%。コード：Moli 91.06%、他方式の最高 84.71%。全文、数式、表の内容、表の構造では、Moli は他方式の最高値を下回ります。" src="../assets/webmainbench-light.svg" width="100%">
 </picture>
 
 人手によるアノテーションに対して本文抽出を評価します。実サイトへはアクセスしません（[データセット](https://github.com/lexmount/WebMainBench/tree/lex-main)）。

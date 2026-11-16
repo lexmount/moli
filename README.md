@@ -336,8 +336,8 @@ other four. [Full report](https://browser.lexmount.com/blog/webfetch-benchmark)
 <summary><strong>Live sites · LexBench-Web-Fetch, 430 tasks</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/webfetch-live-dark.png">
-  <img alt="Pass rate on 430 live-site tasks. Overall: Moli 386/430 (89.8%), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Anti-bot: Moli 88/100, best other 37. Popular: Moli 91, best other 58. Dynamic: Moli 90, best other 58. Static: Moli 97, Chromium 99. Documents and media: Moli 20/30, best other 17." src="assets/webfetch-live-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/webfetch-live-dark.svg">
+  <img alt="Pass rate on 430 live-site tasks. Overall: Moli 386/430 (89.8%), Chromium 234, Lightpanda 228, Obscura 223, Kitesurf 192. Anti-bot: Moli 88/100, best other 37. Popular: Moli 91, best other 58. Dynamic: Moli 90, best other 58. Static: Moli 97, Chromium 99. Documents and media: Moli 20/30, best other 17." src="assets/webfetch-live-light.svg" width="100%">
 </picture>
 
 A pass needs both site access and correct content
@@ -365,8 +365,8 @@ media, and media embedded in web pages.
 <summary><strong>Saved pages · WebMainBench, 545 pages</strong></summary>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/webmainbench-dark.png">
-  <img alt="Extraction quality on 545 saved pages. Overall: Moli 39.27%, Lightpanda 35.00%, Kitesurf 33.43%, Obscura 31.03%, Chromium 27.02%. Code: Moli 91.06%, best other 84.71%. Moli trails the best other method on text, formula, table content and table structure." src="assets/webmainbench-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/webmainbench-dark.svg">
+  <img alt="Extraction quality on 545 saved pages. Overall: Moli 39.27%, Lightpanda 35.00%, Kitesurf 33.43%, Obscura 31.03%, Chromium 27.02%. Code: Moli 91.06%, best other 84.71%. Moli trails the best other method on text, formula, table content and table structure." src="assets/webmainbench-light.svg" width="100%">
 </picture>
 
 Main-content extraction scored against human annotations, without live access
