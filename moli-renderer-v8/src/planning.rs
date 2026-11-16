@@ -316,6 +316,25 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
     document_character_set: Option<&str>,
     request_resource_type: Option<moli_fetch::RequestResourceType>,
 ) -> PreparedScriptSourceLoadOutcome {
+    load_prepared_script_source_outcome_with_optional_load(
+        script,
+        request_origin,
+        loader,
+        document_character_set,
+        request_resource_type,
+        None,
+    )
+    .await
+}
+
+async fn load_prepared_script_source_outcome_with_optional_load(
+    script: &PreparedScript,
+    request_origin: &moli_url::WebOrigin,
+    loader: &ResourceRequestClient,
+    document_character_set: Option<&str>,
+    request_resource_type: Option<moli_fetch::RequestResourceType>,
+    resource_load: Option<crate::network::loads::ResourceLoadLease>,
+) -> PreparedScriptSourceLoadOutcome {
     match &script.source {
         ScriptSource::Inline(source) | ScriptSource::Loaded(source) => {
             PreparedScriptSourceLoadOutcome {
@@ -342,7 +361,12 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
             let request = external_script_request(script, request_origin, request_resource_type);
             // Box the streaming fetch future so parser/script planning does not
             // inherit the chunk collector's larger state machine across awaits.
-            match Box::pin(loader.fetch_cacheable_script_text_stream(request)).await {
+            let response = if let Some(load) = resource_load {
+                Box::pin(loader.fetch_cacheable_script_text_stream_with_load(request, load)).await
+            } else {
+                Box::pin(loader.fetch_cacheable_script_text_stream(request)).await
+            };
+            match response {
                 Ok(response) => {
                     let response = crate::protocol_types::NavigationResponse::from(response);
                     external_script_source_load_outcome_from_response(
@@ -403,6 +427,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
     service_worker_client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     document_url: Url,
+    resource_load: Option<crate::network::loads::ResourceLoadLease>,
 ) -> PreparedScriptSourceLoadOutcome {
     if let Some(outcome) = local_or_unsupported_external_script_source_load_outcome(
         script,
@@ -412,18 +437,30 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
         return outcome;
     }
     let request = external_script_request(script, request_origin, request_resource_type);
-    match browser_context_runtime
-        .fetch_service_worker_subresource_for_client_with_metadata(
-            service_worker_client_id,
-            document_url,
-            &request,
-            loader,
-            resource_task_runner,
-            crate::service_worker_runtime::ServiceWorkerRequestDestination::Script,
-            crate::types::SubresourceResourceType::Script,
-        )
-        .await
-    {
+    let fetch = browser_context_runtime.fetch_service_worker_subresource_for_client_with_metadata(
+        service_worker_client_id,
+        document_url,
+        &request,
+        loader,
+        resource_task_runner,
+        crate::service_worker_runtime::ServiceWorkerRequestDestination::Script,
+        crate::types::SubresourceResourceType::Script,
+    );
+    let response = if let Some(load) = resource_load.as_ref() {
+        let cancel = moli_fetch::FetchCancelHandle::new();
+        load.attach_cancel_handle(cancel.clone());
+        tokio::select! {
+            response = fetch => response,
+            () = cancel.cancelled() => {
+                return failed_external_script_source_load_outcome(
+                    moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+                );
+            }
+        }
+    } else {
+        fetch.await
+    };
+    match response {
         Ok(Some(response)) => external_script_source_load_outcome_from_response_inner(
             script,
             *response.response,
@@ -432,12 +469,13 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
             None,
         ),
         Ok(None) => {
-            load_prepared_script_source_outcome_with_document_character_set(
+            load_prepared_script_source_outcome_with_optional_load(
                 script,
                 request_origin,
                 loader,
                 document_character_set,
                 request_resource_type,
+                resource_load,
             )
             .await
         }
@@ -539,6 +577,7 @@ pub(crate) fn spawn_service_worker_aware_external_script_source_load(
                 browser_context_runtime,
                 service_worker_client_id,
                 document_url,
+                None,
             )
             .await
         },

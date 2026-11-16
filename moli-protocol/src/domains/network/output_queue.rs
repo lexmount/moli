@@ -19,6 +19,7 @@ pub(crate) struct TargetNetworkOutputQueue {
     websocket_event_count: usize,
     next_delivery_order_index: usize,
     completed_subresource_handles: HashSet<SubresourceNetworkRequestHandle>,
+    subresource_request_extra_info_handles: HashSet<SubresourceNetworkRequestHandle>,
     websocket_handshake_recorded_socket_ids: HashSet<u64>,
     pending_websocket_lifecycle_events: HashMap<u64, Vec<WebSocketLifecycleEvent>>,
     staged_subresource_requests:
@@ -2885,6 +2886,12 @@ impl TargetNetworkOutputQueue {
             .insert(output.handle(), output.clone())
             .is_some();
         if !already_started {
+            // RequestStarted emits ExtraInfo inline when admission already
+            // includes its cookie report. Later metadata enrichment does not.
+            if output.request_cookie_report().is_some() {
+                self.subresource_request_extra_info_handles
+                    .insert(output.handle());
+            }
             self.delivery_outputs
                 .push_subresource(TargetSubresourcePlanOutput::RequestStarted(output));
         }
@@ -2930,6 +2937,9 @@ impl TargetNetworkOutputQueue {
         let Some(request) = self.staged_subresource_requests.get(&handle).cloned() else {
             return false;
         };
+        if !self.subresource_request_extra_info_handles.insert(handle) {
+            return false;
+        }
         let delivery_order_index = self.next_delivery_order_index();
         let output = TargetSubresourceRequestExtraInfoOutput::new(
             delivery_order_index,
@@ -2954,17 +2964,24 @@ impl TargetNetworkOutputQueue {
         let Some(request) = self.staged_subresource_requests.get(&handle) else {
             return;
         };
-        if request.request_cookie_report().is_some() {
+        if self
+            .subresource_request_extra_info_handles
+            .contains(&handle)
+        {
             return;
         }
         let request_headers = network_request_headers
             .unwrap_or_else(|| request.request_headers())
             .to_vec();
-        let Some(request_cookie_report) = request_cookie_report.cloned().or_else(|| {
-            network_request_headers
-                .is_some()
-                .then(StoredCookieQueryReport::default)
-        }) else {
+        let Some(request_cookie_report) = request_cookie_report
+            .or_else(|| request.request_cookie_report())
+            .cloned()
+            .or_else(|| {
+                network_request_headers
+                    .is_some()
+                    .then(StoredCookieQueryReport::default)
+            })
+        else {
             return;
         };
         self.append_subresource_request_extra_info(
@@ -3606,6 +3623,90 @@ mod tests {
                 .iter()
                 .all(|output| output.request_id() == "REQ-H17")
         );
+    }
+
+    #[test]
+    fn staged_request_metadata_enrichment_publishes_extra_info_once() {
+        for has_initial_cookie_report in [false, true] {
+            let handle = SubresourceNetworkRequestHandle::new(8);
+            let url = Url::parse("https://example.com/script.js").unwrap();
+            let request = |report| {
+                SubresourceRequestStarted::new(
+                    handle,
+                    Some("FRAME-1".to_owned()),
+                    url.clone(),
+                    url.clone(),
+                    "GET".to_owned(),
+                    Default::default(),
+                    None,
+                    SubresourceResourceType::Script,
+                    SubresourceRequestInitiatorType::Script,
+                    report,
+                )
+            };
+            let enrichment = request(Some(StoredCookieQueryReport::default()));
+            let response = SubresourceResponseStarted::new(
+                handle,
+                Vec::new(),
+                url.clone(),
+                404,
+                Vec::new(),
+                Vec::new(),
+            )
+            .with_network_request_headers(Some(vec![(
+                "Cookie".to_owned(),
+                "test=present".to_owned(),
+            )]));
+            let items = vec![
+                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request(
+                    has_initial_cookie_report.then(StoredCookieQueryReport::default),
+                ))),
+                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(enrichment.clone())),
+                ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response.clone())),
+                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(enrichment)),
+                ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+            ];
+            let mut queue = TargetNetworkOutputQueue::default();
+            append_concrete_items_for_test(&mut queue, &items, "LOADER-1");
+            let outputs = queue
+                .delivery_outputs
+                .outputs
+                .iter()
+                .filter_map(|item| match item.output() {
+                    TargetNetworkDeliveryOutput::Subresource(output) => Some(output.as_ref()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                outputs
+                    .iter()
+                    .filter(|output| matches!(
+                        output,
+                        TargetSubresourcePlanOutput::RequestStarted(_)
+                    ))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                outputs
+                    .iter()
+                    .filter(|output| match output {
+                        TargetSubresourcePlanOutput::RequestStarted(request) =>
+                            request.request_cookie_report().is_some(),
+                        TargetSubresourcePlanOutput::RequestExtraInfo(extra) => {
+                            assert_eq!(
+                                extra.request_headers(),
+                                &[("Cookie".to_owned(), "test=present".to_owned())]
+                            );
+                            true
+                        }
+                        _ => false,
+                    })
+                    .count(),
+                1,
+                "metadata presence must not stand in for ExtraInfo publication"
+            );
+        }
     }
 
     #[test]

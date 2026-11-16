@@ -463,6 +463,19 @@ impl ResourceRequestClient {
         result.map_err(anyhow::Error::msg)
     }
 
+    pub(crate) async fn fetch_cacheable_script_text_stream_with_load(
+        &self,
+        request: Request,
+        resource_load: loads::ResourceLoadLease,
+    ) -> Result<Response> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.fetch_cacheable_script_text_callback_with_load(request, resource_load, |result| {
+            let _ = tx.send(result);
+        })?;
+        rx.await
+            .map_err(|_| anyhow!("script load completion channel closed"))?
+    }
+
     pub(crate) fn fetch_cacheable_script_text_callback_with_load<F>(
         &self,
         request: Request,
