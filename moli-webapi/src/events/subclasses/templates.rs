@@ -1,4 +1,5 @@
 use super::*;
+use super::{message::message_event_init_callback, storage::storage_event_init_callback};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiFunctionTemplateDeclaration};
 
 pub struct EventTemplateDeclaration {
@@ -151,6 +152,8 @@ struct ClipboardChangeEventTemplateAccessorsDeclaration {
 
 pub fn template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
+        "MessageEvent" => EventTemplateDeclaration::new::<MessageEventTemplateMethodsDeclaration>(),
+        "StorageEvent" => EventTemplateDeclaration::new::<StorageEventTemplateMethodsDeclaration>(),
         "ClipboardEvent" => {
             EventTemplateDeclaration::new::<ClipboardEventTemplateAccessorsDeclaration>()
         }
@@ -172,4 +175,22 @@ pub fn template_declaration(interface: &str) -> Option<EventTemplateDeclaration>
         }
         _ => return None,
     })
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MessageEvent, enumerable, receiver)]
+struct MessageEventTemplateMethodsDeclaration {
+    #[webapi(method = "initMessageEvent", length = 1, callback = message_event_init_callback)]
+    init_message_event: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::StorageEvent, enumerable, receiver)]
+struct StorageEventTemplateMethodsDeclaration {
+    #[webapi(
+        method = "initStorageEvent",
+        length = 1,
+        callback = storage_event_init_callback
+    )]
+    init_storage_event: (),
 }

@@ -1,5 +1,4 @@
 use super::super::init::EventInit;
-use super::*;
 use moli_v8_util::v8_string;
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
@@ -46,9 +45,7 @@ impl<'s> ErrorEventInit<'s> {
     }
 }
 
-/// Runtime reports carry already converted payloads. Use the protected
-/// constructor with no dictionary so author getters and replacements never
-/// participate in native error reporting.
+/// Reports carry converted values, without invoking author constructors or getters.
 pub fn construct_original_error_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
@@ -57,15 +54,8 @@ pub fn construct_original_error_event<'s>(
     colno: u32,
     error: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor = v8::Local::<v8::Function>::try_from(moli_v8_util::global_constructor_object(
-        scope,
-        "ErrorEvent",
-    )?)
-    .ok()?;
     let event_type = v8_string(scope, "error")?;
-    let event = constructor.new_instance(scope, &[event_type.into()])?;
-    let state = event_backing(scope, event);
-    ErrorEventInit {
+    let init = ErrorEventInit {
         base: EventInit {
             cancelable: true,
             ..EventInit::default()
@@ -75,7 +65,17 @@ pub fn construct_original_error_event<'s>(
         lineno,
         colno,
         error: Some(error),
-    }
-    .initialize_snapshot(scope, state)?;
-    Some(event)
+    };
+    let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "ErrorEvent")?;
+    super::construct_subclass(
+        scope,
+        wrapper,
+        super::EventSubclassKind::ErrorEvent,
+        event_type,
+        init.event_flags(),
+        |scope, event| {
+            init.initialize(scope, event);
+            true
+        },
+    )
 }

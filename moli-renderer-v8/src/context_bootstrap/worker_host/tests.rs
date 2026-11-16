@@ -108,6 +108,15 @@ fn setup_worker_context() -> (v8::OwnedIsolate, v8::Global<v8::Context>) {
         let drain_key = v8::String::new(ctx_scope, "__drainWorkerMessages").unwrap();
         let _ = global.set(ctx_scope, drain_key.into(), drain_fn.into());
 
+        // This harness omits eager Worker globals and their capture phase.
+        // Install the protected resolver before it executes author script, as
+        // the complete Worker bootstrap does after creating its eager globals.
+        crate::context_bootstrap::exposed_interfaces::initialize_realm_interface_registry(
+            ctx_scope,
+            crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker,
+        )
+        .expect("standalone Worker tests need protected intrinsic allocation");
+
         v8::Global::new(ctx_scope, context)
     };
     (isolate, context)

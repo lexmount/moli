@@ -1,35 +1,4 @@
 use super::*;
-use crate::webidl;
-
-pub(crate) struct StorageReference<'scope>(pub(crate) v8::Local<'scope, v8::Object>);
-
-impl webidl::WebIdlSnapshotValue for StorageReference<'_> {
-    const SNAPSHOT_KIND: webidl::SnapshotKind = webidl::SnapshotKind::Identity;
-}
-
-impl<'s> moli_webapi_declare::WebApiValue<'s> for StorageReference<'s> {
-    fn to_v8_value(&self, _: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
-        Some(self.0.into())
-    }
-}
-
-impl<'scope> webidl::WebIdlConverter<'scope> for StorageReference<'scope> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'scope, '_>,
-        value: v8::Local<'scope, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-            && crate::web_api_interfaces::Storage::is_instance(scope, object)
-        {
-            return Ok(Self(object));
-        }
-        Err(webidl::WebIdlError::cannot_convert(context, "Storage"))
-    }
-}
 
 mod accessors;
 mod callbacks;

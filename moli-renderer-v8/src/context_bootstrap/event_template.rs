@@ -2,7 +2,7 @@ use super::{
     event_document::{document_create_event_callback, document_has_focus_callback},
     event_legacy::{
         composition_event_init_callback, event_init_event_callback, mouse_event_init_callback,
-        storage_event_init_callback, text_event_init_callback, ui_event_init_callback,
+        text_event_init_callback, ui_event_init_callback,
     },
     events::{
         event_bubbles_getter_function, event_cancel_bubble_getter_function,
@@ -17,9 +17,9 @@ use super::{
         event_time_stamp_getter_function, event_type_getter_function, event_value_attribute_getter,
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
         input_event_get_target_ranges_callback, keyboard_event_init_callback,
-        message_event_init_callback, mouse_event_related_target_getter_function,
-        pointer_event_get_predicted_events_callback, submit_event_submitter_getter_function,
-        ui_event_pseudo_target_getter_function, ui_event_which_getter_function,
+        mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
+        submit_event_submitter_getter_function, ui_event_pseudo_target_getter_function,
+        ui_event_which_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
@@ -221,17 +221,6 @@ struct InputEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::StorageEvent, enumerable, receiver)]
-struct StorageEventTemplateMethodsDeclaration {
-    #[webapi(
-        method = "initStorageEvent",
-        length = 1,
-        callback = storage_event_init_callback
-    )]
-    init_storage_event: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable, receiver)]
 struct KeyboardEventTemplateMethodsDeclaration {
     #[webapi(constant = "DOM_KEY_LOCATION_STANDARD", value = 0u32)]
@@ -384,13 +373,6 @@ struct DocumentEventTemplateMethodsDeclaration {
     get_selection: (),
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MessageEvent, enumerable, receiver)]
-struct MessageEventTemplateMethodsDeclaration {
-    #[webapi(method = "initMessageEvent", length = 1, callback = message_event_init_callback)]
-    init_message_event: (),
-}
-
 // Installation and wrapper placement share the same native declarations. Public
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
@@ -398,7 +380,6 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         return Some(declaration);
     }
     Some(match interface {
-        "MessageEvent" => EventTemplateDeclaration::new::<MessageEventTemplateMethodsDeclaration>(),
         "Event" => EventTemplateDeclaration::new::<EventBaseTemplateMethodsDeclaration>(),
         "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
         "UIEvent" => EventTemplateDeclaration::new::<UiEventTemplateMethodsDeclaration>(),
@@ -408,7 +389,6 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
             EventTemplateDeclaration::new::<CompositionEventTemplateMethodsDeclaration>()
         }
         "InputEvent" => EventTemplateDeclaration::new::<InputEventTemplateAccessorsDeclaration>(),
-        "StorageEvent" => EventTemplateDeclaration::new::<StorageEventTemplateMethodsDeclaration>(),
         "KeyboardEvent" => {
             EventTemplateDeclaration::new::<KeyboardEventTemplateMethodsDeclaration>()
         }

@@ -1,5 +1,4 @@
 use super::*;
-use crate::context_bootstrap::events::EventInit;
 use crate::context_bootstrap::navigation_activation::install_navigation_transition;
 use crate::context_bootstrap::navigation_events::navigation_scroll_event_is_active;
 use crate::context_bootstrap::navigation_handler_callbacks::{
@@ -10,7 +9,6 @@ use crate::context_bootstrap::navigation_handler_callbacks::{
 use crate::context_bootstrap::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, runtime_window_is_global, runtime_window_owner,
 };
-use crate::context_bootstrap::web_storage::StorageReference;
 use crate::native_bridge::element::scroll_to_url_fragment_or_top;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::context_host_ptr_from_global_bridge;
@@ -128,67 +126,6 @@ struct NavigateEventMethodsDeclaration {
         data = object
     )]
     scroll: (),
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "StorageEventInit", snapshot)]
-pub(in crate::context_bootstrap::events) struct StorageEventInitMembers<'s> {
-    #[webidl(inherit)]
-    base: EventInit,
-    #[webidl(nullable, converter = "raw")]
-    key: Option<webidl::DomString16>,
-    #[webidl(name = "newValue", nullable, converter = "raw")]
-    new_value: Option<webidl::DomString16>,
-    #[webidl(name = "oldValue", nullable, converter = "raw")]
-    old_value: Option<webidl::DomString16>,
-    #[webidl(name = "storageArea", converter = "raw", nullable)]
-    storage_area: Option<StorageReference<'s>>,
-    #[webidl(default = "", converter = "usv_string")]
-    url: String,
-}
-
-impl<'s> StorageEventInitMembers<'s> {
-    pub(in crate::context_bootstrap::events) fn from_native(
-        key: Option<&[u16]>,
-        old_value: Option<&[u16]>,
-        new_value: Option<&[u16]>,
-        url: &str,
-        storage_area: Option<v8::Local<'s, v8::Value>>,
-    ) -> Self {
-        Self {
-            base: EventInit::default(),
-            key: key.map(|value| webidl::DomString16(value.to_vec())),
-            old_value: old_value.map(|value| webidl::DomString16(value.to_vec())),
-            new_value: new_value.map(|value| webidl::DomString16(value.to_vec())),
-            url: url.to_owned(),
-            storage_area: storage_area
-                .and_then(|value| value.try_into().ok())
-                .map(StorageReference),
-        }
-    }
-}
-
-impl StorageEventInitMembers<'_> {
-    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.base.bubbles, self.base.cancelable, self.base.composed)
-    }
-}
-
-pub(super) fn parse_storage_event_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<StorageEventInitMembers<'s>> {
-    crate::context_bootstrap::events::parse_event_dictionary(scope, args, "StorageEvent")
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_storage_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    parsed: StorageEventInitMembers<'s>,
-) {
-    parsed
-        .initialize_snapshot(scope, event)
-        .expect("StorageEvent state");
 }
 
 pub(super) fn initialize_navigation_current_entry_change_event<'s>(

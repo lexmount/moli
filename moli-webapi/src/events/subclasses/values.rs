@@ -171,3 +171,33 @@ impl<'s> ValueEventInit<'s> {
         .expect("value event dictionary state");
     }
 }
+
+pub fn construct_original_page_transition_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    persisted: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event_type = moli_v8_util::v8_string(scope, event_type)?;
+    let init = ValueEventInit::PageTransition(PageTransitionInit {
+        base: EventInit {
+            bubbles: true,
+            cancelable: true,
+            ..EventInit::default()
+        },
+        persisted,
+    });
+    let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "PageTransitionEvent")?;
+    let event = super::construct_subclass(
+        scope,
+        wrapper,
+        EventSubclassKind::PageTransitionEvent,
+        event_type,
+        init.event_flags(),
+        |scope, event| {
+            init.initialize(scope, event);
+            true
+        },
+    )?;
+    super::mark_event_trusted(scope, event);
+    Some(event)
+}
