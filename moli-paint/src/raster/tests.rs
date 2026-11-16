@@ -97,7 +97,10 @@ fn resource_budget_is_byte_based_instead_of_using_a_pixel_count_limit() {
         u64::from(dimensions.width) * u64::from(dimensions.height) > 16 * 1024 * 1024,
         "test surface must exceed the removed 16M-pixel limit"
     );
-    assert_eq!(validate_resource_budget(dimensions, 0), Ok(()));
+    assert_eq!(
+        validate_resource_budget(dimensions, crate::validation::PaintStreamMetrics::default()),
+        Ok(())
+    );
 }
 
 #[test]
@@ -136,7 +139,10 @@ fn deep_balanced_clip_scopes_pass_snapshot_validation() {
         snapshot.push_fragment(PaintFragment::PopLayer);
     }
 
-    assert_eq!(validate_fragment_stream(&snapshot), Ok(0));
+    assert_eq!(
+        validate_fragment_stream(&snapshot),
+        Ok(crate::validation::PaintStreamMetrics::default())
+    );
 }
 
 #[test]
