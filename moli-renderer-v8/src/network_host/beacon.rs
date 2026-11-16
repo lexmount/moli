@@ -11,10 +11,6 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
-        rv.set(v8::Boolean::new(scope, false).into());
-        return;
-    };
     if args.length() < 1 {
         crate::util::throw_type_error(
             scope,
@@ -26,6 +22,22 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         );
         return;
     }
+
+    // Capture the receiver's owner before conversion can run author code. Popup
+    // Navigators share their opener's realm, so the private owner marker is also
+    // needed; the ambient dispatch scope belongs to the caller.
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("binding validated Navigator receiver");
+    let receiver_context = receiver.get_creation_context(scope);
+    let execution_context = receiver_context.and_then(|context| {
+        let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+        let owner = crate::context_bootstrap::navigator_owner_dispatch_scope(scope, receiver)?;
+        let receiver_scope = &mut v8::ContextScope::new(scope, context);
+        unsafe { &*host_ptr }.current_runtime_window_execution_context_identity_for_dispatch_scope(
+            receiver_scope,
+            owner,
+        )
+    });
 
     let raw_url = match webidl::convert::<webidl::UsvString>(
         scope,
@@ -42,8 +54,23 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
         return;
     };
 
+    // Conversion may retire the receiver's page. Re-read the lifecycle-checked
+    // slot instead of retaining a foreign host pointer across author code.
+    let Some(host_ptr) = receiver_context.and_then(crate::util::context_host_ptr_from_context_slot)
+    else {
+        rv.set_bool(false);
+        return;
+    };
     let host = unsafe { &mut *host_ptr };
-    let Some(request_context) = window_ping_request_context(scope, host) else {
+    let Some(execution_context) = execution_context
+        .filter(|identity| host.window_execution_context_identity_is_current(*identity))
+    else {
+        rv.set_bool(false);
+        return;
+    };
+    let Some(request_context) =
+        window_ping_request_context_for_execution_context(host, execution_context)
+    else {
         rv.set(v8::Boolean::new(scope, false).into());
         return;
     };
@@ -332,14 +359,6 @@ struct WindowPingRequestContext {
     base_url: url::Url,
     request_origin: moli_url::WebOrigin,
     network_partition_key: Option<String>,
-}
-
-fn window_ping_request_context(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &PageScriptHost,
-) -> Option<WindowPingRequestContext> {
-    let execution_context = host.current_runtime_window_execution_context_identity(scope)?;
-    window_ping_request_context_for_execution_context(host, execution_context)
 }
 
 fn window_ping_request_context_for_execution_context(

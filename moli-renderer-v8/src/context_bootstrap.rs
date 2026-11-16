@@ -448,7 +448,8 @@ pub(crate) use self::navigation_restore::{
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;
 pub(crate) use self::navigator_runtime::{
-    bind_window_navigator_identity_seed, set_window_navigator_identity,
+    bind_window_navigator_identity_seed, navigator_owner_dispatch_scope,
+    set_window_navigator_identity,
 };
 pub(crate) use self::navigator_runtime::{
     dispatch_screen_orientation_change, dispatch_window_visual_viewport_resize,
