@@ -401,7 +401,6 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             xhr_id,
             PendingWorkerXhr {
                 xhr: v8::Global::new(scope, xhr),
-                document_url: prepared.document_url.clone(),
                 credentials_mode: prepared.credentials_mode,
 
                 load: load.clone(),
@@ -461,7 +460,7 @@ fn worker_xhr_request(
     .expect("worker XHR URL was already resolved")
     .with_page_network_policy()
     .with_initiator_url(&prepared.document_url)
-    .with_request_origin(moli_url::WebOrigin::from_url(&prepared.document_url))
+    .with_request_origin(state.request_origin())
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(state.network_partition_key.clone())
     .with_request_mode(RequestMode::Cors)
@@ -667,9 +666,10 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
         Ok(response) => {
             let (mut head, body) = response.into_body();
             head.headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
+                state.borrow().request_origin(),
                 &head,
                 pending.credentials_mode,
+                pending.load.request_client().web_security_disabled(),
             );
             apply_xhr_response_body_source(scope, xhr, head, body);
         }

@@ -1,4 +1,4 @@
-use super::fulfilled_redirects::command;
+use super::fulfilled_redirects::{command, session_command};
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -45,6 +45,7 @@ async fn check_worker_intercepted_policy(shared: bool) {
         config.set_web_security_disabled(disabled);
         let mut ctx = TestContext::from_conn(crate::CdpConnection::new_with_fetch_config(config));
         with_loaded_http_document(&mut ctx, &format!("{origin}/page"), "SID-1", "TID-1").await;
+        ctx.observe_worker_network_for_test(None).await;
         enable_runtime_async(&mut ctx, "SID-1", 54_000).await;
         command(&mut ctx, 54_001, "Network.enable", json!({})).await;
         let ready = command(&mut ctx,54_002,"Runtime.evaluate",json!({
@@ -55,6 +56,11 @@ async fn check_worker_intercepted_policy(shared: bool) {
             "awaitPromise":true,"returnByValue":true
         })).await;
         assert_eq!(ready["result"]["result"]["value"], "ready");
+        let fetch_session = if shared {
+            ctx.shared_worker_fetch_sessions_for_test().await[0].clone()
+        } else {
+            "SID-1".to_owned()
+        };
         let mut index = 0;
         for api in ["fetch", "xhr"] {
             for (stage, action) in [
@@ -72,8 +78,9 @@ async fn check_worker_intercepted_policy(shared: bool) {
                     "{}/policy-probe?case={index}",
                     origin.replace("127.0.0.1", "localhost")
                 );
-                command(
+                session_command(
                     &mut ctx,
+                    &fetch_session,
                     id,
                     "Fetch.enable",
                     json!({"patterns":[{"urlPattern":"*policy-probe*","requestStage":stage}]}),
@@ -82,7 +89,14 @@ async fn check_worker_intercepted_policy(shared: bool) {
                 command(&mut ctx,id+1,"Runtime.evaluate",json!({"expression":format!(
                     "globalThis.policyResult=new Promise(resolve=>{{policyPort.onmessage=e=>resolve(e.data);policyPort.postMessage({{url:{url:?},api:{api:?}}});}});'started'"
                 )})).await;
-                let pause = wait_for_request_paused(&mut ctx, &url, "worker policy pause").await;
+                let pause = wait_for_request_paused_on_session(
+                    &mut ctx,
+                    &fetch_session,
+                    &url,
+                    None,
+                    "worker policy pause",
+                )
+                .await;
                 let mut params = json!({"requestId":pause["params"]["requestId"]});
                 let method = if failed {
                     params["errorReason"] = json!("Aborted");
@@ -97,7 +111,7 @@ async fn check_worker_intercepted_policy(shared: bool) {
                 } else {
                     "Fetch.continueResponse"
                 };
-                command(&mut ctx, id + 2, method, params).await;
+                session_command(&mut ctx, &fetch_session, id + 2, method, params).await;
                 let response = command(
                     &mut ctx,
                     id + 3,
@@ -152,6 +166,10 @@ async fn check_worker_intercepted_policy(shared: bool) {
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(terminals.len(), 1, "{api}/{stage}: {terminals:?}");
+                assert_eq!(
+                    terminals[0]["sessionId"],
+                    ctx.worker_network_session_for_request(network_id)
+                );
                 assert_eq!(
                     terminals[0]["method"],
                     if disabled && !failed {
