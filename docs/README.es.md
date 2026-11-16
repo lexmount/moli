@@ -255,8 +255,8 @@ Las siguientes mediciones muestran las capacidades actuales de Moli. Cubren siti
 | [Prueba de rastreo mixto de la web pública](#prueba-de-rastreo-mixto-de-la-web-pública) | Páginas útiles de 192 URL públicas | 103 páginas (53,6 %), RSS mediana de 73 MiB |
 | [Ejemplo de carga de trabajo de un agente](#ejemplo-de-carga-de-trabajo-de-un-agente) | Arranque, latencia y memoria de un episodio de agente | CDP lista en 34,85 ms (Chromium 169,37 ms) |
 | [Pruebas WPT](#pruebas-wpt) | Pruebas seleccionadas de la plataforma web | 1.612.000 superadas |
-| [Rendimiento de Moli en Lexbench-Headless-Browser](#rendimiento-de-moli-en-lexbench-headless-browser) | 1.308 tareas de automatización; CPU y memoria | 81,9 % de éxito; 15 % de la CPU y 13 % de la memoria de Chrome |
-| [Web Fetch](#web-fetch) | 430 tareas en sitios activos; 545 páginas guardadas | 89,8 % y 39,27 %, primero de cinco navegadores en ambos |
+| [Rendimiento de Moli en Lexbench-Headless-Browser](#rendimiento-de-moli-en-lexbench-headless-browser) | 1.308 tareas de automatización; CPU y memoria pico en una ejecución aparte de 557 tareas | 81,9 % de éxito; 15 % de la CPU y 13 % de la memoria pico de Chrome |
+| [Web Fetch](#web-fetch) | 430 tareas en sitios activos; 545 páginas guardadas | 89,8 % de tareas superadas, 39,27 % de puntuación de extracción; primero de cinco navegadores en ambos |
 
 ### Prueba de rastreo mixto de la web pública
 

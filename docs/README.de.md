@@ -254,8 +254,8 @@ Die folgenden Messwerte zeigen Molis derzeitigen Funktionsumfang. Sie decken rea
 | [Gemischter Crawling-Test im öffentlichen Web](#gemischter-crawling-test-im-öffentlichen-web) | Brauchbare Seiten aus 192 öffentlichen URLs | 103 Seiten (53,6 %), 73 MiB RSS im Median |
 | [Beispiel eines Agenten-Workloads](#beispiel-eines-agenten-workloads) | Start, Latenz und Speicher einer Agenten-Episode | CDP bereit nach 34,85 ms (Chromium 169,37 ms) |
 | [WPT-Tests](#wpt-tests) | Ausgewählte Web-Plattform-Tests | 1,612 Millionen bestanden |
-| [Molis Ergebnisse in Lexbench-Headless-Browser](#molis-ergebnisse-in-lexbench-headless-browser) | 1.308 Automatisierungsaufgaben; CPU und Speicher | 81,9 % Erfolg; 15 % der CPU-Zeit und 13 % des Speichers von Chrome |
-| [Web Fetch](#web-fetch) | 430 Aufgaben auf Live-Websites; 545 gespeicherte Seiten | 89,8 % und 39,27 %, in beiden Platz eins von fünf Browsern |
+| [Molis Ergebnisse in Lexbench-Headless-Browser](#molis-ergebnisse-in-lexbench-headless-browser) | 1.308 Automatisierungsaufgaben; CPU und Spitzenspeicher in einem separaten Lauf mit 557 Aufgaben | 81,9 % Erfolg; 15 % der CPU-Zeit und 13 % des Spitzenspeichers von Chrome |
+| [Web Fetch](#web-fetch) | 430 Aufgaben auf Live-Websites; 545 gespeicherte Seiten | 89,8 % Erfolgsquote, 39,27 % Extraktionswert; in beiden Platz eins von fünf Browsern |
 
 ### Gemischter Crawling-Test im öffentlichen Web
 

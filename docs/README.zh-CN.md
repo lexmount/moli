@@ -253,8 +253,8 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 | [公开网页混合抓取测试](#公开网页混合抓取测试) | 192 个公开 URL 中取得有效内容的页面 | 103 个页面（53.6%），RSS 中位数 73 MiB |
 | [智能体工作负载样例](#智能体工作负载样例) | 单个智能体回合的启动、延迟和内存 | CDP 就绪 34.85 ms（Chromium 169.37 ms） |
 | [WPT 测试](#wpt-测试) | 选定的 Web 平台测试 | 通过 161.2 万项 |
-| [Moli 在 Lexbench-Headless-Browser 评测中的表现](#moli-在-lexbench-headless-browser-评测中的表现) | 1,308 道自动化任务；CPU 与内存 | 成功率 81.9%；CPU 时间为 Chrome 的 15%，内存为 13% |
-| [Web Fetch](#web-fetch) | 430 道真实网站任务；545 份网页快照 | 89.8% 和 39.27%，两项均为五个浏览器中第一 |
+| [Moli 在 Lexbench-Headless-Browser 评测中的表现](#moli-在-lexbench-headless-browser-评测中的表现) | 1,308 道自动化任务；另一次 557 道任务运行中的 CPU 与内存峰值 | 成功率 81.9%；CPU 时间为 Chrome 的 15%，内存峰值为 13% |
+| [Web Fetch](#web-fetch) | 430 道真实网站任务；545 份网页快照 | 通过率 89.8%，正文提取得分 39.27%；两项均为五个浏览器中第一 |
 
 ### 公开网页混合抓取测试
 
