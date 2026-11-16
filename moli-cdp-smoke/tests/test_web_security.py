@@ -7,6 +7,21 @@ from moli_cdp_smoke.fixture import FixtureServer
 
 
 class WebSecurityFixtureTests(unittest.TestCase):
+    def test_stream_flushes_first_chunk_while_eof_remains_held(self):
+        fixture = FixtureServer()
+        fixture.start()
+        gate = fixture.web_security.hold_stream('stream')
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(fixture.url + '/web-security/stream?case=stream', timeout=3) as response:
+                self.assertEqual(response.read(6), b'first-')
+                self.assertTrue(gate.started.wait(3))
+                self.assertFalse(gate.release.is_set())
+                gate.release.set()
+                self.assertEqual(response.read(), b'last')
+        finally:
+            fixture.stop()
+
     def test_live_fixture_records_preflight_body_origin_and_cookie_without_cors_opt_in(self):
         fixture = FixtureServer()
         fixture.start()

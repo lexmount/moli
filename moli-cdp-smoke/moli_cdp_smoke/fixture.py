@@ -531,6 +531,7 @@ class FixtureServer:
         self.thread.start()
 
     def stop(self) -> None:
+        self.web_security.release_streams()
         self.document_content_stylesheet_gate.release_response.set()
         self.fetch_runtime_teardown_gate.release_response.set()
         self.navigation_suspension_gate.release_response.set()

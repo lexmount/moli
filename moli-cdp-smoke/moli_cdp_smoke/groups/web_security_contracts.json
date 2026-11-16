@@ -1575,6 +1575,375 @@
           "destination": "style"
         }
       ]
+    },
+    "post-origin-no-referrer-same": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "post-origin-no-referrer-cross": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "post-origin-same-origin-same": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=default-post-origin-same-origin-same-page&policy=same-origin"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=default-post-origin-same-origin-same-page&policy=same-origin"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=default-post-origin-same-origin-same-page&policy=same-origin"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=default-post-origin-same-origin-same-page&policy=same-origin"
+      }
+    ],
+    "post-origin-same-origin-cross": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "post-origin-origin-same": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      }
+    ],
+    "post-origin-origin-cross": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      }
+    ],
+    "classic-no-cors-stream-same": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {
+            "hidden": "1"
+          },
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "classic-no-cors-stream-cross": {
+      "beforeEOF": null,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "opaque",
+          "status": 0,
+          "bodyNull": true
+        },
+        {
+          "phase": "done",
+          "body": ""
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "module-no-cors-stream-same": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {
+            "hidden": "1"
+          },
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "module-no-cors-stream-cross": {
+      "beforeEOF": null,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "opaque",
+          "status": 0,
+          "bodyNull": true
+        },
+        {
+          "phase": "done",
+          "body": ""
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "shared-no-cors-stream-same": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {
+            "hidden": "1"
+          },
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "shared-no-cors-stream-cross": {
+      "beforeEOF": null,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "opaque",
+          "status": 0,
+          "bodyNull": true
+        },
+        {
+          "phase": "done",
+          "body": ""
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
     }
   },
   "disabled": {
@@ -3459,6 +3828,414 @@
           "author": null,
           "body": "",
           "destination": "style"
+        }
+      ]
+    },
+    "post-origin-no-referrer-same": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "post-origin-no-referrer-cross": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "post-origin-same-origin-same": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=disabled-post-origin-same-origin-same-page&policy=same-origin"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=disabled-post-origin-same-origin-same-page&policy=same-origin"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=disabled-post-origin-same-origin-same-page&policy=same-origin"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/web-security/page?case=disabled-post-origin-same-origin-same-page&policy=same-origin"
+      }
+    ],
+    "post-origin-same-origin-cross": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "null",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": null
+      }
+    ],
+    "post-origin-origin-same": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      }
+    ],
+    "post-origin-origin-cross": [
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": "{source}",
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      },
+      {
+        "path": "/web-security/echo",
+        "method": "POST",
+        "origin": null,
+        "cookie": {},
+        "author": null,
+        "body": "probe=value",
+        "referrer": "{source}/"
+      }
+    ],
+    "classic-no-cors-stream-same": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {
+            "hidden": "1"
+          },
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "classic-no-cors-stream-cross": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "module-no-cors-stream-same": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {
+            "hidden": "1"
+          },
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "module-no-cors-stream-cross": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "shared-no-cors-stream-same": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {
+            "hidden": "1"
+          },
+          "author": null,
+          "body": ""
+        }
+      ]
+    },
+    "shared-no-cors-stream-cross": {
+      "beforeEOF": true,
+      "events": [
+        {
+          "phase": "headers",
+          "type": "basic",
+          "status": 200,
+          "bodyNull": false
+        },
+        {
+          "phase": "first",
+          "body": "first-"
+        },
+        {
+          "phase": "done",
+          "body": "first-last"
+        }
+      ],
+      "requests": [
+        {
+          "path": "/web-security/stream",
+          "method": "GET",
+          "origin": null,
+          "cookie": {},
+          "author": null,
+          "body": ""
         }
       ]
     }

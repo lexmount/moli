@@ -37,12 +37,30 @@ READ = """async function read(url, api='fetch', init={}) {
 }"""
 
 
+class StreamGate:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+
 class WebSecurityFixture:
     def __init__(self, image: bytes, media: bytes) -> None:
         self._image = image
         self._media = media
         self._lock = threading.Lock()
         self._requests: dict[str, list[dict[str, Any]]] = {}
+        self._streams: dict[str, StreamGate] = {}
+
+    def hold_stream(self, case: str) -> StreamGate:
+        gate = StreamGate()
+        with self._lock:
+            self._streams[case] = gate
+        return gate
+
+    def release_streams(self) -> None:
+        with self._lock:
+            for gate in self._streams.values():
+                gate.release.set()
 
     def requests(self, case: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -99,6 +117,30 @@ class WebSecurityFixture:
             mime, payload = 'text/vtt', 'WEBVTT\n\n00:00.000 --> 00:01.000\nprobe\n'
         elif route == 'timing':
             payload = '123456789'
+        elif route == 'stream':
+            payload = 'first-last'
+        elif route == 'stream-worker.js':
+            mime = 'text/javascript'
+            payload = '''async function receive(url, reply) {
+              try {
+                const response = await fetch(url, {mode:'no-cors'});
+                reply({phase:'headers',type:response.type,status:response.status,bodyNull:response.body===null});
+                if (!response.body) { reply({phase:'done',body:await response.text()}); return; }
+                const reader=response.body.getReader(), decoder=new TextDecoder();
+                let body='';
+                while(body.length<6) {
+                  const chunk=await reader.read();
+                  if(chunk.done)throw Error('missing first chunk');
+                  body+=decoder.decode(chunk.value,{stream:true});
+                }
+                reply({phase:'first',body});
+                for (;;) { const chunk=await reader.read();if(chunk.done)break;body+=decoder.decode(chunk.value,{stream:true}); }
+                reply({phase:'done',body:body+decoder.decode()});
+              } catch(error) { reply({phase:'error',name:error.name}); }
+              finally { close(); }
+            }
+            onmessage=e=>receive(e.data,value=>postMessage(value));
+            onconnect=({ports:[port]})=>{port.onmessage=e=>receive(e.data,value=>port.postMessage(value));port.start();};'''
         elif route in ('page', 'csp'):
             mime, payload = 'text/html', '<!doctype html><title>web security</title><main>payload</main>'
             if 'policy' in query:
@@ -159,4 +201,13 @@ class WebSecurityFixture:
             handler.send_header(name,value)
         handler.end_headers()
         if handler.command != 'HEAD':
-            handler.wfile.write(data)
+            if route == 'stream':
+                with self._lock:
+                    gate = self._streams[case]
+                handler.wfile.write(data[:6])
+                handler.wfile.flush()
+                gate.started.set()
+                gate.release.wait()
+                handler.wfile.write(data[6:])
+            else:
+                handler.wfile.write(data)
