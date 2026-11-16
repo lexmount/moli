@@ -5028,6 +5028,23 @@ fn set_lightweight_popup_document_write_session<'s>(
     );
 }
 
+fn clear_lightweight_popup_stream_event_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut PageScriptHost,
+    document_handle: DomHandle,
+) {
+    let host = unsafe { &mut *host_ptr };
+    // Erase the current shadow-including tree before disconnecting it. A popup
+    // shares its opener realm, but its Window listener store is independent.
+    host.clear_event_callbacks_for_document_replacement(document_handle, false);
+    if let Some(window) = host
+        .lightweight_popup_id_for_document_handle(document_handle)
+        .and_then(|popup_id| host.lightweight_popup_window(scope, popup_id))
+    {
+        clear_lightweight_popup_window_document_event_state(scope, window);
+    }
+}
+
 fn lightweight_popup_document_open_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -5037,6 +5054,7 @@ fn lightweight_popup_document_open_callback<'s>(
     if let Some((host_ptr, document_handle)) =
         lightweight_popup_document_handle_for_callback(scope, document)
     {
+        clear_lightweight_popup_stream_event_state(scope, host_ptr, document_handle);
         crate::native_bridge::document::set_detached_html_document_body_html(
             scope,
             host_ptr,
@@ -5085,6 +5103,7 @@ fn lightweight_popup_document_write_or_writeln_callback<'s>(
             && !lightweight_popup_document_write_session_active(scope, document)
     });
     if writing_during_load {
+        clear_lightweight_popup_stream_event_state(scope, host_ptr, document_handle);
         crate::native_bridge::document::set_detached_html_document_body_html(
             scope,
             host_ptr,

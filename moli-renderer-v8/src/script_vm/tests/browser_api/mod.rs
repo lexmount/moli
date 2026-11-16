@@ -130,3 +130,5 @@ mod xpath_result_bindings;
 mod native_input_realms;
 
 mod attr_node_native_dispatch;
+
+mod popup_document_open_listeners;
