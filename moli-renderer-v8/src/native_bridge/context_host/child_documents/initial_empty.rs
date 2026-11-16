@@ -2,7 +2,6 @@ use super::super::PageScriptHost;
 use crate::{
     document_runtime::{DocumentPolicyContainer, DomHandle},
     frame_owner_model::{FrameDocumentLoadDeliveryTask, FrameLocalWindowOwnerTransition},
-    native_bridge::OwnerDispatchScope,
 };
 use url::Url;
 
@@ -29,20 +28,10 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> DocumentPolicyContainer {
-        let inherited_policy = match self.owner_dispatch_scope_for_node(handle) {
-            Some(OwnerDispatchScope::Child(parent)) => {
-                self.child_browsing_context_policy_container_snapshot(parent)
-            }
-            Some(OwnerDispatchScope::LightweightPopup(popup_id)) => {
-                self.lightweight_popup_policy_container(popup_id).cloned()
-            }
-            Some(OwnerDispatchScope::Top) | None => None,
-        };
-        // Auxiliary-page handoff and popup retirement can refresh iframe
-        // records while their creator Document has no dispatch mapping.
-        // Preserve the initial-policy fallback only at this setup boundary.
-        let mut policy_container =
-            inherited_policy.unwrap_or_else(|| self.document_policy_container().clone());
+        let mut policy_container = self
+            .owner_dispatch_scope_for_node(handle)
+            .and_then(|owner| self.document_policy_container_for_inheritance(owner))
+            .unwrap_or_else(|| self.document_policy_container().clone());
         if let Some(parent_document) = self
             .dom_host()
             .node(handle)
