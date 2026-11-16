@@ -235,4 +235,4 @@ pub(super) use timers::{TimerInfo, WorkerIsolateTimerQueues, worker_isolate_time
 pub(in crate::worker) use nested_workers::terminate_nested_workers;
 
 mod nested_devtools;
-pub(crate) use nested_devtools::start_nested_worker;
+pub(crate) use nested_devtools::{prepare_nested_worker, start_nested_worker};

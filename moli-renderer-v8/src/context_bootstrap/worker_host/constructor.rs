@@ -467,6 +467,11 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     return;
                 }
             };
+        let devtools = crate::worker::prepare_nested_worker(
+            &nested_context,
+            &resolved_url,
+            worker_options.name.clone(),
+        );
         let (script_url, script_source, network_response) =
             match materialize_nested_worker_script_source(
                 &resolved_url,
@@ -475,7 +480,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 worker_options.credentials_mode.0,
             ) {
                 Ok(source) => source,
-                Err(message) => {
+                Err(error) => {
+                    if let Some(devtools) = &devtools {
+                        devtools.script_failed(
+                            &resolved_url,
+                            error.message.clone(),
+                            error.response,
+                        );
+                    }
+                    let message = error.message;
                     let _ = nested_context.wake_tx.send(
                         crate::worker::WorkerMessage::NestedWorkerEvent {
                             worker_id: nested_context.worker_id,
@@ -555,9 +568,8 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         let (mut worker_handle, devtools) = crate::worker::start_nested_worker(
             options,
             &nested_context,
-            &resolved_url,
-            worker_options.name.clone(),
             network_response,
+            devtools,
         );
         if let Some(mut rx) = worker_handle.take_receiver() {
             let wake_tx = nested_context.wake_tx.clone();
@@ -835,6 +847,19 @@ fn child_context_handle_from_global<'s>(
         .map(|value| DomHandle::new(value as usize))
 }
 
+struct NestedWorkerScriptLoadError {
+    message: String,
+    response: Option<Box<crate::protocol_types::NavigationResponse>>,
+}
+impl From<String> for NestedWorkerScriptLoadError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            response: None,
+        }
+    }
+}
+
 fn materialize_nested_worker_script_source(
     script_url: &Url,
     context: &NestedWorkerContext,
@@ -846,7 +871,7 @@ fn materialize_nested_worker_script_source(
         String,
         Box<crate::protocol_types::NavigationResponse>,
     ),
-    String,
+    NestedWorkerScriptLoadError,
 > {
     if let Some(source) = materialize_worker_script_source(script_url)? {
         let response = Box::new(local_worker_main_script_network_response(
@@ -872,19 +897,27 @@ fn materialize_nested_worker_script_source(
         .request_client()
         .fetch_text_for_worker_blocking_boundary(request)
         .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))?;
-    crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        &context.base_url,
-        &response.redirect_chain,
-        &response.final_url,
-    )
-    .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
-    moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-        .map_err(|error| error.to_string())?;
-    crate::worker::ensure_worker_script_mime_acceptable(
-        &response.final_url,
-        &response.headers,
-        response.body_bytes(),
-    )?;
+    let validation = (|| -> Result<(), String> {
+        crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            &context.base_url,
+            &response.redirect_chain,
+            &response.final_url,
+        )
+        .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
+        moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
+            .map_err(|error| error.to_string())?;
+        crate::worker::ensure_worker_script_mime_acceptable(
+            &response.final_url,
+            &response.headers,
+            response.body_bytes(),
+        )
+    })();
+    if let Err(message) = validation {
+        return Err(NestedWorkerScriptLoadError {
+            message,
+            response: Some(Box::new(response.into())),
+        });
+    }
     let response: crate::protocol_types::NavigationResponse = response.into();
     let body = response.body_text().to_owned();
     let mut final_url = response.final_url.clone();

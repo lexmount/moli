@@ -10,6 +10,7 @@ pub(crate) struct NestedWorkerDevTools {
     instance_id: u64,
     journal: RendererTurnOutputJournal,
     runtime: crate::runtime::RendererWorkerContextRuntime,
+    interception: crate::network::interception_output::ResourceInterceptionContext,
 }
 
 impl NestedWorkerDevTools {
@@ -79,51 +80,30 @@ fn publish(journal: &RendererTurnOutputJournal, event: Event) -> bool {
     )
 }
 
-pub(crate) fn start_nested_worker(
-    options: crate::worker::WorkerSpawnOptions,
+/// Register the target before script loading, including failed HTTP/MIME loads.
+pub(crate) fn prepare_nested_worker(
     context: &super::nested_workers::NestedWorkerContext,
     request_url: &Url,
     name: String,
-    response: Box<crate::protocol_types::NavigationResponse>,
-) -> (crate::worker::WorkerHandle, Option<NestedWorkerDevTools>) {
-    let Some((runtime, parent, journal, control)) =
-        context.interception_context.as_ref().and_then(|control| {
-            Some((
-                context.worker_context_runtime.browser_context_runtime()?,
-                control.worker_target()?.0,
-                control.worker_target()?.1,
-                control.clone(),
-            ))
-        })
-    else {
-        // Native embeddings without DevTools still get their own unobserved
-        // loader. Copying the creator's observer would misattribute requests.
-        return (
-            crate::worker::spawn_worker_with_options(options.with_interception_context(None)),
-            None,
-        );
-    };
+) -> Option<NestedWorkerDevTools> {
+    let control = context.interception_context.as_ref()?;
+    let runtime = context.worker_context_runtime.browser_context_runtime()?;
+    let (parent, journal) = control.worker_target()?;
     let instance_id = runtime.allocate_dedicated_worker_instance_id();
     let output = journal.clone();
     let interception = crate::network::interception_output::ResourceInterceptionContext::worker(
-        Some(control),
+        Some(control.clone()),
         move |event| publish(&output, Event::Resource { instance_id, event }),
     )
     .with_worker_target(
         RendererWorkerTargetIdentity::Dedicated(instance_id),
         journal.clone(),
     );
-    let script_url = options.script_url.clone();
-    let worker = crate::worker::spawn_worker_with_options(
-        options
-            .with_interception_context(Some(interception))
-            .with_pause_evaluation_until_debugger(true),
-    );
-    runtime.attach_dedicated_worker_devtools_handle(instance_id, &worker, Some(journal.clone()));
     let devtools = NestedWorkerDevTools {
         instance_id,
         journal,
         runtime: context.worker_context_runtime.clone(),
+        interception,
     };
     devtools.publish(Event::Created(RendererDedicatedWorkerTargetInfo {
         owner: RendererDedicatedWorkerTargetOwner::Worker(parent),
@@ -132,8 +112,55 @@ pub(crate) fn start_nested_worker(
         document_url: context.base_url.to_string(),
         name,
     }));
+    Some(devtools)
+}
+
+impl NestedWorkerDevTools {
+    pub(crate) fn script_failed(
+        &self,
+        request_url: &Url,
+        error_message: String,
+        response: Option<Box<crate::protocol_types::NavigationResponse>>,
+    ) {
+        self.publish(Event::ScriptLoadFailed {
+            instance_id: self.instance_id,
+            script_url: request_url.to_string(),
+            error_message,
+            response,
+        });
+    }
+}
+
+pub(crate) fn start_nested_worker(
+    options: crate::worker::WorkerSpawnOptions,
+    context: &super::nested_workers::NestedWorkerContext,
+    response: Box<crate::protocol_types::NavigationResponse>,
+    devtools: Option<NestedWorkerDevTools>,
+) -> (crate::worker::WorkerHandle, Option<NestedWorkerDevTools>) {
+    let Some(devtools) = devtools else {
+        // An embedding without DevTools has its own unobserved loader.
+        return (
+            crate::worker::spawn_worker_with_options(options.with_interception_context(None)),
+            None,
+        );
+    };
+    let runtime = context
+        .worker_context_runtime
+        .browser_context_runtime()
+        .expect("prepared Worker runtime");
+    let script_url = options.script_url.clone();
+    let worker = crate::worker::spawn_worker_with_options(
+        options
+            .with_interception_context(Some(devtools.interception.clone()))
+            .with_pause_evaluation_until_debugger(true),
+    );
+    runtime.attach_dedicated_worker_devtools_handle(
+        devtools.instance_id,
+        &worker,
+        Some(devtools.journal.clone()),
+    );
     devtools.publish(Event::ScriptLoaded {
-        instance_id,
+        instance_id: devtools.instance_id,
         script_url,
         response,
     });
