@@ -422,15 +422,27 @@ fn idle_has_a_strict_timeout_for_live_workers_and_websockets() -> Result<()> {
     Ok(())
 }
 
+// These tests need startup headroom while work after readiness must remain
+// outside its deadline. Keep that work longer than the entire readiness budget.
+const READINESS_TIMEOUT_MS: u64 = 10_000;
+const POST_READINESS_DELAY_MS: u64 = READINESS_TIMEOUT_MS + 1_000;
+
+fn delayed_post_readiness_eval() -> String {
+    format!(
+        "new Promise(resolve => setTimeout(() => {{ setInterval(() => {{}}, 60000); document.querySelector('main').textContent='done'; resolve('value'); }}, {POST_READINESS_DELAY_MS}))"
+    )
+}
+
 #[test]
 fn idle_does_not_repeat_after_eval() -> Result<()> {
+    let timeout = READINESS_TIMEOUT_MS.to_string();
     let script = "setInterval(() => {}, 60000); document.querySelector('main').textContent = 'done'; 'value'";
     assert_done(run(
         &document(""),
-        "1000",
+        &timeout,
         &["--dump", "html", "--eval", script],
     )?);
-    let output = run(&document(""), "1000", &["--eval", script])?;
+    let output = run(&document(""), &timeout, &["--eval", script])?;
     assert!(output.status.success(), "{}", clean_output(&output.stderr));
     assert_eq!(clean_output(&output.stdout), "value\n");
     Ok(())
@@ -438,6 +450,7 @@ fn idle_does_not_repeat_after_eval() -> Result<()> {
 
 #[test]
 fn idle_does_not_repeat_after_eval_file() -> Result<()> {
+    let timeout = READINESS_TIMEOUT_MS.to_string();
     let path = unique_temp_file_path("wait-idle", "eval.js")?;
     std::fs::write(
         &path,
@@ -445,7 +458,7 @@ fn idle_does_not_repeat_after_eval_file() -> Result<()> {
     )?;
     let output = run(
         &document(""),
-        "1000",
+        &timeout,
         &["--dump", "html", "--eval-file", path.to_str().unwrap()],
     );
     std::fs::remove_file(path)?;
@@ -455,9 +468,10 @@ fn idle_does_not_repeat_after_eval_file() -> Result<()> {
 
 #[test]
 fn idle_does_not_repeat_after_readiness_script() -> Result<()> {
+    let timeout = READINESS_TIMEOUT_MS.to_string();
     assert_done(run(
         &document(""),
-        "1000",
+        &timeout,
         &[
             "--dump",
             "html",
@@ -488,9 +502,10 @@ fn idle_waits_for_child_window_timers_and_releases_removed_windows() -> Result<(
 
 #[test]
 fn idle_does_not_repeat_after_page_delay() -> Result<()> {
+    let timeout = READINESS_TIMEOUT_MS.to_string();
     assert_done(run(
         &document(""),
-        "1000",
+        &timeout,
         &[
             "--dump",
             "html",
@@ -505,13 +520,14 @@ fn idle_does_not_repeat_after_page_delay() -> Result<()> {
 
 #[test]
 fn idle_keeps_async_eval_outside_readiness_deadline() -> Result<()> {
-    let expression = "new Promise(resolve => setTimeout(() => { setInterval(() => {}, 60000); document.querySelector('main').textContent='done'; resolve('value'); }, 1200))";
+    let timeout = READINESS_TIMEOUT_MS.to_string();
+    let expression = delayed_post_readiness_eval();
     assert_done(run(
         &document(""),
-        "1000",
-        &["--dump", "html", "--eval", expression],
+        &timeout,
+        &["--dump", "html", "--eval", &expression],
     )?);
-    let output = run(&document(""), "1000", &["--eval", expression])?;
+    let output = run(&document(""), &timeout, &["--eval", &expression])?;
     assert!(output.status.success(), "{}", clean_output(&output.stderr));
     assert_eq!(clean_output(&output.stdout), "value\n");
     Ok(())
@@ -519,14 +535,12 @@ fn idle_keeps_async_eval_outside_readiness_deadline() -> Result<()> {
 
 #[test]
 fn idle_keeps_async_eval_file_outside_readiness_deadline() -> Result<()> {
+    let timeout = READINESS_TIMEOUT_MS.to_string();
     let path = unique_temp_file_path("idle-async-eval", "eval.js")?;
-    std::fs::write(
-        &path,
-        "new Promise(resolve => setTimeout(() => { setInterval(() => {}, 60000); document.querySelector('main').textContent='done'; resolve(); }, 1200))",
-    )?;
+    std::fs::write(&path, delayed_post_readiness_eval())?;
     let output = run(
         &document(""),
-        "1000",
+        &timeout,
         &["--dump", "html", "--eval-file", path.to_str().unwrap()],
     );
     std::fs::remove_file(path)?;
@@ -536,10 +550,12 @@ fn idle_keeps_async_eval_file_outside_readiness_deadline() -> Result<()> {
 
 #[test]
 fn idle_keeps_page_delay_outside_readiness_deadline() -> Result<()> {
+    let timeout = READINESS_TIMEOUT_MS.to_string();
+    let delay = POST_READINESS_DELAY_MS.to_string();
     assert_done(run(
         &document("document.querySelector('main').textContent='done'"),
-        "1000",
-        &["--dump", "html", "--delay-ms", "1200"],
+        &timeout,
+        &["--dump", "html", "--delay-ms", &delay],
     )?);
     Ok(())
 }
