@@ -248,15 +248,16 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 
 下面的实测数据展示了 Moli 目前的能力区间。测试覆盖真实网站、自动化客户端、Chromium/WPT 行为验证，以及大规模的 nextest 回归测试套件。
 
-| 测试 | 测量内容 | Moli |
+| 主题 | 测试 | Moli |
 | --- | --- | --- |
-| [公开网页混合抓取测试](#公开网页混合抓取测试) | 192 个公开 URL 中取得有效内容的页面 | 103 个页面（53.6%），RSS 中位数 73 MiB |
-| [智能体工作负载样例](#智能体工作负载样例) | 单个智能体回合的启动、延迟和内存 | CDP 就绪 34.85 ms（Chromium 169.37 ms） |
-| [WPT 测试](#wpt-测试) | 选定的 Web 平台测试 | 通过 161.2 万项 |
-| [Moli 在 Lexbench-Headless-Browser 评测中的表现](#moli-在-lexbench-headless-browser-评测中的表现) | 1,308 道自动化任务；另一次 557 道任务运行中的 CPU 与内存峰值 | 成功率 81.9%；CPU 时间为 Chrome 的 15%，内存峰值为 13% |
-| [Web Fetch](#web-fetch) | 430 道真实网站任务；545 份网页快照 | 通过率 89.8%，正文提取得分 39.27%；两项均为五个浏览器中第一 |
+| [网页抓取与 Web Fetch](#网页抓取与-web-fetch) | 公开网页混合抓取（192 个 URL）；Web Fetch（430 道真实网站任务、545 份网页快照） | 有效页面 103 个（53.6%）；通过率 89.8%、正文提取得分 39.27%，五个浏览器中第一 |
+| [浏览器自动化](#浏览器自动化) | Lexbench-Headless-Browser，1,308 道可比任务 | 成功率 81.9%；Chrome 99.8% |
+| [资源占用](#资源占用) | 四个本地引擎都完成的 557 道任务；单个智能体回合样例 | CPU 时间为 Chrome 的 15%，内存峰值为 13% |
+| [Web 标准](#web-标准) | 选定的 WPT 测试 | 通过 161.2 万项测试 |
 
-### 公开网页混合抓取测试
+### 网页抓取与 Web Fetch
+
+#### 公开网页混合抓取测试
 
 测试对象是 192 个公开 URL，覆盖中国国内和国际主流网站。判定成功的标准是：页面必须生成有实际意义的 JavaScript 执行后内容——仅仅返回 HTTP 200、验证质询页面、登录墙、空响应，或者只有外壳的应用界面，都不计入成功。
 
@@ -267,40 +268,9 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 | Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
 | Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
 
-### 智能体工作负载样例
+#### Web Fetch
 
-| 指标 | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP 就绪 | 34.85 ms | 169.37 ms |
-| 回合活跃时间 p50 | 33.40 ms | 57.13 ms |
-| PSS 峰值 | 102.46 MiB | 348.82 MiB |
-| 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
-
-### WPT 测试
-
-在目前用于验证 Moli 智能体浏览器功能范围的 WPT 测试集合中，一次完整运行有 **161.2 万项测试通过**。
-
-### Moli 在 Lexbench-Headless-Browser 评测中的表现
-
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) 的完整任务集包含 1,928 道任务，覆盖裸 CDP、Playwright、Puppeteer、Selenium 等 13 个固定版本的自动化工具及 Web 平台语义。为了加入仅提供远程端点的 Kitesurf，下图采用其中 1,308 道可比任务，所有浏览器使用相同的任务筛选规则。
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
-  <img alt="五个无头浏览器在 1,308 道可比任务上的成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
-</picture>
-
-**Moli 0.1.1 通过了 1,071 道任务，成功率为 81.88%**，高于 Kitesurf 的 62.08%、Lightpanda 的 53.29% 和 Obscura 的 44.88%；参照引擎 Chrome 为 99.85%。Kitesurf 以 k=1 运行，未覆盖任务按未通过计，远程服务的复现条件也与本地二进制不同。完整结果见 benchmark 的[五引擎报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)。
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
-  <img alt="四个本地引擎的任务成功率与单题内存峰值中位数：Chrome 99.9%、697 MiB，Moli 80.7%、92 MiB，Lightpanda 43.8%、34 MiB，Obscura 39.5%、39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
-</picture>
-
-Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源对比只覆盖四个本地引擎。在另一轮 557 道任务的测试中，只统计四个引擎都完成的工作。Moli 单题 CPU 中位数为 **100.6 ms**，内存峰值中位数为 **92 MiB**；Chrome 分别为 **687 ms** 和 **697 MiB**。Moli 的 CPU 时间约为 Chrome 的 15%，内存峰值约为 13%。测试方法和完整数据见 benchmark 的[资源报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)。
-
-### Web Fetch
-
-Moli 在真实网站和网页快照上与其他四个浏览器对比。点击标题可切换图表；每一行把 Moli（蓝色）与其他四个浏览器的分布范围放在一起对比。[完整报告](https://browser.lexmount.com/blog/webfetch-benchmark) · 使用 [Webstone](https://github.com/lexmount/webstone) 复现（[指南](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。
+Moli 在真实网站和网页快照上与其他四个浏览器对比。点击标题可切换图表；每一行把 Moli（绿色）与其他四个浏览器的分布范围放在一起对比。[完整报告](https://browser.lexmount.com/blog/webfetch-benchmark) · 使用 [Webstone](https://github.com/lexmount/webstone) 复现（[指南](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。
 
 <details name="web-fetch-chart" open>
 <summary><strong>真实网站 · LexBench-Web-Fetch，430 道任务</strong></summary>
@@ -353,6 +323,43 @@ Moli 在真实网站和网页快照上与其他四个浏览器对比。点击标
 </details>
 
 </details>
+
+### 浏览器自动化
+
+#### Moli 在 Lexbench-Headless-Browser 评测中的表现
+
+[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) 的完整任务集包含 1,928 道任务，覆盖裸 CDP、Playwright、Puppeteer、Selenium 等 13 个固定版本的自动化工具及 Web 平台语义。为了加入仅提供远程端点的 Kitesurf，下图采用其中 1,308 道可比任务，所有浏览器使用相同的任务筛选规则。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="五个无头浏览器在 1,308 道可比任务上的成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+</picture>
+
+**Moli 0.1.1 通过了 1,071 道任务，成功率为 81.88%**，高于 Kitesurf 的 62.08%、Lightpanda 的 53.29% 和 Obscura 的 44.88%；参照引擎 Chrome 为 99.85%。Kitesurf 以 k=1 运行，未覆盖任务按未通过计，远程服务的复现条件也与本地二进制不同。完整结果见 benchmark 的[五引擎报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)。
+
+### 资源占用
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="四个本地引擎的任务成功率与单题内存峰值中位数：Chrome 99.9%、697 MiB，Moli 80.7%、92 MiB，Lightpanda 43.8%、34 MiB，Obscura 39.5%、39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+</picture>
+
+Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源对比只覆盖四个本地引擎。在另一轮 557 道任务的测试中，只统计四个引擎都完成的工作。Moli 单题 CPU 中位数为 **100.6 ms**，内存峰值中位数为 **92 MiB**；Chrome 分别为 **687 ms** 和 **697 MiB**。Moli 的 CPU 时间约为 Chrome 的 15%，内存峰值约为 13%。测试方法和完整数据见 benchmark 的[资源报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)。
+
+#### 智能体工作负载样例
+
+| 指标 | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP 就绪 | 34.85 ms | 169.37 ms |
+| 回合活跃时间 p50 | 33.40 ms | 57.13 ms |
+| PSS 峰值 | 102.46 MiB | 348.82 MiB |
+| 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
+
+### Web 标准
+
+#### WPT 测试
+
+在目前用于验证 Moli 智能体浏览器功能范围的 WPT 测试集合中，一次完整运行有 **161.2 万项测试通过**。
 
 ## 项目范围
 
