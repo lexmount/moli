@@ -289,6 +289,59 @@ pub(crate) fn style_property_names_from_object<'s>(
     ))
 }
 
+/// Typed OM observes computed values, before CSSOM resolves percentages and
+/// auto sizes against layout. Reuse the declaration's document/viewport and
+/// retained style observation rather than reading serialized used values.
+pub(crate) fn computed_typed_style_value_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+) -> Option<moli_css_parse::ParsedTypedStyleValue> {
+    let (runtime_ptr, handle, StyleMode::Computed) =
+        style_runtime_and_handle_from_object(scope, style).ok()?
+    else {
+        return None;
+    };
+    if style_object_forces_empty_computed(scope, style, StyleMode::Computed) {
+        return None;
+    }
+    let runtime = unsafe { &*runtime_ptr };
+    let context = style_object_computation_context(scope, style);
+    let read = super::ComputedStyleRead::new_with_context(runtime, handle, context);
+    let computed = read.computed_values()?;
+    let id = style::properties::PropertyId::parse_enabled_for_all_content(property).ok()?;
+    if let style::properties::PropertyId::Custom(name) = &id
+        && computed.custom_properties().inherited.get(name).is_none()
+        && computed
+            .custom_properties()
+            .non_inherited
+            .get(name)
+            .is_none()
+    {
+        return None;
+    }
+    let mut css_text = String::new();
+    computed
+        .computed_or_resolved_property_value(id.clone(), None, &mut css_text)
+        .ok()?;
+    if css_text.is_empty() && !property.starts_with("--") {
+        return None;
+    }
+    let values = if property.starts_with("--") {
+        Some(style::typed_om::TypedValueList {
+            values: [style::typed_om::TypedValue::Unparsed(
+                moli_css_parse::reify_unparsed_style_value(&css_text, None)?,
+            )]
+            .into_iter()
+            .collect(),
+        })
+    } else {
+        id.longhand_id()
+            .and_then(|id| computed.property_value_to_typed_value_list(id))
+    };
+    Some(moli_css_parse::ParsedTypedStyleValue { css_text, values })
+}
+
 pub(crate) fn style_remove_property_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
