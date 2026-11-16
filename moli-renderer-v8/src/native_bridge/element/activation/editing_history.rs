@@ -9,7 +9,7 @@ use crate::native_bridge::element::{
     is_text_control, text_control_value,
 };
 use crate::native_bridge::node::{
-    append_child_in_reaction_scope, remove_child_in_reaction_scope,
+    insert_before_in_reaction_scope, remove_child_in_reaction_scope,
     set_text_content_in_reaction_scope,
 };
 use crate::util::{get_private_value, node_wrapper_from_handle, set_private_value};
@@ -315,6 +315,39 @@ pub(crate) fn commit_edit(
         store_stack(scope, REDO, &[]);
     }
 }
+// A removed subtree may still be retained by history. It must stay detached;
+// moving it elsewhere must not let undo pull it out of an author's new tree.
+fn belongs_to_edit(
+    host: &PageScriptHost,
+    target: DomHandle,
+    node: usize,
+    detached_roots: &BTreeSet<usize>,
+    require_editable: bool,
+) -> bool {
+    let mut current = DomHandle::new(node);
+    loop {
+        let Some(node) = host.dom_host().node(current) else {
+            return false;
+        };
+        if require_editable
+            && let Some(element) = node.as_element()
+            && (element.has_attribute("inert")
+                || element
+                    .attribute("contenteditable")
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("false")))
+        {
+            return false;
+        }
+        if current == target {
+            return true;
+        }
+        let Some(parent) = node.parent_node() else {
+            return detached_roots.contains(&current.index());
+        };
+        current = parent;
+    }
+}
+
 fn matches_entry(host: &PageScriptHost, entry: &Entry, redo: bool) -> bool {
     let target = DomHandle::new(entry.target);
     let editable = if is_text_control(host, target) {
@@ -322,13 +355,74 @@ fn matches_entry(host: &PageScriptHost, entry: &Entry, redo: bool) -> bool {
     } else {
         contenteditable_editing_host(host, target) == Some(target)
     };
-    editable
-        && host.dom_host().is_connected(target)
-        && entry.changes.iter().all(|change| {
-            state(host, change.node, entry.target).as_ref()
+    if !editable || !host.dom_host().is_connected(target) {
+        return false;
+    }
+    let mut detached_roots = BTreeSet::new();
+    for change in &entry.changes {
+        let (State::Children(before), State::Children(after)) = (&change.before, &change.after)
+        else {
+            continue;
+        };
+        let (removed, retained) = if redo {
+            (after, before)
+        } else {
+            (before, after)
+        };
+        detached_roots.extend(
+            removed
+                .iter()
+                .filter(|child| !retained.contains(child))
+                .copied(),
+        );
+    }
+    entry.changes.iter().all(|change| {
+        belongs_to_edit(host, target, change.node, &detached_roots, true)
+            && state(host, change.node, entry.target).as_ref()
                 == Some(if redo { &change.before } else { &change.after })
-        })
+            && [&change.before, &change.after].iter().all(|state| {
+                let State::Children(children) = state else {
+                    return true;
+                };
+                children
+                    .iter()
+                    .all(|child| belongs_to_edit(host, target, *child, &detached_roots, false))
+            })
+    })
 }
+
+fn restore_children(
+    scope: &mut v8::PinScope<'_, '_>,
+    ptr: *mut PageScriptHost,
+    parent: DomHandle,
+    wanted: &[usize],
+) -> bool {
+    let retained = wanted.iter().copied().collect::<BTreeSet<_>>();
+    for child in children(unsafe { &*ptr }, parent) {
+        if !retained.contains(&child)
+            && !remove_child_in_reaction_scope(scope, ptr, parent, DomHandle::new(child))
+        {
+            return false;
+        }
+    }
+    let mut cursor = unsafe { &*ptr }
+        .dom_host()
+        .node(parent)
+        .and_then(|node| node.first_child());
+    for child in wanted {
+        let child = DomHandle::new(*child);
+        if cursor == Some(child) {
+            cursor = unsafe { &*ptr }
+                .dom_host()
+                .node(child)
+                .and_then(|node| node.next_sibling());
+        } else if !insert_before_in_reaction_scope(scope, ptr, parent, child, cursor) {
+            return false;
+        }
+    }
+    true
+}
+
 pub(crate) fn undo_redo(
     scope: &mut v8::PinScope<'_, '_>,
     ptr: *mut PageScriptHost,
@@ -342,22 +436,40 @@ pub(crate) fn undo_redo(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let (source, destination) = if redo { (REDO, UNDO) } else { (UNDO, REDO) };
+    let document = unsafe { &*ptr }.dom_host().owner_document_handle(target);
     let mut from = stack(scope, source);
-    let Some(value) = from.last().copied() else {
-        return false;
+    let (value, entry) = loop {
+        let Some(value) = from.last().copied() else {
+            return false;
+        };
+        if let Some(entry) = read_entry(scope, value)
+            && unsafe { &*ptr }
+                .dom_host()
+                .owner_document_handle(DomHandle::new(entry.target))
+                == document
+            && matches_entry(unsafe { &*ptr }, &entry, redo)
+        {
+            break (value, entry);
+        }
+        // History is per Document, not per focused control. An unavailable
+        // target must not permanently block earlier, still-valid edits.
+        from.pop();
+        store_stack(scope, source, &from);
     };
-    let Some(entry) = read_entry(scope, value) else {
-        return false;
-    };
-    if entry.target != target.index() || !matches_entry(unsafe { &*ptr }, &entry, redo) {
-        return false;
-    }
+    let target = DomHandle::new(entry.target);
     let input_type = if redo {
         TextEditInputType::HistoryRedo
     } else {
         TextEditInputType::HistoryUndo
     };
     if !dispatch_beforeinput(scope, ptr, target, input_type, None)
+        || unsafe { &*ptr }.dom_host().owner_document_handle(target) != document
+        || !matches_entry(unsafe { &*ptr }, &entry, redo)
+    {
+        return false;
+    }
+    super::super::update_focus_preserving_selection(scope, ptr, Some(target));
+    if unsafe { &*ptr }.dom_host().owner_document_handle(target) != document
         || !matches_entry(unsafe { &*ptr }, &entry, redo)
     {
         return false;
@@ -385,25 +497,8 @@ pub(crate) fn undo_redo(
                         }
                     }
                     State::Children(wanted) => {
-                        for child in children(unsafe { &*ptr }, handle) {
-                            if !remove_child_in_reaction_scope(
-                                scope,
-                                ptr,
-                                handle,
-                                DomHandle::new(child),
-                            ) {
-                                return false;
-                            }
-                        }
-                        for child in wanted {
-                            if !append_child_in_reaction_scope(
-                                scope,
-                                ptr,
-                                handle,
-                                DomHandle::new(*child),
-                            ) {
-                                return false;
-                            }
+                        if !restore_children(scope, ptr, handle, wanted) {
+                            return false;
                         }
                     }
                 }
