@@ -22,7 +22,9 @@ use crate::{
 };
 
 use super::super::super::PageScriptHost;
-use super::super::forms::{FormAssociatedResetCallbackTiming, reset_form_default_action};
+use super::super::forms::{
+    FormAssociatedResetCallbackTiming, dispatch_form_reset_event, reset_form_default_action,
+};
 use super::super::{
     ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     cache_input_files_from_selected_files, closed_details_ancestors_to_reveal,
@@ -1611,9 +1613,7 @@ fn perform_click_default_action(
     if is_valid_reset_button(runtime, handle)
         && let Some(form_handle) = form_handle
     {
-        if let Some(event) = construct_simple_event(scope, "reset", true, true, false)
-            && dispatch_public_event(scope, runtime_ptr, form_handle, event).allows_default()
-        {
+        if dispatch_form_reset_event(scope, runtime_ptr, form_handle).allows_default() {
             let _ = reset_form_default_action(
                 scope,
                 runtime_ptr,
