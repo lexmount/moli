@@ -344,12 +344,9 @@ fn start_devtools_continue_intercepted_request_command(
                 ));
             }
         };
-        let pending_page = conn.start_subresource_document_command(
+        let pending_page = conn.start_subresource_command(
             owner,
-            pending
-                .page_owner()
-                .expect("native request has Page residence"),
-            pending.document_command_target(),
+            &pending.residence,
             RendererPageCommand::ContinuePendingSubresourceFetch {
                 internal_id: pending.internal_id,
                 url: parsed_url,
@@ -618,12 +615,9 @@ fn start_devtools_fail_intercepted_request_command(
             // all Network observers, through the normal completion path.
             return FetchCommandTaskStep::Complete(CommandOutputPlan::success());
         }
-        let pending_page = match conn.start_subresource_document_command(
+        let pending_page = match conn.start_subresource_command(
             owner,
-            pending
-                .page_owner()
-                .expect("native request has Page residence"),
-            pending.document_command_target(),
+            &pending.residence,
             RendererPageCommand::FailPendingSubresourceFetch {
                 internal_id: pending.internal_id,
                 error_text: error_text.clone(),
@@ -660,10 +654,9 @@ fn start_devtools_fail_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let pending_page = match conn.start_subresource_document_command(
+        let pending_page = match conn.start_subresource_command(
             owner,
-            &pending.page_owner,
-            pending.command_target.as_ref(),
+            &pending.residence,
             RendererPageCommand::FailPendingSubresourceResponse {
                 internal_id: pending.internal_id,
                 error_text: error_text.clone(),
@@ -903,12 +896,9 @@ fn start_devtools_fulfill_intercepted_request_command(
                     headers,
                 })
             });
-        let pending_page = match conn.start_subresource_document_command(
+        let pending_page = match conn.start_subresource_command(
             owner,
-            pending
-                .page_owner()
-                .expect("native request has Page residence"),
-            pending.document_command_target(),
+            &pending.residence,
             RendererPageCommand::FulfillPendingSubresourceFetch {
                 internal_id: pending.internal_id,
                 request_overrides,
@@ -952,10 +942,9 @@ fn start_devtools_fulfill_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let pending_page = match conn.start_subresource_document_command(
+        let pending_page = match conn.start_subresource_command(
             owner,
-            &pending.page_owner,
-            pending.command_target.as_ref(),
+            &pending.residence,
             RendererPageCommand::FulfillPendingSubresourceResponse {
                 internal_id: pending.internal_id,
                 response_code,
@@ -1498,10 +1487,9 @@ fn start_devtools_continue_intercepted_response_command(
         } else {
             response_headers
         };
-        let pending_page = match conn.start_subresource_document_command(
+        let pending_page = match conn.start_subresource_command(
             owner,
-            &pending.page_owner,
-            pending.command_target.as_ref(),
+            &pending.residence,
             RendererPageCommand::ContinuePendingSubresourceResponse {
                 internal_id: pending.internal_id,
                 response_code: continue_response_code,
@@ -1992,8 +1980,7 @@ mod protocol_neutral_tests {
             .target_page_residence_identity_for_session(Some("SID-primary"))
             .expect("test target should expose a Page residence identity");
         let pending = PendingSubresourceFetchResponseRequest {
-            command_target: None,
-            page_owner,
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(page_owner),
             owner_session_id: Some("SID-primary".to_owned()),
             action_session_id: Some("SID-primary".to_owned()),
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,

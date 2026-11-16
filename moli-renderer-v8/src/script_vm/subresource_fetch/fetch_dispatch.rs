@@ -928,13 +928,7 @@ impl ScriptVm {
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)
-                        | PendingSubresourceContinuation::ChildDocument(_)
-                        | PendingSubresourceContinuation::WorkerFetch { .. }
-                        | PendingSubresourceContinuation::WorkerXhr { .. }
-                        | PendingSubresourceContinuation::WorkerCspReport { .. }
-                        | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                        | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                        | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                        | PendingSubresourceContinuation::ChildDocument(_) => {}
                     }
                     trace_async_subresource_stage(
                         "async_subresource_continuation_delivered",
@@ -1060,13 +1054,7 @@ impl ScriptVm {
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
                         | PendingSubresourceContinuation::WebSocket(_)
-                        | PendingSubresourceContinuation::ChildDocument(_)
-                        | PendingSubresourceContinuation::WorkerFetch { .. }
-                        | PendingSubresourceContinuation::WorkerXhr { .. }
-                        | PendingSubresourceContinuation::WorkerCspReport { .. }
-                        | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                        | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                        | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                        | PendingSubresourceContinuation::ChildDocument(_) => {}
                     }
                     trace_async_subresource_stage(
                         "async_subresource_continuation_delivered",

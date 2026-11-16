@@ -38,10 +38,10 @@ pub(crate) fn dispatch_worker_event<'s>(
                 *event_kind,
             )
         }
+        #[cfg(test)]
+        WorkerToParentMessage::PendingSubresourceFetch(_)
+        | WorkerToParentMessage::SubresourceContinue(_) => false,
         WorkerToParentMessage::SubresourceNetwork(_)
-        | WorkerToParentMessage::PendingSubresourceFetch(_)
-        | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-        | WorkerToParentMessage::SubresourceContinue(_)
         | WorkerToParentMessage::WebSocketSubresource(_)
         | WorkerToParentMessage::WebSocketLifecycle(_)
         | WorkerToParentMessage::WebSocketFrame(_)

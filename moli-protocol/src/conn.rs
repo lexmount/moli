@@ -856,6 +856,12 @@ impl ConnectionNetworkRequestIdAllocator {
         self.next_sequence
     }
 
+    pub(crate) fn request_id_for_native(
+        &mut self,
+        handle: moli_core::page::SubresourceNetworkRequestHandle,
+    ) -> String {
+        format!("REQ-native-{}", handle.get())
+    }
     pub(crate) fn allocate_request_id(&mut self) -> String {
         format!("REQ-{}", self.allocate_sequence())
     }

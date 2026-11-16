@@ -114,30 +114,6 @@ pub(super) enum PendingSubresourceContinuation {
     WebSocket(PendingWebSocketConnection),
     /// A child frame navigation held before its request leaves the renderer.
     ChildDocument(Box<crate::native_bridge::ChildDocumentFetch>),
-    WorkerFetch {
-        worker_id: DedicatedWorkerId,
-        fetch_id: u32,
-    },
-    WorkerXhr {
-        worker_id: DedicatedWorkerId,
-        xhr_id: u32,
-    },
-    WorkerCspReport {
-        worker_id: DedicatedWorkerId,
-        report_id: u32,
-    },
-    SharedWorkerFetch {
-        instance_id: moli_shared_worker::SharedWorkerInstanceId,
-        fetch_id: u32,
-    },
-    SharedWorkerXhr {
-        instance_id: moli_shared_worker::SharedWorkerInstanceId,
-        xhr_id: u32,
-    },
-    SharedWorkerCspReport {
-        instance_id: moli_shared_worker::SharedWorkerInstanceId,
-        report_id: u32,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -181,15 +157,6 @@ impl PendingSubresourceContinuation {
                 | Self::TextTrack { .. }
                 | Self::StylesheetSubresource { .. }
         )
-    }
-
-    pub(super) fn dedicated_worker_id(&self) -> Option<DedicatedWorkerId> {
-        match self {
-            Self::WorkerFetch { worker_id, .. }
-            | Self::WorkerXhr { worker_id, .. }
-            | Self::WorkerCspReport { worker_id, .. } => Some(*worker_id),
-            _ => None,
-        }
     }
 
     pub(super) fn stylesheet_subresource_owner(
@@ -695,14 +662,6 @@ pub(super) struct RunningSubresourceFetchState {
     pub(super) intercept_response: bool,
     pub(super) handle_auth_requests: bool,
     pub(super) initial_auth_network_request_headers: Option<Vec<(String, String)>>,
-}
-
-pub(super) struct InFlightWorkerSubresourceFetchState {
-    pub(super) pending: PendingSubresourceFetchState,
-    pub(super) request_url: Url,
-    pub(super) request_method: String,
-    pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
 }
 
 #[derive(Debug)]

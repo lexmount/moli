@@ -916,6 +916,17 @@ impl ScriptExecutionReport {
         &self.inspector_issues
     }
 
+    /// Incremental consumers can release completed captures while other loads remain in flight.
+    pub fn take_subresource_network_records(&mut self) -> Vec<SubresourceNetworkRecord> {
+        let records = std::mem::take(&mut self.subresource_network_records);
+        if let Some(state) = self.staged_subresource_lifecycle.as_mut() {
+            for handle in records.iter().filter_map(|record| record.request_handle()) {
+                state.completed_handles.remove(&handle.get());
+            }
+        }
+        records
+    }
+
     pub fn subresource_network_records(&self) -> &[SubresourceNetworkRecord] {
         &self.subresource_network_records
     }
@@ -1130,6 +1141,7 @@ impl SubresourceNetworkRequestHandle {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubresourceRequestStarted {
+    redirect: Option<Box<NavigationRedirect>>,
     handle: SubresourceNetworkRequestHandle,
     frame_id: Option<String>,
     document_url: Url,
@@ -1231,6 +1243,7 @@ impl SubresourceRequestStarted {
     ) -> Self {
         let request_body_bytes = request_body_text_bytes(&request_body);
         Self {
+            redirect: None,
             handle,
             frame_id,
             document_url,
@@ -1244,6 +1257,14 @@ impl SubresourceRequestStarted {
             request_initiator_type,
             request_cookie_report,
         }
+    }
+
+    pub fn with_redirect(mut self, redirect: Option<NavigationRedirect>) -> Self {
+        self.redirect = redirect.map(Box::new);
+        self
+    }
+    pub fn redirect(&self) -> Option<&NavigationRedirect> {
+        self.redirect.as_deref()
     }
 
     pub fn handle(&self) -> SubresourceNetworkRequestHandle {

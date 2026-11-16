@@ -1,12 +1,14 @@
-//! Shared native interception transport for XHR and stylesheet resources.
+//! Native interception transport shared by Worker fetch, XHR and stylesheets.
 
 mod context;
+mod fetch;
 mod result;
+mod service_worker;
 mod stream;
 pub(crate) use context::{ControlledXhrContext, XhrInterceptionRoute};
 use result::BufferedXhrResponse;
 pub(crate) use result::{XhrLoadResult, start_buffered_xhr};
-pub(crate) use stream::{ControlledXhrCompletion, ControlledXhrStream};
+pub(crate) use stream::{ControlledResourceStream, ControlledXhrCompletion};
 
 use moli_fetch::{FetchCancelHandle, Request, Response, ResponseHead};
 use tokio::sync::oneshot;
@@ -18,36 +20,45 @@ use crate::{
         interception_control::{
             InterceptionPhase, ResourceInterceptionDecision, ResourceInterceptionPause,
         },
-        interception_output::InterceptionOutput,
         loads::ResourceLoadLease,
     },
-    runtime::{RendererDocumentLifecycleIdentity, RendererOwnerAction},
+    runtime::RendererOwnerAction,
     types::{
         PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
         PendingSubresourceResponseInfo, SubresourceRequestInitiatorType, SubresourceResponseBody,
     },
 };
 
+#[derive(Clone, Copy)]
+enum ResourceResponsePolicy {
+    Xhr,
+    Fetch(crate::types::SubresourcePolicyContext),
+}
+
 pub(crate) struct ControlledResourceLoad {
+    response_policy: ResourceResponsePolicy,
+    service_worker: Option<service_worker::WorkerServiceWorkerFetch>,
+    response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     request: Request,
     info: PendingSubresourceFetchInfo,
     load: ResourceLoadLease,
     cancel: FetchCancelHandle,
-    source_document: RendererDocumentLifecycleIdentity,
-    output: InterceptionOutput,
+    interception: crate::network::interception_output::ResourceInterceptionContext,
     connect_policy: Option<DocumentConnectPolicySnapshot>,
+    csp_violations: Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
     preflight_headers: Vec<(String, String)>,
     initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
     request_initiator_type: SubresourceRequestInitiatorType,
 }
 
+use super::FetchError;
 use super::loaded_response::LoadedResponse;
 
 impl LoadedResponse {
     async fn deliver(
         &self,
         info: &PendingSubresourceFetchInfo,
-        stream: Option<&mut ControlledXhrStream>,
+        stream: Option<&mut ControlledResourceStream>,
         network_request_headers: Option<Vec<(String, String)>>,
     ) -> Result<Option<BufferedXhrResponse>, String> {
         if let Some(stream) = stream {
@@ -81,6 +92,14 @@ impl LoadedResponse {
 }
 
 impl ControlledResourceLoad {
+    pub(crate) fn with_fetch_policy(
+        mut self,
+        policy: crate::types::SubresourcePolicyContext,
+    ) -> Self {
+        self.response_policy = ResourceResponsePolicy::Fetch(policy);
+        self
+    }
+
     pub(crate) fn for_stylesheet(
         interception: crate::network::interception_output::ResourceInterceptionContext,
         request: Request,
@@ -90,13 +109,16 @@ impl ControlledResourceLoad {
         request_initiator_type: SubresourceRequestInitiatorType,
     ) -> Self {
         Self {
+            response_policy: ResourceResponsePolicy::Xhr,
+            service_worker: None,
+            response_filter: None,
             request,
             info,
             load,
             cancel,
-            source_document: interception.source_document,
-            output: interception.output,
+            interception,
             connect_policy: None,
+            csp_violations: Vec::new(),
             preflight_headers: Vec::new(),
             initial_decision: None,
             request_initiator_type,
@@ -109,13 +131,7 @@ impl ControlledResourceLoad {
     pub(crate) fn prepare_initial_pause(&mut self) -> RendererOwnerAction {
         let (pause, decision) = self.pause(InterceptionPhase::Request);
         self.initial_decision = Some(decision);
-        RendererOwnerAction::SubresourceFetchPause {
-            redirect: None,
-            source_document: self.source_document,
-            info: Box::new(self.info.clone()),
-            child_document: None,
-            network_pause: Some(pause),
-        }
+        self.interception.request_action(self.info.clone(), pause)
     }
 
     pub(crate) async fn run(self) -> XhrLoadResult {
@@ -129,15 +145,17 @@ impl ControlledResourceLoad {
 
     pub(crate) async fn run_with_stream(
         mut self,
-        mut stream: Option<ControlledXhrStream>,
+        mut stream: Option<ControlledResourceStream>,
     ) -> ControlledXhrCompletion {
         let result = self.run_inner(stream.as_mut()).await;
-        if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id) {
+        let result = self.normalize_cancellation(result);
+        self.load.finish();
+        if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id()) {
             self.publish_completed();
             return ControlledXhrCompletion::Streamed {
                 internal_id: self.info.internal_id,
                 body_source_id,
-                result: result.map(|_| ()),
+                result: result.map(|_| ()).map_err(Into::into),
             };
         }
         let (result, network_headers) = match result {
@@ -147,15 +165,19 @@ impl ControlledResourceLoad {
             }
             Err(error) => (Err(error), None),
         };
-        let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
+        let mut completed = XhrLoadResult::new(
+            self.info.clone(),
+            result.map_err(Into::into),
+            network_headers,
+        );
+        completed.csp_violations = std::mem::take(&mut self.csp_violations);
         completed.network_record = completed
             .network_record
             .with_request_initiator_type(self.request_initiator_type);
         if completed.info.network_request_handle.is_some() {
             // Redirects already crossed their own native request-pause boundary.
             // Diagnostics retain the full chain; protocol sees only the terminal.
-            self.output.record_subresource_network(
-                self.source_document,
+            self.interception.record_subresource_network(
                 completed
                     .network_record
                     .clone()
@@ -166,17 +188,21 @@ impl ControlledResourceLoad {
         ControlledXhrCompletion::Buffered(Box::new(completed))
     }
 
+    fn normalize_cancellation<T>(&self, result: Result<T, FetchError>) -> Result<T, FetchError> {
+        if result.is_err() && (self.cancel.is_cancelled() || self.load.is_cancelled()) {
+            Err("net::ERR_ABORTED".into())
+        } else {
+            result
+        }
+    }
+
     fn publish_completed(&self) {
-        let _ = self
-            .output
-            .publish(RendererOwnerAction::SubresourceContinue {
-                response_body: None,
-                source_document: self.source_document,
-                event: Box::new(PendingSubresourceContinueEvent::Completed {
-                    internal_id: self.info.internal_id,
-                }),
-                network_pause: None,
-            });
+        let _ = self.interception.publish_continue(
+            PendingSubresourceContinueEvent::Completed {
+                internal_id: self.info.internal_id,
+            },
+            None,
+        );
     }
 
     fn pause(
@@ -196,6 +222,7 @@ impl ControlledResourceLoad {
             .flatten();
         (
             pause
+                .with_worker_network(self.interception.is_worker())
                 .with_request_redirect(redirect)
                 .with_request_initiator_type(self.request_initiator_type),
             rx,
@@ -205,10 +232,18 @@ impl ControlledResourceLoad {
     async fn decision(
         &self,
         rx: oneshot::Receiver<ResourceInterceptionDecision>,
+        phase: InterceptionPhase,
     ) -> Result<ResourceInterceptionDecision, String> {
         tokio::select! {
             biased;
             () = self.cancel.cancelled() => Err("net::ERR_ABORTED".into()),
+            () = self.interception.worker_control_shutdown() => if self.load.disposition() != crate::network::loads::ResourceLoadDisposition::Keepalive {
+                Err("net::ERR_ABORTED".into())
+            } else { Ok(match phase {
+                InterceptionPhase::Request => ResourceInterceptionDecision::ContinueRequest {url:None,method:None,body:None,headers:None,intercept_response:false,handle_auth_requests:false},
+                InterceptionPhase::Response => ResourceInterceptionDecision::ContinueResponse {status:None,headers:None},
+                InterceptionPhase::Auth => ResourceInterceptionDecision::CancelAuth,
+            }) },
             result = rx => result.map_err(|_| "network interception owner was dropped".into()),
         }
     }
@@ -226,38 +261,107 @@ impl ControlledResourceLoad {
     }
 
     fn apply_request_overrides(&mut self, overrides: moli_fetch::RequestOverrides) {
+        let request_changed = overrides.url.is_some()
+            || overrides.method.is_some()
+            || overrides.body.is_some()
+            || overrides.headers.is_some();
         let headers_changed = overrides.headers.is_some();
         overrides.apply(&mut self.request);
         if headers_changed {
             self.preflight_headers = self.request.request_headers.to_byte_strings();
         }
         self.sync_info();
+        if request_changed && self.interception.is_worker() {
+            // The request ID is already announced before its Fetch pause. An
+            // updated snapshot refreshes body capture and subsequent response
+            // metadata; Network's existing announcement claim suppresses a
+            // second requestWillBeSent for this hop.
+            self.publish_worker_request(None);
+        }
     }
 
-    fn check_request(&self) -> Result<(), String> {
+    fn publish_worker_request(&self, redirect: Option<crate::types::NavigationRedirect>) {
+        let handle = self
+            .info
+            .network_request_handle
+            .expect("native resource load has a handle");
+        self.interception.publish_network(
+            crate::types::ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+                crate::types::SubresourceRequestStarted::new(
+                    handle,
+                    self.info.frame_id.clone(),
+                    self.info.document_url.clone(),
+                    self.info.url.clone(),
+                    self.info.method.clone(),
+                    self.info.request_headers.clone(),
+                    self.info.request_body.clone(),
+                    self.info.resource_type,
+                    self.request_initiator_type,
+                    self.info.request_cookie_report.clone(),
+                )
+                .with_request_body_bytes(self.info.request_body_bytes.clone())
+                .with_redirect(redirect)
+                .with_keepalive(
+                    self.load.disposition()
+                        == crate::network::loads::ResourceLoadDisposition::Keepalive,
+                ),
+            )),
+        );
+    }
+
+    fn check_request(&mut self) -> Result<(), String> {
         let redirect_status = if self.request.redirect_count() == 0 {
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
         } else {
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
         };
+        if self.interception.is_worker()
+            && self.request.redirect_count() != 0
+            && let Some(mut violation) = self.connect_policy.as_ref().and_then(|policy| {
+                policy.report_only_violation(
+                    &self.info.document_url,
+                    &self.request.url,
+                    redirect_status,
+                )
+            })
+        {
+            violation.blocked_uri = self.request.redirect_chain()[0].from_url.to_string();
+            self.csp_violations.push(violation);
+        }
         if let Some(policy) = &self.connect_policy
-            && let Some(violation) = policy.enforce_violation(
+            && let Some(mut violation) = policy.enforce_violation(
                 &self.info.document_url,
                 &self.request.url,
                 redirect_status,
             )
         {
-            return Err(
-                crate::document_runtime::document_content_security_policy_error_message(
-                    &violation,
-                    "XMLHttpRequest",
-                ),
+            if self.request.redirect_count() != 0 {
+                violation.blocked_uri = self
+                    .request
+                    .redirect_chain()
+                    .first()
+                    .expect("redirect chain is nonempty")
+                    .from_url
+                    .to_string();
+            }
+            let message = crate::document_runtime::document_content_security_policy_error_message(
+                &violation,
+                "XMLHttpRequest",
             );
+            if self.interception.is_worker() {
+                self.csp_violations.push(violation);
+            }
+            return Err(message);
         }
         if self.connect_policy.is_none() {
             self.request
                 .admit_request_url(&self.request.url)
                 .map_err(|error| error.to_string())?;
+        }
+        if matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
+            && matches!(self.request.url.scheme(), "blob" | "data")
+        {
+            return Ok(());
         }
         moli_url_policy::ensure_http_network_transport_url(&self.request.url)
             .map_err(|error| error.to_string())
@@ -286,23 +390,47 @@ impl ControlledResourceLoad {
 
     async fn run_inner(
         &mut self,
-        mut stream: Option<&mut ControlledXhrStream>,
-    ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
+        mut stream: Option<&mut ControlledResourceStream>,
+    ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), FetchError> {
         use ResourceInterceptionDecision as D;
-        let mut next_request_pause = true;
+        let mut next_request_pause = self.initial_decision.is_some()
+            || self
+                .load
+                .request_client()
+                .page_network_policy()
+                .should_intercept_subresource(self.info.resource_type);
+        let mut announce_request = self.interception.is_worker();
         let mut intercept_response = false;
         let mut handle_auth_requests = false;
         let mut synthetic = None;
         let mut network_request_headers = None;
         let preflight_observer =
             super::preflight_events::CorsPreflightNetworkObserver::for_native_xhr(
-                self.output.clone(),
-                self.source_document,
+                self.interception.clone(),
                 &self.info,
             );
         loop {
             if self.cancel.is_cancelled() || self.load.is_cancelled() {
                 return Err("net::ERR_ABORTED".into());
+            }
+            if announce_request {
+                self.sync_info();
+                self.publish_worker_request(
+                    self.request
+                        .redirect_chain()
+                        .last()
+                        .cloned()
+                        .map(Into::into),
+                );
+                announce_request = false;
+            }
+            if self.interception.worker_control_closed() {
+                if self.load.disposition()
+                    != crate::network::loads::ResourceLoadDisposition::Keepalive
+                {
+                    return Err("net::ERR_ABORTED".into());
+                }
+                next_request_pause = false;
             }
             if next_request_pause {
                 // ExtraInfo describes the first on-wire request of this hop.
@@ -313,21 +441,14 @@ impl ControlledResourceLoad {
                     rx
                 } else {
                     let (pause, rx) = self.pause(InterceptionPhase::Request);
-                    if !self
-                        .output
-                        .publish(RendererOwnerAction::SubresourceFetchPause {
-                            redirect: None,
-                            source_document: self.source_document,
-                            info: Box::new(self.info.clone()),
-                            child_document: None,
-                            network_pause: Some(pause),
-                        })
+                    if !self.interception.publish_request(self.info.clone(), pause)
+                        && !self.interception.worker_control_closed()
                     {
                         return Err("network interception output owner is closed".into());
                     }
                     rx
                 };
-                match self.decision(rx).await? {
+                match self.decision(rx, InterceptionPhase::Request).await? {
                     D::ContinueRequest {
                         url,
                         method,
@@ -345,7 +466,7 @@ impl ControlledResourceLoad {
                         intercept_response = response;
                         handle_auth_requests = auth;
                     }
-                    D::Fail(error) => return Err(error),
+                    D::Fail(error) => return Err(error.into()),
                     D::Fulfill {
                         request_overrides,
                         status,
@@ -363,11 +484,31 @@ impl ControlledResourceLoad {
                 }
             }
             self.check_request()?;
+            if synthetic.is_none() && matches!(self.request.url.scheme(), "blob" | "data") {
+                synthetic = Some(
+                    crate::network_host::local_url_response_result(
+                        &self.request.url,
+                        &self.request.method,
+                    )
+                    .expect("local resource routing")
+                    .map_err(|error| error.to_string())?,
+                );
+            }
+            self.response_filter = None;
+            if synthetic.is_none()
+                && let Some(source) = self.service_worker.clone()
+                && let Some(response) = self.fetch_service_worker_hop(source).await?
+            {
+                synthetic = Some(response);
+            }
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
             let (response, mut is_synthetic, observed_request_headers) = match synthetic.take() {
                 Some(response) => (LoadedResponse::from_response(response), true, None),
                 None => {
+                    if self.load.network_offline() {
+                        return Err("Network emulation offline".into());
+                    }
                     let observed = super::async_fetch::fetch_subresource_hop(
                         &loader,
                         self.request.clone(),
@@ -375,10 +516,22 @@ impl ControlledResourceLoad {
                         self.preflight_headers.clone(),
                         Some(&preflight_observer),
                     )
-                    .await?;
-                    let (response, observation) = observed.into_parts();
-                    let headers = observation.map(|observation| observation.into_headers());
-                    (response, false, headers)
+                    .await;
+                    match observed {
+                        Ok(observed) => {
+                            let (response, observation) = observed.into_parts();
+                            let headers = observation.map(|observation| observation.into_headers());
+                            (response, false, headers)
+                        }
+                        Err(error) if intercept_response => {
+                            let response = self.intercept_failed_response(error).await?;
+                            // The failed hop already crossed its response pause.
+                            // Deliver its replacement through the normal validation path.
+                            intercept_response = false;
+                            (response, true, None)
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             };
             if network_request_headers.is_none() {
@@ -393,37 +546,31 @@ impl ControlledResourceLoad {
             {
                 let (pause, rx) = self.pause(InterceptionPhase::Auth);
                 let pause = pause.with_response_body(response.body.clone());
-                if !self
-                    .output
-                    .publish(RendererOwnerAction::SubresourceContinue {
-                        response_body: None,
-                        source_document: self.source_document,
-                        event: Box::new(PendingSubresourceContinueEvent::AuthRequired(
-                            PendingSubresourceAuthInfo {
-                                internal_id: self.info.internal_id,
-                                url: self.request.url.clone(),
-                                method: self.request.method.clone(),
-                                request_headers: self.request.request_headers.clone(),
-                                request_body: self.info.request_body.clone(),
-                                resource_type: self.info.resource_type,
-                                request_cookie_report: response.head.request_cookie_report.clone(),
-                                network_request_headers: network_request_headers.clone(),
-                                challenge,
-                                intercept_response,
-                                response_final_url: response.head.final_url.clone(),
-                                response_status: response.head.status,
-                                response_headers: response.head.headers.clone(),
-                                response_body: SubresourceResponseBody::from_bytes(Vec::new()),
-                                response_from_cache: response.head.from_cache,
-                                response_cache_state: response.head.cache_state,
-                            },
-                        )),
-                        network_pause: Some(pause),
-                    })
+                if !self.interception.publish_continue(
+                    PendingSubresourceContinueEvent::AuthRequired(PendingSubresourceAuthInfo {
+                        internal_id: self.info.internal_id,
+                        url: self.request.url.clone(),
+                        method: self.request.method.clone(),
+                        request_headers: self.request.request_headers.clone(),
+                        request_body: self.info.request_body.clone(),
+                        resource_type: self.info.resource_type,
+                        request_cookie_report: response.head.request_cookie_report.clone(),
+                        network_request_headers: network_request_headers.clone(),
+                        challenge,
+                        intercept_response,
+                        response_final_url: response.head.final_url.clone(),
+                        response_status: response.head.status,
+                        response_headers: response.head.headers.clone(),
+                        response_body: SubresourceResponseBody::from_bytes(Vec::new()),
+                        response_from_cache: response.head.from_cache,
+                        response_cache_state: response.head.cache_state,
+                    }),
+                    Some(pause),
+                ) && !self.interception.worker_control_closed()
                 {
                     return Err("network authentication output owner is closed".into());
                 }
-                match self.decision(rx).await? {
+                match self.decision(rx, InterceptionPhase::Auth).await? {
                     D::Auth(auth) => {
                         if !self.load.try_restart_with_auth() {
                             return Err(moli_fetch::AuthRetryBudget::ERROR_TEXT.into());
@@ -433,43 +580,39 @@ impl ControlledResourceLoad {
                         continue;
                     }
                     D::CancelAuth => {}
-                    D::Fail(error) => return Err(error),
+                    D::Fail(error) => return Err(error.into()),
                     _ => unreachable!("auth pause accepts only auth decisions"),
                 }
             }
             if intercept_response {
                 let (pause, rx) = self.pause(InterceptionPhase::Response);
                 let pause = pause.with_response_body(response.body.clone());
-                if !self
-                    .output
-                    .publish(RendererOwnerAction::SubresourceContinue {
-                        response_body: None,
-                        source_document: self.source_document,
-                        event: Box::new(PendingSubresourceContinueEvent::ResponsePaused(
-                            PendingSubresourceResponseInfo {
-                                internal_id: self.info.internal_id,
-                                url: self.request.url.clone(),
-                                final_url: response.head.final_url.clone(),
-                                method: self.request.method.clone(),
-                                request_headers: self.request.request_headers.clone(),
-                                request_body: self.info.request_body.clone(),
-                                resource_type: self.info.resource_type,
-                                request_cookie_report: response.head.request_cookie_report.clone(),
-                                network_request_headers: network_request_headers.clone(),
-                                response_status: Some(response.head.status),
-                                response_error: None,
-                                response_headers: response.head.headers.clone(),
-                                response_body: SubresourceResponseBody::from_bytes(Vec::new()),
-                                from_cache: response.head.from_cache,
-                                cache_state: response.head.cache_state,
-                            },
-                        )),
-                        network_pause: Some(pause),
-                    })
+                if !self.interception.publish_continue(
+                    PendingSubresourceContinueEvent::ResponsePaused(
+                        PendingSubresourceResponseInfo {
+                            internal_id: self.info.internal_id,
+                            url: self.request.url.clone(),
+                            final_url: response.head.final_url.clone(),
+                            method: self.request.method.clone(),
+                            request_headers: self.request.request_headers.clone(),
+                            request_body: self.info.request_body.clone(),
+                            resource_type: self.info.resource_type,
+                            request_cookie_report: response.head.request_cookie_report.clone(),
+                            network_request_headers: network_request_headers.clone(),
+                            response_status: Some(response.head.status),
+                            response_error: None,
+                            response_headers: response.head.headers.clone(),
+                            response_body: SubresourceResponseBody::from_bytes(Vec::new()),
+                            from_cache: response.head.from_cache,
+                            cache_state: response.head.cache_state,
+                        },
+                    ),
+                    Some(pause),
+                ) && !self.interception.worker_control_closed()
                 {
                     return Err("network response output owner is closed".into());
                 }
-                match self.decision(rx).await? {
+                match self.decision(rx, InterceptionPhase::Response).await? {
                     D::ContinueResponse { status, headers } => {
                         if let Some(status) = status {
                             response.head.status = status;
@@ -488,26 +631,56 @@ impl ControlledResourceLoad {
                         response = LoadedResponse::from_response(
                             self.synthetic_response(status, headers, body),
                         );
+                        self.response_filter = None;
                         is_synthetic = true;
                     }
-                    D::Fail(error) => return Err(error),
+                    D::Fail(error) => return Err(error.into()),
                     _ => unreachable!("response pause accepts only response decisions"),
                 }
             }
             use super::response_hop::{
                 SubresourceResponseTransition, advance_subresource_response,
             };
-            let transition =
-                advance_subresource_response(&mut self.request, response.head.clone(), false)?;
-            if let SubresourceResponseTransition::ManualResponse { .. } = transition {
+            let transition = if matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
+                && is_synthetic
+                && self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
+                && !response
+                    .head
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+            {
+                if self.response_filter.is_none() {
+                    self.request.validate_cors_response_for_url(
+                        &response.head.final_url,
+                        &response.head.headers,
+                    )?;
+                }
+                SubresourceResponseTransition::FinalResponse
+            } else if self.response_filter.is_some() {
+                super::response_hop::advance_validated_subresource_response(
+                    &mut self.request,
+                    response.head.clone(),
+                    false,
+                )?
+            } else {
+                advance_subresource_response(&mut self.request, response.head.clone(), false)?
+            };
+            let manual = matches!(
+                transition,
+                SubresourceResponseTransition::ManualResponse { .. }
+            );
+            if manual && matches!(self.response_policy, ResourceResponsePolicy::Xhr) {
                 return Err("XHR requests must follow redirects".into());
             }
-            if transition == SubresourceResponseTransition::FinalResponse {
+            if manual || transition == SubresourceResponseTransition::FinalResponse {
                 response.head.redirect_chain = self.request.redirect_chain().to_vec();
                 response.head.redirected = !response.head.redirect_chain.is_empty();
                 // Client-provided responses have the same CORS obligations as
                 // transport responses. Validate before any success is published.
-                if self.request.request_mode == moli_fetch::RequestMode::Cors {
+                if self.response_filter.is_none()
+                    && self.request.request_mode == moli_fetch::RequestMode::Cors
+                {
                     super::validate_cors_response_chain(
                         self.request
                             .request_origin()
@@ -519,10 +692,17 @@ impl ControlledResourceLoad {
                 if !is_synthetic {
                     self.cancel.adopt_response_progress(&hop_cancel);
                 }
+                if let Some(stream) = stream.as_deref_mut() {
+                    stream.policy_violations(std::mem::take(&mut self.csp_violations));
+                }
                 let delivered = response
                     .deliver(
                         &self.info,
-                        if is_synthetic {
+                        if is_synthetic
+                            || manual
+                            || (matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
+                                && self.request.request_mode == moli_fetch::RequestMode::NoCors)
+                        {
                             None
                         } else {
                             stream.as_deref_mut()
@@ -535,16 +715,66 @@ impl ControlledResourceLoad {
             self.preflight_headers = self.request.request_headers.to_byte_strings();
             // Retire the previous hop's protocol correlation before installing
             // its next one. The stable native network handle keeps Network ID.
-            self.output
-                .publish(RendererOwnerAction::SubresourceContinue {
-                    response_body: None,
-                    source_document: self.source_document,
-                    event: Box::new(PendingSubresourceContinueEvent::Completed {
-                        internal_id: self.info.internal_id,
-                    }),
-                    network_pause: None,
-                });
-            next_request_pause = true;
+            self.interception.publish_continue(
+                PendingSubresourceContinueEvent::Completed {
+                    internal_id: self.info.internal_id,
+                },
+                None,
+            );
+            next_request_pause = self
+                .load
+                .request_client()
+                .page_network_policy()
+                .should_intercept_subresource(self.info.resource_type);
+            announce_request = self.interception.is_worker();
+        }
+    }
+
+    async fn intercept_failed_response(
+        &self,
+        error: FetchError,
+    ) -> Result<LoadedResponse, FetchError> {
+        use ResourceInterceptionDecision as D;
+        let (pause, rx) = self.pause(InterceptionPhase::Response);
+        if !self.interception.publish_continue(
+            PendingSubresourceContinueEvent::ResponsePaused(PendingSubresourceResponseInfo {
+                internal_id: self.info.internal_id,
+                url: self.request.url.clone(),
+                final_url: self.request.url.clone(),
+                method: self.request.method.clone(),
+                request_headers: self.request.request_headers.clone(),
+                request_body: self.info.request_body.clone(),
+                resource_type: self.info.resource_type,
+                request_cookie_report: None,
+                network_request_headers: None,
+                response_status: None,
+                response_error: Some(moli_page_types::SubresourceResponseError {
+                    reason: super::response_error_reason(error.network_error_text).to_owned(),
+                    message: error.message.clone(),
+                    network_error_text: error.network_error_text.map(str::to_owned),
+                }),
+                response_headers: Vec::new(),
+                response_body: SubresourceResponseBody::from_bytes(Vec::new()),
+                from_cache: false,
+                cache_state: Default::default(),
+            }),
+            Some(pause),
+        ) && !self.interception.worker_control_closed()
+        {
+            return Err("network response output owner is closed".into());
+        }
+        match self.decision(rx, InterceptionPhase::Response).await? {
+            D::ContinueResponse { .. } => Err(error),
+            D::Fulfill {
+                status,
+                headers,
+                body,
+                ..
+            } => Ok(LoadedResponse::from_response(
+                self.synthetic_response(status, headers, body),
+            )),
+            D::Fail(error) => Err(error.into()),
+            _ => unreachable!("failed response pause accepts only response decisions"),
         }
     }
 }

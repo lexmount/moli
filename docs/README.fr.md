@@ -292,6 +292,35 @@ Le corpus complet de [Lexbench-Headless-Browser](https://github.com/lexmount/Lex
 
 Kitesurf est un service distant, dont le CPU, la mémoire et le nombre de processus ne sont pas mesurables. La comparaison des ressources ne couvre donc que les quatre moteurs locaux. Une exécution distincte de 557 tâches ne comptabilise que le travail terminé par les quatre. La médiane de Moli par tâche était de **100,6 ms de CPU** et **92 MiB de mémoire de pointe** ; Chrome a enregistré respectivement **687 ms** et **697 MiB**. Moli a utilisé environ 15 % du temps CPU et 13 % de la mémoire de pointe de Chrome. La méthodologie et les données complètes figurent dans la [fiche de ressources](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) du benchmark.
 
+### Benchmarks Web Fetch
+
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) exécute 430 tâches sur des sites en ligne. Son taux de réussite couvre donc l'accès au site et l'extraction correcte du contenu. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) traite 545 pages HTML figées et mesure uniquement la qualité d'extraction. [Lire le rapport du benchmark](https://browser.lexmount.com/blog/webfetch-benchmark).
+
+Pour reproduire ces résultats, lancez le parcours Web Fetch de [Webstone](https://github.com/lexmount/webstone) ([guide](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)). Le tableau utilise l'édition v1.0.0 du jeu de données, à 430 tâches.
+
+| Méthode | Global | Pages statiques /100 | Anti-bot /100 | Sites populaires /100 | Sites dynamiques /100 | Documents et médias /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89,8 %** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54,4 % | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53,0 % | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51,9 % | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44,7 % | 90 | 10 | 40 | 41 | 11 |
+
+Les cellules indiquent le nombre de tâches réussies. La dernière colonne regroupe le contenu des documents, les fichiers multimédias directs et les médias intégrés aux pages Web ; le tableau couvre ainsi les sept catégories.
+
+<details>
+<summary><strong>WebMainBench · qualité d'extraction sur 545 pages figées</strong></summary>
+
+| Méthode | Contenu principal produit | Global | Texte | Code | Formules | Contenu des tableaux | Structure des tableaux |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39,27 %** | 40,73 % | **91,06 %** | 28,20 % | 22,62 % | 13,75 % |
+| Lightpanda | 545/545 | 35,00 % | 41,52 % | 84,71 % | 12,97 % | 21,81 % | **14,00 %** |
+| Obscura | 543/545 | 31,03 % | **41,88 %** | 81,82 % | **31,39 %** | 0,03 % | 0,00 % |
+| Chromium | 545/545 | 27,02 % | 39,40 % | 35,86 % | 21,12 % | **25,01 %** | 13,73 % |
+| Kitesurf | 524/545 | 33,43 % | 36,99 % | 80,70 % | 19,32 % | 18,25 % | 11,87 % |
+
+</details>
+
 ## Périmètre du projet
 
 Sur les scénarios de navigateur pour agents couverts par la documentation, Moli est déjà prêt pour la production, et continue de faire l'objet d'un développement actif.

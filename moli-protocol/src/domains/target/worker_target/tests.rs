@@ -134,6 +134,7 @@ fn commit_worker_attach_outputs_for_test(
 
 fn shared_worker_info(instance_id: u64) -> RendererSharedWorkerTargetInfo {
     RendererSharedWorkerTargetInfo {
+        interception_policy: None,
         owner_local_host_id: moli_core::RendererOwnerLocalHostId::new_for_testing(1),
         instance_id: SharedWorkerInstanceId::from_u64(instance_id),
         url: "https://example.test/shared-worker.js".to_owned(),

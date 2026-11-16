@@ -1505,6 +1505,58 @@ document.head.appendChild(style);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn connected_style_load_after_stop_loading_settles_without_load_event() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/connected-style-after-stop").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__afterStop = [];
+addEventListener("load", () => __afterStop.push("window-load"));
+const style = document.createElement("style");
+style.onload = () => __afterStop.push("style-load");
+style.textContent = "body { color: green; }";
+document.head.appendChild(style);
+"queued"
+"#,
+        )?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        let task = take_next_style_element_event_task_for_test(&mut page_vm)
+            .expect("one exact connected-style event task should be ready");
+
+        // Stop invalidates the delay without retiring the Document. The
+        // queued element event still runs and observes an invalidated handle.
+        page_vm.vm_mut().stop_current_main_document_loading()?;
+        assert_eq!(page_vm.vm_mut().eval("document.readyState")?, "complete");
+        let body = page_vm.apply_selected_page_connected_style_event_turn(task)?;
+        assert_eq!(
+            body.action.target_effect,
+            PageConnectedStyleEventTargetEffect::DispatchedToCurrentOwner {
+                load_delay_effect: PageConnectedStyleLoadDelayEffect::InvalidatedExactBinding,
+            }
+        );
+        page_vm
+            .finish_selected_page_networking_task(
+                PageNetworkingTurnAction::StyleElementEvent(body.action),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__afterStop.join('|')")?,
+            "style-load"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("connected-style load after stop test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn connected_style_completion_syncs_a_microtask_created_child_after_checkpoint() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");

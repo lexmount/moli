@@ -107,7 +107,6 @@ pub(crate) struct WorkerGlobalState {
     /// Worker XHR id counter.
     pub(in crate::worker) next_xhr_id: u32,
     /// Worker-owned CSP report requests paused for Fetch domain request-stage interception.
-    pub(in crate::worker) pending_csp_reports: HashMap<u32, PendingWorkerCspReport>,
     /// Worker-local AbortController/AbortSignal runtime state.
     pub(in crate::worker) abort: Rc<RefCell<WorkerAbortStore>>,
     /// Worker-thread view of the creator's browser-context/partition runtime.

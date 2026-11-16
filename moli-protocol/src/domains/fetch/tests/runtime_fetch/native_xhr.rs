@@ -548,6 +548,7 @@ async fn terminating_worker_cancels_a_synchronously_paused_request() {
     });
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.observe_worker_network_for_test(None).await;
     enable_runtime_async(&mut ctx, "SID-1", 40300).await;
     ctx.process_async(json!({"id":40306,"method":"Network.enable","sessionId":"SID-1"}))
         .await;
@@ -574,16 +575,31 @@ async fn terminating_worker_cancels_a_synchronously_paused_request() {
     ctx.process_async(json!({"id":40303,"method":"Runtime.evaluate","sessionId":"SID-1","params":{"expression":"worker.terminate();JSON.stringify(workerResult);"}})).await;
     let result = take_response_by_id(&mut ctx, 40303);
     assert_eq!(result["result"]["result"]["value"], "[]", "{result}");
-    let failure = ctx
-        .wait_for_scheduler_message("terminated Worker's network terminal", |message| {
-            message["method"] == "Network.loadingFailed"
-                && message["params"]["requestId"] == pause["params"]["networkId"]
+    let observer = ctx.worker_network_session_for_request(&pause["params"]["networkId"]);
+    ctx.wait_for_scheduler_message("Worker target detached", |event| {
+        event["method"] == "Target.detachedFromTarget" && event["params"]["sessionId"] == observer
+    })
+    .await;
+    // Chromium does not require a terminal after the target has disappeared.
+    let terminals = ctx
+        .sent
+        .iter()
+        .filter(|event| {
+            matches!(
+                event["method"].as_str(),
+                Some("Network.loadingFinished" | "Network.loadingFailed")
+            ) && event["params"]["requestId"] == pause["params"]["networkId"]
         })
-        .await;
-    assert_eq!(
-        failure["params"]["errorText"], "net::ERR_ABORTED",
-        "{failure}"
+        .collect::<Vec<_>>();
+    assert!(
+        terminals.len() <= 1,
+        "native load can complete at most once: {terminals:?}"
     );
+    for terminal in terminals {
+        assert_eq!(terminal["method"], "Network.loadingFailed");
+        assert_eq!(terminal["params"]["errorText"], "net::ERR_ABORTED");
+        assert_eq!(terminal["sessionId"], observer);
+    }
     // A terminated Worker must release the native pause and the renderer owner.
     // No client decision is needed to make termination complete.
     ctx.process_async(json!({"id":40304,"method":"Fetch.disable","sessionId":"SID-1"}))

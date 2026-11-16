@@ -1410,6 +1410,12 @@ async fn capture_streaming_raw_response(
 /// scripts may instead own a one-shot continuation while the Page is built.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PendingSubresourceFetchResidence {
+    Worker {
+        browser_context_id: String,
+        target_id: String,
+        pause: moli_core::network::ResourceInterceptionPause,
+        body: Option<moli_core::network::ResourceInterceptionBody>,
+    },
     Page(super::state::TargetPageResidenceIdentity),
     Document {
         page_owner: super::state::TargetPageResidenceIdentity,
@@ -1439,10 +1445,81 @@ impl PendingSubresourceFetchRequest {
         &mut self,
         body: moli_core::network::ResourceInterceptionBody,
     ) {
-        if let PendingSubresourceFetchResidence::Document { command_target, .. } =
-            &mut self.residence
-        {
-            *command_target = command_target.clone().with_response_body(body);
+        self.residence.bind_response_body(body);
+    }
+    pub(crate) fn bind_native_network_pause(
+        &mut self,
+        pause: moli_core::network::ResourceInterceptionPause,
+    ) {
+        self.residence.bind_native_network_pause(pause);
+    }
+    pub(crate) fn page_owner(&self) -> Option<&super::state::TargetPageResidenceIdentity> {
+        self.residence.page_owner()
+    }
+    pub(crate) fn document_command_target(
+        &self,
+    ) -> Option<&moli_core::page::PageDocumentCommandTarget> {
+        self.residence.document_command_target()
+    }
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        self.residence.source_document()
+    }
+    pub(crate) fn detached_parser_script_fetch_continuation(
+        &self,
+    ) -> Option<&DetachedParserScriptFetchContinuation> {
+        self.residence.detached_parser_script_fetch_continuation()
+    }
+}
+
+impl PendingSubresourceFetchResidence {
+    pub(crate) fn observes_worker_network(&self) -> bool {
+        matches!(self, Self::Worker { .. })
+            || self
+                .document_command_target()
+                .is_some_and(|target| target.observes_worker_network())
+    }
+    pub(crate) fn native_pause(&self) -> Option<&moli_core::network::ResourceInterceptionPause> {
+        match self {
+            Self::Worker { pause, .. } => Some(pause),
+            _ => None,
+        }
+    }
+    pub(crate) fn native_response_body(
+        &self,
+    ) -> Option<&moli_core::network::ResourceInterceptionBody> {
+        match self {
+            Self::Worker { body, pause, .. } => body.as_ref().or_else(|| pause.response_body()),
+            _ => self.document_command_target()?.native_response_body(),
+        }
+    }
+    pub(crate) fn has_native_network_pause(&self) -> bool {
+        self.native_pause().is_some()
+            || self
+                .document_command_target()
+                .is_some_and(|target| target.has_native_network_pause())
+    }
+    pub(crate) fn start_resource_command(
+        &self,
+        command: moli_core::RendererPageCommand,
+    ) -> anyhow::Result<moli_core::page::PendingResourceCommand> {
+        match self {
+            Self::Worker { pause, .. } => Ok(moli_core::page::PendingResourceCommand::Network(
+                pause.dispatch(command),
+            )),
+            Self::Document { command_target, .. } => command_target.start_resource_command(command),
+            _ => anyhow::bail!("RequestNotFound"),
+        }
+    }
+    pub(crate) fn bind_response_body(
+        &mut self,
+        body: moli_core::network::ResourceInterceptionBody,
+    ) {
+        match self {
+            Self::Document { command_target, .. } => {
+                *command_target = command_target.clone().with_response_body(body)
+            }
+            Self::Worker { body: slot, .. } => *slot = Some(body),
+            _ => {}
         }
     }
 
@@ -1450,27 +1527,30 @@ impl PendingSubresourceFetchRequest {
         &mut self,
         pause: moli_core::network::ResourceInterceptionPause,
     ) {
-        if let PendingSubresourceFetchResidence::Document { command_target, .. } =
-            &mut self.residence
-        {
-            *command_target = command_target.clone().with_network_pause(pause);
+        match self {
+            Self::Document { command_target, .. } => {
+                *command_target = command_target.clone().with_network_pause(pause)
+            }
+            Self::Worker { pause: slot, .. } => *slot = pause,
+            _ => {}
         }
     }
 
     pub(crate) fn page_owner(&self) -> Option<&super::state::TargetPageResidenceIdentity> {
-        match &self.residence {
+        match self {
             PendingSubresourceFetchResidence::Page(owner)
             | PendingSubresourceFetchResidence::Document {
                 page_owner: owner, ..
             } => Some(owner),
-            PendingSubresourceFetchResidence::DetachedParserScript(_) => None,
+            PendingSubresourceFetchResidence::DetachedParserScript(_)
+            | PendingSubresourceFetchResidence::Worker { .. } => None,
         }
     }
 
     pub(crate) fn document_command_target(
         &self,
     ) -> Option<&moli_core::page::PageDocumentCommandTarget> {
-        match &self.residence {
+        match self {
             PendingSubresourceFetchResidence::Document { command_target, .. } => {
                 Some(command_target)
             }
@@ -1479,7 +1559,7 @@ impl PendingSubresourceFetchRequest {
     }
 
     pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
-        match &self.residence {
+        match self {
             PendingSubresourceFetchResidence::Document { command_target, .. } => {
                 Some(command_target.document())
             }
@@ -1490,8 +1570,9 @@ impl PendingSubresourceFetchRequest {
     pub(crate) fn detached_parser_script_fetch_continuation(
         &self,
     ) -> Option<&DetachedParserScriptFetchContinuation> {
-        match &self.residence {
-            PendingSubresourceFetchResidence::Page(_)
+        match self {
+            PendingSubresourceFetchResidence::Worker { .. }
+            | PendingSubresourceFetchResidence::Page(_)
             | PendingSubresourceFetchResidence::Document { .. } => None,
             PendingSubresourceFetchResidence::DetachedParserScript(continuation) => {
                 Some(continuation)
@@ -1606,8 +1687,7 @@ pub(crate) enum ClaimedSubresourceContinueRequest {
 #[derive(Debug, Clone)]
 pub struct PendingSubresourceFetchAuthRequest {
     /// Page residence that owns the paused renderer authentication request.
-    pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
-    pub(crate) command_target: Option<moli_core::page::PageDocumentCommandTarget>,
+    pub(crate) residence: PendingSubresourceFetchResidence,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -1629,10 +1709,6 @@ pub struct PendingSubresourceFetchAuthRequest {
 }
 
 impl PendingSubresourceFetchAuthRequest {
-    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
-        self.command_target.as_ref().map(|target| target.document())
-    }
-
     pub fn pop_next_auth_required_pause(&mut self) -> Option<PendingSubresourceFetchAuthStage> {
         let chain = self.auth_stage_chain.as_mut()?;
         let next = chain.remaining_sessions.first().cloned()?;
@@ -1661,8 +1737,7 @@ pub struct PendingSubresourceFetchAuthStage {
 #[derive(Debug, Clone)]
 pub struct PendingSubresourceFetchResponseRequest {
     /// Page residence that owns the paused renderer response request.
-    pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
-    pub(crate) command_target: Option<moli_core::page::PageDocumentCommandTarget>,
+    pub(crate) residence: PendingSubresourceFetchResidence,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -1689,10 +1764,6 @@ pub struct PendingSubresourceFetchResponseRequest {
 }
 
 impl PendingSubresourceFetchResponseRequest {
-    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
-        self.command_target.as_ref().map(|target| target.document())
-    }
-
     pub fn pop_next_response_stage_pause(
         &mut self,
     ) -> Option<PendingSubresourceFetchResponseStage> {

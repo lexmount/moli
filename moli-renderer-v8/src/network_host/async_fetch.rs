@@ -424,18 +424,15 @@ pub(crate) fn next_redirect_url(
         })
 }
 
-pub(crate) async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+#[cfg(test)]
+async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
     loader: &ResourceRequestClient,
     request: Request,
-    cancel_handle: Option<FetchCancelHandle>,
-    preflight_request_headers: Vec<(String, String)>,
+    cancel: Option<FetchCancelHandle>,
+    headers: Vec<(String, String)>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, FetchError> {
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-        loader,
-        request,
-        cancel_handle,
-        preflight_request_headers,
-        None,
+        loader, request, cancel, headers, None,
     )
     .await
 }
@@ -943,10 +940,11 @@ fn validate_redirect_mode_parts(
     if redirect_mode == RequestRedirectMode::Manual {
         return Ok(());
     }
-    let target = next_redirect_url(final_url, status, headers, 0)?;
-    if redirect_mode == RequestRedirectMode::Error && target.is_some() {
+    if redirect_mode == RequestRedirectMode::Error && matches!(status, 301 | 302 | 303 | 307 | 308)
+    {
         return Err(redirect_mode_error_message(final_url));
     }
+    next_redirect_url(final_url, status, headers, 0)?;
     Ok(())
 }
 

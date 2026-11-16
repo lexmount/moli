@@ -447,6 +447,15 @@ pub struct ServeArgs {
     #[arg(long)]
     pub debugger: bool,
 
+    /// Serve one CDP session over inherited pipes instead of a TCP listener,
+    /// matching Chromium's `--remote-debugging-pipe`: the client writes
+    /// NUL-terminated JSON messages to file descriptor 3 and reads replies from
+    /// file descriptor 4. The server stops at EOF on descriptor 3 or on
+    /// `Browser.close`.
+    #[cfg(unix)]
+    #[arg(long, conflicts_with_all = ["host", "port"])]
+    pub remote_debugging_pipe: bool,
+
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 
@@ -850,6 +859,16 @@ mod tests {
             Commands::Fetch(args) => assert_eq!(args.delay_ms, 250),
             other => panic!("expected fetch command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn fetch_defaults_keep_the_done_stage_and_one_second_redirect_window() {
+        let cli = Cli::parse_from(["moli", "fetch", "https://example.test/"]);
+        let Commands::Fetch(args) = cli.command else {
+            panic!("expected fetch command");
+        };
+        assert!(matches!(args.wait_until, FetchWaitUntil::Done));
+        assert_eq!(args.redirect_wait_ms, 1_000);
     }
 
     #[test]

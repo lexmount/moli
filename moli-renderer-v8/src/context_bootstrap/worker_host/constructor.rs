@@ -314,7 +314,6 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 resolved_url.to_string(),
                 creator_request_client.clone(),
             )
-            .with_interception_context(host.native_interception_context())
             .with_script_kind(worker_options.worker_type)
             .with_module_credentials_mode(worker_options.credentials_mode.0)
             .with_module_static_import_initiator_url(base_url.clone())
@@ -338,18 +337,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             if let Some(client_id) = reserved_service_worker_client_id {
                 options = options.with_reserved_service_worker_client_id(client_id);
             }
-            let worker_handle = spawn_worker_with_options(options);
-            let worker_id =
-                host.register_worker(scope, worker, worker_handle, execution_context_owner);
-            let recorded = host.record_dedicated_worker_target_created(
-                worker_id,
+            let wait_for_debugger = options.pause_evaluation_until_debugger;
+            let worker_id = host.register_worker(
+                scope,
+                worker,
+                options,
+                execution_context_owner,
                 base_url.clone(),
                 request_url,
                 worker_options.name.clone(),
-            );
-            debug_assert!(
-                recorded,
-                "newly registered local DedicatedWorker must publish its target"
             );
             let recorded = host.record_dedicated_worker_target_script_loaded(
                 worker_id,
@@ -360,6 +356,10 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 recorded,
                 "newly registered local DedicatedWorker must publish its main script response"
             );
+            host.publish_live_turn_output_prefix();
+            if !wait_for_debugger {
+                host.start_registered_local_worker(worker_id);
+            }
             worker_id
         } else {
             let cross_origin_http_worker_script =

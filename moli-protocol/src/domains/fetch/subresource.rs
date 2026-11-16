@@ -60,6 +60,7 @@ struct PendingSubresourceFetchPauseSource {
     /// Network request id is the loader id of the Document it creates.
     child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
     native_network: bool,
+    observe_network: bool,
     request_initiator_type: SubresourceRequestInitiatorType,
     redirect: Option<moli_page_types::NavigationRedirect>,
 }
@@ -96,6 +97,9 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
         return network::NetworkPreparedOutputs::default();
     };
     let native_network = network_pause.is_some();
+    let observe_network = !network_pause
+        .as_ref()
+        .is_some_and(|pause| pause.observes_worker_network());
     let request_initiator_type = network_pause
         .as_ref()
         .map_or(SubresourceRequestInitiatorType::Script, |pause| {
@@ -123,6 +127,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
             detached_parser_script_fetch_continuation: None,
             child_document,
             native_network,
+            observe_network,
             request_initiator_type,
             redirect,
         }],
@@ -153,6 +158,7 @@ pub(crate) fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_r
             detached_parser_script_fetch_continuation: Some(continuation),
             child_document: None,
             native_network: false,
+            observe_network: true,
             request_initiator_type: SubresourceRequestInitiatorType::Script,
             redirect: None,
         }],
@@ -175,9 +181,12 @@ fn prepare_subresource_fetch_pause_sources(
             .map(crate::conn::PendingSubresourceFetchResidence::Page)
     });
     let Some((fetch_snapshot, frame_id)) = (|| {
-        let target_frame_id = conn
-            .target_session_owner_frame_tree_identity_for_owner(owner)
-            .map(|(target_id, _, _, _)| target_id)?;
+        let target_frame_id = if conn.worker_resource_identity_for_owner(owner).is_some() {
+            String::new()
+        } else {
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
+                .map(|(target_id, _, _, _)| target_id)?
+        };
         let frame_id = frame_id.unwrap_or(&target_frame_id);
         Some((
             conn.target_fetch_subresource_interception_snapshot_for_owner(owner)?,
@@ -197,6 +206,7 @@ fn prepare_subresource_fetch_pause_sources(
             detached_parser_script_fetch_continuation,
             child_document,
             native_network,
+            observe_network,
             request_initiator_type,
             redirect,
         } = source;
@@ -214,9 +224,7 @@ fn prepare_subresource_fetch_pause_sources(
         };
         let network_request_id = if native_network {
             info.network_request_handle
-                .and_then(|handle| {
-                    conn.network_request_id_for_subresource_handle_for_owner(owner, handle)
-                })
+                .map(|handle| conn.native_network_request_id(handle))
                 .unwrap_or(network_request_id)
         } else {
             network_request_id
@@ -279,6 +287,7 @@ fn prepare_subresource_fetch_pause_sources(
                         &info,
                     )
                     .with_fetch_request_id(request_id.clone())
+                    .with_network_observation(observe_network)
                     .with_request_initiator_type(request_initiator_type)
                     .with_child_document(child_document.clone())
                     .with_redirect(redirect.clone());
@@ -494,6 +503,7 @@ fn prepare_subresource_fetch_pause_sources(
                 &info,
             )
             .with_blocked_intercepts(blocked_intercepts)
+            .with_network_observation(observe_network)
             .with_request_initiator_type(request_initiator_type)
             .with_fetch_request_id(request_id.clone())
             .with_child_document(child_document)
@@ -531,6 +541,11 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
     outputs: Vec<network::TargetSubresourceFetchPauseOutput>,
 ) {
     for output in outputs {
+        let network_session_ids = if output.network_output().observes_network() {
+            network_session_ids
+        } else {
+            &[]
+        };
         let network_request_id = output.network_output().network_request_id().to_owned();
         // Detached parser-script completions use the same native handle as
         // their pause, just like renderer-owned subresource completions.
@@ -825,6 +840,39 @@ pub(super) fn next_chained_subresource_response_pause_event(
         return None;
     }
     Some(event)
+}
+
+pub(crate) fn worker_fetch_pause_prepared_outputs(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    browser_context_id: String,
+    target_id: String,
+    info: moli_core::page::PendingSubresourceFetchInfo,
+    pause: moli_core::network::ResourceInterceptionPause,
+) -> network::NetworkPreparedOutputs {
+    let redirect = pause.request_redirect().cloned().map(Into::into);
+    let initiator = pause.request_initiator_type();
+    prepare_subresource_fetch_pause_sources(
+        conn,
+        owner,
+        Some(""),
+        None,
+        Some(crate::conn::PendingSubresourceFetchResidence::Worker {
+            browser_context_id,
+            target_id,
+            pause,
+            body: None,
+        }),
+        vec![PendingSubresourceFetchPauseSource {
+            info,
+            detached_parser_script_fetch_continuation: None,
+            child_document: None,
+            native_network: true,
+            observe_network: false,
+            request_initiator_type: initiator,
+            redirect,
+        }],
+    )
 }
 
 #[cfg(test)]

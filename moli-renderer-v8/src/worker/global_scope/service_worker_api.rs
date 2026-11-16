@@ -273,7 +273,7 @@ pub(super) fn service_worker_registration_show_notification_callback<'s>(
     };
     if parent_tx
         .send(WorkerToParentMessage::ServiceWorkerShowNotification(
-            crate::runtime::ServiceWorkerShowNotification {
+            Box::new(crate::runtime::ServiceWorkerShowNotification {
                 request_id,
                 registration_id,
                 version_id,
@@ -282,7 +282,7 @@ pub(super) fn service_worker_registration_show_notification_callback<'s>(
                 metadata: options.metadata,
                 actions: options.actions,
                 data: options.data,
-            },
+            }),
         ))
         .is_err()
     {

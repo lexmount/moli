@@ -104,6 +104,52 @@ impl PreparedSubresourceProjection {
 }
 
 impl NetworkPreparedOutputs {
+    pub(crate) fn from_worker_continue(
+        action: crate::domains::activity::PreparedSubresourceContinueAction,
+    ) -> Self {
+        Self {
+            pending_subresource_continue_actions: vec![action],
+            ..Default::default()
+        }
+    }
+    pub(crate) fn project_worker(
+        mut self,
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+    ) -> (
+        Vec<crate::conn::BackgroundProtocolEvent>,
+        Vec<fetch::PreparedSubresourceAutoContinue>,
+        Vec<crate::domains::activity::PreparedSubresourceContinueWait>,
+    ) {
+        let mut events = Vec::new();
+        super::backlog::emit_prepared_renderer_network_live_background_events(
+            conn,
+            &mut events,
+            owner,
+            &mut self.renderer_live,
+        );
+        let sessions = conn.network_event_session_ids_for_owner(owner);
+        fetch::emit_subresource_fetch_pause_outputs(
+            conn,
+            &mut events,
+            owner,
+            &sessions,
+            self.subresource_fetch_pauses,
+        );
+        let mut pending = Vec::new();
+        for action in self.pending_subresource_continue_actions {
+            if let Some(wait) = crate::domains::activity::prepare_subresource_continue_action(
+                conn,
+                &mut events,
+                owner,
+                action,
+            ) {
+                pending.push(wait);
+            }
+        }
+        (events, self.automatic_subresource_continuations, pending)
+    }
+
     pub(crate) fn from_renderer_live_delivery(
         renderer_live: TargetNetworkBacklogPreparedDelivery,
     ) -> Self {

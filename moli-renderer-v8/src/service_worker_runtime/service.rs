@@ -903,6 +903,7 @@ mod tests {
         cancel_handle: moli_fetch::FetchCancelHandle,
     ) -> ServiceWorkerFetchJob {
         ServiceWorkerFetchJob {
+            response_delivery: Default::default(),
             initial_redirect_count: 0,
             request: {
                 let origin = moli_url::WebOrigin::from_url(&document_url);

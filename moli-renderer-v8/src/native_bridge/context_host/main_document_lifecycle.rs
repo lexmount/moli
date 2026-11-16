@@ -1,11 +1,12 @@
 use super::PageScriptHost;
 use crate::frame_owner_model::{
-    DocumentLinkEventOwner, DocumentLoadDelayTokenId, FrameDocumentTaskOwner,
-    MainDocumentCompleteLifecycleAction, MainDocumentDomContentLoadedLifecycleAction,
-    MainDocumentImageLoadDelayBinding, MainDocumentInteractiveLifecycleAction,
-    MainDocumentLoadCompletionState, MainDocumentMediaLoadDelayBinding,
-    MainDocumentScriptLoadDelayKind, MainDocumentScriptLoadDelayLease,
-    MainDocumentScriptLoadDelayRelease, MainDocumentStyleLoadEventBinding,
+    DocumentLinkEventOwner, DocumentLoadDelaySettlement, DocumentLoadDelayTokenId,
+    FrameDocumentTaskOwner, MainDocumentCompleteLifecycleAction,
+    MainDocumentDomContentLoadedLifecycleAction, MainDocumentImageLoadDelayBinding,
+    MainDocumentInteractiveLifecycleAction, MainDocumentLoadCompletionState,
+    MainDocumentMediaLoadDelayBinding, MainDocumentScriptLoadDelayKind,
+    MainDocumentScriptLoadDelayLease, MainDocumentScriptLoadDelayRelease,
+    MainDocumentStyleLoadEventBinding,
 };
 use crate::{
     document_runtime::{
@@ -234,7 +235,7 @@ impl PageScriptHost {
     pub(crate) fn settle_main_style_load_event(
         &mut self,
         binding: MainDocumentStyleLoadEventBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         self.frame_owner_store.settle_main_style_load_event(binding)
     }
 
@@ -258,7 +259,7 @@ impl PageScriptHost {
     pub(crate) fn settle_main_image_load_delay(
         &mut self,
         binding: MainDocumentImageLoadDelayBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         self.frame_owner_store.settle_main_image_load_delay(binding)
     }
 
@@ -282,7 +283,7 @@ impl PageScriptHost {
     pub(crate) fn settle_main_media_load_delay(
         &mut self,
         binding: MainDocumentMediaLoadDelayBinding,
-    ) -> bool {
+    ) -> DocumentLoadDelaySettlement {
         self.frame_owner_store.settle_main_media_load_delay(binding)
     }
 

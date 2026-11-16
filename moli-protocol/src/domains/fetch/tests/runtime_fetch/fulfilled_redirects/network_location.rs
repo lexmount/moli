@@ -224,6 +224,9 @@ async fn network_only_fetch_failures_preserve_transport_error_codes() {
             let (base, _release, _requests, server) = redirect_server(true).await;
             let mut ctx = TestContext::new();
             with_loaded_http_document(&mut ctx, &format!("{base}/page"), "SID-1", "TID-1").await;
+            if worker_mode != "window" {
+                ctx.observe_worker_network_for_test(None).await;
+            }
             enable_runtime_async(&mut ctx, "SID-1", 65_000).await;
             command(&mut ctx, 65_001, "Network.enable", json!({})).await;
             let source = if refused {
@@ -275,6 +278,14 @@ async fn network_only_fetch_failures_preserve_transport_error_codes() {
                 })
                 .unwrap()["params"]["requestId"]
                 .clone();
+            if worker_mode != "window" {
+                let session = ctx.worker_network_session_for_request(&request_id);
+                assert!(ctx.sent.iter().any(|message| {
+                    message["method"] == "Network.requestWillBeSent"
+                        && message["params"]["requestId"] == request_id
+                        && message["sessionId"] == session
+                }));
+            }
             assert_network_failure(
                 &mut ctx,
                 &request_id,
@@ -312,6 +323,9 @@ async fn manual_redirect_response_pause_preserves_connection_error_reason() {
         for per_request in [false, true] {
             for fulfill in [false, true] {
                 let (mut ctx, _, server) = fixture().await;
+                if worker {
+                    ctx.observe_worker_network_for_test(None).await;
+                }
                 command(&mut ctx, 64_005, "Network.enable", json!({})).await;
                 command(&mut ctx, 64_000, "Fetch.enable", json!({
                     "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":if per_request { "Request" } else { "Response" }}]
@@ -408,6 +422,9 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
                     (ctx, None)
                 };
                 let source = format!("{base}/redirect");
+                if worker {
+                    ctx.observe_worker_network_for_test(None).await;
+                }
                 command(&mut ctx, 62_006, "Network.enable", json!({})).await;
                 command(&mut ctx, 62_001, "Fetch.enable", json!({
                     "patterns":[{"urlPattern":source,"resourceType":"Fetch","requestStage":if per_request { "Request" } else { "Response" }}]

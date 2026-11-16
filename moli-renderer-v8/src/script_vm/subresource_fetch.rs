@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow, bail};
-use moli_shared_worker::SharedWorkerInstanceId;
 use std::cell::RefCell;
 use std::pin::pin;
 use std::rc::Rc;
@@ -31,91 +30,15 @@ use crate::types::{
     AsyncSubresourceFetchResponseFilter, AsyncSubresourceFetchResult,
     ChildBlockingStylesheetLoadCompletion, ChildClassicScriptLoadCompletion,
     ChildDocumentLoadCompletion, ChildModuleDependencyFetchCompletion,
-    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion, DedicatedWorkerId,
-    NetworkBodySourceId, PendingSubresourceAuthInfo, PendingSubresourceAuthState,
-    PendingSubresourceContinuation, PendingSubresourceContinueEvent,
-    PendingSubresourceContinueOutcome, PendingSubresourceFetchInfo, PendingSubresourceFetchState,
-    PendingSubresourceResponseState, PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
-    RunningSubresourceFetchState, StreamingSubresourceFetchState, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType, SubresourceResourceType,
-    SubresourceResponseBody,
+    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion, NetworkBodySourceId,
+    PendingSubresourceAuthInfo, PendingSubresourceAuthState, PendingSubresourceContinuation,
+    PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
+    PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseState,
+    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion, RunningSubresourceFetchState,
+    StreamingSubresourceFetchState, SubresourceNetworkRequestHandle,
+    SubresourceRequestInitiatorType, SubresourceResourceType, SubresourceResponseBody,
 };
 use crate::util::v8_string;
-
-#[derive(Clone, Copy)]
-enum WorkerOwnedFetchTarget {
-    Dedicated {
-        worker_id: DedicatedWorkerId,
-        fetch_id: u32,
-    },
-    Shared {
-        instance_id: SharedWorkerInstanceId,
-        fetch_id: u32,
-    },
-}
-
-impl WorkerOwnedFetchTarget {
-    fn from_continuation(continuation: &PendingSubresourceContinuation) -> Option<Self> {
-        match continuation {
-            PendingSubresourceContinuation::WorkerFetch {
-                worker_id,
-                fetch_id,
-            } => Some(Self::Dedicated {
-                worker_id: *worker_id,
-                fetch_id: *fetch_id,
-            }),
-            PendingSubresourceContinuation::SharedWorkerFetch {
-                instance_id,
-                fetch_id,
-            } => Some(Self::Shared {
-                instance_id: *instance_id,
-                fetch_id: *fetch_id,
-            }),
-            _ => None,
-        }
-    }
-
-    fn fetch_id(self) -> u32 {
-        match self {
-            Self::Dedicated { fetch_id, .. } | Self::Shared { fetch_id, .. } => fetch_id,
-        }
-    }
-
-    fn continuation(self) -> PendingSubresourceContinuation {
-        match self {
-            Self::Dedicated {
-                worker_id,
-                fetch_id,
-            } => PendingSubresourceContinuation::WorkerFetch {
-                worker_id,
-                fetch_id,
-            },
-            Self::Shared {
-                instance_id,
-                fetch_id,
-            } => PendingSubresourceContinuation::SharedWorkerFetch {
-                instance_id,
-                fetch_id,
-            },
-        }
-    }
-
-    fn unavailable_message(self) -> String {
-        match self {
-            Self::Dedicated {
-                worker_id,
-                fetch_id,
-            } => format!("worker `{worker_id}` is not available for pending fetch `{fetch_id}`"),
-            Self::Shared {
-                instance_id,
-                fetch_id,
-            } => format!(
-                "shared worker `{}` is not available for pending fetch `{fetch_id}`",
-                instance_id.as_u64()
-            ),
-        }
-    }
-}
 
 fn document_connect_csp_redirect_failure_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -536,145 +459,6 @@ fn window_subresource_realm_is_current(
         && binding.is_current(&context_host.borrow())
 }
 
-#[derive(Clone, Copy)]
-enum WorkerOwnedXhrTarget {
-    Dedicated {
-        worker_id: DedicatedWorkerId,
-        xhr_id: u32,
-    },
-    Shared {
-        instance_id: SharedWorkerInstanceId,
-        xhr_id: u32,
-    },
-}
-
-impl WorkerOwnedXhrTarget {
-    fn from_continuation(continuation: &PendingSubresourceContinuation) -> Option<Self> {
-        match continuation {
-            PendingSubresourceContinuation::WorkerXhr { worker_id, xhr_id } => {
-                Some(Self::Dedicated {
-                    worker_id: *worker_id,
-                    xhr_id: *xhr_id,
-                })
-            }
-            PendingSubresourceContinuation::SharedWorkerXhr {
-                instance_id,
-                xhr_id,
-            } => Some(Self::Shared {
-                instance_id: *instance_id,
-                xhr_id: *xhr_id,
-            }),
-            _ => None,
-        }
-    }
-
-    fn xhr_id(self) -> u32 {
-        match self {
-            Self::Dedicated { xhr_id, .. } | Self::Shared { xhr_id, .. } => xhr_id,
-        }
-    }
-
-    fn continuation(self) -> PendingSubresourceContinuation {
-        match self {
-            Self::Dedicated { worker_id, xhr_id } => {
-                PendingSubresourceContinuation::WorkerXhr { worker_id, xhr_id }
-            }
-            Self::Shared {
-                instance_id,
-                xhr_id,
-            } => PendingSubresourceContinuation::SharedWorkerXhr {
-                instance_id,
-                xhr_id,
-            },
-        }
-    }
-
-    fn unavailable_message(self) -> String {
-        match self {
-            Self::Dedicated { worker_id, xhr_id } => {
-                format!("worker `{worker_id}` is not available for pending xhr `{xhr_id}`")
-            }
-            Self::Shared {
-                instance_id,
-                xhr_id,
-            } => format!(
-                "shared worker `{}` is not available for pending xhr `{xhr_id}`",
-                instance_id.as_u64()
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum WorkerOwnedCspReportTarget {
-    Dedicated {
-        worker_id: DedicatedWorkerId,
-        report_id: u32,
-    },
-    Shared {
-        instance_id: SharedWorkerInstanceId,
-        report_id: u32,
-    },
-}
-
-impl WorkerOwnedCspReportTarget {
-    fn from_continuation(continuation: &PendingSubresourceContinuation) -> Option<Self> {
-        match continuation {
-            PendingSubresourceContinuation::WorkerCspReport {
-                worker_id,
-                report_id,
-            } => Some(Self::Dedicated {
-                worker_id: *worker_id,
-                report_id: *report_id,
-            }),
-            PendingSubresourceContinuation::SharedWorkerCspReport {
-                instance_id,
-                report_id,
-            } => Some(Self::Shared {
-                instance_id: *instance_id,
-                report_id: *report_id,
-            }),
-            _ => None,
-        }
-    }
-
-    fn report_id(self) -> u32 {
-        match self {
-            Self::Dedicated { report_id, .. } | Self::Shared { report_id, .. } => report_id,
-        }
-    }
-
-    fn unavailable_message(self) -> String {
-        match self {
-            Self::Dedicated {
-                worker_id,
-                report_id,
-            } => format!(
-                "worker `{worker_id}` is not available for pending CSP report `{report_id}`"
-            ),
-            Self::Shared {
-                instance_id,
-                report_id,
-            } => format!(
-                "shared worker `{}` is not available for pending CSP report `{report_id}`",
-                instance_id.as_u64()
-            ),
-        }
-    }
-}
-
-fn with_pending_subresource_record_identity(
-    record: SubresourceNetworkRecord,
-    request_body_bytes: Option<bytes::Bytes>,
-    request_handle: Option<SubresourceNetworkRequestHandle>,
-) -> SubresourceNetworkRecord {
-    let mut record = record.with_request_body_bytes(request_body_bytes);
-    if let Some(handle) = request_handle {
-        record = record.with_request_handle(handle);
-    }
-    record
-}
-
 impl ScriptVm {}
 
 #[derive(Clone, Copy, Default)]
@@ -781,12 +565,6 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::Xhr { .. } => "xhr",
         PendingSubresourceContinuation::WebSocket(_) => "websocket",
         PendingSubresourceContinuation::ChildDocument(_) => "child_document",
-        PendingSubresourceContinuation::WorkerFetch { .. } => "worker_fetch",
-        PendingSubresourceContinuation::WorkerXhr { .. } => "worker_xhr",
-        PendingSubresourceContinuation::WorkerCspReport { .. } => "worker_csp_report",
-        PendingSubresourceContinuation::SharedWorkerFetch { .. } => "shared_worker_fetch",
-        PendingSubresourceContinuation::SharedWorkerXhr { .. } => "shared_worker_xhr",
-        PendingSubresourceContinuation::SharedWorkerCspReport { .. } => "shared_worker_csp_report",
     }
 }
 

@@ -597,6 +597,7 @@ impl RendererPendingWindowOpenEvent {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererSharedWorkerTargetInfo {
+    pub interception_policy: Option<crate::network::ResourceInterceptionPolicy>,
     pub owner_local_host_id: super::RendererOwnerLocalHostId,
     pub instance_id: SharedWorkerInstanceId,
     pub url: String,
@@ -612,6 +613,10 @@ pub struct RendererSharedWorkerConsoleMessage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RendererSharedWorkerTargetEvent {
+    Resource {
+        instance_id: SharedWorkerInstanceId,
+        event: crate::network::ResourceInterceptionEvent,
+    },
     Created(RendererSharedWorkerTargetInfo),
     Destroyed {
         instance_id: SharedWorkerInstanceId,
@@ -646,6 +651,10 @@ pub struct RendererDedicatedWorkerTargetInfo {
 /// complete Page subresource record.
 #[derive(Debug, Clone)]
 pub enum RendererDedicatedWorkerTargetEvent {
+    Resource {
+        instance_id: u64,
+        event: crate::network::ResourceInterceptionEvent,
+    },
     Created(RendererDedicatedWorkerTargetInfo),
     ScriptLoaded {
         instance_id: u64,
@@ -675,6 +684,16 @@ pub enum RendererDedicatedWorkerTargetEvent {
 impl PartialEq for RendererDedicatedWorkerTargetEvent {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (
+                Self::Resource {
+                    instance_id: a,
+                    event: ae,
+                },
+                Self::Resource {
+                    instance_id: b,
+                    event: be,
+                },
+            ) => a == b && ae == be,
             (Self::Created(left), Self::Created(right)) => left == right,
             (
                 Self::ScriptLoaded {

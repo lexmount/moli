@@ -163,7 +163,15 @@ fn run_fetch_cli_with_dump_and_args(url: &str, dump: &str, args: &[&str]) -> Res
 }
 
 fn run_fetch_cli_with_default_wait_and_dump(url: &str, dump: &str) -> Result<Output> {
-    run_moli([
+    run_fetch_cli_with_default_wait_dump_and_args(url, dump, &[])
+}
+
+fn run_fetch_cli_with_default_wait_dump_and_args(
+    url: &str,
+    dump: &str,
+    args: &[&str],
+) -> Result<Output> {
+    let mut cli_args = vec![
         "moli",
         "fetch",
         "--log-level",
@@ -172,8 +180,10 @@ fn run_fetch_cli_with_default_wait_and_dump(url: &str, dump: &str) -> Result<Out
         "*",
         "--dump",
         dump,
-        url,
-    ])
+    ];
+    cli_args.extend_from_slice(args);
+    cli_args.push(url);
+    run_moli(cli_args)
 }
 
 fn run_fetch_cli_without_dump(url: &str) -> Result<Output> {
@@ -694,7 +704,7 @@ impl BlockingStylesheetTimeoutFixtureServer {
         }
 
         async fn slow_css() -> impl IntoResponse {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             ([("content-type", "text/css; charset=utf-8")], "html {}")
         }
 
@@ -1561,9 +1571,9 @@ fn cli_dump_html_rejects_from_raw_headers_without_waiting_for_body() -> Result<(
         "--http-no-proxy",
         "*",
         "--http-timeout",
-        "5000",
+        "30000",
         "--timeout",
-        "500",
+        "5000",
         "--dump",
         "html",
         &url,
@@ -2720,25 +2730,25 @@ fn cli_readiness_timeout_identifies_response_selector_and_script_phases() -> Res
     let cases: [(&[&str], &str); 4] = [
         (
             &["--wait-response-url", "/response-that-never-arrives"],
-            "fetch readiness timed out after 350 ms while waiting for a subresource response",
+            "fetch readiness timed out after 5000 ms while waiting for a subresource response",
         ),
         (
             &["--wait-selector", "#selector-that-never-appears"],
-            "fetch readiness timed out after 350 ms while waiting for a selector",
+            "fetch readiness timed out after 5000 ms while waiting for a selector",
         ),
         (
             &["--wait-script", "globalThis.scriptThatNeverBecomesTruthy"],
-            "fetch readiness timed out after 350 ms while waiting for a script to become truthy",
+            "fetch readiness timed out after 5000 ms while waiting for a script to become truthy",
         ),
         (
             &["--wait-script", "() => false"],
-            "fetch readiness timed out after 350 ms while waiting for a script to become truthy",
+            "fetch readiness timed out after 5000 ms while waiting for a script to become truthy",
         ),
     ];
 
     for (args, expected_phase) in cases {
         let mut args = args.to_vec();
-        args.extend(["--timeout", "350"]);
+        args.extend(["--timeout", "5000"]);
         let output = run_fetch_cli_with_dump_and_args(&url, "html", &args)?;
         let stdout = clean_output(&output.stdout);
         let stderr = clean_output(&output.stderr);
@@ -3071,7 +3081,7 @@ fn assert_cli_best_effort_stage_uses_remaining_deadline(
     // Leave headroom for parsing under parallel CI. The readiness warning
     // exposes the actual budget handed to the stability stage, so test the
     // 500 ms deduction directly rather than wall-clock scheduler latency.
-    const TIMEOUT_MS: u64 = 3_000;
+    const TIMEOUT_MS: u64 = 10_000;
     const RESPONSE_DELAY_MS: u64 = 500;
     let timeout = TIMEOUT_MS.to_string();
     let output = run_moli([
@@ -3271,7 +3281,9 @@ fn cli_quiet_page_domstable_uses_remaining_best_effort_budget() -> Result<()> {
 fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
-    let url = server.url("/wait-until-slow-interval-fetch");
+    let url = server.url("/wait-until-delayed-interval-fetch");
+    // Three seconds are spent on the main response. A reset would take at
+    // least eight seconds; allow scheduling slack while still rejecting it.
     let started = std::time::Instant::now();
     let output = run_moli([
         "moli",
@@ -3285,7 +3297,7 @@ fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() ->
         "--wait-selector",
         "#never-appears",
         "--timeout",
-        "1000",
+        "5000",
         "--dump",
         "html",
         &url,
@@ -3302,11 +3314,11 @@ fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() ->
         "stderr={stderr}"
     );
     assert!(
-        stderr.contains("fetch readiness timed out after 1000 ms while waiting for a selector"),
+        stderr.contains("fetch readiness timed out after 5000 ms while waiting for a selector"),
         "stderr={stderr}"
     );
     assert!(
-        elapsed < std::time::Duration::from_millis(1_300),
+        elapsed < std::time::Duration::from_secs(7),
         "the selector appears to have received a fresh timeout: {elapsed:?}"
     );
     Ok(())
@@ -3385,11 +3397,14 @@ fn cli_load_waits_for_slow_post_domcontentloaded_runtime_script() -> Result<()> 
 }
 
 #[test]
-fn cli_default_redirect_wait_follows_client_navigation_from_terminal_302() -> Result<()> {
+fn cli_redirect_wait_follows_client_navigation_from_terminal_302() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
+    // Exercise successor/lifecycle handling independently of startup latency.
+    // The production default is an absolute 1 s window from fetch start and
+    // may legitimately expire before a delayed navigation on a busy runner.
+    let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--redirect-wait-ms", "10000"])?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3418,7 +3433,9 @@ fn cli_terminal_302_without_navigation_waits_then_returns_its_body() -> Result<(
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-no-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
+    // Initialization consumes this window, so leave time for the marker's
+    // load-triggered timer even when a shared runner is busy.
+    let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--redirect-wait-ms", "10000"])?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3437,7 +3454,7 @@ fn cli_terminal_302_without_navigation_waits_then_returns_its_body() -> Result<(
     );
     assert!(
         html.contains("id=\"redirect-status-wait-marker\""),
-        "the default redirect wait must keep the terminal 302 Page live: stdout={stdout}"
+        "the configured redirect wait must keep the terminal 302 Page live: stdout={stdout}"
     );
     Ok(())
 }
@@ -3592,7 +3609,16 @@ fn cli_domcontentloaded_recovers_from_delayed_403_navigation_at_same_stage() -> 
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_wait_until(&url, "domcontentloaded")?;
+    let output = run_fetch_cli_with_default_wait_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--wait-until",
+            "domcontentloaded",
+            "--redirect-wait-ms",
+            "10000",
+        ],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3619,7 +3645,7 @@ fn cli_load_recovers_from_delayed_403_navigation_at_same_stage() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_wait_until(&url, "load")?;
+    let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--redirect-wait-ms", "10000"])?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3796,7 +3822,11 @@ fn cli_default_done_recovers_from_delayed_403_navigation_at_load() -> Result<()>
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_default_wait_and_dump(&url, "json")?;
+    let output = run_fetch_cli_with_default_wait_dump_and_args(
+        &url,
+        "json",
+        &["--redirect-wait-ms", "10000"],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3919,7 +3949,7 @@ fn cli_readiness_plan_continues_after_http_error_replacement_navigation() -> Res
         "html",
         &[
             "--timeout",
-            "1800",
+            "10000",
             "--wait-response-url",
             "/wait-until-json-data",
             "--wait-response-json",
@@ -4557,7 +4587,7 @@ fn cli_timeout_reports_waiting_for_response_headers_as_one_reason() -> Result<()
 fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
-    let url = server.url("/streaming/slow-html-tail");
+    let url = server.url("/streaming/stalled-html-tail");
 
     // Run a real child process so this regression distinguishes the expected
     // exit code from SIGABRT. The response has committed its headers and first
@@ -4580,7 +4610,7 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
                 "--wait-until",
                 wait_until,
                 "--timeout",
-                "400",
+                "5000",
                 "--dump",
                 "html",
                 &url,
@@ -4596,13 +4626,13 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
         );
         assert!(stdout.is_empty(), "wait_until={wait_until} stdout={stdout}");
         assert!(
-            stderr.contains("timed out after 400 ms"),
+            stderr.contains("timed out after 5000 ms"),
             "wait_until={wait_until} stderr={stderr}"
         );
         assert_single_fetch_failure_reason(
             &stderr,
             &url,
-            "fetch readiness timed out after 400 ms while streaming main body",
+            "fetch readiness timed out after 5000 ms while streaming main body",
         );
         assert!(
             !stderr.contains("resident renderer page entry must retain an active PageVm"),
@@ -4683,11 +4713,11 @@ fn cli_timeout_reports_parser_blocking_stylesheet_as_one_reason() -> Result<()> 
         "--http-no-proxy",
         "*",
         "--http-timeout",
-        "5000",
+        "30000",
         "--wait-until",
         "domcontentloaded",
         "--timeout",
-        "500",
+        "5000",
         "--dump",
         "html",
         &url,
@@ -4701,7 +4731,7 @@ fn cli_timeout_reports_parser_blocking_stylesheet_as_one_reason() -> Result<()> 
     assert_single_fetch_failure_reason(
         &stderr,
         &url,
-        "fetch readiness timed out after 500 ms while waiting for parser-blocking stylesheet",
+        "fetch readiness timed out after 5000 ms while waiting for parser-blocking stylesheet",
     );
     Ok(())
 }

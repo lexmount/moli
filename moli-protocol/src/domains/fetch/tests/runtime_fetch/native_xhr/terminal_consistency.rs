@@ -32,6 +32,9 @@ async fn xhr_cors_decision_and_network_terminal_agree_in_every_delivery_mode() {
                         "TID-1",
                     )
                     .await;
+                    if worker {
+                        ctx.observe_worker_network_for_test(None).await;
+                    }
                     enable_runtime_async(&mut ctx, "SID-1", 41400).await;
                     ctx.process_async(
                         json!({"id":41401,"method":"Network.enable","sessionId":"SID-1"}),

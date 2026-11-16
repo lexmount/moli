@@ -74,3 +74,5 @@ pub(in crate::domains) async fn project_frozen_slot_for_test(
 }
 
 pub(crate) use subresource::stage_blocked_intercepts;
+
+pub(in crate::domains) use subresource::prepare_worker_subresource_continue_action;

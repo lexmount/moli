@@ -367,6 +367,35 @@ Moli는 Chrome CPU 시간의 약 15%, 최대 메모리의 약 13%를 사용했�
 [리소스 카드](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)를
 참조하세요.
 
+### Web Fetch 벤치마크
+
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch)는 실제 웹사이트에서 430개 과제를 실행하므로 통과율에는 사이트 접근과 정확한 콘텐츠 추출이 모두 반영됩니다. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main)는 저장된 HTML 페이지 545개를 처리하며 실제 사이트 접근을 제외한 추출 품질만 평가합니다. [벤치마크 보고서 보기](https://browser.lexmount.com/blog/webfetch-benchmark).
+
+결과를 재현하려면 [Webstone](https://github.com/lexmount/webstone)에서 Web Fetch 트랙을 실행하세요([가이드](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)). 표는 데이터셋의 430개 과제 버전(v1.0.0)을 기준으로 합니다.
+
+| 방법 | 종합 | 정적 페이지 /100 | 봇 차단 /100 | 인기 사이트 /100 | 동적 사이트 /100 | 문서 및 미디어 /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
+
+각 셀은 통과한 과제 수입니다. 마지막 열은 문서 내용, 직접 미디어 파일, 웹페이지에 삽입된 미디어를 합친 값이며, 표 전체에서 일곱 범주를 모두 다룹니다.
+
+<details>
+<summary><strong>WebMainBench · 저장된 545개 페이지의 추출 품질</strong></summary>
+
+| 방법 | 본문 추출 | 종합 | 본문 | 코드 | 수식 | 표 내용 | 표 구조 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
+
 ## 프로젝트 범위
 
 Moli는 문서에서 정의한 에이전트 브라우저 시나리오 안에서 프로덕션 준비가 되었으며,

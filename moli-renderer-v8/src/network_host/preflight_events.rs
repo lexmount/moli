@@ -19,10 +19,7 @@ pub(in crate::network_host) struct CorsPreflightNetworkObserver {
 #[derive(Clone)]
 enum PreflightNetworkOutput {
     Document(RendererResourceCompletionSender),
-    Native {
-        output: crate::network::interception_output::InterceptionOutput,
-        source_document: crate::runtime::RendererDocumentLifecycleIdentity,
-    },
+    Native(crate::network::interception_output::ResourceInterceptionContext),
 }
 
 impl CorsPreflightNetworkObserver {
@@ -39,15 +36,11 @@ impl CorsPreflightNetworkObserver {
     }
 
     pub(super) fn for_native_xhr(
-        output: crate::network::interception_output::InterceptionOutput,
-        source_document: crate::runtime::RendererDocumentLifecycleIdentity,
+        output: crate::network::interception_output::ResourceInterceptionContext,
         info: &crate::types::PendingSubresourceFetchInfo,
     ) -> Self {
         Self {
-            output: PreflightNetworkOutput::Native {
-                output,
-                source_document,
-            },
+            output: PreflightNetworkOutput::Native(output),
             frame_id: info.frame_id.clone(),
             document_url: info.document_url.clone(),
             resource_type: info.resource_type,
@@ -112,11 +105,8 @@ impl CorsPreflightNetworkObserver {
                     AsyncSubresourceFetchEvent::ObservedNetworkRecord(Box::new(record)),
                 );
             }
-            PreflightNetworkOutput::Native {
-                output,
-                source_document,
-            } => {
-                output.record_subresource_network(*source_document, record);
+            PreflightNetworkOutput::Native(output) => {
+                output.record_subresource_network(record);
             }
         }
     }

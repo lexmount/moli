@@ -33,10 +33,22 @@ const READINESS_FAILURE_DIAGNOSTICS_TIMEOUT: Duration = Duration::from_millis(25
 
 pub async fn run_from_env() -> Result<()> {
     let cli = Cli::parse_from(normalize_args_for_compat(std::env::args_os()));
+    run_with_transport(cli, ServeTransport::Tcp).await
+}
+
+/// Initializes logging and runs a parsed command using process stdout.
+/// Pipe endpoints must already be owned by the caller.
+pub async fn run_with_transport(cli: Cli, transport: ServeTransport) -> Result<()> {
     let config = AppConfig::from_cli(&cli).context("failed to build app configuration")?;
     crate::telemetry::init(&config.log_filter);
     let mut stdout = std::io::stdout();
-    run_cli_with_config(cli, config, &mut stdout).await
+    match transport {
+        ServeTransport::Tcp => run_cli_with_config(cli, config, &mut stdout).await,
+        #[cfg(unix)]
+        ServeTransport::Pipe(input, output) => {
+            run_cli_with_config_and_pipe(cli, config, &mut stdout, input, output).await
+        }
+    }
 }
 
 pub async fn run_cli<W: Write>(stdout: &mut W, cli: Cli) -> Result<()> {
@@ -44,10 +56,53 @@ pub async fn run_cli<W: Write>(stdout: &mut W, cli: Cli) -> Result<()> {
     run_cli_with_config(cli, config, stdout).await
 }
 
+/// Runs a command without claiming process-global file descriptors.
+/// On Unix, pipe mode requires `run_cli_with_config_and_pipe` instead.
 pub async fn run_cli_with_config<W: Write>(
+    cli: Cli,
+    config: AppConfig,
+    stdout: &mut W,
+) -> Result<()> {
+    #[cfg(unix)]
+    anyhow::ensure!(
+        !matches!(&cli.command, Commands::Serve(args) if args.remote_debugging_pipe),
+        "--remote-debugging-pipe requires explicitly owned descriptors; use run_cli_with_config_and_pipe"
+    );
+    run_cli_with_transport(cli, config, stdout, ServeTransport::Tcp).await
+}
+
+/// Runs `serve --remote-debugging-pipe`, consuming the caller's pipe endpoints.
+/// The descriptors may have any numbers; they are closed when serving ends.
+#[cfg(unix)]
+pub async fn run_cli_with_config_and_pipe<W: Write>(
+    cli: Cli,
+    config: AppConfig,
+    stdout: &mut W,
+    input: std::os::fd::OwnedFd,
+    output: std::os::fd::OwnedFd,
+) -> Result<()> {
+    anyhow::ensure!(
+        matches!(&cli.command, Commands::Serve(args) if args.remote_debugging_pipe),
+        "pipe descriptors require serve --remote-debugging-pipe"
+    );
+    run_cli_with_transport(cli, config, stdout, ServeTransport::Pipe(input, output)).await
+}
+
+/// The caller supplies owned endpoints when serving over a pipe.
+#[derive(Debug)]
+pub enum ServeTransport {
+    /// Serve over the configured TCP listener.
+    Tcp,
+    /// Read CDP commands from the first endpoint and write replies to the second.
+    #[cfg(unix)]
+    Pipe(std::os::fd::OwnedFd, std::os::fd::OwnedFd),
+}
+
+async fn run_cli_with_transport<W: Write>(
     cli: Cli,
     mut config: AppConfig,
     stdout: &mut W,
+    transport: ServeTransport,
 ) -> Result<()> {
     match cli.command {
         Commands::Fetch(mut args) => {
@@ -274,9 +329,16 @@ pub async fn run_cli_with_config<W: Write>(
                 Arc::clone(&storage_partition),
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            let result = server.serve().await;
+            let result = match transport {
+                #[cfg(unix)]
+                ServeTransport::Pipe(input, output) => server
+                    .serve_pipe(input, output)
+                    .await
+                    .context("protocol pipe failed"),
+                ServeTransport::Tcp => server.serve().await.context("protocol server failed"),
+            };
             finalize_serve_cookies(&storage_partition, args.cookie_jar.as_deref(), stdout);
-            result.context("protocol server failed")?;
+            result?;
         }
         Commands::Import(args) => {
             let summary =

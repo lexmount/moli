@@ -5,7 +5,7 @@ use crate::{
 };
 
 /// Chosen once, before dispatch. Compatibility is the explicit asynchronous
-/// adapter for embeddings without a native protocol owner (and SharedWorkers).
+/// adapter for embeddings without a native protocol owner.
 /// An incomplete native owner is an error, never an ordinary network route.
 pub(crate) enum XhrInterceptionRoute {
     Ordinary,
@@ -33,24 +33,44 @@ pub(crate) struct ControlledXhrContext {
 impl ControlledXhrContext {
     pub(crate) fn load(
         self,
-        request: moli_fetch::Request,
+        mut request: moli_fetch::Request,
         mut info: PendingSubresourceFetchInfo,
         load: ResourceLoadLease,
         cancel: moli_fetch::FetchCancelHandle,
         preflight_headers: Vec<(String, String)>,
     ) -> super::ControlledResourceLoad {
+        request = load.request_client().bind_browser_site_context(request);
         info.request_headers = request.interception_request_headers();
         super::ControlledResourceLoad {
+            response_policy: super::ResourceResponsePolicy::Xhr,
+            service_worker: None,
+            response_filter: None,
             request,
             info,
             load,
             cancel,
-            source_document: self.interception.source_document,
-            output: self.interception.output,
+            interception: self.interception,
             connect_policy: Some(self.connect_policy),
+            csp_violations: Vec::new(),
             preflight_headers,
             initial_decision: None,
             request_initiator_type: crate::types::SubresourceRequestInitiatorType::Script,
         }
+    }
+}
+
+impl ControlledXhrContext {
+    pub(crate) fn fetch_load(
+        self,
+        request: moli_fetch::Request,
+        info: PendingSubresourceFetchInfo,
+        load: ResourceLoadLease,
+        cancel: moli_fetch::FetchCancelHandle,
+        policy: crate::types::SubresourcePolicyContext,
+    ) -> super::ControlledResourceLoad {
+        let headers = request.request_headers.to_byte_strings();
+        let mut controlled = self.load(request, info, load, cancel, headers);
+        controlled.response_policy = super::ResourceResponsePolicy::Fetch(policy);
+        controlled
     }
 }

@@ -58,6 +58,11 @@ impl RendererBrowserContextRuntime {
             .remove(&instance_id);
     }
 
+    pub fn set_shared_worker_pause_on_start_for_devtools(&self, pause: bool) {
+        self.inner
+            .shared_worker_pause_on_start_for_devtools
+            .store(pause, std::sync::atomic::Ordering::Release);
+    }
     pub fn set_dedicated_worker_pause_on_start_for_devtools(&self, pause: bool) {
         self.inner
             .dedicated_worker_pause_on_start_for_devtools

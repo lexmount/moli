@@ -60,6 +60,7 @@ impl TargetSubresourceFetchPauseOutput {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetSubresourceFetchPauseNetworkOutput {
+    observe_network: bool,
     network_request_id: String,
     request_handle: Option<SubresourceNetworkRequestHandle>,
     frame_id: String,
@@ -90,6 +91,7 @@ impl TargetSubresourceFetchPauseNetworkOutput {
         info: &PendingSubresourceFetchInfo,
     ) -> Self {
         Self {
+            observe_network: true,
             network_request_id,
             request_handle: info.network_request_handle,
             frame_id,
@@ -111,6 +113,13 @@ impl TargetSubresourceFetchPauseNetworkOutput {
         }
     }
 
+    pub(crate) fn with_network_observation(mut self, observe: bool) -> Self {
+        self.observe_network = observe;
+        self
+    }
+    pub(crate) fn observes_network(&self) -> bool {
+        self.observe_network
+    }
     pub(crate) fn with_redirect(
         mut self,
         redirect: Option<moli_page_types::NavigationRedirect>,

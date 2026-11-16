@@ -74,11 +74,7 @@ impl FetchResponseBodySource {
 fn response_body_source(
     pending: &crate::conn::PendingSubresourceFetchResponseRequest,
 ) -> crate::conn::ProtocolResponseBody {
-    match pending
-        .command_target
-        .as_ref()
-        .and_then(|target| target.native_response_body())
-    {
+    match pending.residence.native_response_body() {
         Some(body) => crate::conn::ProtocolResponseBody::Network(body.clone()),
         None => pending.response_body.clone().into(),
     }

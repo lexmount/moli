@@ -48,8 +48,8 @@ pub(crate) use worker_target::{
     CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity,
     PreparedDedicatedWorkerProjectionDisposal, PreparedDedicatedWorkerRetirement,
     RemovedSharedWorkerAttachment, WorkerRetirementFailureCleanup, WorkerTargetLifecycleOutput,
-    WorkerTargetOutputProjection, prepare_worker_inspector_projection, project_worker_target_event,
-    retain_events,
+    WorkerTargetOutputProjection, prepare_worker_inspector_projection, prepare_worker_resource,
+    project_worker_target_event, retain_events,
 };
 
 pub(crate) enum TargetCommandFailureCleanup {
@@ -218,6 +218,9 @@ fn sync_dedicated_worker_pause_on_start_for_devtools(conn: &CdpConnection) {
         .collect::<Vec<_>>();
     for runtime in runtimes {
         runtime.set_dedicated_worker_pause_on_start_for_devtools(pause);
+        runtime.set_shared_worker_pause_on_start_for_devtools(
+            conn.shared_worker_pause_on_start_for_devtools(),
+        );
     }
 }
 

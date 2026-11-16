@@ -742,8 +742,10 @@ fn spawn_parent_message_pump(
                         service.enqueue_periodic_sync_event_completed(completion);
                     }
                     WorkerToParentMessage::ServiceWorkerShowNotification(request) => {
-                        service
-                            .enqueue_show_notification_requested(request, Arc::clone(&source_host));
+                        service.enqueue_show_notification_requested(
+                            *request,
+                            Arc::clone(&source_host),
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerGetNotifications(request) => {
                         service
@@ -873,12 +875,12 @@ fn spawn_parent_message_pump(
                     WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
                         let _ = publication.commit(None);
                     }
+                    #[cfg(test)]
+                    WorkerToParentMessage::PendingSubresourceFetch(_)
+                    | WorkerToParentMessage::SubresourceContinue(_) => {}
                     WorkerToParentMessage::Post(_)
                     | WorkerToParentMessage::SharedWorkerClosed
                     | WorkerToParentMessage::SubresourceNetwork(_)
-                    | WorkerToParentMessage::PendingSubresourceFetch(_)
-                    | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-                    | WorkerToParentMessage::SubresourceContinue(_)
                     | WorkerToParentMessage::WebSocketSubresource(_)
                     | WorkerToParentMessage::WebSocketLifecycle(_)
                     | WorkerToParentMessage::WebSocketFrame(_) => {}

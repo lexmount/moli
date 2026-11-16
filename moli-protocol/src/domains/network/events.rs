@@ -287,7 +287,7 @@ pub(crate) fn emit_request_will_be_sent(
         out,
         AutomationEvent::NetworkBeforeRequestSent(NetworkRequestEvent {
             target_id: DevToolsTargetId::from(frame_id),
-            frame_id: Some(DevToolsFrameId::from(frame_id)),
+            frame_id: (!frame_id.is_empty()).then(|| DevToolsFrameId::from(frame_id)),
             request_id: DevToolsRequestId::from(request_id),
             loader_id: Some(DevToolsLoaderId::from(loader_id)),
             url: request_url.as_str().to_owned(),
@@ -578,7 +578,7 @@ fn emit_response_received_with_extra_info_delivery(
         out,
         AutomationEvent::NetworkResponseStarted(NetworkRequestEvent {
             target_id: DevToolsTargetId::from(frame_id),
-            frame_id: Some(DevToolsFrameId::from(frame_id)),
+            frame_id: (!frame_id.is_empty()).then(|| DevToolsFrameId::from(frame_id)),
             request_id: DevToolsRequestId::from(request_id),
             loader_id: Some(DevToolsLoaderId::from(loader_id)),
             url: final_url.as_str().to_owned(),
@@ -669,7 +669,7 @@ pub(crate) fn emit_loading_finished(
         out,
         AutomationEvent::NetworkResponseCompleted(NetworkRequestEvent {
             target_id: DevToolsTargetId::from(frame_id),
-            frame_id: Some(DevToolsFrameId::from(frame_id)),
+            frame_id: (!frame_id.is_empty()).then(|| DevToolsFrameId::from(frame_id)),
             request_id: DevToolsRequestId::from(request_id),
             loader_id: Some(DevToolsLoaderId::from(loader_id)),
             url: String::new(),
@@ -776,7 +776,7 @@ pub(crate) fn emit_loading_failed(
         out,
         AutomationEvent::NetworkFetchError(NetworkRequestEvent {
             target_id: DevToolsTargetId::from(frame_id),
-            frame_id: Some(DevToolsFrameId::from(frame_id)),
+            frame_id: (!frame_id.is_empty()).then(|| DevToolsFrameId::from(frame_id)),
             request_id: DevToolsRequestId::from(request_id),
             loader_id: Some(DevToolsLoaderId::from(loader_id)),
             url: String::new(),
@@ -845,7 +845,6 @@ pub(crate) fn emit_cdp_network_automation_event(
                         .resource_type
                         .map(DevToolsNetworkResourceType::as_cdp_type)
                         .unwrap_or_default(),
-                    "frameId": network_event.frame_id.as_ref().map(|id| id.as_str()).unwrap_or(""),
                     "response": {
                         "url": network_event.url.as_str(),
                         "status": network_event.status.unwrap_or_default(),
@@ -864,6 +863,9 @@ pub(crate) fn emit_cdp_network_automation_event(
                     },
                     "hasExtraInfo": network_event.has_extra_info,
                 });
+                if let Some(frame_id) = network_event.frame_id.as_ref() {
+                    params["frameId"] = json!(frame_id.as_str());
+                }
                 if let Some(fetch_request_id) = network_event.fetch_request_id.as_ref() {
                     params["__moliFetchRequestId"] = json!(fetch_request_id.as_str());
                 }
@@ -964,9 +966,11 @@ fn emit_network_before_request_sent(
             .resource_type
             .map(DevToolsNetworkResourceType::as_cdp_type)
             .unwrap_or_default(),
-        "frameId": network_event.frame_id.as_ref().map(|id| id.as_str()).unwrap_or(""),
         "hasUserGesture": false,
     });
+    if let Some(frame_id) = network_event.frame_id.as_ref() {
+        params["frameId"] = json!(frame_id.as_str());
+    }
     if let Some(request_body) = network_event.request_body.as_ref() {
         params["request"]["postData"] = json!(request_body);
     }

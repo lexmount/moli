@@ -59,6 +59,133 @@ async fn dispatch(ctx: &mut TestContext, event_type: &str, key: &str, code: &str
     ctx.expect_result(901, json!({}), None);
 }
 
+async fn install_keyboard_microtask_log(ctx: &mut TestContext) {
+    assert!(evaluate_bool(ctx, r#"(() => {
+        window.__microtaskLog = [];
+        for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
+            for (let listener = 1; listener <= 2; ++listener) {
+                document.addEventListener(type, () => {
+                    __microtaskLog.push(type + ':' + listener);
+                    Promise.resolve().then(() => __microtaskLog.push('microtask-' + type + ':' + listener));
+                });
+            }
+        }
+        return true;
+    })()"#).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_native_keyboard_events_checkpoint_between_listeners_and_before_defaults() {
+    for route in ["keyDown", "rawKeyDown"] {
+        let mut ctx = keyboard_fixture("<input id='field'>").await;
+        install_keyboard_microtask_log(&mut ctx).await;
+        dispatch(&mut ctx, route, "x", "KeyX", "x").await;
+        if route == "rawKeyDown" {
+            dispatch(&mut ctx, "char", "x", "KeyX", "x").await;
+        }
+        dispatch(&mut ctx, "keyUp", "x", "KeyX", "").await;
+
+        let actual: serde_json::Value = serde_json::from_str(
+            &evaluate_string(&mut ctx, "JSON.stringify(__microtaskLog)").await,
+        )
+        .unwrap();
+        assert_eq!(
+            actual,
+            json!([
+                "keydown:1",
+                "microtask-keydown:1",
+                "keydown:2",
+                "microtask-keydown:2",
+                "keypress:1",
+                "microtask-keypress:1",
+                "keypress:2",
+                "microtask-keypress:2",
+                "beforeinput:1",
+                "microtask-beforeinput:1",
+                "beforeinput:2",
+                "microtask-beforeinput:2",
+                "input:1",
+                "microtask-input:1",
+                "input:2",
+                "microtask-input:2",
+                "keyup:1",
+                "microtask-keyup:1",
+                "keyup:2",
+                "microtask-keyup:2"
+            ]),
+            "route: {route}"
+        );
+        assert_eq!(field_value(&mut ctx).await, "x");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_keyboard_callback_microtasks_can_retarget_and_cancel_character_insertion() {
+    for cancel in [false, true] {
+        let mut ctx = keyboard_fixture("<input id='field'>").await;
+        assert!(
+            evaluate_bool(
+                &mut ctx,
+                &format!(
+                    r#"(() => {{
+            window.__microtaskLog = [];
+            field.addEventListener('keydown', () => {{
+                __microtaskLog.push('keydown');
+                Promise.resolve().then(() => {{
+                    __microtaskLog.push('microtask-keydown');
+                    other.focus();
+                }});
+            }});
+            other.addEventListener('keypress', event => {{
+                __microtaskLog.push('keypress:' + event.target.id);
+                Promise.resolve().then(() => {{
+                    __microtaskLog.push('microtask-keypress');
+                    if ({cancel}) event.preventDefault();
+                }});
+            }});
+            return true;
+        }})()"#
+                )
+            )
+            .await
+        );
+        dispatch(&mut ctx, "keyDown", "x", "KeyX", "x").await;
+        assert_eq!(
+            evaluate_string(&mut ctx, "JSON.stringify(__microtaskLog)").await,
+            r#"["keydown","microtask-keydown","keypress:other","microtask-keypress"]"#
+        );
+        assert_eq!(field_value(&mut ctx).await, "");
+        assert_eq!(
+            evaluate_string(&mut ctx, "other.value").await,
+            if cancel { "" } else { "x" }
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_synthetic_keyboard_events_keep_microtasks_inside_the_outer_script_boundary() {
+    let mut ctx = keyboard_fixture("<input id='field'>").await;
+    // Exercise a native input first so its temporary policy must not leak.
+    dispatch(&mut ctx, "keyDown", "x", "KeyX", "x").await;
+    install_keyboard_microtask_log(&mut ctx).await;
+    assert!(
+        evaluate_bool(
+            &mut ctx,
+            r#"(() => {
+        field.dispatchEvent(new KeyboardEvent('keydown', {key: 'x', bubbles: true}));
+        field.dispatchEvent(new KeyboardEvent('keypress', {key: 'x', bubbles: true}));
+        __microtaskLog.push('script-end');
+        return true;
+    })()"#
+        )
+        .await
+    );
+    assert_eq!(
+        evaluate_string(&mut ctx, "JSON.stringify(__microtaskLog)").await,
+        r#"["keydown:1","keydown:2","keypress:1","keypress:2","script-end","microtask-keydown:1","microtask-keydown:2","microtask-keypress:1","microtask-keypress:2"]"#
+    );
+}
+
 async fn field_value(ctx: &mut TestContext) -> String {
     evaluate_string(
         ctx,

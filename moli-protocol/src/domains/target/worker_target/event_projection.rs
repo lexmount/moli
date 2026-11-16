@@ -31,6 +31,13 @@ impl WorkerTargetOutputProjection {
         for event in self.events {
             let result: Result<()> = async {
                 match event {
+                WorkerTargetLifecycleOutput::Resource { browser_context_id, target_id, event } => {
+                    if let Some((events, automatic, pending)) = context.with_state(driver, move |state, _| state.prepare_worker_resource(browser_context_id,target_id,event))? {
+                        retain_events(context,events);
+                        for continuation in automatic { continuation.run(driver).await?; }
+                        for continuation in pending { retain_events(context,continuation.run(driver).await?); }
+                    }
+                }
                 WorkerTargetLifecycleOutput::DedicatedWorkerDetached {
                     target_delta,
                     cleanup_plan,
@@ -318,6 +325,9 @@ pub(crate) fn project_worker_target_event(
     let mut side_effects = events::TargetProtocolSideEffects::default();
     for event in std::iter::once(event) {
         match event {
+            WorkerTargetLifecycleOutput::Resource { .. } => {
+                unreachable!("Worker resource projection is asynchronous")
+            }
             WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
                 browser_context_id,
                 renderer_instance_id,

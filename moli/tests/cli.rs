@@ -17,6 +17,10 @@ use moli_browser_profile::BrowserProfilePaths;
 use moli_core::OptionalResourceFetchMask;
 use moli_fetch::{FetchConfig, WebBotAuthProfile};
 
+#[cfg(unix)]
+#[path = "cli/remote_debugging_pipe.rs"]
+mod remote_debugging_pipe;
+
 const RFC_9421_ED25519_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\n\
 MC4CAQAwBQYDK2VwBCIEIJ+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF\n\
 -----END PRIVATE KEY-----\n";
@@ -691,6 +695,8 @@ fn infers_serve_mode_when_called_without_args() {
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
             cookie_jar: None,
+            #[cfg(unix)]
+            remote_debugging_pipe: false,
             debugger: false,
             host: "127.0.0.1".to_owned(),
             port: 9222,
@@ -720,6 +726,8 @@ fn parses_serve_flags_with_explicit_command() {
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
             cookie_jar: None,
+            #[cfg(unix)]
+            remote_debugging_pipe: false,
             debugger: false,
             host: "0.0.0.0".to_owned(),
             port: 9333,
@@ -729,6 +737,31 @@ fn parses_serve_flags_with_explicit_command() {
             common: CommonArgs::default(),
         }))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn parses_remote_debugging_pipe_and_rejects_listener_flags() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "serve",
+        "--remote-debugging-pipe",
+    ]))
+    .unwrap();
+    let Commands::Serve(args) = cli.command else {
+        panic!("expected serve command");
+    };
+    assert!(args.remote_debugging_pipe);
+
+    for listener in [["--port", "9333"], ["--host", "0.0.0.0"]] {
+        let error = Cli::try_parse_from(normalize_args_for_compat(
+            ["moli", "serve", "--remote-debugging-pipe"]
+                .into_iter()
+                .chain(listener),
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 }
 
 #[test]

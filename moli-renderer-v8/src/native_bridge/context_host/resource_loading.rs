@@ -1,35 +1,21 @@
 use super::{OwnerDispatchScope, PageScriptHost};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
-use crate::types::DedicatedWorkerId;
 use crate::{
     module_runtime::{ModuleAttributesKey, PendingDynamicModuleImport, WasmModuleRecord},
     page_task_queue::RendererResourceCompletionSender,
     renderer_resource_scheduler::RendererResourceScheduler,
     types::{
-        InFlightWorkerSubresourceFetchState, NetworkBodySourceId, PendingSubresourceAuthInfo,
-        PendingSubresourceAuthState, PendingSubresourceContinuation,
+        NetworkBodySourceId, PendingSubresourceAuthState, PendingSubresourceContinuation,
         PendingSubresourceContinueEvent, PendingSubresourceExecutionContext,
-        PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseInfo,
-        PendingSubresourceResponseState, PendingWebSocketConnection, PendingWebSocketResponseState,
-        RunningSubresourceFetchState, ScriptNetworkOutput, ScriptNetworkOutputItem,
-        StreamingSubresourceFetchState, SubresourceBodyFinished, SubresourceFetchRegistration,
-        SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
+        PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseState,
+        PendingWebSocketConnection, PendingWebSocketResponseState, RunningSubresourceFetchState,
+        ScriptNetworkOutput, ScriptNetworkOutputItem, StreamingSubresourceFetchState,
+        SubresourceBodyFinished, SubresourceFetchRegistration, SubresourceNetworkRecord,
+        SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
         SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
         SubresourceResponseStarted,
     },
 };
-use moli_shared_worker::SharedWorkerInstanceId;
-
-fn navigation_response_from_subresource_body(
-    body: &SubresourceResponseBody,
-    head: moli_fetch::ResponseHead,
-) -> crate::types::NavigationResponse {
-    let bytes = body.materialize_bytes().unwrap_or_default();
-    crate::types::NavigationResponse::from_head_and_materialized_body(
-        head,
-        moli_fetch::ResponseBody::materialized_bytes(bytes),
-    )
-}
 
 impl PageScriptHost {
     #[cfg(test)]
@@ -755,235 +741,6 @@ impl PageScriptHost {
         );
         self.note_subresource_activity();
         internal_id
-    }
-
-    pub(crate) fn record_pending_worker_subresource_fetch(
-        &mut self,
-        context: v8::Global<v8::Context>,
-        worker_id: DedicatedWorkerId,
-        fetch_id: u32,
-        load: ResourceLoadLease,
-        credentials_mode: moli_fetch::RequestCredentialsMode,
-        request_mode: moli_fetch::RequestMode,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
-        self.pending_subresource_fetches.insert(
-            info.internal_id,
-            PendingSubresourceFetchState {
-                dispatch: None,
-                redirect_headers: None,
-                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::adapter(
-                    OwnerDispatchScope::Top,
-                    context,
-                ),
-                credentials_mode,
-                request_mode,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::WorkerFetch {
-                    worker_id,
-                    fetch_id,
-                },
-                deferred_request_started: false,
-            },
-        );
-        self.note_subresource_activity();
-    }
-
-    pub(crate) fn record_pending_worker_subresource_xhr(
-        &mut self,
-        context: v8::Global<v8::Context>,
-        worker_id: DedicatedWorkerId,
-        xhr_id: u32,
-        load: ResourceLoadLease,
-        credentials_mode: moli_fetch::RequestCredentialsMode,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
-        self.pending_subresource_fetches.insert(
-            info.internal_id,
-            PendingSubresourceFetchState {
-                dispatch: None,
-                redirect_headers: None,
-                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::adapter(
-                    OwnerDispatchScope::Top,
-                    context,
-                ),
-                credentials_mode,
-                request_mode: moli_fetch::RequestMode::Cors,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::WorkerXhr { worker_id, xhr_id },
-                deferred_request_started: false,
-            },
-        );
-        self.note_subresource_activity();
-    }
-
-    pub(crate) fn record_pending_worker_subresource_csp_report(
-        &mut self,
-        context: v8::Global<v8::Context>,
-        worker_id: DedicatedWorkerId,
-        report_id: u32,
-        load: ResourceLoadLease,
-        credentials_mode: moli_fetch::RequestCredentialsMode,
-        request_mode: moli_fetch::RequestMode,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
-        self.pending_subresource_fetches.insert(
-            info.internal_id,
-            PendingSubresourceFetchState {
-                dispatch: None,
-                redirect_headers: None,
-                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::adapter(
-                    OwnerDispatchScope::Top,
-                    context,
-                ),
-                credentials_mode,
-                request_mode,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::WorkerCspReport {
-                    worker_id,
-                    report_id,
-                },
-                deferred_request_started: false,
-            },
-        );
-        self.note_subresource_activity();
-    }
-
-    pub(crate) fn record_pending_shared_worker_subresource_fetch(
-        &mut self,
-        context: v8::Global<v8::Context>,
-        instance_id: SharedWorkerInstanceId,
-        fetch_id: u32,
-        load: ResourceLoadLease,
-        credentials_mode: moli_fetch::RequestCredentialsMode,
-        request_mode: moli_fetch::RequestMode,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
-        self.pending_subresource_fetches.insert(
-            info.internal_id,
-            PendingSubresourceFetchState {
-                dispatch: None,
-                redirect_headers: None,
-                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::adapter(
-                    OwnerDispatchScope::Top,
-                    context,
-                ),
-                credentials_mode,
-                request_mode,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::SharedWorkerFetch {
-                    instance_id,
-                    fetch_id,
-                },
-                deferred_request_started: false,
-            },
-        );
-        self.note_subresource_activity();
-    }
-
-    pub(crate) fn record_pending_shared_worker_subresource_xhr(
-        &mut self,
-        context: v8::Global<v8::Context>,
-        instance_id: SharedWorkerInstanceId,
-        xhr_id: u32,
-        load: ResourceLoadLease,
-        credentials_mode: moli_fetch::RequestCredentialsMode,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
-        self.pending_subresource_fetches.insert(
-            info.internal_id,
-            PendingSubresourceFetchState {
-                dispatch: None,
-                redirect_headers: None,
-                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::adapter(
-                    OwnerDispatchScope::Top,
-                    context,
-                ),
-                credentials_mode,
-                request_mode: moli_fetch::RequestMode::Cors,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::SharedWorkerXhr {
-                    instance_id,
-                    xhr_id,
-                },
-                deferred_request_started: false,
-            },
-        );
-        self.note_subresource_activity();
-    }
-
-    pub(crate) fn record_pending_shared_worker_subresource_csp_report(
-        &mut self,
-        context: v8::Global<v8::Context>,
-        instance_id: SharedWorkerInstanceId,
-        report_id: u32,
-        load: ResourceLoadLease,
-        credentials_mode: moli_fetch::RequestCredentialsMode,
-        request_mode: moli_fetch::RequestMode,
-        network_partition_key: Option<String>,
-        mut info: PendingSubresourceFetchInfo,
-    ) {
-        self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
-        self.pending_subresource_fetches.insert(
-            info.internal_id,
-            PendingSubresourceFetchState {
-                dispatch: None,
-                redirect_headers: None,
-                request_origin: moli_url::WebOrigin::from_url(&info.document_url),
-                info,
-                load,
-                execution_context: PendingSubresourceExecutionContext::adapter(
-                    OwnerDispatchScope::Top,
-                    context,
-                ),
-                credentials_mode,
-                request_mode,
-                network_partition_key,
-                policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::SharedWorkerCspReport {
-                    instance_id,
-                    report_id,
-                },
-                deferred_request_started: false,
-            },
-        );
-        self.note_subresource_activity();
     }
 
     pub(crate) fn record_async_subresource_fetch(
@@ -1882,116 +1639,6 @@ impl PageScriptHost {
         self.restore_pending_subresource_fetch(pending);
     }
 
-    pub(crate) fn cancel_pending_worker_subresource_fetch(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        fetch_id: u32,
-        error_text: String,
-    ) -> bool {
-        let Some(internal_id) = self.pending_subresource_fetches.iter().find_map(
-            |(internal_id, pending)| match &pending.continuation {
-                PendingSubresourceContinuation::WorkerFetch {
-                    worker_id: pending_worker_id,
-                    fetch_id: pending_fetch_id,
-                } if *pending_worker_id == worker_id && *pending_fetch_id == fetch_id => {
-                    Some(*internal_id)
-                }
-                PendingSubresourceContinuation::WorkerXhr {
-                    worker_id: pending_worker_id,
-                    xhr_id: pending_xhr_id,
-                } if *pending_worker_id == worker_id && *pending_xhr_id == fetch_id => {
-                    Some(*internal_id)
-                }
-                PendingSubresourceContinuation::WorkerCspReport {
-                    worker_id: pending_worker_id,
-                    report_id: pending_report_id,
-                } if *pending_worker_id == worker_id && *pending_report_id == fetch_id => {
-                    Some(*internal_id)
-                }
-                _ => None,
-            },
-        ) else {
-            return false;
-        };
-        let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) else {
-            return false;
-        };
-        #[cfg(test)]
-        self.pending_subresource_fetch_infos
-            .retain(|info| info.internal_id != internal_id);
-        self.record_pending_subresource_failure(&pending.info, error_text);
-        self.record_pending_subresource_continue_event(
-            PendingSubresourceContinueEvent::Completed { internal_id },
-        );
-        true
-    }
-
-    pub(crate) fn cancel_pending_shared_worker_subresource_fetch(
-        &mut self,
-        instance_id: SharedWorkerInstanceId,
-        fetch_id: u32,
-        error_text: String,
-    ) -> bool {
-        let Some(internal_id) = self.pending_subresource_fetches.iter().find_map(
-            |(internal_id, pending)| match &pending.continuation {
-                PendingSubresourceContinuation::SharedWorkerFetch {
-                    instance_id: pending_instance_id,
-                    fetch_id: pending_fetch_id,
-                } if *pending_instance_id == instance_id && *pending_fetch_id == fetch_id => {
-                    Some(*internal_id)
-                }
-                PendingSubresourceContinuation::SharedWorkerXhr {
-                    instance_id: pending_instance_id,
-                    xhr_id: pending_xhr_id,
-                } if *pending_instance_id == instance_id && *pending_xhr_id == fetch_id => {
-                    Some(*internal_id)
-                }
-                PendingSubresourceContinuation::SharedWorkerCspReport {
-                    instance_id: pending_instance_id,
-                    report_id: pending_report_id,
-                } if *pending_instance_id == instance_id && *pending_report_id == fetch_id => {
-                    Some(*internal_id)
-                }
-                _ => None,
-            },
-        ) else {
-            return false;
-        };
-        let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) else {
-            return false;
-        };
-        #[cfg(test)]
-        self.pending_subresource_fetch_infos
-            .retain(|info| info.internal_id != internal_id);
-        self.record_pending_subresource_failure(&pending.info, error_text);
-        self.record_pending_subresource_continue_event(
-            PendingSubresourceContinueEvent::Completed { internal_id },
-        );
-        true
-    }
-
-    fn record_pending_subresource_failure(
-        &mut self,
-        info: &PendingSubresourceFetchInfo,
-        error_text: String,
-    ) {
-        let mut record = SubresourceNetworkRecord::failure(
-            info.frame_id.clone(),
-            info.document_url.clone(),
-            info.url.clone(),
-            info.method.clone(),
-            info.request_headers.clone(),
-            info.request_body.clone(),
-            info.resource_type,
-            error_text,
-        )
-        .with_request_body_bytes(info.request_body_bytes.clone());
-        if let Some(handle) = info.network_request_handle {
-            record = record.with_request_handle(handle);
-        }
-        self.record_subresource_network(record);
-    }
-
     pub(crate) fn record_running_subresource_fetch(&mut self, state: RunningSubresourceFetchState) {
         self.running_subresource_fetches
             .insert(state.pending.info.internal_id, state);
@@ -2217,15 +1864,6 @@ impl PageScriptHost {
         self.streaming_subresource_fetches.remove(&internal_id)
     }
 
-    pub(crate) fn record_in_flight_worker_subresource_fetch(
-        &mut self,
-        state: InFlightWorkerSubresourceFetchState,
-    ) {
-        self.in_flight_worker_subresource_fetches
-            .insert(state.pending.info.internal_id, state);
-        self.note_subresource_activity();
-    }
-
     pub(crate) fn take_running_subresource_fetch(
         &mut self,
         internal_id: u64,
@@ -2402,18 +2040,6 @@ impl PageScriptHost {
             return true;
         }
 
-        if let Some(in_flight) = self
-            .in_flight_worker_subresource_fetches
-            .remove(&internal_id)
-        {
-            self.record_observable_abort_before_response(&in_flight.pending);
-            in_flight.pending.load.cancel();
-            self.record_pending_subresource_continue_event(
-                PendingSubresourceContinueEvent::Completed { internal_id },
-            );
-            return true;
-        }
-
         if let Some(running) = self.running_subresource_fetches.remove(&internal_id) {
             self.record_observable_abort_before_response(&running.pending);
             running.pending.load.cancel();
@@ -2457,11 +2083,6 @@ impl PageScriptHost {
     fn subresource_fetch_states(&self) -> impl Iterator<Item = &PendingSubresourceFetchState> {
         self.pending_subresource_fetches
             .values()
-            .chain(
-                self.in_flight_worker_subresource_fetches
-                    .values()
-                    .map(|state| &state.pending),
-            )
             .chain(
                 self.running_subresource_fetches
                     .values()
@@ -2564,9 +2185,6 @@ impl PageScriptHost {
     ) {
         for pending in self.pending_subresource_fetches.values_mut() {
             apply(pending);
-        }
-        for state in self.in_flight_worker_subresource_fetches.values_mut() {
-            apply(&mut state.pending);
         }
         for state in self.running_subresource_fetches.values_mut() {
             apply(&mut state.pending);
@@ -2905,70 +2523,6 @@ impl PageScriptHost {
         retired
     }
 
-    pub(crate) fn cancel_subresource_fetches_for_worker(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-    ) -> usize {
-        let mut internal_ids =
-            self.pending_subresource_fetches
-                .iter()
-                .filter_map(|(internal_id, pending)| {
-                    (pending.continuation.dedicated_worker_id() == Some(worker_id))
-                        .then_some(*internal_id)
-                })
-                .chain(self.in_flight_worker_subresource_fetches.iter().filter_map(
-                    |(internal_id, running)| {
-                        (running.pending.continuation.dedicated_worker_id() == Some(worker_id))
-                            .then_some(*internal_id)
-                    },
-                ))
-                .chain(self.running_subresource_fetches.iter().filter_map(
-                    |(internal_id, running)| {
-                        (running.pending.continuation.dedicated_worker_id() == Some(worker_id))
-                            .then_some(*internal_id)
-                    },
-                ))
-                .chain(self.streaming_subresource_fetches.iter().filter_map(
-                    |(internal_id, streaming)| {
-                        (streaming.pending.continuation.dedicated_worker_id() == Some(worker_id))
-                            .then_some(*internal_id)
-                    },
-                ))
-                .chain(self.pending_subresource_auths.iter().filter_map(
-                    |(internal_id, pending)| {
-                        (pending.pending.continuation.dedicated_worker_id() == Some(worker_id))
-                            .then_some(*internal_id)
-                    },
-                ))
-                .chain(self.pending_subresource_responses.iter().filter_map(
-                    |(internal_id, pending)| {
-                        (pending.pending.continuation.dedicated_worker_id() == Some(worker_id))
-                            .then_some(*internal_id)
-                    },
-                ))
-                .collect::<Vec<_>>();
-        internal_ids.sort_unstable();
-        internal_ids.dedup();
-        let mut cancelled = 0;
-        for internal_id in internal_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
-            cancelled += usize::from(self.abort_subresource_fetch(internal_id));
-        }
-        #[cfg(test)]
-        self.pending_subresource_fetch_infos
-            .retain(|info| !internal_ids.contains(&info.internal_id));
-        if cancelled > 0 {
-            tracing::debug!(
-                worker_id = worker_id.as_u64(),
-                cancelled,
-                "cancelled subresource requests for retired DedicatedWorker"
-            );
-        }
-        cancelled
-    }
-
     pub(crate) fn cancel_stylesheet_subresource_fetches_for_document_owner(
         &mut self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
@@ -3183,126 +2737,6 @@ impl PageScriptHost {
         self.note_subresource_activity();
     }
 
-    pub(crate) fn record_worker_subresource_response_pause(
-        &mut self,
-        info: PendingSubresourceResponseInfo,
-    ) {
-        if let Some(in_flight) = self
-            .in_flight_worker_subresource_fetches
-            .remove(&info.internal_id)
-        {
-            self.record_pending_subresource_response(PendingSubresourceResponseState {
-                pending: in_flight.pending,
-                request_url: in_flight.request_url,
-                request_method: in_flight.request_method,
-                request_headers: in_flight.request_headers,
-                request_body: in_flight.request_body,
-                encoded: None,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text: info
-                    .response_error
-                    .as_ref()
-                    .and_then(|error| error.network_error_text.clone()),
-                result: info
-                    .response_status
-                    .ok_or_else(|| {
-                        info.response_error
-                            .as_ref()
-                            .map(|error| error.message.clone())
-                            .unwrap_or_else(|| "Failed".to_owned())
-                    })
-                    .map(|status| {
-                        navigation_response_from_subresource_body(
-                            &info.response_body,
-                            moli_fetch::ResponseHead {
-                                status_text: None,
-                                final_url: info.url.clone(),
-                                status,
-                                headers: info.response_headers.clone(),
-                                request_cookie_report: info.request_cookie_report.clone(),
-                                cookie_set_reports: Vec::new(),
-                                redirected: false,
-                                redirect_chain: Vec::new(),
-                                from_cache: info.from_cache,
-                                cache_state: info.cache_state,
-                                negotiated_http_version: None,
-                            },
-                        )
-                        .with_network_request_headers(info.network_request_headers.clone())
-                    }),
-            });
-            self.record_pending_subresource_continue_event(
-                PendingSubresourceContinueEvent::ResponsePaused(info),
-            );
-        } else {
-            self.record_pending_subresource_continue_event(
-                PendingSubresourceContinueEvent::Completed {
-                    internal_id: info.internal_id,
-                },
-            );
-        }
-    }
-
-    pub(crate) fn record_worker_subresource_auth_pause(
-        &mut self,
-        info: PendingSubresourceAuthInfo,
-    ) {
-        if let Some(in_flight) = self
-            .in_flight_worker_subresource_fetches
-            .remove(&info.internal_id)
-        {
-            self.record_pending_subresource_auth(PendingSubresourceAuthState {
-                pending: in_flight.pending,
-                request_url: info.url.clone(),
-                request_method: info.method.clone(),
-                request_headers: info.request_headers.clone(),
-                request_body: info.request_body.clone(),
-                intercept_response: info.intercept_response,
-                initial_network_request_headers: info.network_request_headers.clone(),
-                encoded: None,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                response: navigation_response_from_subresource_body(
-                    &info.response_body,
-                    moli_fetch::ResponseHead {
-                        status_text: None,
-                        final_url: info.response_final_url.clone(),
-                        status: info.response_status,
-                        headers: info.response_headers.clone(),
-                        request_cookie_report: info.request_cookie_report.clone(),
-                        cookie_set_reports: Vec::new(),
-                        redirected: false,
-                        redirect_chain: Vec::new(),
-                        from_cache: info.response_from_cache,
-                        cache_state: info.response_cache_state,
-                        negotiated_http_version: None,
-                    },
-                )
-                .with_network_request_headers(info.network_request_headers.clone()),
-            });
-            self.record_pending_subresource_continue_event(
-                PendingSubresourceContinueEvent::AuthRequired(info),
-            );
-        } else {
-            self.record_pending_subresource_continue_event(
-                PendingSubresourceContinueEvent::Completed {
-                    internal_id: info.internal_id,
-                },
-            );
-        }
-    }
-
-    pub(crate) fn record_worker_subresource_completed(&mut self, internal_id: u64) {
-        self.in_flight_worker_subresource_fetches
-            .remove(&internal_id);
-        self.record_pending_subresource_continue_event(
-            PendingSubresourceContinueEvent::Completed { internal_id },
-        );
-    }
-
     pub(crate) fn record_pending_websocket_response(
         &mut self,
         state: PendingWebSocketResponseState,
@@ -3356,7 +2790,6 @@ impl PageScriptHost {
             + self.pending_subresource_responses.len()
             + self.pending_websocket_responses.len()
             + self.streaming_subresource_fetches.len()
-            + self.in_flight_worker_subresource_fetches.len()
     }
 
     pub(crate) fn note_subresource_activity(&mut self) {

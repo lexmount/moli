@@ -31,6 +31,12 @@ impl From<String> for FetchError {
     }
 }
 
+impl From<&str> for FetchError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
 impl From<FetchError> for String {
     fn from(error: FetchError) -> Self {
         error.message

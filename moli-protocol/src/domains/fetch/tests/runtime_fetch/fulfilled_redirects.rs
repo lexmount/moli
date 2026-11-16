@@ -2,7 +2,7 @@ use super::*;
 
 mod network_location;
 
-async fn command(ctx: &mut TestContext, id: u64, method: &str, params: Value) -> Value {
+pub(super) async fn command(ctx: &mut TestContext, id: u64, method: &str, params: Value) -> Value {
     ctx.process_async(json!({
         "id": id, "sessionId": "SID-1", "method": method, "params": params,
     }))
@@ -16,7 +16,7 @@ async fn command(ctx: &mut TestContext, id: u64, method: &str, params: Value) ->
     response
 }
 
-async fn session_command(
+pub(super) async fn session_command(
     ctx: &mut TestContext,
     session: &str,
     id: u64,
@@ -357,12 +357,10 @@ async fn fulfilled_window_fetch_redirect_modes_and_missing_location() {
         .await;
         let expected = if mode == "manual" {
             json!({"status":0,"type":"opaqueredirect","body":"","redirected":false})
-        } else if !location {
-            json!({"status":302,"type":"basic","body":"noloc","redirected":false})
-        } else if mode == "error" {
+        } else if mode == "error" && location {
             json!({"error":"TypeError"})
         } else {
-            json!({"status":0,"type":"opaqueredirect","body":"","redirected":false})
+            json!({"status":302,"type":"basic","body":"noloc","redirected":false})
         };
         assert_eq!(
             result["result"]["result"]["value"], expected,
@@ -706,7 +704,10 @@ async fn check_manual_preflight_redirect(stage: Option<&str>, recover_failure: b
             Some("http://user:pass@example.test/not-followed"),
         ),
         ("manual", 302, true, Some("http://127.0.0.1:9/not-followed")),
+        ("error", 302, true, None),
+        ("follow", 302, true, None),
         ("manual", 200, true, Some("http://[")),
+        ("error", 200, true, Some("http://[")),
     ];
     let observed = Arc::new(Mutex::new(Vec::new()));
     let server_observed = observed.clone();
@@ -828,9 +829,14 @@ async fn check_manual_preflight_redirect(stage: Option<&str>, recover_failure: b
         if recover_failure && invalid_redirect {
             assert_eq!(value["status"], 200);
             assert_eq!(value["body"], "replacement");
-        } else if !cors_allowed || mode != "manual" || invalid_redirect {
+        } else if !cors_allowed
+            || invalid_redirect
+            || (status == 302
+                && ((mode == "error" && (stage.is_none() || location.is_some()))
+                    || (mode == "follow" && location.is_some())))
+        {
             assert_eq!(value, &json!({"error":"TypeError"}), "{stage:?}/{index}");
-        } else if status == 302 {
+        } else if status == 302 && mode == "manual" {
             assert_eq!(
                 value,
                 &json!({
@@ -839,7 +845,7 @@ async fn check_manual_preflight_redirect(stage: Option<&str>, recover_failure: b
                 "{stage:?}/{index}"
             );
         } else {
-            assert_eq!(value["status"], 200);
+            assert_eq!(value["status"], status);
             assert_eq!(value["type"], "cors");
             assert_eq!(value["body"], "response");
             assert_eq!(value["url"], source);
@@ -1321,4 +1327,5 @@ async fn network_redirect_repauses_and_expires_request_scoped_header_edits() {
     server.abort();
 }
 
+mod cors_order;
 mod exact_patterns;

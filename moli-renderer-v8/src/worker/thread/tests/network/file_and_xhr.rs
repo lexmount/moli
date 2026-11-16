@@ -268,12 +268,9 @@ async fn worker_xmlhttprequest_uses_worker_script_base_url_and_event_target_list
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
+    let msg = recv_post_json(&mut handle).await;
     assert_eq!(
-        expect_post_json(msg),
+        msg,
         format!(
             r#"{{"ctor":"function","eventTarget":true,"uploadTag":"[object XMLHttpRequestUpload]","status":200,"url":"{base_url}/assets/data.txt","text":"hello from worker xhr","readyState":4,"events":["prop-rs:readystatechange:1","rs:readystatechange:1","prop-rs:readystatechange:2","rs:readystatechange:2","prop-rs:readystatechange:3","rs:readystatechange:3","prop-rs:readystatechange:4","rs:readystatechange:4","prop-load:200","load:200:hello from worker xhr","prop-loadend:4","loadend:4"]}}"#
         )
@@ -321,7 +318,7 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker xhr pause, got {pending:?}");
     };
-    assert!(pending.info.network_request_handle.is_none());
+    assert!(pending.info.network_request_handle.is_some());
     assert_eq!(pending.info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(
         pending.info.url.as_str(),
@@ -333,7 +330,7 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
         Some("credentialless-worker-xhr")
     );
 
-    let request = pending_worker_xhr_continue(pending.fetch_id, 31, &pending.info, false);
+    let request = pending_worker_xhr_continue(pending.fetch_id, &pending.info, false);
     handle.fulfill_pending_xhr(
         request,
         204,
@@ -395,6 +392,13 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
     ));
     handle.post_message(serialize_test_string("go"));
 
+    let WorkerToParentMessage::PendingSubresourceFetch(pending) =
+        timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap()
+    else {
+        panic!("native synchronous XHR pauses before transport");
+    };
+    let request = pending_worker_xhr_continue(pending.fetch_id, &pending.info, false);
+    handle.fail_pending_xhr(request, "native sync failure".into());
     let mut post = None;
     let mut network = None;
     for _ in 0..2 {
@@ -424,7 +428,7 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
     assert!(matches!(
         record.outcome(),
         SubresourceNetworkOutcome::Failure { error_text }
-            if error_text == "Synchronous XMLHttpRequest interception requires a protocol output owner"
+            if error_text == "native sync failure"
     ));
     assert_eq!(
         post.expect("sync worker XHR interception should post final surface"),
@@ -479,7 +483,7 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker xhr pause, got {pending:?}");
     };
-    let request = pending_worker_xhr_continue(pending.fetch_id, 37, &pending.info, true);
+    let request = pending_worker_xhr_continue(pending.fetch_id, &pending.info, true);
     handle.continue_pending_xhr(request.clone());
 
     let response_pause = timeout(TIMEOUT, handle.recv())
@@ -492,11 +496,16 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
     else {
         panic!("expected worker xhr response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 37);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(info.response_status, Some(200));
     assert_eq!(
-        info.response_body.try_bytes().unwrap().as_ref(),
+        handle
+            .native_response_body(info.internal_id)
+            .await
+            .materialize_bytes()
+            .unwrap()
+            .as_slice(),
         b"origin-worker-xhr"
     );
 
@@ -579,7 +588,7 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
                 responseText: xhr.responseText,
                 events,
             });
-            close();
+            // Keep this observer alive for native cancellation.
         })();
         "#
         .into(),
@@ -612,7 +621,7 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
         matches!(
             outcome,
             SubresourceNetworkOutcome::Failure { error_text }
-                if error_text == "Synchronous XMLHttpRequest timed out after 30 ms"
+                if error_text == "net::ERR_ABORTED"
         ),
         "expected sync worker XHR timeout failure, got {outcome:?}"
     );
@@ -774,7 +783,7 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected large worker xhr pause, got {pending:?}");
     };
-    let request = pending_worker_xhr_continue(pending.fetch_id, 67, &pending.info, true);
+    let request = pending_worker_xhr_continue(pending.fetch_id, &pending.info, true);
     handle.continue_pending_xhr(request.clone());
 
     let response_pause = timeout(TIMEOUT, handle.recv())
@@ -787,9 +796,11 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
     else {
         panic!("expected large worker xhr response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 67);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(
-        info.response_body
+        handle
+            .native_response_body(info.internal_id)
+            .await
             .read_chunk(expected_len - 1, 1)
             .expect("spooled body tail should be readable"),
         b"x"
@@ -847,7 +858,7 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker xhr auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_xhr_continue(pending.fetch_id, 41, &pending.info, false);
+    let mut request = pending_worker_xhr_continue(pending.fetch_id, &pending.info, false);
     request.handle_auth_requests = true;
     handle.continue_pending_xhr(request.clone());
 
@@ -861,7 +872,7 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
     else {
         panic!("expected worker xhr auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 41);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(info.challenge.source, "Server");
     assert_eq!(info.challenge.scheme, "basic");
@@ -935,7 +946,7 @@ async fn worker_xhr_auth_required_then_fail_errors_without_exposing_challenge_bo
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker xhr auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_xhr_continue(pending.fetch_id, 43, &pending.info, false);
+    let mut request = pending_worker_xhr_continue(pending.fetch_id, &pending.info, false);
     request.handle_auth_requests = true;
     handle.continue_pending_xhr(request.clone());
 
@@ -949,7 +960,7 @@ async fn worker_xhr_auth_required_then_fail_errors_without_exposing_challenge_bo
     else {
         panic!("expected worker xhr auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 43);
+    assert_eq!(info.internal_id, pending.info.internal_id);
     assert_eq!(info.challenge.realm, "worker-xhr-area");
 
     handle.fail_pending_xhr_auth(request, "worker xhr auth aborted".to_owned());
@@ -1005,12 +1016,9 @@ async fn worker_xmlhttprequest_arraybuffer_preserves_response_bytes() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
+    let msg = recv_post_json(&mut handle).await;
     assert_eq!(
-        expect_post_json(msg),
+        msg,
         r#"{"status":200,"bytes":"65,0,66","responseTextState":"InvalidStateError"}"#
     );
     server
@@ -1077,12 +1085,9 @@ async fn worker_xmlhttprequest_upload_dispatches_completion_events() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
+    let msg = recv_post_json(&mut handle).await;
     assert_eq!(
-        expect_post_json(msg),
+        msg,
         r#"{"status":200,"response":"{\"ok\":true}","uploadEvents":["loadstart:true:true:true:0:20","progress:true:true:true:20:20","load:true:true:true:20:20","loadend:true:true:true:20:20"],"uploadOrder":["xhr:loadstart","listener-before:loadstart","handler:loadstart","listener-after:loadstart","listener-before:progress","handler:progress","listener-after:progress","listener-before:load","handler:load","listener-after:load","listener-before:loadend","handler:loadend","listener-after:loadend"]}"#
     );
     server
@@ -1168,7 +1173,6 @@ async fn worker_xhr_upload_listener_preflight_survives_sync_and_interception() {
             };
             handle.continue_pending_xhr(pending_worker_xhr_continue(
                 pending.fetch_id,
-                47,
                 &pending.info,
                 false,
             ));
@@ -1741,7 +1745,7 @@ async fn worker_xmlhttprequest_redirect_loop_reports_error_after_loadstart() {
 #[tokio::test]
 async fn worker_xmlhttprequest_cross_origin_redirect_without_cors_reports_error_after_loadstart() {
     ensure_v8();
-    let (source_base_url, _, source_server, target_server) =
+    let (source_base_url, target_base_url, source_server, target_server) =
         spawn_cross_origin_redirect_without_cors_http_servers(
             "/worker-xhr-cors-redirect-deny",
             "/worker-xhr-cors-denied-target",
@@ -1809,7 +1813,10 @@ async fn worker_xmlhttprequest_cross_origin_redirect_without_cors_reports_error_
         .await
         .expect("worker XHR CORS redirect target server should finish");
     let record = network.expect("worker XHR CORS redirect should record network failure");
-    assert_eq!(record.url().as_str(), url);
+    assert_eq!(
+        record.url().as_str(),
+        format!("{target_base_url}/worker-xhr-cors-denied-target")
+    );
     assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
     assert!(matches!(
         record.outcome(),
@@ -1911,11 +1918,13 @@ async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src
     source_server
         .await
         .expect("worker XHR CSP redirect source server should finish");
-    target_server
-        .await
-        .expect("worker XHR CSP redirect target server should finish");
+    assert!(
+        !target_server.is_finished(),
+        "CSP refuses the redirect before the target receives a request"
+    );
+    target_server.abort();
     let record = network.expect("worker XHR CSP redirect should record network failure");
-    assert_eq!(record.url().as_str(), url);
+    assert_eq!(record.url().path(), "/worker-xhr-csp-target");
     assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
     assert!(matches!(
         record.outcome(),

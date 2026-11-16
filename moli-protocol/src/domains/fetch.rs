@@ -70,6 +70,7 @@ pub(crate) use subresource::{
     detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record,
     emit_subresource_fetch_pause_outputs,
     subresource_fetch_pause_prepared_outputs_for_renderer_record,
+    worker_fetch_pause_prepared_outputs,
 };
 
 pub(in crate::domains) fn prepare_owner_disposal(

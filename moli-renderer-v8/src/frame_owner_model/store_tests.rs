@@ -756,6 +756,131 @@ fn main_async_script_delays_are_exact_and_replacement_owned() {
 }
 
 #[test]
+fn stopping_a_document_invalidates_resource_delays_by_exact_identity() {
+    let mut store = FrameOwnerStore::default();
+    store.ensure_main_frame(
+        handle(1),
+        url("https://example.test/"),
+        url("https://example.test/"),
+        "https://example.test".to_owned(),
+        policy_container(),
+        policy_context(),
+        None,
+    );
+    let snapshot = store.current_main_owner_snapshot().unwrap();
+    let owner = FrameDocumentTaskOwner::new(
+        snapshot.scheduler_lane_id,
+        snapshot.local_window_id,
+        snapshot.document_id,
+    );
+    let style = store
+        .accept_current_main_style_load_event(owner, handle(2))
+        .unwrap();
+    let image = store
+        .accept_current_main_image_load_delay(owner, handle(3))
+        .unwrap();
+    let media = store
+        .accept_current_main_media_load_delay(owner, handle(4))
+        .unwrap();
+    let stylesheet_resource = store
+        .accept_current_main_stylesheet_subresource_load_delay(owner)
+        .unwrap();
+    let classic = store
+        .acquire_current_main_document_script_load_delay(
+            owner,
+            MainDocumentScriptLoadDelayKind::Classic,
+        )
+        .unwrap();
+    let module = store
+        .acquire_current_main_document_script_load_delay(
+            owner,
+            MainDocumentScriptLoadDelayKind::Module,
+        )
+        .unwrap();
+
+    assert_eq!(store.stop_current_main_document_loading(owner), Some(true));
+    assert_eq!(store.stop_current_main_document_loading(owner), Some(false));
+    assert_eq!(
+        store.current_main_document_complete_transition_is_ready(owner),
+        Some(false)
+    );
+
+    let wrong_reason =
+        MainDocumentStyleLoadEventBinding::new(owner, handle(2), image.load_delay_token());
+    let unknown = MainDocumentStyleLoadEventBinding::new(
+        owner,
+        handle(2),
+        Some(DocumentLoadDelayTokenId(u64::MAX)),
+    );
+    assert_eq!(
+        store.settle_main_style_load_event(wrong_reason),
+        DocumentLoadDelaySettlement::NotOwned
+    );
+    assert_eq!(
+        store.settle_main_style_load_event(unknown),
+        DocumentLoadDelaySettlement::NotOwned
+    );
+
+    for _ in 0..2 {
+        for settlement in [
+            store.settle_main_style_load_event(style),
+            store.settle_main_image_load_delay(image),
+            store.settle_main_media_load_delay(media),
+            store.settle_stylesheet_subresource_load_delay(stylesheet_resource),
+        ] {
+            assert_eq!(settlement, DocumentLoadDelaySettlement::Invalidated);
+            assert!(!settlement.released());
+        }
+    }
+    for lease in [classic, module] {
+        assert_eq!(
+            store.release_main_document_script_load_delay(lease),
+            MainDocumentScriptLoadDelayRelease::Invalidated
+        );
+    }
+    assert_eq!(
+        store.current_main_document_has_async_script_load_delay(owner),
+        Some(false)
+    );
+    assert_eq!(
+        store.current_main_document_complete_transition_is_ready(owner),
+        Some(false)
+    );
+
+    let post_stop = store
+        .accept_current_main_style_load_event(owner, handle(5))
+        .unwrap();
+    assert!(post_stop.load_delay_token().is_none());
+    assert_eq!(
+        store.settle_main_style_load_event(post_stop),
+        DocumentLoadDelaySettlement::NoDelayRequired
+    );
+
+    let replacement = store
+        .replace_main_document(
+            handle(1),
+            url("https://example.test/new"),
+            url("https://example.test/new"),
+        )
+        .unwrap();
+    let new_style = store
+        .accept_current_main_style_load_event(replacement.current_owner(), handle(6))
+        .unwrap();
+    assert_eq!(
+        store.settle_main_style_load_event(style),
+        DocumentLoadDelaySettlement::NotOwned
+    );
+    assert_eq!(
+        store.settle_main_image_load_delay(image),
+        DocumentLoadDelaySettlement::NotOwned
+    );
+    assert_eq!(
+        store.settle_main_style_load_event(new_style),
+        DocumentLoadDelaySettlement::Released
+    );
+}
+
+#[test]
 fn main_style_load_event_binding_delays_complete_until_event_settlement() {
     let mut store = FrameOwnerStore::default();
     store.ensure_main_frame(
@@ -796,9 +921,9 @@ fn main_style_load_event_binding_delays_complete_until_event_settlement() {
         "the exact style event token must block complete"
     );
 
-    assert!(store.settle_main_style_load_event(binding));
+    assert!(store.settle_main_style_load_event(binding).settled());
     assert!(
-        !store.settle_main_style_load_event(binding),
+        !store.settle_main_style_load_event(binding).settled(),
         "one style event binding must settle exactly once"
     );
     assert_eq!(
@@ -873,7 +998,7 @@ fn main_style_load_event_binding_cannot_settle_replacement_document() {
 
     assert!(!store.main_style_load_event_is_current(stale));
     assert!(
-        !store.settle_main_style_load_event(stale),
+        !store.settle_main_style_load_event(stale).settled(),
         "stale style completion must not mutate replacement lifecycle"
     );
     assert_eq!(
@@ -923,7 +1048,7 @@ fn main_image_request_delay_is_element_owned_and_replacement_safe() {
         Some(false)
     );
 
-    assert!(store.settle_main_image_load_delay(event));
+    assert!(store.settle_main_image_load_delay(event).settled());
     assert_eq!(
         store.current_main_document_complete_transition_is_ready(owner),
         Some(true),
@@ -942,7 +1067,7 @@ fn main_image_request_delay_is_element_owned_and_replacement_safe() {
         .expect("main replacement");
     assert!(!store.main_image_load_delay_is_current(stale));
     assert!(
-        !store.settle_main_image_load_delay(stale),
+        !store.settle_main_image_load_delay(stale).settled(),
         "stale image event must not release replacement state"
     );
     assert_eq!(
@@ -992,13 +1117,21 @@ fn main_stylesheet_subresource_delays_are_exact_and_replacement_safe() {
         store.current_main_document_complete_transition_is_ready(owner),
         Some(false)
     );
-    assert!(store.settle_stylesheet_subresource_load_delay(image));
+    assert!(
+        store
+            .settle_stylesheet_subresource_load_delay(image)
+            .settled()
+    );
     assert_eq!(
         store.current_main_document_complete_transition_is_ready(owner),
         Some(false),
         "the remaining CSS font token must keep complete blocked"
     );
-    assert!(store.settle_stylesheet_subresource_load_delay(font));
+    assert!(
+        store
+            .settle_stylesheet_subresource_load_delay(font)
+            .settled()
+    );
     assert_eq!(
         store.current_main_document_complete_transition_is_ready(owner),
         Some(true)
@@ -1015,7 +1148,11 @@ fn main_stylesheet_subresource_delays_are_exact_and_replacement_safe() {
         )
         .expect("main replacement");
     assert!(!store.stylesheet_subresource_load_delay_is_current(stale));
-    assert!(!store.settle_stylesheet_subresource_load_delay(stale));
+    assert!(
+        !store
+            .settle_stylesheet_subresource_load_delay(stale)
+            .settled()
+    );
     assert_eq!(
         store.current_main_document_complete_transition_is_ready(replacement.current_owner()),
         Some(false)
@@ -1062,7 +1199,7 @@ fn main_media_delay_is_element_owned_and_cannot_settle_replacement() {
         Some(false),
         "the media element must retain its load delay through first data"
     );
-    assert!(store.settle_main_media_load_delay(binding));
+    assert!(store.settle_main_media_load_delay(binding).settled());
     assert_eq!(
         store.current_main_document_complete_transition_is_ready(owner),
         Some(true)
@@ -1080,7 +1217,7 @@ fn main_media_delay_is_element_owned_and_cannot_settle_replacement() {
         .expect("main replacement");
     assert!(!store.main_media_load_delay_is_current(stale));
     assert!(
-        !store.settle_main_media_load_delay(stale),
+        !store.settle_main_media_load_delay(stale).settled(),
         "stale media completion must not release replacement state"
     );
     assert_eq!(
@@ -4562,9 +4699,9 @@ fn child_image_load_event_binding_delays_complete_and_retires_with_document() {
         "the exact image token must block complete"
     );
 
-    assert!(store.settle_child_image_load_event_binding(image));
+    assert!(store.settle_child_image_load_event_binding(image).settled());
     assert!(
-        !store.settle_child_image_load_event_binding(image),
+        !store.settle_child_image_load_event_binding(image).settled(),
         "image terminal must consume its load-delay token exactly once"
     );
     let complete = store
@@ -4599,7 +4736,9 @@ fn child_image_load_event_binding_delays_complete_and_retires_with_document() {
         "replacement must stale the old image event owner"
     );
     assert!(
-        !store.settle_child_image_load_event_binding(post_complete_image),
+        !store
+            .settle_child_image_load_event_binding(post_complete_image)
+            .settled(),
         "a stale image event must not settle against the replacement document"
     );
 }
@@ -4630,7 +4769,11 @@ fn child_stylesheet_subresource_delays_release_only_their_document() {
             .prepare_current_child_document_complete_transition(child_handle, owner)
             .is_none()
     );
-    assert!(store.settle_stylesheet_subresource_load_delay(image));
+    assert!(
+        store
+            .settle_stylesheet_subresource_load_delay(image)
+            .settled()
+    );
     assert!(
         store
             .prepare_current_child_document_complete_transition(child_handle, owner)
@@ -4654,7 +4797,9 @@ fn child_stylesheet_subresource_delays_release_only_their_document() {
     assert_eq!(transition.retired_owner(), Some(owner));
     assert!(!store.stylesheet_subresource_load_delay_is_current(font));
     assert!(
-        !store.settle_stylesheet_subresource_load_delay(font),
+        !store
+            .settle_stylesheet_subresource_load_delay(font)
+            .settled(),
         "stale CSS terminal must not release replacement lifecycle state"
     );
     let replacement = transition.current_owner().expect("replacement owner");
@@ -4715,9 +4860,9 @@ fn child_media_load_delay_is_element_owned_and_cannot_settle_replacement() {
         "the exact media token must block complete"
     );
 
-    assert!(store.settle_child_media_load_delay(media));
+    assert!(store.settle_child_media_load_delay(media).settled());
     assert!(
-        !store.settle_child_media_load_delay(media),
+        !store.settle_child_media_load_delay(media).settled(),
         "loadeddata must consume the media token exactly once"
     );
     let complete = store
@@ -4748,7 +4893,9 @@ fn child_media_load_delay_is_element_owned_and_cannot_settle_replacement() {
         "replacement must stale the old media owner"
     );
     assert!(
-        !store.settle_child_media_load_delay(post_complete_media),
+        !store
+            .settle_child_media_load_delay(post_complete_media)
+            .settled(),
         "a stale media event must not settle against the replacement document"
     );
 }

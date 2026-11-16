@@ -19,6 +19,7 @@ mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
 mod networking_tasks;
+mod resource_output;
 mod script_loading;
 mod script_mime;
 mod thread;
@@ -31,8 +32,10 @@ pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
-    NestedWorkerContext, WorkerGlobalState, WorkerOpfsCompletion, WorkerWebCryptoCompletion,
-    cancel_worker_opfs_task, check_worker_websocket_csp, close_worker_websocket,
+    NestedWorkerContext, WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse,
+    WorkerFetchStreamingChunk, WorkerFetchStreamingFinished, WorkerFetchStreamingStarted,
+    WorkerGlobalState, WorkerOpfsCompletion, WorkerWebCryptoCompletion, cancel_worker_opfs_task,
+    check_worker_websocket_csp, close_worker_websocket,
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
@@ -58,8 +61,7 @@ pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
     WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
-    WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerPendingSubresourceFetch,
-    WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
+    WorkerParentErrorEventKind, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
     WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
     WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
 };
@@ -77,4 +79,9 @@ pub(crate) use script_mime::{
 pub(crate) use thread::{
     WorkerGlobalKind, WorkerScriptKind, WorkerScriptSource, WorkerSpawnOptions,
     dispatch_current_worker_callback_exception, spawn_worker_with_options,
+};
+
+#[cfg(test)]
+pub(crate) use handle::{
+    WorkerPendingFetchContinue, WorkerPendingSubresourceFetch, WorkerPendingXhrContinue,
 };

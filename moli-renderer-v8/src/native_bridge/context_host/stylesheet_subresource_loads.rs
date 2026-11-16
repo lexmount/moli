@@ -1,19 +1,10 @@
 use super::PageScriptHost;
 use crate::{
     document_runtime::DomHandle,
-    frame_owner_model::{FrameDocumentTaskOwner, StylesheetSubresourceLoadDelayBinding},
+    frame_owner_model::{
+        DocumentLoadDelaySettlement, FrameDocumentTaskOwner, StylesheetSubresourceLoadDelayBinding,
+    },
 };
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct StylesheetSubresourceLoadDelaySettlement {
-    settled: bool,
-}
-
-impl StylesheetSubresourceLoadDelaySettlement {
-    pub(crate) fn settled(self) -> bool {
-        self.settled
-    }
-}
 
 impl PageScriptHost {
     pub(crate) fn accept_current_stylesheet_subresource_load_delay_for_document(
@@ -79,12 +70,11 @@ impl PageScriptHost {
     pub(crate) fn settle_stylesheet_subresource_load_delay(
         &mut self,
         binding: StylesheetSubresourceLoadDelayBinding,
-    ) -> StylesheetSubresourceLoadDelaySettlement {
+    ) -> DocumentLoadDelaySettlement {
         let settled = self
             .frame_owner_store
             .settle_stylesheet_subresource_load_delay(binding);
-        let queued_child_frame_task = if settled
-            && binding.load_delay_token().is_some()
+        let queued_child_frame_task = if settled.released()
             && let Some(child_handle) = binding.child_handle()
         {
             self.queue_child_document_complete_lifecycle_if_ready_for_owner(
@@ -98,10 +88,10 @@ impl PageScriptHost {
             owner = ?binding.owner(),
             child_handle = ?binding.child_handle(),
             token = ?binding.load_delay_token(),
-            settled,
+            ?settled,
             queued_child_frame_task,
             "settled stylesheet subresource load delay"
         );
-        StylesheetSubresourceLoadDelaySettlement { settled }
+        settled
     }
 }

@@ -28,6 +28,8 @@ pub(crate) struct XhrLoadResult {
     pub(crate) result: Result<Response, String>,
     pub(crate) info: PendingSubresourceFetchInfo,
     pub(crate) network_record: SubresourceNetworkRecord,
+    pub(crate) csp_violations:
+        Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
 }
 
 impl XhrLoadResult {
@@ -95,6 +97,7 @@ impl XhrLoadResult {
             info,
             result: result.map(|delivered| delivered.response),
             network_record,
+            csp_violations: Vec::new(),
         }
     }
 }

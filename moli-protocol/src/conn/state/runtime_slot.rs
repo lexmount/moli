@@ -1079,6 +1079,17 @@ impl TargetRuntimeSlot {
         page.bind_renderer_agent_attachment(current.id());
     }
 
+    pub(crate) fn ingest_worker_network_output(
+        &mut self,
+        item: &ScriptNetworkOutputItem,
+        allocator: &mut ConnectionNetworkRequestIdAllocator,
+    ) -> TargetNetworkBacklogPreparedDelivery {
+        self.network_agent
+            .ingest_renderer_output_item_and_prepare_live_delivery(
+                item, "", None, None, None, allocator,
+            )
+    }
+
     /// Appends one concrete renderer-produced network fact to the protocol
     /// queue for the exact committed Document that produced it.
     ///

@@ -175,6 +175,14 @@ impl CdpConnection {
         self.dedicated_worker_pause_on_start_for_devtools()
     }
 
+    pub(crate) fn shared_worker_pause_on_start_for_devtools(&self) -> bool {
+        self.auto_attach_owner_sessions_for_target_type("shared_worker")
+            .iter()
+            .any(|owner| {
+                (owner.is_none() || self.is_browser_session_id(owner.as_deref()))
+                    && self.auto_attach_owner_waits_for_debugger_on_start(owner.as_deref())
+            })
+    }
     pub(crate) fn dedicated_worker_pause_on_start_for_devtools(&self) -> bool {
         !self
             .dedicated_worker_pause_on_start_owner_sessions

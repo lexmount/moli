@@ -119,7 +119,7 @@ pub(crate) fn form_control_is_effectively_disabled(
             continue;
         };
         if parent_element.is_html_fieldset()
-            && parent_element.has_attribute("disabled")
+            && parent_element.has_attribute_ns("", "disabled")
             && !control_is_in_first_legend(runtime, handle, parent)
         {
             return true;
@@ -135,7 +135,7 @@ fn disabled_attribute_applies_to_control(
     handle: DomHandle,
     element: &Element,
 ) -> bool {
-    element.has_attribute("disabled")
+    element.has_attribute_ns("", "disabled")
         && (is_form_associated_custom_element_handle(runtime, handle)
             || matches!(
                 element.local_name(),
@@ -161,7 +161,7 @@ fn option_is_disabled_by_optgroup(runtime: &PageScriptHost, handle: DomHandle) -
             continue;
         };
         match parent_element.local_name() {
-            "optgroup" => return parent_element.has_attribute("disabled"),
+            "optgroup" => return parent_element.has_attribute_ns("", "disabled"),
             "select" | "hr" | "datalist" | "option" => return false,
             _ => {}
         }

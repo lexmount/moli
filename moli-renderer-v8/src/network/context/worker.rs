@@ -41,6 +41,7 @@ struct WorkerResourceLoaderAuthority {
     owner: WorkerResourceOwner,
     state: Mutex<WorkerResourceLoaderState>,
     loads: ResourceLoadRegistry,
+    interception: Mutex<Option<crate::network::interception_output::ResourceInterceptionContext>>,
 }
 
 impl Drop for WorkerResourceLoaderAuthority {
@@ -48,6 +49,9 @@ impl Drop for WorkerResourceLoaderAuthority {
         // Normal Worker shutdown detaches before V8 teardown. Keep destruction
         // itself safe as well so bootstrap failures cannot leave an ordinary
         // transport running without its WorkerGlobalScope.
+        if let Some(context) = self.interception.get_mut() {
+            context.close_worker_observer();
+        }
         self.loads.begin_detach();
     }
 }
@@ -80,8 +84,16 @@ impl WorkerResourceLoader {
                 owner,
                 state: Mutex::new(WorkerResourceLoaderState::Active),
                 loads,
+                interception: Mutex::new(None),
             }),
         }
+    }
+
+    pub(crate) fn set_interception_context(
+        &self,
+        context: Option<crate::network::interception_output::ResourceInterceptionContext>,
+    ) {
+        *self.authority.interception.lock() = context;
     }
 
     pub(crate) fn register_load(
@@ -118,6 +130,9 @@ impl WorkerResourceLoader {
         }
         *state = WorkerResourceLoaderState::Detaching;
         drop(state);
+        if let Some(context) = &*self.authority.interception.lock() {
+            context.close_worker_observer();
+        }
         self.authority.loads.begin_detach();
         true
     }

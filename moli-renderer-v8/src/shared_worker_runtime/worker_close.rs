@@ -80,7 +80,7 @@ mod tests {
         let (tx, mut rx) = crate::runtime::renderer_output_transport_channel();
         host.target_output().bind_transport(tx);
 
-        host.publish_created_target_event();
+        host.publish_created_target_event(None);
         host.publish_destroyed_target_event();
         host.publish_destroyed_target_event();
 

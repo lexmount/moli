@@ -5,11 +5,9 @@ use crate::native_bridge::element::{
 use moli_webapi_declare::WebApiObject;
 
 mod document;
-mod live_attribute_bridge;
 mod node;
 
 use document::install_detached_document_methods;
-use live_attribute_bridge::install_live_attribute_bridge_methods;
 use node::{install_detached_node_methods, install_detached_parent_node_move_before};
 
 #[derive(WebApiObject)]
@@ -30,11 +28,10 @@ struct DocumentFragmentGetElementByIdDeclaration {
 }
 
 pub(in crate::native_bridge) fn install_detached_bridge_methods(scope: &mut v8::PinScope<'_, '_>) {
-    let Some(bridge) = global_bridge_object(scope) else {
+    if global_bridge_object(scope).is_none() {
         return;
-    };
+    }
     ensure_detached_bridge_prototypes(scope);
-    install_live_attribute_bridge_methods(scope, bridge);
 
     let Some(element_prototype) = bridge_prototype_object(scope, "__detachedElementPrototype")
     else {
