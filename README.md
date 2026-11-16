@@ -323,8 +323,8 @@ nextest regression suite.
 | [Mixed public-web crawl test](#mixed-public-web-crawl-test) | Useful pages from 192 public URLs | 103 pages (53.6%), 73 MiB median RSS |
 | [Sample agent workload](#sample-agent-workload) | Startup, latency and memory of one agent episode | CDP ready in 34.85 ms (Chromium 169.37 ms) |
 | [WPT tests](#wpt-tests) | Selected web-platform tests | 1.612 million passed |
-| [Moli's performance in Lexbench-Headless-Browser](#molis-performance-in-lexbench-headless-browser) | 1,308 automation tasks; CPU and memory | 81.9% success; 15% of Chrome's CPU time, 13% of its memory |
-| [Web Fetch](#web-fetch) | 430 live-site tasks; 545 saved pages | 89.8% and 39.27%, first of five browsers on both |
+| [Moli's performance in Lexbench-Headless-Browser](#molis-performance-in-lexbench-headless-browser) | 1,308 automation tasks; CPU and peak memory on a separate 557-task run | 81.9% success; 15% of Chrome's CPU time, 13% of its peak memory |
+| [Web Fetch](#web-fetch) | 430 live-site tasks; 545 saved pages | 89.8% pass rate, 39.27% extraction score; first of five browsers on both |
 
 ### Mixed public-web crawl test
 
