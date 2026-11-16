@@ -246,15 +246,15 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 
 ## 测试数据
 
-Moli 在任务固定的公开评测集上进行测试。每一行都说明怎样算通过，以及在哪里复现。
+Moli 在任务固定的公开评测集上进行测试。每一行说明测量的是什么，并链接到详情。
 
-| 方向 | 评测集 | 通过的含义 | Moli | 详情 |
+| 方向 | 评测集 | 测量内容 | Moli | 详情 |
 | --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 道真实网站任务 | 从真实网站取回所需内容 | **89.8%**，五个浏览器中第一 | [Web Fetch](#web-fetch) |
-| 正文提取 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 份网页快照 | 提取的正文与人工标注一致 | **39.27%**，五个浏览器中第一 | [Web Fetch](#web-fetch) |
-| 浏览器自动化 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 道可比任务 | CDP、自动化工具或 Web 平台任务执行成功 | **81.9%**；Chrome 99.8% | [浏览器自动化](#浏览器自动化) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 道真实网站任务 | 从真实网站取回所需内容的任务比例 | **89.8%**，五个浏览器中第一 | [Web Fetch](#web-fetch) |
+| 正文提取 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 份网页快照 | 相对人工标注的正文提取质量得分（越高越好） | **39.27%**，五个浏览器中第一 | [Web Fetch](#web-fetch) |
+| 浏览器自动化 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 道可比任务 | CDP、自动化工具和 Web 平台任务的成功比例 | **81.9%**；Chrome 99.8% | [浏览器自动化](#浏览器自动化) |
 | 资源占用 | Lexbench-Headless-Browser · 所有本地引擎都完成的 557 道任务 | 单题 CPU 时间和内存峰值的中位数 | Chrome CPU 时间的 **15%**、内存峰值的 **13%** | [资源占用](#资源占用) |
-| Web 标准 | 选定的 [WPT](https://github.com/web-platform-tests/wpt) 测试 | WPT 测试通过 | 一次完整运行通过 **161.2 万**项测试 | — |
+| Web 标准 | 选定的 [WPT](https://github.com/web-platform-tests/wpt) 测试 | 通过的 WPT 测试数 | 一次完整运行通过 **161.2 万**项测试 | — |
 
 ### Web Fetch
 

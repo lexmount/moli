@@ -304,16 +304,16 @@ Moli는 Chromium 래퍼가 아닌 독립형 브라우저 커널입니다. Rust�
 
 ## 벤치마크
 
-Moli는 작업이 고정된 공개 벤치마크로 측정합니다. 각 행은 무엇을 통과로 보는지와 어디서 재현할 수
-있는지를 알려 줍니다.
+Moli는 작업이 고정된 공개 벤치마크로 측정합니다. 각 행은 무엇을 측정하는지 보여 주고
+자세한 내용으로 연결됩니다.
 
-| 영역 | 벤치마크 | 통과 기준 | Moli | 자세히 |
+| 영역 | 벤치마크 | 측정 항목 | Moli | 자세히 |
 | --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 실제 사이트 과제 430개 | 실제 사이트에서 필요한 콘텐츠를 가져옴 | **89.8%**, 브라우저 5개 중 1위 | [Web Fetch](#web-fetch) |
-| 콘텐츠 추출 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 저장된 페이지 545개 | 본문이 사람이 표시한 정답과 일치함 | **39.27%**, 5개 중 1위 | [Web Fetch](#web-fetch) |
-| 브라우저 자동화 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 비교 가능한 작업 1,308개 | CDP, 자동화 도구, 웹 플랫폼 작업이 성공함 | **81.9%**, Chrome 99.8% | [브라우저 자동화](#브라우저-자동화) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 실제 사이트 과제 430개 | 실제 사이트에서 필요한 콘텐츠를 가져온 과제의 비율 | **89.8%**, 브라우저 5개 중 1위 | [Web Fetch](#web-fetch) |
+| 콘텐츠 추출 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 저장된 페이지 545개 | 사람이 표시한 정답 대비 추출 품질 점수(높을수록 좋음) | **39.27%**, 5개 중 1위 | [Web Fetch](#web-fetch) |
+| 브라우저 자동화 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 비교 가능한 작업 1,308개 | CDP, 자동화 도구, 웹 플랫폼 작업의 성공 비율 | **81.9%**, Chrome 99.8% | [브라우저 자동화](#브라우저-자동화) |
 | 리소스 사용량 | Lexbench-Headless-Browser · 모든 로컬 엔진이 완료한 작업 557개 | 작업당 중앙 CPU 시간과 최대 메모리 | Chrome CPU 시간의 **15%**, 메모리의 **13%** | [리소스 사용량](#리소스-사용량) |
-| 웹 표준 | 선별한 [WPT](https://github.com/web-platform-tests/wpt) 테스트 | WPT 테스트를 통과함 | 전체 실행 한 번에 **161만 2천 개** 테스트 통과 | — |
+| 웹 표준 | 선별한 [WPT](https://github.com/web-platform-tests/wpt) 테스트 | 통과한 WPT 테스트 수 | 전체 실행 한 번에 **161만 2천 개** 테스트 통과 | — |
 
 ### Web Fetch
 
