@@ -323,6 +323,7 @@ pub(crate) use wrappers::{
     set_event_private_value,
 };
 
+pub(crate) use subclasses::construct_native_touch_event;
 pub(in crate::context_bootstrap) use wrappers::{
     event_platform_attribute_getter, event_value_attribute_getter,
 };

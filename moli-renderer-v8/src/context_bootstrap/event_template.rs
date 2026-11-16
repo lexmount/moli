@@ -131,6 +131,13 @@ struct SubmitEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::TouchEvent, enumerable, receiver)]
+struct TouchEventTemplateMethodsDeclaration {
+    #[webapi(method, length = 1, callback = event_get_modifier_state_callback)]
+    get_modifier_state: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::FormDataEvent, enumerable, receiver)]
 struct FormDataEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "formData", getter = form_data_event_form_data_getter_function)]
@@ -395,6 +402,7 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         "MouseEvent" => EventTemplateDeclaration::new::<MouseEventTemplateMethodsDeclaration>(),
         "WheelEvent" => EventTemplateDeclaration::new::<WheelEventTemplateConstantsDeclaration>(),
         "PointerEvent" => EventTemplateDeclaration::new::<PointerEventTemplateMethodsDeclaration>(),
+        "TouchEvent" => EventTemplateDeclaration::new::<TouchEventTemplateMethodsDeclaration>(),
         "SubmitEvent" => EventTemplateDeclaration::new::<SubmitEventTemplateAccessorsDeclaration>(),
         "FormDataEvent" => {
             EventTemplateDeclaration::new::<FormDataEventTemplateAccessorsDeclaration>()
@@ -408,6 +416,11 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
 pub(super) fn event_has_prototype_attribute(interface: &str, property: &str) -> bool {
     let mut interface = Some(interface);
     while let Some(name) = interface {
+        if name == "TouchEvent"
+            && super::touch_runtime::TOUCH_EVENT_PROTOTYPE_ATTRIBUTES.contains(&property)
+        {
+            return true;
+        }
         if event_template_declaration(name)
             .is_some_and(|declaration| declaration.attributes.contains(&property))
         {

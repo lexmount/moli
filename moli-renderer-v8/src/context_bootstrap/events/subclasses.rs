@@ -9,6 +9,8 @@ mod input;
 mod keyboard;
 mod pointer;
 mod security_policy;
+mod touch;
+pub(crate) use touch::construct_native_touch_event;
 
 pub(in crate::context_bootstrap::events) use basic::initialize_text_event;
 pub(in crate::context_bootstrap) use constructor::build_event_subclass_template;
