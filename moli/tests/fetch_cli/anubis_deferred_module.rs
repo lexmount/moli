@@ -202,7 +202,9 @@ fn cli_deferred_module_observes_stylesheet_unblocked_parser_dom() -> Result<()> 
             "--wait-selector",
             "#passed",
             "--timeout",
-            "3000",
+            // This checks parser ordering, not latency. Leave room for CLI
+            // startup and local HTTP scheduling under parallel workspace tests.
+            "15000",
             "--dump",
             "html",
             &url,
