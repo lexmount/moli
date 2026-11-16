@@ -1,6 +1,7 @@
 use super::{
     ImageDecodeRequestId, ImageDecodeRetirementOutcome, OwnerDispatchScope, PageScriptHost,
-    PendingImageDecodeRequest, PendingImageDecodeRequestState, RuntimeObservableContextToken,
+    PendingImageDecodeRequest, PendingImageDecodeRequestState, PendingImageLoadNetworkState,
+    RuntimeObservableContextToken,
 };
 use crate::{
     document_runtime::DomHandle,
@@ -101,14 +102,16 @@ impl PageScriptHost {
                 self.settle_image_decode_request(scope, request, ImageDecodeCompletion::Resolve);
             return true;
         }
-        let waits_for_current_load =
-            self.pending_image_load_events
-                .iter()
-                .any(|(pending_element, pending)| {
-                    self.pending_image_load_event_is_current(*pending_element, *pending)
-                        && image_selected_request_key(self, *pending_element).as_ref()
-                            == Some(&request.request_key)
-                });
+        let waits_for_current_load = self
+            .pending_image_load_events
+            .get(&request.element)
+            .is_some_and(|pending| {
+                self.pending_image_load_event_is_current(request.element, *pending)
+                    && !matches!(
+                        pending.network_state,
+                        PendingImageLoadNetworkState::Failed(_)
+                    )
+            });
         if waits_for_current_load {
             request.state = PendingImageDecodeRequestState::PendingLoad;
             self.pending_image_decode_requests.insert(id, request);
@@ -131,7 +134,11 @@ impl PageScriptHost {
         let ids = self
             .pending_image_decode_requests
             .iter()
-            .filter_map(|(id, request)| (request.element == element).then_some(*id))
+            .filter_map(|(id, request)| {
+                (request.element == element
+                    && request.state == PendingImageDecodeRequestState::PendingLoad)
+                    .then_some(*id)
+            })
             .collect::<Vec<_>>();
         for id in &ids {
             let _ = self.process_image_decode_request(scope, *id);
@@ -145,8 +152,10 @@ impl PageScriptHost {
     ) -> usize {
         let ids = self
             .pending_image_decode_requests
-            .keys()
-            .copied()
+            .iter()
+            .filter_map(|(id, request)| {
+                (request.state == PendingImageDecodeRequestState::PendingLoad).then_some(*id)
+            })
             .collect::<Vec<_>>();
         for id in &ids {
             let _ = self.process_image_decode_request(scope, *id);
