@@ -51,3 +51,45 @@ fn legacy_mouse_initializer_converts_nullable_interfaces_and_short_before_mutati
         panic!("legacy MouseEvent conversion failures: {failures}");
     }
 }
+
+#[test]
+fn legacy_mouse_initializer_synchronizes_flags_and_resets_extended_modifiers() {
+    let mut vm = new_parsed_test_vm(
+        "https://legacy-mouse-modifiers.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    assert_eq!(vm.eval(r#"
+(() => {
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  const extra = ['AltGraph', 'CapsLock', 'Fn', 'FnLock', 'Hyper', 'NumLock',
+    'ScrollLock', 'Super', 'Symbol', 'SymbolLock'];
+  for (const w of [window, frame.contentWindow]) {
+    for (const C of [w.MouseEvent, w.WheelEvent, w.PointerEvent, w.DragEvent]) {
+      const event = new C('before', {ctrlKey: true, modifierAltGraph: true, modifierCapsLock: true});
+      if (!event.getModifierState('AltGraph') || !event.getModifierState('Control')) throw Error('initial modifier state');
+      w.MouseEvent.prototype.initMouseEvent.call(event, 'after', true, false, w,
+        0, 0, 0, 0, 0, false, true, true, false, 0, null);
+      if (event.ctrlKey || !event.altKey || !event.shiftKey || event.metaKey) throw Error('legacy modifier flags');
+      for (const key of ['Control', 'Alt', 'Shift', 'Meta', ...extra]) {
+        if (event.getModifierState(key) !== (key === 'Alt' || key === 'Shift')) throw Error(C.name + ': stale ' + key);
+      }
+      w.MouseEvent.prototype.initMouseEvent.call(event, 'reset');
+      for (const key of ['Control', 'Alt', 'Shift', 'Meta', ...extra]) {
+        if (event.getModifierState(key)) throw Error('default reinitialization left ' + key);
+      }
+      const dispatch = new C('probe', {ctrlKey: true, modifierAltGraph: true});
+      const target = w.document.createElement('div');
+      let dispatchPreserved = false;
+      target.addEventListener('probe', () => {
+        w.MouseEvent.prototype.initMouseEvent.call(dispatch, 'ignored');
+        dispatchPreserved = dispatch.type === 'probe' && dispatch.ctrlKey && dispatch.getModifierState('AltGraph');
+      });
+      target.dispatchEvent(dispatch);
+      if (!dispatchPreserved) throw Error('reinitialized during dispatch');
+    }
+  }
+  frame.remove();
+  return 'ok';
+})()
+"#).expect("legacy MouseEvent modifier initialization probe"), "ok");
+}
