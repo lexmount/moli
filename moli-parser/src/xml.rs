@@ -19,6 +19,12 @@ use moli_dom::native::{
     Attribute as NativeAttribute, DomHost, NativeDom, NativeNodeId, Node, ParserConstruction,
 };
 
+mod fragment;
+pub use fragment::{ParsedXmlFragment, XmlFragmentParseError};
+
+const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE: &str = "http://www.w3.org/2000/xmlns/";
+
 #[derive(Debug, Clone, Default)]
 pub struct XmlParser;
 
