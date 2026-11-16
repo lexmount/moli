@@ -21,6 +21,7 @@ from ..web_security_fixture import READ
 from .web_security_forms import observe_forms
 from .web_security_loaders import observe_loaders
 from .web_security_service_workers import observe_stylesheet_redirect
+from .web_security_streams import observe_streams
 
 
 ORACLE_VERSION = '156.0.8078.73'
@@ -215,6 +216,7 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
 
             observed.update(await observe_loaders(page,context,source,peer,mode))
             observed.update(await observe_forms(page,context,source,peer,mode))
+            observed.update(await observe_streams(page,context,source,peer,mode,disabled))
             observed.update(await observe_stylesheet_redirect(page,context,source,peer,mode,service_worker=False))
 
             # Distinct registrable domains exercise default Site Isolation.

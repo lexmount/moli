@@ -11,6 +11,26 @@ from .web_security_loaders import resource
 async def observe_forms(page: Any, context: Any, source: str, peer: FixtureServer,
                         mode: str) -> dict[str, Any]:
     observed: dict[str, Any] = {}
+    for policy in ('no-referrer', 'same-origin', 'origin'):
+        for cross in (False, True):
+            name = f'post-origin-{policy}-' + ('cross' if cross else 'same')
+            key = mode + '-' + name
+            await page.goto(resource(source, 'page', key + '-page', policy=policy), wait_until='load')
+            destination = resource(peer.url if cross else source, 'echo', key, witness_referrer=1)
+            await context.clear_cookies()
+            await submit(page, destination, True)
+            for request_mode in ('cors', 'no-cors', 'same-origin'):
+                await context.clear_cookies()
+                await page.evaluate('''async ([url,mode])=>{
+                  try { await fetch(url,{method:'POST',body:'probe=value',mode}); }
+                  catch(error) { if(error.name!=='TypeError')throw error; }
+                }''', [destination, request_mode])
+            # Fetch and form submit to exactly the same URL in sequence.
+            # Reading the fixture over HTTP works for either origin.
+            observed[name] = await page.evaluate('url=>fetch(url).then(r=>r.json())',
+                resource(source if not cross else peer.url, 'requests', key + '-read',
+                         **{'for': key, 'cors': 1}))
+
     for framed in (False, True):
         for initial, changed in (('origin', 'no-referrer'), ('no-referrer', 'origin')):
             name = f'formdata-policy-{initial}-to-{changed}-' + ('iframe' if framed else 'top')
