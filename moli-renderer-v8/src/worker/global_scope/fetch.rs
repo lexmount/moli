@@ -1048,7 +1048,35 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
             start_worker_streaming_fetch(scope, state, started)
         }
         WorkerFetchEvent::StreamingChunk(chunk) => {
-            enqueue_pending_network_body_chunk(scope, chunk.body_source_id, chunk.bytes)
+            let range = chunk.take_range();
+            for offset in (range.start..range.end).step_by(64 * 1024) {
+                match chunk
+                    .body
+                    .read_captured_chunk(offset, (range.end - offset).min(64 * 1024))
+                {
+                    Ok(bytes) => {
+                        enqueue_pending_network_body_chunk(scope, chunk.body_source_id, bytes)
+                    }
+                    Err(error) => {
+                        for pending in state.borrow().pending_fetches.values() {
+                            if pending.streaming_body_source_id == Some(chunk.body_source_id) {
+                                pending.load.cancel();
+                            }
+                        }
+                        let message = error.to_string();
+                        let reason = v8_string(scope, &message)
+                            .map(|message| v8::Exception::type_error(scope, message))
+                            .unwrap_or_else(|| v8::undefined(scope).into());
+                        error_pending_network_body_stream_with_reason(
+                            scope,
+                            chunk.body_source_id,
+                            message,
+                            reason,
+                        );
+                        break;
+                    }
+                }
+            }
         }
         WorkerFetchEvent::StreamingFinished(finished) => {
             finish_worker_streaming_fetch(scope, state, finished)

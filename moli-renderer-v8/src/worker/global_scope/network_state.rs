@@ -39,9 +39,48 @@ pub(crate) struct WorkerFetchStreamingStarted {
     pub(crate) head: ResponseHead,
 }
 
+/// One pending wake per response, sharing the native disk-backed capture.
+/// A blocked Worker must not retain another Vec for every network chunk.
+#[derive(Clone)]
 pub(crate) struct WorkerFetchStreamingChunk {
     pub(crate) body_source_id: NetworkBodySourceId,
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) body: crate::network::ResourceInterceptionBody,
+    pending: Arc<parking_lot::Mutex<PendingBodyDelivery>>,
+}
+
+#[derive(Default)]
+struct PendingBodyDelivery {
+    offset: usize,
+    end: usize,
+    queued: bool,
+}
+
+impl WorkerFetchStreamingChunk {
+    pub(crate) fn new(
+        body_source_id: NetworkBodySourceId,
+        body: crate::network::ResourceInterceptionBody,
+    ) -> Self {
+        Self {
+            body_source_id,
+            body,
+            pending: Arc::new(parking_lot::Mutex::new(PendingBodyDelivery::default())),
+        }
+    }
+    pub(crate) fn publish(&self, end: usize, sender: &mpsc::UnboundedSender<WorkerFetchEvent>) {
+        let mut pending = self.pending.lock();
+        pending.end = end;
+        if !pending.queued {
+            pending.queued = true;
+            let _ = sender.send(WorkerFetchEvent::StreamingChunk(self.clone()));
+        }
+    }
+    pub(crate) fn take_range(&self) -> std::ops::Range<usize> {
+        let mut pending = self.pending.lock();
+        let range = pending.offset..pending.end;
+        pending.offset = pending.end;
+        pending.queued = false;
+        range
+    }
 }
 
 pub(crate) struct WorkerFetchStreamingFinished {
@@ -140,4 +179,47 @@ pub(in crate::worker) struct WorkerWebSocketState {
     pub(in crate::worker) load: Option<ResourceLoadLease>,
     pub(in crate::worker) opened: bool,
     pub(in crate::worker) network_recorded: bool,
+}
+
+#[cfg(test)]
+mod body_delivery_tests {
+    use super::*;
+
+    #[test]
+    fn coalesced_ranges_keep_bytes_in_the_native_capture_and_rearm_after_delivery() {
+        let body = crate::network::ResourceInterceptionBody::from_complete(
+            SubresourceResponseBody::from_bytes(b"abcdefgh".to_vec()),
+        );
+        let delivery = WorkerFetchStreamingChunk::new(
+            crate::network_host::new_network_body_source_id(),
+            body.clone(),
+        );
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        delivery.publish(3, &sender);
+        delivery.publish(5, &sender);
+        let WorkerFetchEvent::StreamingChunk(first) = receiver.try_recv().unwrap() else {
+            panic!("body wake")
+        };
+        assert!(
+            receiver.try_recv().is_err(),
+            "at most one wake per response"
+        );
+        assert_eq!(first.take_range(), 0..5);
+        assert_eq!(first.body.read_captured_chunk(0, 5).unwrap(), b"abcde");
+        // Data arriving after the Worker took its prefix queues a distinct
+        // wake and never repeats bytes already handed to JS.
+        delivery.publish(8, &sender);
+        let WorkerFetchEvent::StreamingChunk(second) = receiver.try_recv().unwrap() else {
+            panic!("next body wake")
+        };
+        assert_eq!(second.take_range(), 5..8);
+        assert_eq!(second.body.read_captured_chunk(5, 3).unwrap(), b"fgh");
+        assert!(receiver.try_recv().is_err());
+        drop(receiver);
+        delivery.publish(8, &sender);
+        assert!(
+            !body.cancellation_handle().is_cancelled(),
+            "JS exit cannot cancel a keepalive transfer"
+        );
+    }
 }
