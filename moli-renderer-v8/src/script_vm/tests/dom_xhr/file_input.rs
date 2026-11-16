@@ -268,3 +268,49 @@ fn equal_file_values_keep_the_supplied_filelist_identity() {
         "true"
     );
 }
+
+#[test]
+fn file_list_item_uses_native_contents_and_bounds_without_author_getters() {
+    let mut vm = new_parsed_test_vm(
+        "https://file-list-native-item.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    assert_eq!(vm.eval(r#"
+(() => {
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  const high = '4294967294';
+  for (const w of [window, frame.contentWindow]) {
+    const transfer = new w.DataTransfer();
+    const file = new w.File(['native'], 'native.txt');
+    transfer.items.add(file);
+    const list = transfer.files, item = w.FileList.prototype.item;
+    let reads = 0;
+    const trap = () => { reads++; throw Error('author numeric getter'); };
+    Object.defineProperty(list, '0', {configurable: true, get: trap});
+    Object.defineProperty(list, 'length', {configurable: true, get: trap});
+    const prototype = Object.create(w.FileList.prototype);
+    Object.defineProperty(prototype, '1', {configurable: true, get: trap});
+    Object.setPrototypeOf(list, prototype);
+    const previous = Object.getOwnPropertyDescriptor(w.Array.prototype, high);
+    Object.defineProperty(w.Array.prototype, high, {configurable: true, get: trap});
+    try {
+      if (item.call(list, 0) !== file) throw Error('native File identity');
+      if (item.call(list, 1) !== null || item.call(list, Number(high)) !== null) throw Error('native item bounds');
+      const input = w.document.createElement('input'); input.type = 'file';
+      const empty = input.files, emptyPrototype = Object.create(w.FileList.prototype);
+      Object.defineProperty(emptyPrototype, '0', {get: trap});
+      Object.setPrototypeOf(empty, emptyPrototype);
+      if (item.call(empty, 0) !== null) throw Error('empty native list bounds');
+      Object.setPrototypeOf(list, null);
+      if (item.call(list, 0) !== file) throw Error('native identity after prototype mutation');
+      if (reads !== 0) throw Error('item consulted author data');
+    } finally {
+      if (previous) Object.defineProperty(w.Array.prototype, high, previous);
+      else delete w.Array.prototype[high];
+    }
+  }
+  frame.remove();
+  return 'ok';
+})()
+"#).expect("FileList.item native data probe"), "ok");
+}
