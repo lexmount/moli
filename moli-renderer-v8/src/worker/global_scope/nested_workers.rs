@@ -7,6 +7,7 @@ use super::*;
 pub(crate) struct NestedWorkerContext {
     pub(crate) interception_context:
         Option<crate::network::interception_output::ResourceInterceptionContext>,
+    pub(crate) pause_on_start: Arc<AtomicBool>,
     pub(crate) worker_id: DedicatedWorkerId,
     pub(crate) base_url: Url,
     pub(crate) loader: crate::network::context::WorkerResourceLoader,
@@ -44,6 +45,7 @@ pub(crate) fn reserve_nested_worker_context(
         .insert(worker_id, v8::Global::new(scope, worker));
     Some(NestedWorkerContext {
         interception_context: state.interception_context.clone(),
+        pause_on_start: state.nested_worker_pause.clone(),
         worker_id,
         base_url,
         loader: state.loader.clone(),
@@ -154,5 +156,17 @@ pub(in crate::worker) fn dispatch_nested_worker_event(
             dispatched: crate::context_bootstrap::dispatch_worker_event(scope, worker, message),
             unhandled_error: None,
         },
+    }
+}
+
+/// Retire actual child Workers before the creator's V8 wrappers disappear.
+pub(in crate::worker) fn terminate_nested_workers(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+) {
+    let wrappers = std::mem::take(&mut state.borrow_mut().nested_worker_wrappers);
+    for wrapper in wrappers.into_values() {
+        let wrapper = v8::Local::new(scope, &wrapper);
+        crate::context_bootstrap::terminate_worker_wrapper(scope, wrapper);
     }
 }

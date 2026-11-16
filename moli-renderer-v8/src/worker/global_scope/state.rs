@@ -143,6 +143,7 @@ pub(crate) struct WorkerGlobalState {
     /// Worker-local WebSocket id counter.
     pub(in crate::worker) next_websocket_id: u64,
     /// Worker-local dedicated workers created through `new Worker(...)`.
+    pub(in crate::worker) nested_worker_pause: Arc<AtomicBool>,
     pub(in crate::worker) next_nested_worker_id: u64,
     pub(in crate::worker) nested_worker_wrappers:
         HashMap<DedicatedWorkerId, v8::Global<v8::Object>>,

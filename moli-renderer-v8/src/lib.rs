@@ -250,7 +250,8 @@ pub use runtime::{
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCdpCall,
     RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererContentStripOptions,
     RendererCountEntry, RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererDevToolsAgentToken, RendererDevToolsMainCommandEnvelope, RendererDocumentBoxModel,
+    RendererDedicatedWorkerTargetOwner, RendererDevToolsAgentToken,
+    RendererDevToolsMainCommandEnvelope, RendererDocumentBoxModel,
     RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
     RendererDocumentChildNodeSnapshots, RendererDocumentCommandTarget,
     RendererDocumentCommitPermit, RendererDocumentFrontendNodeIdsResolution,
@@ -339,8 +340,8 @@ pub use runtime::{
     RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
     RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload, RendererSyntheticResponseBody,
     RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
-    RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot, WorkerInspectorError,
-    renderer_output_transport_channel,
+    RendererWindowDocumentSource, RendererWorkerTargetIdentity, RuntimeConsoleMessageSnapshot,
+    WorkerInspectorError, renderer_output_transport_channel,
 };
 pub use runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,

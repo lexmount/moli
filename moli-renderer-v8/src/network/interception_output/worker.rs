@@ -32,6 +32,10 @@ pub enum ResourceInterceptionEvent {
 pub(crate) struct WorkerInterceptionOutput {
     control: Option<ResourceInterceptionContext>,
     publish: Arc<dyn Fn(ResourceInterceptionEvent) -> bool + Send + Sync>,
+    target: Option<(
+        crate::runtime::RendererWorkerTargetIdentity,
+        crate::runtime::RendererTurnOutputJournal,
+    )>,
     closed: AtomicBool,
     closed_notify: tokio::sync::Notify,
 }
@@ -55,9 +59,36 @@ impl ResourceInterceptionContext {
         Self::Worker(Arc::new(WorkerInterceptionOutput {
             control,
             publish: Arc::new(publish),
+            target: None,
             closed: AtomicBool::new(false),
             closed_notify: tokio::sync::Notify::new(),
         }))
+    }
+
+    pub(crate) fn with_worker_target(
+        mut self,
+        identity: crate::runtime::RendererWorkerTargetIdentity,
+        journal: crate::runtime::RendererTurnOutputJournal,
+    ) -> Self {
+        let Self::Worker(output) = &mut self else {
+            unreachable!("Worker target requires a Worker observer")
+        };
+        Arc::get_mut(output)
+            .expect("target is bound before observer publication")
+            .target = Some((identity, journal));
+        self
+    }
+
+    pub(crate) fn worker_target(
+        &self,
+    ) -> Option<(
+        crate::runtime::RendererWorkerTargetIdentity,
+        crate::runtime::RendererTurnOutputJournal,
+    )> {
+        match self {
+            Self::Worker(output) => output.target.clone(),
+            Self::Document { .. } => None,
+        }
     }
 
     pub(crate) fn fork_worker_observer(&self) -> Self {
@@ -66,6 +97,7 @@ impl ResourceInterceptionContext {
             Self::Worker(output) => Self::Worker(Arc::new(WorkerInterceptionOutput {
                 control: output.control.clone(),
                 publish: output.publish.clone(),
+                target: output.target.clone(),
                 closed: AtomicBool::new(false),
                 closed_notify: tokio::sync::Notify::new(),
             })),

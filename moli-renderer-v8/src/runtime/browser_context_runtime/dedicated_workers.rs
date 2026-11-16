@@ -75,6 +75,12 @@ impl RendererBrowserContextRuntime {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub fn set_dedicated_worker_children_pause_on_start(&self, instance_id: u64, pause: bool) {
+        if let Some(handle) = self.dedicated_worker_devtools_handle(instance_id) {
+            handle.set_nested_worker_pause_on_start(pause);
+        }
+    }
+
     fn dedicated_worker_devtools_handle(&self, instance_id: u64) -> Option<WorkerDevToolsHandle> {
         self.inner
             .dedicated_worker_devtools_targets

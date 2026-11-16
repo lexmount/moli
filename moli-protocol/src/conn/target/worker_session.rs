@@ -120,19 +120,42 @@ impl CdpConnection {
                 browser_context_id,
                 target_id,
             } => {
-                let renderer_page = RendererPageResidenceIdentity::from_residence(residence)?;
                 let browser_context = self.browser_context_by_id(&browser_context_id)?;
                 let target = browser_context.dedicated_worker_target(&target_id)?;
-                let owner_target_id = target.owner_page.target_id()?;
-                let owner_target = browser_context.page_target(owner_target_id)?;
-                if !owner_target
-                    .runtime_slot()
-                    .routes_current_renderer_page_owner(
-                        renderer_page,
-                        target.owner_page.page_attachment_id(),
-                    )
-                {
-                    return None;
+                match &target.owner {
+                    crate::conn::DedicatedWorkerRootOwner::Page(page) => {
+                        let renderer_page =
+                            RendererPageResidenceIdentity::from_residence(residence)?;
+                        let owner_target = browser_context.page_target(page.target_id()?)?;
+                        if !owner_target
+                            .runtime_slot()
+                            .routes_current_renderer_page_owner(
+                                renderer_page,
+                                page.page_attachment_id(),
+                            )
+                        {
+                            return None;
+                        }
+                    }
+                    crate::conn::DedicatedWorkerRootOwner::SharedWorker(root_id) => {
+                        let RendererOutputResidenceIdentity::SharedWorker {
+                            browser_context_runtime_id,
+                            instance_id,
+                        } = residence
+                        else {
+                            return None;
+                        };
+                        if !browser_context
+                            .routes_renderer_browser_context_runtime(browser_context_runtime_id)
+                            || browser_context
+                                .shared_worker_target(root_id)?
+                                .renderer_instance_id
+                                .as_u64()
+                                != instance_id
+                        {
+                            return None;
+                        }
+                    }
                 }
                 target
                     .protocol_attachment_identity(&browser_context_id, session_id)

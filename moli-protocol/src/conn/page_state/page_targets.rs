@@ -1042,11 +1042,11 @@ impl BrowserContext {
         committed_page: Option<&crate::conn::TargetPageResidenceIdentity>,
     ) {
         for worker in self.dedicated_worker_targets.values().filter(|worker| {
-            worker.owner_page.target_id() == Some(target_id)
+            worker.owner_page().and_then(|page| page.target_id()) == Some(target_id)
                 && !worker.is_retiring()
                 && match committed_page {
-                    Some(page) => &worker.owner_page != page,
-                    None => !self.target_page_output_residence_is_current(&worker.owner_page),
+                    Some(page) => worker.owner_page() != Some(page),
+                    None => !self.dedicated_worker_owner_is_current(worker),
                 }
         }) {
             self.renderer_runtime()
@@ -1082,6 +1082,25 @@ impl BrowserContext {
         self.dedicated_worker_targets.remove(&renderer_instance_id)
     }
 
+    pub(crate) fn dedicated_worker_owner_is_current(
+        &self,
+        target: &DedicatedWorkerTargetState,
+    ) -> bool {
+        let root_current = match &target.owner {
+            crate::conn::DedicatedWorkerRootOwner::Page(page) => {
+                self.target_page_output_residence_is_current(page)
+            }
+            crate::conn::DedicatedWorkerRootOwner::SharedWorker(id) => {
+                self.shared_worker_target(id).is_some()
+            }
+        };
+        root_current
+            && target
+                .parent_target_id
+                .as_ref()
+                .is_none_or(|id| self.worker_resource_target(id).is_some())
+    }
+
     pub(crate) fn assign_session_to_dedicated_worker_target(
         &mut self,
         target_id: &str,
@@ -1093,8 +1112,7 @@ impl BrowserContext {
         let Some(renderer_instance_id) = self
             .dedicated_worker_target(target_id)
             .filter(|target| {
-                !target.is_retiring()
-                    && self.target_page_output_residence_is_current(&target.owner_page)
+                !target.is_retiring() && self.dedicated_worker_owner_is_current(target)
             })
             .map(|target| target.renderer_instance_id)
         else {
@@ -1302,7 +1320,7 @@ impl BrowserContext {
             title,
             url: target.url.clone(),
             attached: target.has_session(),
-            opener_id: target.owner_page.target_id().map(DevToolsTargetId::from),
+            opener_id: target.parent_target_id().map(DevToolsTargetId::from),
             opener_frame_id: None,
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),

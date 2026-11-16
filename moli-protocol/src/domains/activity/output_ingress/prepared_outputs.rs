@@ -391,6 +391,7 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         action: RendererOwnerAction,
+        source_residence: moli_core::RendererOutputResidenceIdentity,
         page_source: Option<(
             crate::conn::TargetPageResidenceIdentity,
             crate::conn::RendererPageResidenceIdentity,
@@ -624,6 +625,7 @@ impl PreparedProtocolOutputs {
                     dedicated_worker_target_lifecycle_prepared_outputs_for_event(
                         conn,
                         owner,
+                        source_residence,
                         page_source,
                         event,
                     )

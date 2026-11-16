@@ -204,8 +204,10 @@ fn dedicated_worker_info(
     request_url: &str,
 ) -> RendererDedicatedWorkerTargetInfo {
     RendererDedicatedWorkerTargetInfo {
-        owner_local_host_id: owner_renderer_page.owner_local_host_id(),
-        page_id: owner_renderer_page.page_id(),
+        owner: RendererDedicatedWorkerTargetOwner::Page {
+            owner_local_host_id: owner_renderer_page.owner_local_host_id(),
+            page_id: owner_renderer_page.page_id(),
+        },
         instance_id,
         request_url: request_url.to_owned(),
         document_url: "https://example.test/page.html".to_owned(),
@@ -409,7 +411,10 @@ async fn dedicated_worker_creation_precedes_page_main_script_request_and_uses_ta
 fn dedicated_worker_creation_rejects_a_renderer_page_identity_mismatch() {
     let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
     let mut info = dedicated_worker_info(8, owner_renderer_page, "https://example.test/worker.js");
-    info.page_id = moli_core::PageId::new_for_testing(24);
+    let RendererDedicatedWorkerTargetOwner::Page { page_id, .. } = &mut info.owner else {
+        unreachable!()
+    };
+    *page_id = moli_core::PageId::new_for_testing(24);
 
     assert!(
         register_dedicated_worker_target(
@@ -874,8 +879,7 @@ async fn dedicated_worker_failed_load_created_and_destroyed_in_one_capture_is_no
         dedicated_worker_target_lifecycle_outputs_for_events(
             conn,
             "BID-1".to_owned(),
-            owner_page,
-            owner_renderer_page,
+            Some((owner_page, owner_renderer_page)),
             vec![None],
             vec![
                 RendererDedicatedWorkerTargetEvent::Created(dedicated_worker_info(
@@ -959,8 +963,7 @@ async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retiremen
         dedicated_worker_target_lifecycle_outputs_for_events(
             conn,
             "BID-1".to_owned(),
-            owner_page,
-            owner_renderer_page,
+            Some((owner_page, owner_renderer_page)),
             vec![None],
             vec![
                 RendererDedicatedWorkerTargetEvent::Created(dedicated_worker_info(
@@ -3702,3 +3705,158 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
 }
 
 mod retirement_workflow;
+
+#[tokio::test]
+async fn nested_worker_auto_attach_uses_direct_parent_and_retains_root_residence() {
+    for shared in [false, true] {
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (parent, parent_id, parent_route) = if shared {
+            let outputs = register_shared_worker_target(
+                &mut conn,
+                "BID-1",
+                Some("TID-page".to_owned()),
+                shared_worker_info(700),
+            );
+            let parent_id = outputs
+                .worker_target_lifecycle_outputs
+                .iter()
+                .find_map(|output| match output {
+                    WorkerTargetLifecycleOutput::SharedWorkerCreated { target_delta } => {
+                        Some(target_delta.target_id().to_owned())
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let route = CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: parent_id.clone(),
+            };
+            (
+                RendererWorkerTargetIdentity::Shared(SharedWorkerInstanceId::from_u64(700)),
+                parent_id,
+                route,
+            )
+        } else {
+            let outputs = register_dedicated_worker_target(
+                &mut conn,
+                "BID-1",
+                owner_page.clone(),
+                owner_renderer_page,
+                Vec::new(),
+                dedicated_worker_info(700, owner_renderer_page, "https://example.test/outer.js"),
+            );
+            let parent_id = dedicated_created_target_id(&outputs);
+            let route = CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: parent_id.clone(),
+            };
+            (
+                RendererWorkerTargetIdentity::Dedicated(700),
+                parent_id,
+                route,
+            )
+        };
+        conn.register_session_route_for_test("SID-parent", parent_route);
+        conn.set_auto_attach_owner(
+            Some("SID-parent"),
+            true,
+            true,
+            CdpTargetFilter::default_auto_attach(),
+            true,
+        );
+        enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, true);
+        let mut info =
+            dedicated_worker_info(701, owner_renderer_page, "https://example.test/inner.js");
+        info.owner = RendererDedicatedWorkerTargetOwner::Worker(parent);
+        let created = if shared {
+            let owner = CommandOwnerScope::for_route(CdpSessionRoute::BrowserContext {
+                browser_context_id: "BID-1".to_owned(),
+            });
+            let runtime = conn
+                .browser_context_by_id("BID-1")
+                .unwrap()
+                .renderer_runtime()
+                .id();
+            let wrong_source = moli_core::RendererOutputResidenceIdentity::SharedWorker {
+                browser_context_runtime_id: runtime,
+                instance_id: 999,
+            };
+            assert!(
+                dedicated_worker_target_lifecycle_prepared_outputs_for_event(
+                    &mut conn,
+                    &owner,
+                    wrong_source,
+                    None,
+                    RendererDedicatedWorkerTargetEvent::Created(info.clone())
+                )
+                .is_empty(),
+                "a different SharedWorker stream cannot create this child"
+            );
+            let source = moli_core::RendererOutputResidenceIdentity::SharedWorker {
+                browser_context_runtime_id: runtime,
+                instance_id: 700,
+            };
+            dedicated_worker_target_lifecycle_prepared_outputs_for_event(
+                &mut conn,
+                &owner,
+                source,
+                None,
+                RendererDedicatedWorkerTargetEvent::Created(info),
+            )
+        } else {
+            register_nested_worker_target(&mut conn, "BID-1", parent, info)
+        };
+        let inner_id = dedicated_created_target_id(&created);
+        let context = conn.browser_context_by_id("BID-1").unwrap();
+        let inner = context.dedicated_worker_target(&inner_id).unwrap();
+        assert_eq!(inner.parent_target_id(), Some(parent_id.as_str()));
+        assert_eq!(
+            inner.owner,
+            if shared {
+                crate::conn::DedicatedWorkerRootOwner::SharedWorker(parent_id.clone())
+            } else {
+                crate::conn::DedicatedWorkerRootOwner::Page(owner_page)
+            }
+        );
+        assert!(context.dedicated_worker_owner_is_current(inner));
+        let loaded = record_dedicated_worker_main_script(
+            &mut conn,
+            "BID-1",
+            701,
+            "https://example.test/inner.js".to_owned(),
+            crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+                "https://example.test/inner.js",
+                200,
+                true,
+            ))),
+        );
+        let owners = loaded
+            .worker_target_lifecycle_outputs
+            .iter()
+            .filter_map(|output| match output {
+                WorkerTargetLifecycleOutput::DedicatedWorkerAttached {
+                    prepared_attach, ..
+                } => Some(prepared_attach.sessions()[0].owner_session_id()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            owners,
+            [Some("SID-parent")],
+            "the root Page must not also attach to a grandchild"
+        );
+        if shared {
+            let _retired = remove_shared_worker_target(
+                &mut conn,
+                "BID-1",
+                SharedWorkerInstanceId::from_u64(700),
+            );
+            let context = conn.browser_context_by_id("BID-1").unwrap();
+            assert!(
+                context
+                    .dedicated_worker_target(&inner_id)
+                    .is_none_or(|target| target.is_retiring())
+            );
+        }
+    }
+}

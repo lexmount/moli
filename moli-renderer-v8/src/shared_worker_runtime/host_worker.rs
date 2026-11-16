@@ -40,20 +40,25 @@ impl RendererSharedWorkerHost {
         let policy =
             crate::network::ResourceInterceptionPolicy(request_client.page_network_policy());
         let weak_host = Arc::downgrade(self);
-        let interception = crate::network::interception_output::ResourceInterceptionContext::worker(
-            None,
-            move |event| {
-                let Some(host) = weak_host.upgrade() else {
-                    return false;
-                };
-                let state = host.state.lock();
-                if !matches!(*state, RendererSharedWorkerHostState::Running { .. }) {
-                    return false;
-                }
-                host.publish_resource_event(event);
-                true
-            },
-        );
+        let interception =
+            crate::network::interception_output::ResourceInterceptionContext::worker(
+                None,
+                move |event| {
+                    let Some(host) = weak_host.upgrade() else {
+                        return false;
+                    };
+                    let state = host.state.lock();
+                    if !matches!(*state, RendererSharedWorkerHostState::Running { .. }) {
+                        return false;
+                    }
+                    host.publish_resource_event(event);
+                    true
+                },
+            )
+            .with_worker_target(
+                crate::runtime::RendererWorkerTargetIdentity::Shared(self.instance_id()),
+                self.target_output().clone(),
+            );
         let options = WorkerSpawnOptions::new_with_request_client(
             script_source,
             script_url.clone(),

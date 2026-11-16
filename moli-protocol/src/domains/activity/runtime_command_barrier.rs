@@ -772,6 +772,10 @@ mod tests {
                             },
                         ),
                     ),
+                    moli_core::RendererOutputResidenceIdentity::Page {
+                        owner_local_host_id: page_source.as_ref().unwrap().1.owner_local_host_id(),
+                        page_id: page_source.as_ref().unwrap().1.page_id(),
+                    },
                     page_source,
                 );
             let renderer_cause = permit.map(|permit| renderer_cause_for_permit(conn, permit));

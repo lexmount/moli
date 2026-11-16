@@ -85,3 +85,5 @@ pub(crate) use thread::{
 pub(crate) use handle::{
     WorkerPendingFetchContinue, WorkerPendingSubresourceFetch, WorkerPendingXhrContinue,
 };
+
+pub(crate) use global_scope::start_nested_worker;

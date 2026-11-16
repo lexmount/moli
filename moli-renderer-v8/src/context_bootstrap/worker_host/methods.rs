@@ -49,6 +49,13 @@ pub(in crate::context_bootstrap) fn worker_terminate_callback<'s>(
         unsafe { &mut *host_ptr }.forget_worker(worker_id);
         return;
     }
+    terminate_worker_wrapper(scope, worker);
+}
+
+pub(crate) fn terminate_worker_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    worker: v8::Local<'s, v8::Object>,
+) {
     let Some(handle_ptr) = super::constructor::get_worker_handle(scope, worker) else {
         return;
     };

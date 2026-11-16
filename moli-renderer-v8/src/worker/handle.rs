@@ -602,6 +602,7 @@ impl WorkerRuntimeEvent {
 /// running worker.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkerDevToolsHandle {
+    nested_worker_pause: Arc<AtomicBool>,
     network_cancel: moli_fetch::FetchCancelHandle,
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     worker_tx: mpsc::UnboundedSender<WorkerMessage>,
@@ -614,11 +615,19 @@ impl WorkerDevToolsHandle {
         isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     ) -> Self {
         Self {
+            nested_worker_pause: Arc::new(AtomicBool::new(false)),
             network_cancel: moli_fetch::FetchCancelHandle::new(),
             isolate_handle: Arc::clone(&isolate_handle),
             inspector_tasks: WorkerInspectorTaskRunner::new(wake_tx.clone(), isolate_handle),
             worker_tx: wake_tx,
         }
+    }
+
+    pub(crate) fn nested_worker_pause_on_start(&self) -> Arc<AtomicBool> {
+        self.nested_worker_pause.clone()
+    }
+    pub(crate) fn set_nested_worker_pause_on_start(&self, pause: bool) {
+        self.nested_worker_pause.store(pause, Ordering::Release);
     }
 
     pub(crate) fn network_cancel_handle(&self) -> moli_fetch::FetchCancelHandle {

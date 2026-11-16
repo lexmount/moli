@@ -136,6 +136,33 @@ pub(super) fn remove_shared_worker_target_with_reason(
         };
         target_id
     };
+    let children = conn
+        .browser_context_by_id(browser_context_id)
+        .map(|context| {
+            context
+                .dedicated_worker_targets
+                .values()
+                .filter(|target| {
+                    target.owner
+                        == crate::conn::DedicatedWorkerRootOwner::SharedWorker(target_id.clone())
+                })
+                .map(|target| target.renderer_instance_id)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for child in children {
+        if let Some(context) = conn.browser_context_by_id(browser_context_id) {
+            context
+                .renderer_runtime()
+                .close_dedicated_worker_for_devtools(child);
+        }
+        outputs.extend(prepare_dedicated_worker_target_retirement(
+            conn,
+            browser_context_id,
+            child,
+            DedicatedWorkerRetirementCause::OwnerRetired,
+        ));
+    }
     let destroyed_delta = conn.prepare_destroyed_target_host_delta(&target_id);
     let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
         return outputs;

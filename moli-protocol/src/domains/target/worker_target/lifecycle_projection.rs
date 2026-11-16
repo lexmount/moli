@@ -134,46 +134,102 @@ pub(in crate::domains) fn service_worker_target_lifecycle_prepared_outputs_for_e
     service_worker_target_lifecycle_outputs_for_events(conn, browser_context_id, vec![event])
 }
 
+fn dedicated_worker_stream_matches(
+    conn: &CdpConnection,
+    browser_context_id: &str,
+    source_residence: moli_core::RendererOutputResidenceIdentity,
+    page_source: Option<&(TargetPageResidenceIdentity, RendererPageResidenceIdentity)>,
+    root: &crate::conn::DedicatedWorkerRootOwner,
+    local_host: moli_core::RendererOwnerLocalHostId,
+    retiring: bool,
+) -> bool {
+    match root {
+        crate::conn::DedicatedWorkerRootOwner::Page(page) => {
+            page_source.is_some_and(|(source, renderer)| {
+                source == page
+                    && renderer.owner_local_host_id() == local_host
+                    && (retiring || conn.target_page_output_residence_is_current(page))
+            })
+        }
+        crate::conn::DedicatedWorkerRootOwner::SharedWorker(root_id) => {
+            let moli_core::RendererOutputResidenceIdentity::SharedWorker {
+                browser_context_runtime_id,
+                instance_id,
+            } = source_residence
+            else {
+                return false;
+            };
+            conn.browser_context_by_id(browser_context_id)
+                .is_some_and(|context| {
+                    context.routes_renderer_browser_context_runtime(browser_context_runtime_id)
+                        && context.shared_worker_target(root_id).is_some_and(|target| {
+                            target.renderer_instance_id.as_u64() == instance_id
+                        })
+                })
+        }
+    }
+}
+
 pub(in crate::domains) fn dedicated_worker_target_lifecycle_prepared_outputs_for_event(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
+    source_residence: moli_core::RendererOutputResidenceIdentity,
     page_source: Option<(TargetPageResidenceIdentity, RendererPageResidenceIdentity)>,
     event: RendererDedicatedWorkerTargetEvent,
 ) -> TargetPreparedOutputs {
-    let Some((owner_page, owner_renderer_page)) = page_source else {
+    let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) else {
         return TargetPreparedOutputs::default();
     };
-    if let RendererDedicatedWorkerTargetEvent::Destroyed { instance_id } = event {
-        let context_id = owner_page.browser_context_id();
-        if conn
-            .browser_context_by_id(context_id)
-            .and_then(|context| context.dedicated_worker_targets.get(&instance_id))
-            .is_none_or(|target| {
-                target.owner_page != owner_page
-                    || target.renderer_owner_local_host_id
-                        != owner_renderer_page.owner_local_host_id()
-            })
-        {
-            return TargetPreparedOutputs::default();
-        }
-        return prepare_dedicated_worker_target_retirement(
-            conn,
-            context_id,
-            instance_id,
-            DedicatedWorkerRetirementCause::RendererDestroyed,
-        );
-    }
-    if !conn.target_page_output_residence_is_current(&owner_page) {
+    let context = match conn.browser_context_by_id(&browser_context_id) {
+        Some(context) => context,
+        None => return TargetPreparedOutputs::default(),
+    };
+    let source = match &event {
+        RendererDedicatedWorkerTargetEvent::Created(info) => match info.owner {
+            RendererDedicatedWorkerTargetOwner::Page {
+                owner_local_host_id,
+                ..
+            } => page_source.as_ref().map(|(page, _)| {
+                (
+                    crate::conn::DedicatedWorkerRootOwner::Page(page.clone()),
+                    owner_local_host_id,
+                )
+            }),
+            RendererDedicatedWorkerTargetOwner::Worker(parent) => {
+                nested_parent_metadata(context, parent).map(|(owner, _, local)| (owner, local))
+            }
+        },
+        RendererDedicatedWorkerTargetEvent::Resource { instance_id, .. }
+        | RendererDedicatedWorkerTargetEvent::ScriptLoaded { instance_id, .. }
+        | RendererDedicatedWorkerTargetEvent::ScriptLoadFailed { instance_id, .. }
+        | RendererDedicatedWorkerTargetEvent::Console { instance_id, .. }
+        | RendererDedicatedWorkerTargetEvent::RuntimeInspectorMessages { instance_id, .. }
+        | RendererDedicatedWorkerTargetEvent::Destroyed { instance_id } => context
+            .dedicated_worker_targets
+            .get(instance_id)
+            .map(|target| (target.owner.clone(), target.renderer_owner_local_host_id)),
+    };
+    let retiring = matches!(event, RendererDedicatedWorkerTargetEvent::Destroyed { .. });
+    let Some((root, local)) = source else {
+        return TargetPreparedOutputs::default();
+    };
+    if !dedicated_worker_stream_matches(
+        conn,
+        &browser_context_id,
+        source_residence,
+        page_source.as_ref(),
+        &root,
+        local,
+        retiring,
+    ) {
         return TargetPreparedOutputs::default();
     }
-    let browser_context_id = owner_page.browser_context_id().to_owned();
-    let owner_page_network_sessions = conn.network_event_session_ids_for_owner(owner);
+    let sessions = conn.network_event_session_ids_for_owner(owner);
     dedicated_worker_target_lifecycle_outputs_for_events(
         conn,
         browser_context_id,
-        owner_page,
-        owner_renderer_page,
-        owner_page_network_sessions,
+        page_source,
+        sessions,
         vec![event],
     )
 }
@@ -181,8 +237,7 @@ pub(in crate::domains) fn dedicated_worker_target_lifecycle_prepared_outputs_for
 pub(super) fn dedicated_worker_target_lifecycle_outputs_for_events(
     conn: &mut CdpConnection,
     browser_context_id: String,
-    owner_page: TargetPageResidenceIdentity,
-    owner_renderer_page: RendererPageResidenceIdentity,
+    page_source: Option<(TargetPageResidenceIdentity, RendererPageResidenceIdentity)>,
     owner_page_network_sessions: Vec<Option<String>>,
     events: Vec<RendererDedicatedWorkerTargetEvent>,
 ) -> TargetPreparedOutputs {
@@ -202,16 +257,23 @@ pub(super) fn dedicated_worker_target_lifecycle_outputs_for_events(
                     });
                 }
             }
-            RendererDedicatedWorkerTargetEvent::Created(info) => {
-                outputs.extend(register_dedicated_worker_target(
-                    conn,
-                    &browser_context_id,
-                    owner_page.clone(),
-                    owner_renderer_page,
-                    owner_page_network_sessions.clone(),
-                    info,
-                ));
-            }
+            RendererDedicatedWorkerTargetEvent::Created(info) => match info.owner {
+                RendererDedicatedWorkerTargetOwner::Page { .. } => {
+                    if let Some((page, renderer)) = page_source.as_ref() {
+                        outputs.extend(register_dedicated_worker_target(
+                            conn,
+                            &browser_context_id,
+                            page.clone(),
+                            *renderer,
+                            owner_page_network_sessions.clone(),
+                            info,
+                        ));
+                    }
+                }
+                RendererDedicatedWorkerTargetOwner::Worker(parent) => outputs.extend(
+                    register_nested_worker_target(conn, &browser_context_id, parent, info),
+                ),
+            },
             RendererDedicatedWorkerTargetEvent::ScriptLoaded {
                 instance_id,
                 script_url,

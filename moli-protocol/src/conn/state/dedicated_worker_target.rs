@@ -8,6 +8,13 @@ use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::{SharedWorkerTargetState, TargetPageResidenceIdentity};
 
+/// The native stream which owns this Worker, independently of direct parentage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DedicatedWorkerRootOwner {
+    Page(TargetPageResidenceIdentity),
+    SharedWorker(String),
+}
+
 /// Protocol state for one renderer-owned DedicatedWorker lifetime.
 ///
 /// The V8 inspector/session bookkeeping is identical to a SharedWorker target,
@@ -16,7 +23,8 @@ use super::{SharedWorkerTargetState, TargetPageResidenceIdentity};
 #[derive(Debug)]
 pub(crate) struct DedicatedWorkerTargetState {
     pub(crate) renderer_instance_id: u64,
-    pub(crate) owner_page: TargetPageResidenceIdentity,
+    pub(crate) owner: DedicatedWorkerRootOwner,
+    pub(crate) parent_target_id: Option<String>,
     pub(crate) owner_page_network_sessions: Vec<Option<String>>,
     pub(crate) inner: SharedWorkerTargetState,
     retiring: bool,
@@ -52,7 +60,8 @@ impl DedicatedWorkerTargetState {
     ) -> Self {
         Self {
             renderer_instance_id,
-            owner_page,
+            owner: DedicatedWorkerRootOwner::Page(owner_page),
+            parent_target_id: None,
             owner_page_network_sessions,
             inner: SharedWorkerTargetState::new(
                 renderer_owner_local_host_id,
@@ -69,6 +78,52 @@ impl DedicatedWorkerTargetState {
             defer_failed_load_destroy_until_debugger_resume: false,
             renderer_destroyed_while_waiting_for_debugger: false,
         }
+    }
+
+    pub(crate) fn new_nested(
+        owner: DedicatedWorkerRootOwner,
+        parent_target_id: String,
+        renderer_owner_local_host_id: moli_core::RendererOwnerLocalHostId,
+        renderer_instance_id: u64,
+        target_id: String,
+        name: String,
+        owner_network_sessions: Vec<Option<String>>,
+    ) -> Self {
+        Self {
+            renderer_instance_id,
+            owner,
+            parent_target_id: Some(parent_target_id),
+            owner_page_network_sessions: owner_network_sessions,
+            inner: SharedWorkerTargetState::new(
+                renderer_owner_local_host_id,
+                SharedWorkerInstanceId::from_u64(renderer_instance_id),
+                target_id,
+                None,
+                String::new(),
+                name,
+            ),
+            retiring: false,
+            main_script: None,
+            delivered_main_script_sessions: BTreeSet::new(),
+            replayable_main_script_sessions: BTreeSet::new(),
+            defer_failed_load_destroy_until_debugger_resume: false,
+            renderer_destroyed_while_waiting_for_debugger: false,
+        }
+    }
+
+    pub(crate) fn owner_page(&self) -> Option<&TargetPageResidenceIdentity> {
+        match &self.owner {
+            DedicatedWorkerRootOwner::Page(page) => Some(page),
+            _ => None,
+        }
+    }
+    pub(crate) fn parent_target_id(&self) -> Option<&str> {
+        self.parent_target_id
+            .as_deref()
+            .or_else(|| match &self.owner {
+                DedicatedWorkerRootOwner::Page(page) => page.target_id(),
+                DedicatedWorkerRootOwner::SharedWorker(target) => Some(target.as_str()),
+            })
     }
 
     pub(crate) fn is_retiring(&self) -> bool {

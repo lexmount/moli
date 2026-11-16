@@ -231,3 +231,8 @@ pub(crate) use state::{
     worker_termination_requested,
 };
 pub(super) use timers::{TimerInfo, WorkerIsolateTimerQueues, worker_isolate_timer_queues};
+
+pub(in crate::worker) use nested_workers::terminate_nested_workers;
+
+mod nested_devtools;
+pub(crate) use nested_devtools::start_nested_worker;
