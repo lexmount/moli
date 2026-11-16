@@ -1,7 +1,7 @@
-use crate::util::v8_string;
-use crate::webidl;
+use moli_v8_util::v8_string;
+use moli_webidl as webidl;
 
-pub(super) fn try_parse_promise_args<'s, T>(
+pub fn try_parse_promise_args<'s, T>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> std::result::Result<T, v8::Local<'s, v8::Value>>
@@ -19,7 +19,7 @@ where
     }
 }
 
-pub(super) fn type_error_value<'s>(
+pub fn type_error_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
 ) -> v8::Local<'s, v8::Value> {
@@ -27,7 +27,7 @@ pub(super) fn type_error_value<'s>(
     v8::Exception::type_error(scope, message)
 }
 
-pub(super) fn set_rejected_promise<'s>(
+pub fn set_rejected_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     reason: v8::Local<'s, v8::Value>,

@@ -1,9 +1,8 @@
-use super::*;
-use crate::util::{
-    callback_data_index_value, get_private_value, serialize_v8_iter_array, set_private_value,
-};
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 use moli_v8_util::buffer_source_bytes_from_value as buffer_source_value_bytes;
+use moli_v8_util::{callback_data_index_value, get_private_value, set_private_value};
+use moli_v8_util::{callback_data_item, throw_type_error, v8_string, v8str};
+use moli_webapi_declare::serialize_v8_iter_array;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
@@ -60,7 +59,7 @@ struct NamedCurveAlgorithmDeclaration<'scope> {
     named_curve: Option<v8::Local<'scope, v8::String>>,
 }
 
-pub(super) fn build_named_algorithm_object<'s>(
+pub fn build_named_algorithm_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
 ) -> v8::Local<'s, v8::Object> {
@@ -69,7 +68,7 @@ pub(super) fn build_named_algorithm_object<'s>(
         .expect("named algorithm declaration should bind")
 }
 
-pub(super) fn build_hmac_algorithm_object<'s>(
+pub fn build_hmac_algorithm_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     hash_name: &str,
     length_bits: usize,
@@ -81,7 +80,7 @@ pub(super) fn build_hmac_algorithm_object<'s>(
         .expect("HMAC algorithm declaration should bind")
 }
 
-pub(super) fn build_symmetric_algorithm_object<'s>(
+pub fn build_symmetric_algorithm_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
     length_bits: usize,
@@ -91,7 +90,7 @@ pub(super) fn build_symmetric_algorithm_object<'s>(
         .expect("symmetric algorithm declaration should bind")
 }
 
-pub(super) fn build_rsa_algorithm_object<'s>(
+pub fn build_rsa_algorithm_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
     hash_name: &str,
@@ -100,7 +99,7 @@ pub(super) fn build_rsa_algorithm_object<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let hash_name = hash_name.to_ascii_uppercase();
     let hash = build_named_algorithm_object(scope, &hash_name);
-    let public_exponent = blob::array_buffer_from_bytes(scope, public_exponent.to_vec())
+    let public_exponent = moli_v8_util::array_buffer_from_bytes(scope, public_exponent.to_vec())
         .and_then(|buffer| v8::Uint8Array::new(scope, buffer, 0, buffer.byte_length()));
     RsaAlgorithmDeclaration::new(
         v8_string(scope, name),
@@ -112,7 +111,7 @@ pub(super) fn build_rsa_algorithm_object<'s>(
     .expect("RSA algorithm declaration should bind")
 }
 
-pub(super) fn build_named_curve_algorithm_object<'s>(
+pub fn build_named_curve_algorithm_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
     named_curve: &str,
@@ -193,25 +192,25 @@ struct CryptoKeyPrototypeAccessorsDeclaration {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CryptoKeyClonePayload {
-    pub(crate) key_type: String,
-    pub(crate) algorithm: CryptoKeyAlgorithmClonePayload,
-    pub(crate) extractable: bool,
-    pub(crate) usages: Vec<String>,
-    pub(crate) key_bytes: Vec<u8>,
+pub struct CryptoKeyClonePayload {
+    pub key_type: String,
+    pub algorithm: CryptoKeyAlgorithmClonePayload,
+    pub extractable: bool,
+    pub usages: Vec<String>,
+    pub key_bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CryptoKeyAlgorithmClonePayload {
-    pub(crate) name: String,
-    pub(crate) hash_name: Option<String>,
-    pub(crate) length_bits: Option<usize>,
-    pub(crate) named_curve: Option<String>,
-    pub(crate) modulus_length_bits: Option<usize>,
-    pub(crate) public_exponent: Option<Vec<u8>>,
+pub struct CryptoKeyAlgorithmClonePayload {
+    pub name: String,
+    pub hash_name: Option<String>,
+    pub length_bits: Option<usize>,
+    pub named_curve: Option<String>,
+    pub modulus_length_bits: Option<usize>,
+    pub public_exponent: Option<Vec<u8>>,
 }
 
-pub(super) fn install_crypto_key_template_bindings<'s>(
+pub fn install_crypto_key_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -246,7 +245,7 @@ fn crypto_key_attribute_getter_callback<'s>(
     }
 }
 
-pub(super) fn new_crypto_key_object<'s>(
+pub fn new_crypto_key_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key_type: &str,
     algorithm: v8::Local<'s, v8::Object>,
@@ -255,8 +254,9 @@ pub(super) fn new_crypto_key_object<'s>(
     key_bytes: &[u8],
 ) -> Option<v8::Local<'s, v8::Object>> {
     let normalized_usages = normalized_key_usages(usages);
-    let usages_array = crate::util::serialize_v8_array(scope, normalized_usages.as_slice())?;
-    let bytes = blob::array_buffer_from_bytes(scope, key_bytes.to_vec())?;
+    let usages_array =
+        moli_webapi_declare::serialize_v8_array(scope, normalized_usages.as_slice())?;
+    let bytes = moli_v8_util::array_buffer_from_bytes(scope, key_bytes.to_vec())?;
     CryptoKeyObjectDeclaration::new(key_type, algorithm, extractable, usages_array, bytes)
         .bind(scope)
         .ok()
@@ -271,14 +271,14 @@ fn normalized_key_usages(usages: &[String]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn is_crypto_key_object<'s>(
+pub fn is_crypto_key_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::CryptoKey::is_instance(scope, key)
 }
 
-pub(crate) fn crypto_key_clone_payload_from_object<'s>(
+pub fn crypto_key_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> Option<CryptoKeyClonePayload> {
@@ -291,17 +291,10 @@ pub(crate) fn crypto_key_clone_payload_from_object<'s>(
     })
 }
 
-pub(crate) fn crypto_key_object_from_clone_payload<'s>(
+pub fn crypto_key_object_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: CryptoKeyClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    // Like Blink's ExecutionContextExposesInterface(kCryptoKeyTag), check
-    // native exposure before resolving the intrinsic identity. Public globals
-    // can be deleted or replaced independently of secure-context policy.
-    if !super::super::exposed_interfaces::is_realm_interface_exposed(scope, "CryptoKey") {
-        return None;
-    }
-    super::super::ensure_intrinsic_interface_constructor(scope, "CryptoKey").ok()?;
     if !clone_payload_algorithm_is_supported(&payload.key_type, &payload.algorithm) {
         return None;
     }
@@ -410,7 +403,7 @@ fn data_property_usize<'s>(
     value.number_value(scope).map(|value| value as usize)
 }
 
-pub(super) fn crypto_key_bytes<'s>(
+pub fn crypto_key_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<u8>> {
@@ -432,7 +425,7 @@ pub(super) fn crypto_key_bytes<'s>(
     })
 }
 
-pub(super) fn crypto_key_algorithm_object<'s>(
+pub fn crypto_key_algorithm_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -440,7 +433,7 @@ pub(super) fn crypto_key_algorithm_object<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-pub(super) fn crypto_key_kind<'s>(
+pub fn crypto_key_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
@@ -449,7 +442,7 @@ pub(super) fn crypto_key_kind<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
 }
 
-pub(super) fn crypto_key_extractable<'s>(
+pub fn crypto_key_extractable<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> Option<bool> {
@@ -457,7 +450,7 @@ pub(super) fn crypto_key_extractable<'s>(
         .map(|value| value.boolean_value(scope))
 }
 
-pub(super) fn crypto_key_usages<'s>(
+pub fn crypto_key_usages<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<String>> {
@@ -471,7 +464,7 @@ pub(super) fn crypto_key_usages<'s>(
     Some(usages)
 }
 
-pub(super) fn crypto_key_has_usage<'s>(
+pub fn crypto_key_has_usage<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
     expected: &str,
@@ -526,7 +519,7 @@ fn crypto_key_visible_usages_array<'s>(
     Some(visible)
 }
 
-pub(super) fn cloned_algorithm_object<'s>(
+pub fn cloned_algorithm_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     algorithm: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -583,7 +576,7 @@ fn cloned_public_exponent_view<'s>(
     algorithm
         .get(scope, v8str(scope, "publicExponent").into())
         .and_then(|value| buffer_source_value_bytes(scope, value))
-        .and_then(|bytes| blob::array_buffer_from_bytes(scope, bytes))
+        .and_then(|bytes| moli_v8_util::array_buffer_from_bytes(scope, bytes))
         .and_then(|buffer| v8::Uint8Array::new(scope, buffer, 0, buffer.byte_length()))
 }
 
@@ -596,3 +589,11 @@ fn cloned_usages_array<'s>(
         .collect::<Option<Vec<_>>>()?;
     serialize_v8_iter_array(scope, values)
 }
+
+const CRYPTO_KEY_KIND_SLOT: &str = "__moliCryptoKeyKind";
+const CRYPTO_KEY_ALGORITHM_SLOT: &str = "__moliCryptoKeyAlgorithm";
+const CRYPTO_KEY_EXTRACTABLE_SLOT: &str = "__moliCryptoKeyExtractable";
+const CRYPTO_KEY_USAGES_SLOT: &str = "__moliCryptoKeyUsages";
+const CRYPTO_KEY_VISIBLE_ALGORITHM_SLOT: &str = "__moliCryptoKeyVisibleAlgorithm";
+const CRYPTO_KEY_VISIBLE_USAGES_SLOT: &str = "__moliCryptoKeyVisibleUsages";
+const CRYPTO_KEY_BYTES_SLOT: &str = "__moliCryptoKeyBytes";

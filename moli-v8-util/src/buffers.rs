@@ -18,3 +18,11 @@ pub fn buffer_source_bytes_from_value(
     }
     None
 }
+
+pub fn array_buffer_from_bytes<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+) -> Option<v8::Local<'s, v8::ArrayBuffer>> {
+    let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+    Some(v8::ArrayBuffer::with_backing_store(scope, &backing_store))
+}

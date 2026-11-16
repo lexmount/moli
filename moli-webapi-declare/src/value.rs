@@ -221,3 +221,26 @@ macro_rules! impl_tuple_value {
 impl_tuple_value!(2; 0 => A, 1 => B);
 impl_tuple_value!(3; 0 => A, 1 => B, 2 => C);
 impl_tuple_value!(4; 0 => A, 1 => B, 2 => C, 3 => D);
+
+pub fn serialize_v8_array<'s, T>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: T,
+) -> Option<v8::Local<'s, v8::Array>>
+where
+    T: WebApiValue<'s>,
+{
+    let value = value.to_v8_value(scope)?;
+    v8::Local::<v8::Array>::try_from(value).ok()
+}
+
+pub fn serialize_v8_iter_array<'s, I, T>(
+    scope: &mut v8::PinScope<'s, '_>,
+    values: I,
+) -> Option<v8::Local<'s, v8::Array>>
+where
+    I: IntoIterator<Item = T>,
+    T: WebApiValue<'s>,
+{
+    let values = values.into_iter().collect::<Vec<_>>();
+    serialize_v8_array(scope, values.as_slice())
+}

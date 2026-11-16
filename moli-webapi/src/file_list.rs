@@ -1,7 +1,7 @@
-use crate::util::{get_private_value, set_private_value};
-use crate::web_api_interfaces;
-use crate::webidl;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, set_private_value};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 
 const FILE_LIST_LENGTH_SLOT: &str = "__lmFileListLength";
 const FILE_LIST_FILES_SLOT: &str = "__lmFileListFiles";
@@ -27,7 +27,7 @@ struct FileListItemArgs {
     index: u32,
 }
 
-pub(super) fn install_file_list_template_bindings<'s>(
+pub fn install_file_list_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -35,13 +35,17 @@ pub(super) fn install_file_list_template_bindings<'s>(
     if interface_name != "FileList" {
         return;
     }
+    FileListTemplateMethodsDeclaration::initialize_prototype_template(
+        scope,
+        template.prototype_template(scope),
+    );
     FileListPrototypeAccessorsDeclaration::initialize_prototype_template(
         scope,
         template.prototype_template(scope),
     );
 }
 
-pub(crate) fn build_file_list_object<'s>(
+pub fn build_file_list_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     files: &[v8::Local<'s, v8::Object>],
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -60,7 +64,7 @@ pub(crate) fn build_file_list_object<'s>(
     Some(object)
 }
 
-pub(crate) fn sync_file_list_contents<'s>(
+pub fn sync_file_list_contents<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     files: &[v8::Local<'s, v8::Object>],
@@ -109,14 +113,14 @@ fn build_file_list_contents_array<'s>(
     v8::Array::new_with_elements(scope, &values)
 }
 
-pub(crate) fn is_file_list_object<'s>(
+pub fn is_file_list_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::FileList::is_instance(scope, object)
 }
 
-pub(crate) fn file_list_files_from_object<'s>(
+pub fn file_list_files_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<v8::Local<'s, v8::Object>>> {
@@ -142,7 +146,7 @@ pub(crate) fn file_list_files_from_object<'s>(
     Some(files)
 }
 
-pub(in crate::context_bootstrap) fn file_list_item_callback<'s>(
+pub fn file_list_item_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -185,4 +189,17 @@ fn file_list_length_from_object<'s>(
     let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     get_private_value(scope, object, FILE_LIST_LENGTH_SLOT)
         .and_then(|value| value.number_value(scope))
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::FileList, enumerable, receiver)]
+struct FileListTemplateMethodsDeclaration {
+    #[webapi(method, length = 1, callback = file_list_item_callback)]
+    item: (),
+
+    #[webapi(
+        intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
+        symbol = "iterator",
+    )]
+    iterator: (),
 }

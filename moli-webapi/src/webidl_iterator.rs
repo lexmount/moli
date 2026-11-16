@@ -1,14 +1,12 @@
-use crate::web_api_interfaces;
-use crate::{
-    callback_invocation::invoke_synchronous_webidl_callback_function,
-    util::{
-        get_private_object, get_private_value, materialize_hidden_function_template_prototype,
-        set_private_value, throw_type_error, v8str,
-    },
-    webidl,
-};
+use crate::callbacks::invoke_synchronous_webidl_callback_function;
+use crate::interfaces as web_api_interfaces;
 use anyhow::{Result, anyhow};
+use moli_v8_util::{
+    get_private_object, get_private_value, materialize_hidden_function_template_prototype,
+    set_private_value, throw_type_error, v8str,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, v8};
+use moli_webidl as webidl;
 
 const SNAPSHOT_ITERATOR_VALUES_SLOT: &str = "__moliWebIdlIteratorValues";
 const SNAPSHOT_ITERATOR_INDEX_SLOT: &str = "__moliWebIdlIteratorIndex";
@@ -30,7 +28,7 @@ const CSS_FONT_FEATURE_VALUES_MAP_ITERATOR_PROTOTYPE_SLOT: &str =
     "__moliCssFontFeatureValuesMapIteratorPrototype";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SnapshotWebIdlIteratorKind {
+pub enum SnapshotWebIdlIteratorKind {
     StylePropertyMapReadOnly,
     EventCounts,
     FontFaceSet,
@@ -74,7 +72,7 @@ impl SnapshotWebIdlIteratorKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SetlikeWebIdlIteratorKind {
+pub enum SetlikeWebIdlIteratorKind {
     ViewTransitionTypeSet,
     CustomStateSet,
 }
@@ -108,7 +106,7 @@ impl SetlikeWebIdlIteratorKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SetlikeWebIdlIteratorMethod {
+pub enum SetlikeWebIdlIteratorMethod {
     Entries,
     Keys,
     Values,
@@ -125,7 +123,7 @@ impl SetlikeWebIdlIteratorMethod {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MaplikeWebIdlIteratorMethod {
+pub enum MaplikeWebIdlIteratorMethod {
     Entries,
     Keys,
     Values,
@@ -242,7 +240,7 @@ struct CssFontFeatureValuesMapIteratorPrototypeDeclaration {
     next: (),
 }
 
-pub(crate) fn install_webidl_collection_iterator_intrinsics<'s>(
+pub fn install_webidl_collection_iterator_intrinsics<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
@@ -303,19 +301,19 @@ pub(crate) fn install_webidl_collection_iterator_intrinsics<'s>(
     Ok(())
 }
 
-pub(crate) fn webidl_collection_reflect_apply_intrinsic<'s>(
+pub fn webidl_collection_reflect_apply_intrinsic<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Function>> {
     native_collection_intrinsic(scope, NATIVE_REFLECT_APPLY_INTRINSIC_SLOT)
 }
 
-pub(crate) fn reflect_construct_intrinsic<'s>(
+pub fn reflect_construct_intrinsic<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Function>> {
     native_collection_intrinsic(scope, NATIVE_REFLECT_CONSTRUCT_INTRINSIC_SLOT)
 }
 
-pub(crate) fn new_snapshot_webidl_iterator<'s>(
+pub fn new_snapshot_webidl_iterator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     values: v8::Local<'s, v8::Array>,
     kind: SnapshotWebIdlIteratorKind,
@@ -328,7 +326,7 @@ pub(crate) fn new_snapshot_webidl_iterator<'s>(
     (iterator.set_prototype(scope, prototype.into()) == Some(true)).then_some(iterator)
 }
 
-pub(crate) fn new_setlike_webidl_iterator<'s>(
+pub fn new_setlike_webidl_iterator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     set: v8::Local<'s, v8::Set>,
     kind: SetlikeWebIdlIteratorKind,
@@ -343,7 +341,7 @@ pub(crate) fn new_setlike_webidl_iterator<'s>(
     (iterator.set_prototype(scope, prototype.into()) == Some(true)).then_some(iterator)
 }
 
-pub(crate) fn call_setlike_webidl_for_each<'s>(
+pub fn call_setlike_webidl_for_each<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     set: v8::Local<'s, v8::Set>,
     owner: v8::Local<'s, v8::Object>,
@@ -369,7 +367,7 @@ pub(crate) fn call_setlike_webidl_for_each<'s>(
     Some(v8::undefined(scope).into())
 }
 
-pub(crate) fn new_maplike_webidl_iterator<'s>(
+pub fn new_maplike_webidl_iterator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     map: v8::Local<'s, v8::Map>,
     method: MaplikeWebIdlIteratorMethod,
@@ -395,7 +393,7 @@ pub(crate) fn new_maplike_webidl_iterator<'s>(
     )
 }
 
-pub(crate) fn call_maplike_webidl_for_each<'s>(
+pub fn call_maplike_webidl_for_each<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     map: v8::Local<'s, v8::Map>,
     owner: v8::Local<'s, v8::Object>,
@@ -416,7 +414,7 @@ pub(crate) fn call_maplike_webidl_for_each<'s>(
     Some(v8::undefined(scope).into())
 }
 
-pub(crate) fn prepare_webidl_collection_for_each_callback<'s>(
+pub fn prepare_webidl_collection_for_each_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     callback: v8::Local<'s, v8::Value>,
     operation: &'static str,
@@ -438,7 +436,7 @@ pub(crate) fn prepare_webidl_collection_for_each_callback<'s>(
     }
 }
 
-pub(crate) fn invoke_webidl_collection_for_each_callback<'s>(
+pub fn invoke_webidl_collection_for_each_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     callback: &webidl::PreparedWebIdlCallbackFunction,
     this_arg: v8::Local<'s, v8::Value>,

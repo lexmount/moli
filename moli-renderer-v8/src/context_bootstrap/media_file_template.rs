@@ -48,7 +48,7 @@ use super::canvas::{
     webgl2_get_supported_extensions_callback,
 };
 use super::file_api::{
-    file_list_item_callback, file_reader_abort_callback, file_reader_read_as_array_buffer_callback,
+    file_reader_abort_callback, file_reader_read_as_array_buffer_callback,
     file_reader_read_as_binary_string_callback, file_reader_read_as_data_url_callback,
     file_reader_read_as_text_callback,
 };
@@ -86,19 +86,6 @@ struct OffscreenCanvasTemplateMethodsDeclaration {
 
     #[webapi(method, length = 0, callback = offscreen_canvas_convert_to_blob_callback)]
     convert_to_blob: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileList, enumerable, receiver)]
-struct FileListTemplateMethodsDeclaration {
-    #[webapi(method, length = 1, callback = file_list_item_callback)]
-    item: (),
-
-    #[webapi(
-        intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
-        symbol = "iterator",
-    )]
-    iterator: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -690,10 +677,6 @@ pub(super) fn install_media_file_template_bindings<'s>(
         "WEBGL_lose_context" => {
             let proto = template.prototype_template(scope);
             WebGlLoseContextTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
-        }
-        "FileList" => {
-            let proto = template.prototype_template(scope);
-            FileListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
         "FileReader" => {
             let proto = template.prototype_template(scope);

@@ -242,11 +242,7 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),
-    allowed(
-        "webidl_iterator.rs",
-        4,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
+    // Native collection forwarding moved unchanged to moli_webapi::webidl_iterator.
     allowed(
         "worker/global_scope/console.rs",
         1,

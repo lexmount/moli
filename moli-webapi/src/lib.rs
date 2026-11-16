@@ -50,3 +50,14 @@ pub mod webgl_values;
 pub mod callbacks;
 
 pub mod headers;
+
+pub mod crypto_key;
+pub mod file_list;
+pub mod idle_deadline;
+pub mod media_capabilities;
+pub mod media_source;
+pub mod touch;
+pub mod webidl_iterator;
+
+pub mod intersection_observer_entry;
+pub mod mutation_record;
