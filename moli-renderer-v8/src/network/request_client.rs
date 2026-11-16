@@ -1113,6 +1113,33 @@ impl ResourceRequestClient {
         self.resource_runtime.client().prepare_request(request);
     }
 
+    /// Snapshot browser request metadata at admission, using the same header,
+    /// credential and site-context policies as transport dispatch. Protocols
+    /// that expose a request before its response must not start with empty
+    /// headers and cookies and rely on a later CDP-only ExtraInfo update.
+    pub(crate) fn prepare_subresource_request_observation(
+        &self,
+        request: Request,
+    ) -> (
+        moli_fetch::RequestHeaders,
+        Option<moli_cookie_jar::StoredCookieQueryReport>,
+    ) {
+        let mut request = self.bind_browser_site_context(request);
+        self.prepare_service_worker_request(&mut request);
+        let cookie_report = if request.allows_credentials_for_url(&request.url) {
+            moli_fetch::observe_cookie_access_report_for_request(
+                &self.cookie_store(),
+                &request.url,
+                request.network_cookie_context(),
+            )
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+        (request.interception_request_headers(), cookie_report)
+    }
+
     /// Bind the owner's cookie scope before a caller retains redirect state,
     /// using the same partition handling as transport dispatch.
     pub(crate) fn bind_browser_site_context(&self, mut request: Request) -> Request {

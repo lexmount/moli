@@ -1379,6 +1379,7 @@ pub(crate) struct TargetSubresourceRequestStartedOutput {
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
+    request_extra_info_deferred: bool,
 }
 
 impl TargetSubresourceRequestStartedOutput {
@@ -1404,6 +1405,7 @@ impl TargetSubresourceRequestStartedOutput {
             resource_type: request.resource_type(),
             request_initiator_type: request.request_initiator_type(),
             request_cookie_report: request.request_cookie_report().cloned(),
+            request_extra_info_deferred: request.request_extra_info_deferred(),
         }
     }
 
@@ -1464,6 +1466,10 @@ impl TargetSubresourceRequestStartedOutput {
 
     pub(crate) fn request_cookie_report(&self) -> Option<&StoredCookieQueryReport> {
         self.request_cookie_report.as_ref()
+    }
+
+    pub(crate) fn request_extra_info_deferred(&self) -> bool {
+        self.request_extra_info_deferred
     }
 }
 
@@ -2886,9 +2892,10 @@ impl TargetNetworkOutputQueue {
             .insert(output.handle(), output.clone())
             .is_some();
         if !already_started {
-            // RequestStarted emits ExtraInfo inline when admission already
-            // includes its cookie report. Later metadata enrichment does not.
-            if output.request_cookie_report().is_some() {
+            // An admission cookie report emits ExtraInfo inline unless the
+            // producer defers it to transport. Later enrichment is not itself
+            // publication of an ExtraInfo event.
+            if output.request_cookie_report().is_some() && !output.request_extra_info_deferred() {
                 self.subresource_request_extra_info_handles
                     .insert(output.handle());
             }
@@ -2974,7 +2981,15 @@ impl TargetNetworkOutputQueue {
             .unwrap_or_else(|| request.request_headers())
             .to_vec();
         let Some(request_cookie_report) = request_cookie_report
-            .or_else(|| request.request_cookie_report())
+            .or_else(|| {
+                // Admission metadata serves BiDi's initial event. It is not
+                // evidence that transport ran (for example, a Service Worker
+                // may supply the response), or that its cookie report agrees
+                // with the later transport observation.
+                (!request.request_extra_info_deferred())
+                    .then(|| request.request_cookie_report())
+                    .flatten()
+            })
             .cloned()
             .or_else(|| {
                 network_request_headers
@@ -3627,7 +3642,7 @@ mod tests {
 
     #[test]
     fn staged_request_metadata_enrichment_publishes_extra_info_once() {
-        for has_initial_cookie_report in [false, true] {
+        for (has_initial_cookie_report, deferred) in [(false, false), (true, false), (true, true)] {
             let handle = SubresourceNetworkRequestHandle::new(8);
             let url = Url::parse("https://example.com/script.js").unwrap();
             let request = |report| {
@@ -3645,6 +3660,12 @@ mod tests {
                 )
             };
             let enrichment = request(Some(StoredCookieQueryReport::default()));
+            let initial = request(has_initial_cookie_report.then(StoredCookieQueryReport::default));
+            let initial = if deferred {
+                initial.with_deferred_request_extra_info()
+            } else {
+                initial
+            };
             let response = SubresourceResponseStarted::new(
                 handle,
                 Vec::new(),
@@ -3658,9 +3679,7 @@ mod tests {
                 "test=present".to_owned(),
             )]));
             let items = vec![
-                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request(
-                    has_initial_cookie_report.then(StoredCookieQueryReport::default),
-                ))),
+                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(initial)),
                 ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(enrichment.clone())),
                 ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response.clone())),
                 ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(enrichment)),
@@ -3692,7 +3711,8 @@ mod tests {
                     .iter()
                     .filter(|output| match output {
                         TargetSubresourcePlanOutput::RequestStarted(request) =>
-                            request.request_cookie_report().is_some(),
+                            request.request_cookie_report().is_some()
+                                && !request.request_extra_info_deferred(),
                         TargetSubresourcePlanOutput::RequestExtraInfo(extra) => {
                             assert_eq!(
                                 extra.request_headers(),
@@ -3707,6 +3727,51 @@ mod tests {
                 "metadata presence must not stand in for ExtraInfo publication"
             );
         }
+    }
+
+    #[test]
+    fn deferred_admission_cookie_report_does_not_invent_transport_extra_info() {
+        let handle = SubresourceNetworkRequestHandle::new(8);
+        let url = Url::parse("https://example.com/script.js").unwrap();
+        let request = SubresourceRequestStarted::new(
+            handle,
+            Some("FRAME-1".to_owned()),
+            url.clone(),
+            url.clone(),
+            "GET".to_owned(),
+            Default::default(),
+            None,
+            SubresourceResourceType::Script,
+            SubresourceRequestInitiatorType::Script,
+            Some(StoredCookieQueryReport::default()),
+        )
+        .with_deferred_request_extra_info();
+        let record = subresource_record(SubresourceResourceType::Script, url.as_str())
+            .with_request_handle(handle);
+        let mut queue = TargetNetworkOutputQueue::default();
+        append_concrete_items_for_test(
+            &mut queue,
+            &[
+                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+                ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
+            ],
+            "LOADER-1",
+        );
+        let activity = PendingSubresourceNetworkActivity::from_sessions(vec![
+            PendingSubresourceNetworkActivitySession::new(None, 0),
+        ]);
+        let mut request_ids = StableSubresourceHandleRequestIds::default();
+        let snapshot = pending_delivery_snapshot(&queue, activity, None, &mut request_ids).unwrap();
+        let outputs = subresource_outputs(&snapshot);
+        assert_eq!(outputs.len(), 3);
+        let TargetSubresourceNetworkDeliveryOutput::RequestStarted(start) = &outputs[0] else {
+            panic!("admission must remain visible");
+        };
+        assert!(start.output().request_cookie_report().is_some());
+        assert!(outputs.iter().all(|output| !matches!(
+            output,
+            TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(_)
+        )));
     }
 
     #[test]
