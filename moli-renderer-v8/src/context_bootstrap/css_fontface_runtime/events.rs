@@ -5,10 +5,11 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
 use crate::web_api_interfaces;
-use crate::webidl;
+use moli_webapi::events::subclasses::{
+    FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT, font::frozen_font_face_array,
+};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
-const FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT: &str = "__moliFontFaceSetLoadEventFontfaces";
 const FONT_FACE_SET_ONLOADING_SLOT: &str = "__moliFontFaceSetOnloading";
 const FONT_FACE_SET_ONLOADINGDONE_SLOT: &str = "__moliFontFaceSetOnloadingdone";
 const FONT_FACE_SET_ONLOADINGERROR_SLOT: &str = "__moliFontFaceSetOnloadingerror";
@@ -63,24 +64,6 @@ struct FontFaceSetEventHandlerAccessorsDeclaration {
         enumerable
     )]
     onloadingerror: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSetLoadEvent, enumerable, receiver)]
-struct FontFaceSetLoadEventPrototypeDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = font_face_set_load_event_fontfaces_getter
-    )]
-    fontfaces: (),
-}
-
-pub(in crate::context_bootstrap) fn install_font_face_set_load_event_template_accessors<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-) {
-    let prototype = template.prototype_template(scope);
-    FontFaceSetLoadEventPrototypeDeclaration::initialize_prototype_template(scope, prototype);
 }
 
 pub(in crate::context_bootstrap) fn install_font_face_set_event_handler_accessors<'s>(
@@ -145,58 +128,6 @@ fn font_face_set_event_handler_setter<'s>(
         handler.slot_name,
         args.get(0),
     );
-}
-
-fn font_face_set_load_event_fontfaces_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let value = crate::context_bootstrap::event_private_value(
-        scope,
-        args.this(),
-        FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT,
-    )
-    .unwrap_or_else(|| v8::undefined(scope).into());
-    rv.set(value);
-}
-
-fn frozen_font_face_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    values: impl IntoIterator<Item = v8::Local<'s, v8::Value>>,
-) -> v8::Local<'s, v8::Array> {
-    let values = values.into_iter().collect::<Vec<_>>();
-    let array = v8::Array::new_with_elements(scope, &values);
-    let _ = array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-    array
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "FontFaceSetLoadEventInit")]
-pub(in crate::context_bootstrap) struct FontFaceSetLoadEventInit<'s> {
-    #[webidl(inherit)]
-    base: crate::context_bootstrap::events::EventInit,
-    #[webidl(sequence, interface = web_api_interfaces::FontFace, default = Vec::new())]
-    fontfaces: Vec<v8::Local<'s, v8::Object>>,
-}
-
-impl<'s> FontFaceSetLoadEventInit<'s> {
-    pub(in crate::context_bootstrap) fn event_flags(&self) -> (bool, bool, bool) {
-        (self.base.bubbles, self.base.cancelable, self.base.composed)
-    }
-    pub(in crate::context_bootstrap) fn initialize(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        event: v8::Local<'s, v8::Object>,
-    ) {
-        let fontfaces = frozen_font_face_array(scope, self.fontfaces.into_iter().map(Into::into));
-        set_private_value(
-            scope,
-            event,
-            FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT,
-            fontfaces.into(),
-        );
-    }
 }
 
 fn dispatched_font_face_set_load_event<'s>(

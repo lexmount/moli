@@ -3,7 +3,10 @@ mod support;
 use moli_v8_test_util::ensure_v8;
 use moli_v8_util::{global_constructor_prototype, set_private_value, v8str};
 use moli_webapi::{
-    events::{self, EventRuntime, audio, device, ice_error_event, speech, state, value, webrtc},
+    events::{
+        self, EventRuntime, audio, device, ice_error_event, kind::EventSubclassKind, speech, state,
+        subclasses, value, webrtc,
+    },
     interfaces,
 };
 use std::{cell::Cell, pin::pin, rc::Rc};
@@ -31,6 +34,46 @@ fn initialize_wrapper<'s>(
     interfaces::initialize(scope, wrapper, interface).ok()?;
     set_private_value(scope, wrapper, state::EVENT_BACKING_SLOT, backing.into());
     state::define_event_is_trusted_accessor(scope, wrapper);
+    // Minimal value projection. DOM targets and isolated-world wrappers are
+    // exercised by the Renderer tests, rather than implemented by this fixture.
+    let names = backing.get_own_property_names(
+        scope,
+        v8::GetPropertyNamesArgs {
+            property_filter: v8::PropertyFilter::ALL_PROPERTIES | v8::PropertyFilter::SKIP_SYMBOLS,
+            ..Default::default()
+        },
+    )?;
+    for index in 0..names.length() {
+        let key = names.get_index(scope, index)?;
+        let name = key.to_rust_string_lossy(scope);
+        if [
+            "type",
+            "bubbles",
+            "cancelable",
+            "composed",
+            "timeStamp",
+            "isTrusted",
+        ]
+        .contains(&name.as_str())
+            || subclasses::template_declaration(interface)
+                .is_some_and(|declaration| declaration.attributes.contains(&name.as_str()))
+        {
+            continue;
+        }
+        let getter = v8::Function::builder(state::event_value_attribute_getter)
+            .data(key)
+            .build(scope)?;
+        let attributes = backing.get_property_attributes(scope, key)?;
+        let mut descriptor =
+            v8::PropertyDescriptor::new_from_get_set(getter.into(), v8::undefined(scope).into());
+        descriptor.set_enumerable(!attributes.is_dont_enum());
+        descriptor.set_configurable(!attributes.is_dont_delete());
+        wrapper.define_property(
+            scope,
+            v8::Local::<v8::Name>::try_from(key).ok()?,
+            &descriptor,
+        )?;
+    }
     Some(())
 }
 
@@ -74,6 +117,53 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         );
     }
     finish_template(scope, interfaces::Event::DESCRIPTOR, event);
+
+    for kind in [
+        EventSubclassKind::CustomEvent,
+        EventSubclassKind::CloseEvent,
+        EventSubclassKind::ClipboardEvent,
+        EventSubclassKind::CommandEvent,
+        EventSubclassKind::ToggleEvent,
+        EventSubclassKind::InterestEvent,
+        EventSubclassKind::PopStateEvent,
+        EventSubclassKind::HashChangeEvent,
+        EventSubclassKind::PageTransitionEvent,
+        EventSubclassKind::PromiseRejectionEvent,
+        EventSubclassKind::FormDataEvent,
+        EventSubclassKind::SubmitEvent,
+        EventSubclassKind::TrackEvent,
+        EventSubclassKind::ErrorEvent,
+        EventSubclassKind::SecurityPolicyViolationEvent,
+        EventSubclassKind::FontFaceSetLoadEvent,
+        EventSubclassKind::ClipboardChangeEvent,
+    ] {
+        let template = subclasses::build_template(scope, kind).unwrap();
+        template.inherit(event);
+        if let Some(declaration) = subclasses::template_declaration(kind.constructor_name()) {
+            (declaration.install)(scope, template);
+        }
+        if kind == EventSubclassKind::SubmitEvent {
+            subclasses::submit::install_template_bindings(scope, template);
+        }
+        if kind == EventSubclassKind::FontFaceSetLoadEvent {
+            subclasses::font::install_font_face_set_load_event_template_accessors(scope, template);
+        }
+        finish_template(
+            scope,
+            interfaces::descriptor(kind.constructor_name()).unwrap(),
+            template,
+        );
+    }
+    let before_unload = v8::FunctionTemplate::new(scope, illegal_constructor);
+    before_unload.inherit(event);
+    (subclasses::template_declaration("BeforeUnloadEvent")
+        .unwrap()
+        .install)(scope, before_unload);
+    finish_template(
+        scope,
+        interfaces::BeforeUnloadEvent::DESCRIPTOR,
+        before_unload,
+    );
 
     let payment =
         value::build_value_event_template(scope, value::ValueEventKind::PaymentRequestUpdate);
@@ -228,6 +318,11 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         (interfaces::RTCIceCandidate::DESCRIPTOR, "candidate"),
         (interfaces::RTCDataChannel::DESCRIPTOR, "channel"),
         (interfaces::AudioBuffer::DESCRIPTOR, "buffer"),
+        (interfaces::DataTransfer::DESCRIPTOR, "clipboard"),
+        (interfaces::FormData::DESCRIPTOR, "form"),
+        (interfaces::TextTrack::DESCRIPTOR, "track"),
+        (interfaces::FontFace::DESCRIPTOR, "font"),
+        (interfaces::Element::DESCRIPTOR, "sourceElement"),
         (
             interfaces::SpeechSynthesisUtterance::DESCRIPTOR,
             "utterance",
@@ -587,4 +682,191 @@ fn rtc_payload_conversion_order_and_native_receiver_checks() {
       return true;
     })()"#,
     );
+}
+
+#[test]
+fn value_subclass_constructors_keep_payloads_flags_and_own_property_shapes() {
+    check(
+        r#"(() => {
+        const details = {}, promise = Promise.resolve(1);
+        const cases = [
+            [CustomEvent, {detail: details}, 'detail', details],
+            [CloseEvent, {code: -1, reason: 'bye\ud800', wasClean: true}, 'reason', 'bye\ud800'],
+            [ClipboardEvent, {clipboardData: clipboard}, 'clipboardData', clipboard],
+            [CommandEvent, {command: 'go\ud800', source: sourceElement}, 'source', sourceElement],
+            [ToggleEvent, {oldState: 'closed', newState: 'open', source: sourceElement}, 'newState', 'open'],
+            [InterestEvent, {source: sourceElement}, 'source', sourceElement],
+            [PopStateEvent, {state: details, hasUAVisualTransition: true}, 'state', details],
+            [HashChangeEvent, {oldURL: '#a\ud800', newURL: '#b'}, 'oldURL', '#a\ud800'],
+            [PageTransitionEvent, {persisted: true}, 'persisted', true],
+            [PromiseRejectionEvent, {promise, reason: details}, 'promise', promise],
+            [SubmitEvent, {agentInvoked: true}, 'agentInvoked', true],
+            [TrackEvent, {track}, 'track', track],
+            [FontFaceSetLoadEvent, {fontfaces: [font]}, 'fontfaces', null],
+        ];
+        for (const [Ctor, init, property, expected] of cases) {
+            class Derived extends Ctor {}
+            const e = new Derived('type\ud800', {...init, bubbles: true, cancelable: true, composed: true});
+            assert(e instanceof Derived && e instanceof Ctor && e instanceof Event, Ctor.name);
+            assert(e.type === 'type\ud800' && e.bubbles && e.cancelable && e.composed);
+            assert(e.timeStamp === 37.25 && e.isTrusted === false);
+            if (Ctor === FontFaceSetLoadEvent) {
+                assert(e.fontfaces.length === 1 && e.fontfaces[0] === font && Object.isFrozen(e.fontfaces));
+            } else assert(e[property] === expected, Ctor.name + '.' + property);
+        }
+        const custom = new CustomEvent('c', {detail: details});
+        assert(Object.hasOwn(custom, 'detail') && !Object.hasOwn(custom, 'initCustomEvent'));
+        const toggle = new ToggleEvent('t', {newState: 'open'});
+        const d = Object.getOwnPropertyDescriptor(toggle, 'newState');
+        assert(!d.enumerable && !d.configurable && typeof d.get === 'function' && d.set === undefined);
+        assert(new CloseEvent('c', {code: -1}).code === 65535);
+        assert(!Object.hasOwn(new HashChangeEvent('h'), 'oldURL'));
+        return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn value_event_conversion_order_preserves_utf16_and_usv_string_distinctions() {
+    check(
+        r#"(() => {
+        const reads = [];
+        const dictionary = new Proxy({message: '\ud800', filename: '\ud800', error: 7}, {
+            get(target, name) {reads.push(name); return target[name];}
+        });
+        const e = new ErrorEvent({toString() {reads.push('type'); return 'error';}}, dictionary);
+        assert(reads.join(',') === 'type,bubbles,cancelable,composed,colno,error,filename,lineno,message', reads);
+        assert(e.message === '\ud800' && e.filename === '\ufffd' && e.error === 7);
+        assert(!Object.hasOwn(e, 'message'));
+        const cspReads = [];
+        const csp = new SecurityPolicyViolationEvent('violation', new Proxy({
+            blockedURI: '\ud800', documentURI: '\ud800', sourceFile: '\ud800',
+            referrer: '\ud800', sample: '\ud800', statusCode: 65537, disposition: 'report'
+        }, {get(target, name) {cspReads.push(name); return target[name];}}));
+        assert(cspReads.join(',') === 'bubbles,cancelable,composed,blockedURI,columnNumber,disposition,documentURI,effectiveDirective,lineNumber,originalPolicy,referrer,sample,sourceFile,statusCode,violatedDirective', cspReads);
+        assert(csp.blockedURI === '\ufffd' && csp.documentURI === '\ufffd' && csp.sourceFile === '\ufffd');
+        assert(csp.referrer === '\ufffd' && csp.sample === '\ud800' && csp.statusCode === 1 && csp.disposition === 'report');
+        const toggleReads = [];
+        new ToggleEvent('t', new Proxy({}, {get(_, key) {toggleReads.push(key);}}));
+        assert(toggleReads.join(',') === 'bubbles,cancelable,composed,newState,oldState,source', toggleReads);
+        return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn event_subclass_validation_precedes_timestamp_and_preserves_thrown_values() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 12.0);
+    assert!(
+        eval(
+            scope,
+            r#"(() => {
+        for (const [Ctor, init] of [
+            [FormDataEvent, {}], [FormDataEvent, {formData: {}}],
+            [TrackEvent, {track: {}}], [ClipboardEvent, {clipboardData: {}}],
+            [CommandEvent, {source: {}}], [SecurityPolicyViolationEvent, {disposition: 'invalid'}],
+            [FontFaceSetLoadEvent, {fontfaces: [{}]}], [ClipboardChangeEvent, {changeId: 1}]
+        ]) {
+            let caught;
+            try { new Ctor('x', init); } catch (error) {caught = error;}
+            assert(caught instanceof TypeError, Ctor.name);
+        }
+        for (const Ctor of [PromiseRejectionEvent, FormDataEvent]) {
+            let converted = false, caught;
+            try {new Ctor({toString() {converted = true; return 'x';}});} catch (e) {caught = e;}
+            assert(caught instanceof TypeError && !converted);
+        }
+        const sentinel = {};
+        let caught;
+        try {new CustomEvent('c', {get detail() {throw sentinel;}});} catch (e) {caught = e;}
+        assert(caught === sentinel);
+        return true;
+    })()"#
+        )
+        .is_true()
+    );
+    assert_eq!(
+        scope
+            .get_current_context()
+            .get_slot::<Clock>()
+            .unwrap()
+            .reads
+            .get(),
+        0
+    );
+}
+
+#[test]
+fn clipboard_change_freezes_lossless_sequences_and_applies_bigint_conversion() {
+    check(
+        r#"(() => {
+        const order = [];
+        const e = new ClipboardChangeEvent('change', {
+            get types() {order.push('types'); return new Set(['text/plain\ud800', {toString() {order.push('string'); return 'x';}}]);},
+            get changeId() {order.push('changeId'); return {valueOf() {order.push('bigint'); return 23n;}};}
+        });
+        assert(order.join(',') === 'changeId,bigint,types,string', order);
+        assert(e.changeId === 23n && e.types[0] === 'text/plain\ud800' && e.types[1] === 'x');
+        assert(Object.isFrozen(e.types) && e.types === e.types);
+        assert(new ClipboardChangeEvent('c').changeId === 0n && new ClipboardChangeEvent('c').types.length === 0);
+        return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn legacy_custom_init_is_blocked_during_dispatch_and_keeps_private_values() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 37.25);
+    let event = eval(
+        scope,
+        "globalThis.custom = new CustomEvent('first', {detail: 'old'}); custom;",
+    );
+    let event = v8::Local::<v8::Object>::try_from(event).unwrap();
+    state::set_event_dispatching(scope, event, true);
+    assert!(eval(scope, "custom.initCustomEvent('ignored', true, true, 2); custom.type === 'first' && custom.detail === 'old'").is_true());
+    state::set_event_dispatching(scope, event, false);
+    assert!(eval(scope, "custom.initCustomEvent('next\\ud800', true, true, 9); custom.type === 'next\\ud800' && custom.detail === 9 && custom.bubbles && custom.cancelable").is_true());
+    assert!(subclasses::event_subclass_kind(scope, event) == Some(EventSubclassKind::CustomEvent));
+}
+
+#[test]
+fn native_error_and_before_unload_factories_ignore_replaced_public_constructors() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 37.25);
+    eval(
+        scope,
+        "globalThis.OriginalErrorEvent = ErrorEvent; globalThis.OriginalBeforeUnloadEvent = BeforeUnloadEvent; ErrorEvent = BeforeUnloadEvent = function() {throw new Error('public constructor');};",
+    );
+    let error = v8::Integer::new(scope, 7).into();
+    let event =
+        subclasses::error::construct_original_error_event(scope, "message", "file", 4, 2, error)
+            .unwrap();
+    publish(scope, "nativeError", event);
+    let event = subclasses::new_uninitialized_before_unload_event(scope).unwrap();
+    publish(scope, "beforeUnload", event);
+    assert!(eval(scope, r#"(() => {
+        assert(nativeError instanceof OriginalErrorEvent && nativeError.message === 'message' && nativeError.error === 7);
+        assert(beforeUnload instanceof OriginalBeforeUnloadEvent && beforeUnload.returnValue === '');
+        beforeUnload.returnValue = {toString() {return 'leave\ud800';}};
+        assert(beforeUnload.returnValue === 'leave\ud800');
+        return true;
+    })()"#).is_true());
+    assert_eq!(state::event_initialized(scope, event), Some(false));
 }

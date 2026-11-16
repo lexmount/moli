@@ -77,6 +77,10 @@ fn setup_worker_context() -> (v8::OwnedIsolate, v8::Global<v8::Context>) {
                 crate::context_bootstrap::find_constructor_spec("Event").expect("Event spec"),
                 crate::context_bootstrap::find_constructor_spec("MessageEvent")
                     .expect("MessageEvent spec"),
+                crate::context_bootstrap::find_constructor_spec("ErrorEvent")
+                    .expect("ErrorEvent spec"),
+                crate::context_bootstrap::find_constructor_spec("CloseEvent")
+                    .expect("CloseEvent spec"),
             ],
         )
         .expect("standalone Worker tests need intrinsic event constructors");
@@ -107,6 +111,26 @@ fn setup_worker_context() -> (v8::OwnedIsolate, v8::Global<v8::Context>) {
         v8::Global::new(ctx_scope, context)
     };
     (isolate, context)
+}
+
+#[test]
+fn worker_exposure_initializes_value_events_before_native_delivery() {
+    ensure_v8();
+    let (mut isolate, context) = setup_worker_context();
+    assert_eq!(
+        eval_ok(
+            &mut isolate,
+            &context,
+            r#"(() => {
+            const error = new ErrorEvent('error', {message: 'worker', lineno: 4});
+            const close = new CloseEvent('close', {code: 1000, wasClean: true});
+            return error instanceof Event && error.message === 'worker' && error.lineno === 4
+                && close instanceof Event && close.code === 1000 && close.wasClean
+                && !close.isTrusted && Number.isFinite(close.timeStamp);
+        })()"#
+        ),
+        "true"
+    );
 }
 
 fn install_dom_exception<'s>(scope: &mut v8::PinScope<'s, '_>, global: v8::Local<'s, v8::Object>) {

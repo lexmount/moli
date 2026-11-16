@@ -68,6 +68,10 @@ pub(in crate::context_bootstrap) fn install_worker_exposed_interfaces<'s>(
 ) -> Result<()> {
     let registry = worker_interface_template_registry(scope, realm_kind, specs)?;
     IntrinsicInterfaceRegistry::initialize_for_current_context(scope, registry.len(), realm_kind)?;
+    // Worker eager objects must exist before the intrinsic resolver is enabled
+    // by capture_eager_intrinsic_interfaces. Event constructors can run as soon
+    // as they are exposed, including in embedders without that capture step.
+    install_event_runtime(scope);
 
     for metadata in registry.metadata_entries() {
         if metadata.installation != GlobalInstallation::Lazy

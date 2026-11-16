@@ -1,5 +1,23 @@
 use super::*;
-use crate::webidl;
+use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webidl as webidl;
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SubmitEvent, enumerable, receiver)]
+struct SubmitEventMethodsDeclaration {
+    #[webapi(accessor_property = "agentInvoked", getter = submit_event_agent_invoked_getter_function)]
+    agent_invoked: (),
+    #[webapi(method = "respondWith", length = 1, callback = submit_event_respond_with_callback)]
+    respond_with: (),
+}
+
+pub fn install_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let prototype = template.prototype_template(scope);
+    SubmitEventMethodsDeclaration::initialize_prototype_template(scope, prototype);
+}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SubmitEvent.respondWith")]
@@ -8,7 +26,7 @@ struct RespondWithArgs<'s> {
     response: v8::Local<'s, v8::Promise>,
 }
 
-pub(in crate::context_bootstrap) fn submit_event_agent_invoked_getter_function<'s>(
+fn submit_event_agent_invoked_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -19,7 +37,7 @@ pub(in crate::context_bootstrap) fn submit_event_agent_invoked_getter_function<'
     );
 }
 
-pub(in crate::context_bootstrap) fn submit_event_respond_with_callback<'s>(
+fn submit_event_respond_with_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -34,11 +52,10 @@ pub(in crate::context_bootstrap) fn submit_event_respond_with_callback<'s>(
         || !event_bool_attribute(scope, event, "defaultPrevented")
         || !event_is_dispatching(scope, event)
     {
-        crate::native_bridge::throw_dom_exception(
+        crate::embedding::throw_dom_exception_value(
             scope,
-            "InvalidStateError",
-            11,
             "respondWith requires an agent-invoked submit event during dispatch after preventDefault()",
+            "InvalidStateError",
         );
         return;
     }
@@ -50,10 +67,7 @@ pub(in crate::context_bootstrap) fn submit_event_respond_with_callback<'s>(
     );
 }
 
-pub(crate) fn mark_agent_submit_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    event: v8::Local<'_, v8::Object>,
-) {
+pub fn mark_agent_submit_event(scope: &mut v8::PinScope<'_, '_>, event: v8::Local<'_, v8::Object>) {
     set_event_private_value(
         scope,
         event,
@@ -62,7 +76,7 @@ pub(crate) fn mark_agent_submit_event(
     );
 }
 
-pub(crate) fn take_submit_event_response<'s>(
+pub fn take_submit_event_response<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Promise>> {

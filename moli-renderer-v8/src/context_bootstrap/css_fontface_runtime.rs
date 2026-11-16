@@ -44,10 +44,7 @@ mod storage;
 pub(crate) use automatic::discover_requests as discover_font_requests;
 #[cfg(test)]
 pub(crate) use automatic::discovery_count as font_request_discovery_count;
-pub(in crate::context_bootstrap) use events::{
-    FontFaceSetLoadEventInit, install_font_face_set_event_handler_accessors,
-    install_font_face_set_load_event_template_accessors,
-};
+pub(in crate::context_bootstrap) use events::install_font_face_set_event_handler_accessors;
 pub(super) use font_face::{
     font_face_constructor_callback, font_face_load_callback, install_font_face_template_accessors,
 };

@@ -2,21 +2,7 @@ use super::init::read_event_init;
 use super::*;
 use crate::context_bootstrap::{current_performance_time_origin, dom_time_since_origin_millis};
 use crate::util::get_private_value;
-
-pub(in crate::context_bootstrap) fn event_type_argument<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    constructor_name: &'static str,
-) -> Option<v8::Local<'s, v8::String>> {
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            &format!("Failed to construct '{constructor_name}': 1 argument required."),
-        );
-        return None;
-    }
-    args.get(0).to_string(scope)
-}
+pub(in crate::context_bootstrap) use moli_webapi::events::init::event_type_argument;
 
 pub(crate) fn event_composed_path_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,

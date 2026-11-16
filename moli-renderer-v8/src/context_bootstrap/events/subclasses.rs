@@ -1,18 +1,15 @@
-use super::base::{define_event_property, event_type_argument, initialize_event_object_with_type};
+use super::base::event_type_argument;
 use super::kind::EventSubclassKind;
 use super::*;
 
 mod basic;
 mod constructor;
 mod data;
-mod error;
 mod input;
 mod keyboard;
 mod navigation_init;
-mod payload;
 mod pointer;
 mod security_policy;
-mod values;
 
 pub(in crate::context_bootstrap::events) use basic::initialize_text_event;
 pub(in crate::context_bootstrap) use constructor::build_event_subclass_template;
@@ -27,8 +24,8 @@ pub(in crate::context_bootstrap::events) use data::{
     StorageEventInitMembers, initialize_navigate_event_methods,
 };
 
-pub(crate) use error::construct_original_error_event;
 pub(in crate::context_bootstrap) use keyboard::keyboard_event_init_callback;
+pub(crate) use moli_webapi::events::subclasses::error::construct_original_error_event;
 pub(crate) use security_policy::initialize_native_security_policy_violation_event;
 
 pub(crate) use input::clear_input_event_target_ranges;
