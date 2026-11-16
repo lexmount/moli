@@ -1224,9 +1224,9 @@ impl Request {
         {
             return Some(origin.clone());
         }
-        // Unsafe non-CORS requests (including form submissions) must not
-        // disclose an origin that their referrer policy suppresses.
-        if self.request_mode != RequestMode::Cors {
+        // Chromium applies referrer-policy Origin suppression to navigation
+        // POSTs. Fetch keeps its real origin even in no-cors/same-origin mode.
+        if self.request_mode == RequestMode::Navigate {
             let suppress_origin = match self.effective_referrer_policy() {
                 "no-referrer" => true,
                 "same-origin" => !origin.same_origin_url(request_url),

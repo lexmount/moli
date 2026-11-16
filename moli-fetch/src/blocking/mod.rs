@@ -1364,6 +1364,53 @@ mod tests {
     }
 
     #[test]
+    fn fetch_post_origin_is_independent_of_referrer_policy() {
+        let source = url("https://page.test/page");
+        for disabled in [false, true] {
+            let mut config = FetchConfig::default();
+            config.set_web_security_disabled(disabled);
+            for mode in [
+                RequestMode::Cors,
+                RequestMode::NoCors,
+                RequestMode::SameOrigin,
+            ] {
+                for (policy, referrer) in [
+                    ("no-referrer", None),
+                    ("same-origin", Some("https://page.test/page")),
+                    ("origin", Some("https://page.test/")),
+                ] {
+                    let request =
+                        Request::new("POST", "https://page.test/submit", None, Vec::new())
+                            .unwrap()
+                            .with_request_origin((&source).into())
+                            .with_initiator_url(&source)
+                            .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+                            .with_request_mode(mode)
+                            .with_subresource_request_metadata(crate::SubresourceRequestMetadata {
+                                document_referrer_policy: Some(policy.to_owned()),
+                                ..Default::default()
+                            });
+                    let headers =
+                        outgoing_request_headers_for_url(&config, &request, &request.url, None);
+                    assert_eq!(header_value(&headers, "referer").as_deref(), referrer);
+                    for headers in [
+                        headers,
+                        request
+                            .interception_request_headers_with_web_security(disabled)
+                            .to_byte_strings(),
+                    ] {
+                        assert_eq!(
+                            header_value(&headers, "origin").as_deref(),
+                            (!disabled).then_some("https://page.test"),
+                            "{mode:?}, {policy}, disabled={disabled}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn browser_subresource_origin_header_is_method_mode_and_origin_aware() {
         struct Case {
             name: &'static str,
