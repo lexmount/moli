@@ -1,9 +1,13 @@
-use super::*;
-use crate::util::{callback_data_index_value, get_private_value};
-use crate::web_api_interfaces;
-use crate::webidl;
+//! ImageData declarations, pixel snapshots, and clone helpers.
+
+use crate::{embedding, interfaces as web_api_interfaces};
 use moli_canvas::byte_len as rgba8_byte_len;
+use moli_v8_util::{
+    callback_data_index_value, callback_data_item, get_private_value, global_constructor_object,
+    throw_type_error, v8_string,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 use std::str::FromStr;
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
@@ -67,11 +71,11 @@ struct ImageDataPrototypeDeclaration {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ImageDataClonePayload {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) color_space: String,
-    pub(crate) bytes: Vec<u8>,
+pub struct ImageDataClonePayload {
+    pub width: u32,
+    pub height: u32,
+    pub color_space: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(
@@ -111,7 +115,7 @@ fn color_space_snapshot<'s>(
     v8_string(scope, value.label()).map(Into::into)
 }
 
-pub(super) fn image_data_constructor_callback<'s>(
+pub fn image_data_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -138,7 +142,7 @@ pub(super) fn image_data_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(in crate::context_bootstrap) fn install_image_data_template_bindings<'s>(
+pub fn install_image_data_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -264,7 +268,7 @@ fn image_data_expected_len(
     })
 }
 
-pub(in crate::context_bootstrap) fn new_uint8_clamped_array_from_bytes<'s>(
+pub fn new_uint8_clamped_array_from_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bytes: Vec<u8>,
 ) -> Option<v8::Local<'s, v8::Uint8ClampedArray>> {
@@ -274,16 +278,13 @@ pub(in crate::context_bootstrap) fn new_uint8_clamped_array_from_bytes<'s>(
     v8::Uint8ClampedArray::new(scope, buffer, 0, len)
 }
 
-pub(super) fn build_image_data_object<'s>(
+pub fn build_image_data_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     width: u32,
     height: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let ctor = v8::Local::<v8::Function>::try_from(super::shared::global_constructor_object(
-        scope,
-        "ImageData",
-    )?)
-    .ok()?;
+    let ctor =
+        v8::Local::<v8::Function>::try_from(global_constructor_object(scope, "ImageData")?).ok()?;
     let object = ctor.new_instance(
         scope,
         &[
@@ -294,18 +295,15 @@ pub(super) fn build_image_data_object<'s>(
     Some(object)
 }
 
-pub(super) fn build_image_data_object_with_bytes<'s>(
+pub fn build_image_data_object_with_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     width: u32,
     height: u32,
     bytes: Vec<u8>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let data = new_uint8_clamped_array_from_bytes(scope, bytes)?;
-    let ctor = v8::Local::<v8::Function>::try_from(super::shared::global_constructor_object(
-        scope,
-        "ImageData",
-    )?)
-    .ok()?;
+    let ctor =
+        v8::Local::<v8::Function>::try_from(global_constructor_object(scope, "ImageData")?).ok()?;
     let object = ctor.new_instance(
         scope,
         &[
@@ -317,7 +315,7 @@ pub(super) fn build_image_data_object_with_bytes<'s>(
     Some(object)
 }
 
-pub(crate) fn build_image_data_object_from_clone_payload<'s>(
+pub fn build_image_data_object_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: ImageDataClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -326,11 +324,8 @@ pub(crate) fn build_image_data_object_from_clone_payload<'s>(
         color_space: ImageDataColorSpace::parse(&payload.color_space)?,
     }
     .to_js_snapshot(scope, SnapshotPrototype::Ordinary)?;
-    let ctor = v8::Local::<v8::Function>::try_from(super::shared::global_constructor_object(
-        scope,
-        "ImageData",
-    )?)
-    .ok()?;
+    let ctor =
+        v8::Local::<v8::Function>::try_from(global_constructor_object(scope, "ImageData")?).ok()?;
     ctor.new_instance(
         scope,
         &[
@@ -342,7 +337,7 @@ pub(crate) fn build_image_data_object_from_clone_payload<'s>(
     )
 }
 
-pub(crate) fn image_data_clone_payload_from_object<'s>(
+pub fn image_data_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<ImageDataClonePayload> {
@@ -361,7 +356,7 @@ pub(crate) fn image_data_clone_payload_from_object<'s>(
     })
 }
 
-pub(super) fn image_data_dimensions_from_object<'s>(
+pub fn image_data_dimensions_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(u32, u32)> {
@@ -383,9 +378,17 @@ fn image_data_dimension_from_object_slot<'s>(
     Some(value as u32)
 }
 
-use crate::util::private_string_property as image_data_string_from_object_slot;
+fn image_data_string_from_object_slot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Option<String> {
+    get_private_value(scope, object, slot)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+}
 
-pub(super) fn image_data_bytes_from_object<'s>(
+pub fn image_data_bytes_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<Vec<u8>> {
@@ -398,7 +401,7 @@ pub(super) fn image_data_bytes_from_object<'s>(
 }
 
 fn throw_image_data_index_size_error(scope: &mut v8::PinScope<'_, '_>) {
-    crate::context_bootstrap::throw_dom_exception_value(
+    embedding::throw_dom_exception_value(
         scope,
         "The source width is zero or not a finite integer.",
         "IndexSizeError",

@@ -1,7 +1,9 @@
 //! Immutable time-range snapshots, independent of a media decoder.
 
-use crate::{util::get_private_value, web_api_interfaces, webidl};
+use crate::{embedding, interfaces as web_api_interfaces};
+use moli_v8_util::get_private_value;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 
 const RANGES_SLOT: &str = "__moliTimeRanges";
 
@@ -39,7 +41,7 @@ struct EndArgs {
 
 /// Copies native, normalized intervals into a new snapshot in the current realm.
 /// Adjacent/overlapping intervals must be merged by the producing media backend.
-pub(crate) fn new_time_ranges_value<'s>(
+pub fn new_time_ranges_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     ranges: &[(f64, f64)],
 ) -> v8::Local<'s, v8::Object> {
@@ -60,7 +62,7 @@ pub(crate) fn new_time_ranges_value<'s>(
         .expect("TimeRanges snapshot binds")
 }
 
-pub(in crate::context_bootstrap) fn install_time_ranges_template_bindings<'s>(
+pub fn install_time_ranges_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -124,7 +126,7 @@ fn endpoint<'s>(
 ) {
     let ranges = native_ranges(scope, receiver);
     if index >= ranges.length() / 2 {
-        super::constructors::throw_dom_exception_value(
+        embedding::throw_dom_exception_value(
             scope,
             "The index is outside the time ranges.",
             "IndexSizeError",

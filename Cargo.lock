@@ -3781,10 +3781,13 @@ dependencies = [
 name = "moli-webapi"
 version = "0.1.0"
 dependencies = [
+ "moli-canvas",
+ "moli-geometry",
  "moli-v8-test-util",
  "moli-v8-util",
  "moli-webapi-declare",
  "moli-webidl",
+ "strum",
  "v8",
 ]
 

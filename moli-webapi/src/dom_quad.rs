@@ -1,9 +1,11 @@
-use super::*;
-use crate::{
-    util::{callback_data_index_value, get_private_object},
-    web_api_interfaces, webidl,
+//! DOMQuad values, accessors, bounds, and structured-clone helpers.
+
+use crate::{dom_rect, geometry as geometry_runtime, interfaces as web_api_interfaces};
+use moli_v8_util::{
+    callback_data_index_value, callback_data_item, get_private_object, throw_type_error,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
+use moli_webidl as webidl;
 
 const DOM_QUAD_P1_SLOT: &str = "__moliDomQuadP1";
 const DOM_QUAD_P2_SLOT: &str = "__moliDomQuadP2";
@@ -112,7 +114,7 @@ struct DomQuadInit {
     p4: Option<geometry_runtime::DomPointInit>,
 }
 
-pub(super) fn dom_quad_constructor_callback<'s>(
+pub fn dom_quad_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -142,7 +144,7 @@ pub(super) fn dom_quad_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(in crate::context_bootstrap) fn install_dom_quad_template_bindings<'s>(
+pub fn install_dom_quad_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -305,7 +307,7 @@ fn optional_dom_point_member<'s>(
         .map(|init| Some(init.unwrap_or_default()))
 }
 
-pub(super) fn dom_quad_points<'s>(
+pub fn dom_quad_points<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<[v8::Local<'s, v8::Object>; 4]> {
@@ -321,7 +323,7 @@ pub(super) fn dom_quad_points<'s>(
     ])
 }
 
-pub(super) fn dom_quad_clone_data<'s>(
+pub fn dom_quad_clone_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<[[f64; 4]; 4]> {
@@ -332,7 +334,7 @@ pub(super) fn dom_quad_clone_data<'s>(
     }))
 }
 
-pub(super) fn build_dom_quad_clone_object<'s>(
+pub fn build_dom_quad_clone_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     points: [[f64; 4]; 4],
 ) -> v8::Local<'s, v8::Object> {
@@ -358,7 +360,7 @@ const DOM_QUAD_POINT_SLOTS: &[&str] = &[
     DOM_QUAD_P4_SLOT,
 ];
 
-pub(super) fn build_dom_quad_from_cloned_points<'s>(
+pub fn build_dom_quad_from_cloned_points<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     [p1, p2, p3, p4]: [v8::Local<'s, v8::Object>; 4],
 ) -> v8::Local<'s, v8::Object> {

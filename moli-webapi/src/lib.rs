@@ -9,5 +9,15 @@
 //! are supplied by the embedding runtime. This crate does not depend on the
 //! renderer or its document and task scheduling state.
 
+pub mod dom_quad;
 pub mod dom_rect;
+pub mod dom_rect_list;
+mod embedding;
+pub mod encoded_video_chunk;
+pub mod geometry;
+pub mod geometry_clone;
+pub mod image_data;
 pub mod interfaces;
+pub mod time_ranges;
+
+pub use embedding::{RealmCallbacks, install_realm_callbacks};

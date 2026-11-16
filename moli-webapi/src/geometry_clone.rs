@@ -1,7 +1,7 @@
-use super::{dom_quad, dom_rect, geometry_runtime};
+use crate::{dom_quad, dom_rect, geometry as geometry_runtime};
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum GeometryClonePayload {
+pub enum GeometryClonePayload {
     Point {
         mutable: bool,
         values: [f64; 4],
@@ -20,7 +20,7 @@ pub(crate) enum GeometryClonePayload {
     },
 }
 
-pub(crate) fn geometry_clone_payload_from_object<'s>(
+pub fn geometry_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<GeometryClonePayload> {
@@ -43,7 +43,7 @@ pub(crate) fn geometry_clone_payload_from_object<'s>(
     })
 }
 
-pub(crate) fn build_geometry_object_from_clone_payload<'s>(
+pub fn build_geometry_object_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: GeometryClonePayload,
 ) -> v8::Local<'s, v8::Object> {
@@ -65,14 +65,14 @@ pub(crate) fn build_geometry_object_from_clone_payload<'s>(
     }
 }
 
-pub(crate) fn geometry_quad_clone_points<'s>(
+pub fn geometry_quad_clone_points<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<[v8::Local<'s, v8::Object>; 4]> {
     dom_quad::dom_quad_points(scope, object)
 }
 
-pub(crate) fn build_geometry_quad_from_cloned_points<'s>(
+pub fn build_geometry_quad_from_cloned_points<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     points: [v8::Local<'s, v8::Object>; 4],
 ) -> v8::Local<'s, v8::Object> {
