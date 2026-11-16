@@ -491,6 +491,8 @@ impl LightweightPopupDocumentState {
         self.base_url = base_url;
         self.document_domain_override = None;
         self.policy_container.referrer_policy = response.referrer_policy;
+        self.policy_container.content_security_policy_self_url =
+            response.content_security_policy_self_url;
         self.policy_container.cross_origin_embedder_policy = response.cross_origin_embedder_policy;
         self.policy_container.document_isolation_policy = response.document_isolation_policy;
         self.policy_container.cross_origin_isolated = response.cross_origin_isolated;
@@ -5208,4 +5210,41 @@ fn lightweight_popup_event<'s>(
     LightweightPopupEventDeclaration::new(v8_string(scope, event_type)?)
         .bind(scope)
         .ok()
+}
+
+#[cfg(test)]
+mod policy_source_tests {
+    use super::*;
+
+    #[test]
+    fn popup_response_replaces_the_inherited_script_policy_source() {
+        let creator = Url::parse("https://creator.test/parent").unwrap();
+        let destination = Url::parse("https://destination.test/page").unwrap();
+        let headers = [(
+            "Content-Security-Policy".to_owned(),
+            b"script-src 'self'".to_vec(),
+        )];
+        let state = LightweightPopupDocumentState::new(
+            creator.clone(),
+            DocumentPolicyContainer::from_navigation_response_headers(&headers, &creator),
+        )
+        .apply_navigation_response(
+            destination.clone(),
+            DocumentPolicyContainer::from_navigation_response_headers(&headers, &destination),
+        );
+        let document = crate::parser::HtmlParser::SCRIPTING_ENABLED
+            .parse(destination.clone(), "<!doctype html>".to_owned());
+        let mut runtime = crate::document_runtime::DocumentRuntime::from_document(document);
+        runtime.set_initial_document_policy_container(state.policy_container);
+        assert!(
+            runtime
+                .script_element_request_csp_violation(&destination.join("script.js").unwrap())
+                .is_none()
+        );
+        assert!(
+            runtime
+                .script_element_request_csp_violation(&creator.join("script.js").unwrap())
+                .is_some()
+        );
+    }
 }
