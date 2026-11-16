@@ -85,6 +85,7 @@ pub(crate) fn popup_activation_creates_new_target_for_owner(
             .is_none()
     })
 }
+pub(crate) use worker_target::release_failed_dedicated_worker_target;
 pub(in crate::domains) use worker_target::{
     TargetPreparedOutputSlot, TargetPreparedOutputs,
     commit_failed_dedicated_worker_retirement_sync,

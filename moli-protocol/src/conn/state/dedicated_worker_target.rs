@@ -189,10 +189,12 @@ impl DedicatedWorkerTargetState {
     }
 
     pub(crate) fn release_deferred_renderer_destroyed_for_debugger_resume(&mut self) -> bool {
+        // A detach can race the renderer's Destroyed publication. In that
+        // case the eventual publication must not start deferring again.
+        self.defer_failed_load_destroy_until_debugger_resume = false;
         if !self.renderer_destroyed_while_waiting_for_debugger {
             return false;
         }
-        self.defer_failed_load_destroy_until_debugger_resume = false;
         self.renderer_destroyed_while_waiting_for_debugger = false;
         true
     }

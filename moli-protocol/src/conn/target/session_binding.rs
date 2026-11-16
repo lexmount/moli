@@ -894,6 +894,13 @@ impl CdpConnection {
                             worker.renderer_instance_id,
                         );
                 }
+                if let Some(events) = crate::domains::target::release_failed_dedicated_worker_target(
+                    self,
+                    &browser_context_id,
+                    &target_id,
+                ) {
+                    plan.extend(TargetEventPlan::from_background_events(events));
+                }
             } else {
                 crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
                     self,

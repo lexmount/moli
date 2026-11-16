@@ -656,10 +656,18 @@ pub(in crate::domains) fn release_failed_dedicated_worker_target_after_debugger_
     else {
         return None;
     };
+    release_failed_dedicated_worker_target(conn, &browser_context_id, &target_id)
+}
+
+pub(crate) fn release_failed_dedicated_worker_target(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    target_id: &str,
+) -> Option<Vec<BackgroundProtocolEvent>> {
     let renderer_instance_id = {
         let target = conn
-            .browser_context_by_id_mut(&browser_context_id)?
-            .dedicated_worker_target_mut(&target_id)?;
+            .browser_context_by_id_mut(browser_context_id)?
+            .dedicated_worker_target_mut(target_id)?;
         if !target.release_deferred_renderer_destroyed_for_debugger_resume() {
             return None;
         }
@@ -667,7 +675,7 @@ pub(in crate::domains) fn release_failed_dedicated_worker_target_after_debugger_
     };
     let outputs = prepare_dedicated_worker_target_retirement(
         conn,
-        &browser_context_id,
+        browser_context_id,
         renderer_instance_id,
         DedicatedWorkerRetirementCause::OwnerRetired,
     );
