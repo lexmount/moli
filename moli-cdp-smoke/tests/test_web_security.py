@@ -50,3 +50,33 @@ class WebSecurityFixtureTests(unittest.TestCase):
                 response.close()
         finally:
             fixture.stop()
+
+    def test_redirect_policy_and_incoming_referrer_are_independent_witnesses(self):
+        fixture = FixtureServer()
+        fixture.start()
+        try:
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *args, **kwargs):
+                    return None
+
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+            request = urllib.request.Request(
+                fixture.url + '/web-security/redirect?case=policy&status=307&to=/next'
+                '&policy=unsafe-url&witness_referrer=1', data=b'probe=value',
+                headers={'Origin': 'null'},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                opener.open(request, timeout=3)
+            response = raised.exception
+            try:
+                self.assertEqual(response.code, 307)
+                self.assertEqual(response.headers['Location'], '/next')
+                self.assertEqual(response.headers['Referrer-Policy'], 'unsafe-url')
+                self.assertEqual(fixture.web_security.requests('policy'), [{
+                    'path': '/web-security/redirect', 'method': 'POST', 'origin': 'null',
+                    'cookie': {}, 'author': None, 'body': 'probe=value', 'referrer': None,
+                }])
+            finally:
+                response.close()
+        finally:
+            fixture.stop()
