@@ -41,16 +41,31 @@ struct Change {
     before: State,
     after: State,
 }
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+struct TypingContinuity {
+    focus: u64,
+    selection: u64,
+}
+
+fn typing_continuity(host: &PageScriptHost) -> TypingContinuity {
+    TypingContinuity {
+        focus: host.focus_change_epoch(),
+        selection: host.editing_continuity_epoch(),
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Entry {
     target: usize,
     typing: bool,
+    continuity: TypingContinuity,
     before: Selection,
     after: Selection,
     changes: Vec<Change>,
 }
 pub(crate) struct EditSnapshot {
     target: usize,
+    continuity: TypingContinuity,
     selection: Selection,
     nodes: BTreeMap<usize, State>,
 }
@@ -194,6 +209,7 @@ pub(super) fn capture_edit_including(
     }
     Some(EditSnapshot {
         target: target.index(),
+        continuity: typing_continuity(host),
         selection: selected,
         nodes,
     })
@@ -287,20 +303,25 @@ pub(crate) fn commit_edit(
     if changes.is_empty() {
         return;
     }
+    // Initializing the Document's history owner may create its Selection.
+    // Capture continuity after that internal initialization, so it cannot
+    // split off the first character of an otherwise continuous typing run.
+    let mut undo = stack(scope, UNDO);
     let after = selection(scope, host, before.target);
     let typing = input_type == TextEditInputType::InsertText;
     let mut entry = Entry {
         target: before.target,
         typing,
+        continuity: typing_continuity(host),
         before: before.selection,
         after,
         changes,
     };
-    let mut undo = stack(scope, UNDO);
     if typing
         && let Some(last) = undo.last().and_then(|value| read_entry(scope, *value))
         && last.typing
         && last.target == entry.target
+        && last.continuity == before.continuity
         && last.after == entry.before
         && last.changes.iter().all(|change| {
             before

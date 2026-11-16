@@ -402,6 +402,7 @@ impl PageScriptHost {
 
     pub(crate) fn clear_selection_record(&mut self, handle: SelectionRecordHandle) {
         self.selection_record_registry.clear_record(handle);
+        self.break_typing_continuity();
     }
 
     pub(crate) fn set_selection_record_owner_document(
@@ -433,7 +434,7 @@ impl PageScriptHost {
     ) -> bool {
         let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
-        self.selection_record_registry.store(
+        let changed = self.selection_record_registry.store(
             dom_host,
             handle,
             associated_range,
@@ -442,7 +443,11 @@ impl PageScriptHost {
             direction,
             composed_start,
             composed_end,
-        )
+        );
+        if changed {
+            self.break_typing_continuity();
+        }
+        changed
     }
 
     pub(crate) fn selection_record_has_range(&self, handle: SelectionRecordHandle) -> bool {
@@ -476,8 +481,20 @@ impl PageScriptHost {
     ) -> bool {
         let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
-        self.selection_record_registry
-            .set_boundary(dom_host, handle, role, container, offset)
+        let before = self
+            .selection_record_registry
+            .boundary(dom_host, handle, role);
+        let result = self
+            .selection_record_registry
+            .set_boundary(dom_host, handle, role, container, offset);
+        if self
+            .selection_record_registry
+            .boundary(dom_host, handle, role)
+            != before
+        {
+            self.break_typing_continuity();
+        }
+        result
     }
 
     pub(crate) fn selection_record_is_collapsed(&mut self, handle: SelectionRecordHandle) -> bool {

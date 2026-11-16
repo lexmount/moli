@@ -2977,6 +2977,25 @@ impl ScriptVm {
                 )));
             }
 
+            if (target.is_text_control || contenteditable_editing_host(runtime, handle).is_some())
+                && matches!(
+                    key_lower.as_str(),
+                    "arrowleft"
+                        | "left"
+                        | "arrowright"
+                        | "right"
+                        | "arrowup"
+                        | "up"
+                        | "arrowdown"
+                        | "down"
+                        | "home"
+                        | "end"
+                )
+            {
+                // A navigation command ends typing even at an unchanged caret.
+                runtime.break_typing_continuity();
+            }
+
             if target.is_text_control
                 && matches!(
                     key_lower.as_str(),

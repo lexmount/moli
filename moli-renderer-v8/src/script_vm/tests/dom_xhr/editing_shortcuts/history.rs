@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn editing_shortcuts_continuous_control_typing_includes_the_first_character() {
+    for markup in ["<input id=a>", "<textarea id=a></textarea>"] {
+        let mut vm = new_parsed_test_vm("https://editing-continuous.test/", markup);
+        vm.eval("document.getElementById('a').focus()").unwrap();
+        text(&mut vm, "first");
+        key(&mut vm, "z", "KeyZ", 2);
+        assert_eq!(vm.eval("document.getElementById('a').value").unwrap(), "");
+    }
+}
+
+#[test]
+fn editing_shortcuts_typing_groups_end_on_focus_and_selection_round_trips() {
+    for markup in [
+        "<input id=a>",
+        "<textarea id=a></textarea>",
+        "<div id=a contenteditable></div>",
+    ] {
+        for movement in ["focus", "arrows", "selection-api"] {
+            let mut vm = new_parsed_test_vm(
+                "https://editing-typing-groups.test/",
+                &format!("{markup}<input id=b>"),
+            );
+            vm.eval("globalThis.a=document.getElementById('a');globalThis.b=document.getElementById('b');a.focus()").unwrap();
+            text(&mut vm, "abc");
+            match movement {
+                "focus" => {
+                    vm.eval("b.focus();a.focus()").unwrap();
+                }
+                "arrows" => {
+                    key(&mut vm, "ArrowLeft", "ArrowLeft", 0);
+                    key(&mut vm, "ArrowRight", "ArrowRight", 0);
+                }
+                _ => {
+                    vm.eval("if(a.setSelectionRange){a.setSelectionRange(2,2);a.setSelectionRange(3,3)}else{getSelection().collapse(a.firstChild,2);getSelection().collapse(a.firstChild,3)}").unwrap();
+                }
+            }
+            text(&mut vm, "d");
+            key(&mut vm, "z", "KeyZ", 2);
+            assert_eq!(
+                vm.eval("a.value??a.textContent").unwrap(),
+                "abc",
+                "{markup}, {movement}"
+            );
+        }
+    }
+}
+
+#[test]
 fn editing_shortcuts_history_preserves_unrelated_connected_iframe_and_custom_element() {
     let mut vm = new_parsed_test_vm(
         "https://editing-iframe.test/",
