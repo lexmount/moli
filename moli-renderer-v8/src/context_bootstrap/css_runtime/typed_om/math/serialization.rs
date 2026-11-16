@@ -11,6 +11,21 @@ pub(in crate::context_bootstrap::css_runtime::typed_om) fn serialize<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    serialize_expression(scope, object, false)
+}
+
+pub(in crate::context_bootstrap::css_runtime::typed_om) fn serialize_for_declaration<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    serialize_expression(scope, object, true)
+}
+
+fn serialize_expression<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    declaration: bool,
+) -> Option<String> {
     let mut tasks = vec![Task::Value(object, false, false)];
     let mut output = String::new();
     let mut visited = 0usize;
@@ -29,7 +44,12 @@ pub(in crate::context_bootstrap::css_runtime::typed_om) fn serialize<'s>(
             continue;
         };
         if values::css_unit_value_unit(scope, object).is_some() {
-            output.push_str(&values::serialize(scope, object)?);
+            let text = if declaration {
+                values::serialize_for_declaration(scope, object)?
+            } else {
+                values::serialize(scope, object)?
+            };
+            output.push_str(&text);
             continue;
         }
         let op = kind(scope, object)?;
