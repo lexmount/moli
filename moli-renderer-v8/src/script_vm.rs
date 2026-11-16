@@ -10,9 +10,7 @@ use std::{
 use crate::DocumentStartScript;
 use crate::content_security_policy::ContentSecurityPolicyScriptElementRequest;
 use crate::dom::NodeId;
-use crate::dom::native::{
-    DomHost, DomMutationEffects, NativeDom, NativeNodeId, NodeData,
-};
+use crate::dom::native::{DomHost, DomMutationEffects, NativeDom, NativeNodeId, NodeData};
 use crate::frame_owner_model::{
     ChildDocumentModulatorStore, DocumentId, FrameDocumentTaskOwner, FrameOwnerStore, FrameRealmId,
     FrameScriptJob, FrameScriptJobKind,
@@ -723,6 +721,7 @@ mod main_world;
 use main_world::MainWorld;
 #[cfg(feature = "devtools")]
 mod native_drag_data;
+mod object_resource_selection;
 mod promise_rejection_task;
 mod script_preparation_error;
 mod service_worker_query;

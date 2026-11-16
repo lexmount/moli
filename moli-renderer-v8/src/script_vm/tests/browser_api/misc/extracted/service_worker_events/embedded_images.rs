@@ -554,3 +554,66 @@ document.body.appendChild(bitmapLifetimeOwner);
         "all requests in this case were intercepted"
     );
 }
+
+#[tokio::test]
+async fn embedded_object_resource_errors_complete_unsupported_schemes_and_keep_blank_documents() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        "https://object-errors.test/page.html",
+        &loader,
+    );
+    vm.exec_runtime_turn(
+        r#"
+      if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+      globalThis.objectEvents = [];
+      globalThis.objectEventDetails = [];
+      globalThis.objectJavascriptExecuted = false;
+      for (const [id, data] of [
+        ['file', 'file:\\http://nonexistent.html'],
+        ['invalid', 'http://test:test'],
+        ['unsupported-about', 'about:unsupported-object-resource'],
+        ['javascript', 'javascript:parent.objectJavascriptExecuted = true'],
+        ['blank', 'about:blank'],
+      ]) {
+        const element = document.createElement('object');
+        element.id = id;
+        element.data = data;
+        element.onerror = event => {
+          objectEvents.push(id + ':error');
+          objectEventDetails.push([
+            Object.getPrototypeOf(event).constructor === Event, event.isTrusted,
+            !event.bubbles, !event.cancelable, event.target === element,
+            element.contentWindow === null, element.contentDocument === null,
+          ].every(Boolean));
+        };
+        element.onload = () => objectEvents.push(id + ':load');
+        document.body.append(element);
+      }
+    "#,
+        None,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(objectEvents.length === 5)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(objectEvents.slice().sort())")
+            .unwrap(),
+        r#"["blank:load","file:error","invalid:error","javascript:error","unsupported-about:error"]"#
+    );
+    assert_eq!(
+        vm.eval("String(objectEventDetails.length === 4 && objectEventDetails.every(Boolean))")
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(vm.eval("String(!objectJavascriptExecuted && frames.length === 1 && document.getElementById('blank').contentWindow instanceof document.getElementById('blank').contentWindow.Window)").unwrap(), "true");
+    assert!(
+        !vm.has_pending_child_document_lifecycle(),
+        "failed resources release their navigation and load barriers"
+    );
+}

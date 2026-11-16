@@ -175,6 +175,9 @@ impl PageScriptHost {
         {
             Self::drop_child_browsing_context_subtree_with_window_realm(scope, self, handle);
         }
+        if self.refresh_invalid_object_resource_selection(scope, handle) {
+            return None;
+        }
         self.refresh_embedded_content_csp_admission(scope, handle);
         self.refresh_embedded_image_resource(scope, handle);
         match self.child_browsing_context_bootstrap_for_handle(handle) {
@@ -1067,6 +1070,7 @@ impl PageScriptHost {
 
     fn drop_child_browsing_context_handles(&mut self, handles: Vec<DomHandle>) {
         for handle in handles {
+            self.cancel_object_resource_selection(handle);
             self.cancel_embedded_image_resource(handle);
             self.object_fallback_bootstraps.remove(&handle);
             self.embedded_content_csp_admissions.remove(&handle);
@@ -1173,6 +1177,7 @@ impl PageScriptHost {
                 && self.child_browsing_context_host_is_active(*handle)
         });
         let live_handles = handles.iter().copied().collect::<HashSet<_>>();
+        self.retain_live_object_resource_selections(&live_handles);
         let stale_meta_refresh_handles = self
             .child_meta_refresh_navigations
             .keys()

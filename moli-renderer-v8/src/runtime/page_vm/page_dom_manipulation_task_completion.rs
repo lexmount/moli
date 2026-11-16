@@ -46,6 +46,9 @@ impl PageVm {
             PageDomManipulationTurnAction::ScriptPreparationError(action) => {
                 action.into_page_task_completion()
             }
+            PageDomManipulationTurnAction::ObjectResourceSelection(action) => {
+                action.into_page_task_completion()
+            }
             PageDomManipulationTurnAction::PromiseRejection(action) => {
                 action.into_page_task_completion()
             }

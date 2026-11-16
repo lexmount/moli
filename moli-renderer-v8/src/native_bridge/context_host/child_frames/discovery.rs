@@ -233,6 +233,7 @@ impl PageScriptHost {
                 .into_iter()
                 .any(|name| attribute_name.eq_ignore_ascii_case(name))
         {
+            self.cancel_object_resource_selection(handle);
             self.object_fallback_bootstraps.remove(&handle);
         }
     }
@@ -298,18 +299,13 @@ impl PageScriptHost {
             .unwrap_or_else(|_| Url::parse("about:blank").expect("static about:blank should parse"))
     }
 
-    pub(super) fn parse_child_frame_owner_attribute_url(
+    pub(in crate::native_bridge::context_host) fn parse_child_frame_owner_attribute_url(
         &self,
         handle: DomHandle,
         raw: &str,
     ) -> Option<Url> {
         let base = self.document_base_url_for_child_context(handle);
         parse_url_with_document_query_encoding(self, handle, &base, raw).ok()
-    }
-
-    fn resolve_child_frame_owner_attribute_url(&self, handle: DomHandle, raw: &str) -> Url {
-        self.parse_child_frame_owner_attribute_url(handle, raw)
-            .unwrap_or_else(|| Url::parse("about:blank").expect("static about:blank should parse"))
     }
 
     pub(in crate::native_bridge::context_host) fn child_browsing_context_bootstrap_for_handle(
@@ -355,17 +351,26 @@ impl PageScriptHost {
                 .then_some(ChildBrowsingContextBootstrap::AboutBlank);
         }
 
-        let url = self.resolve_child_frame_owner_attribute_url(handle, raw_url);
+        let Some(url) = self.parse_child_frame_owner_attribute_url(handle, raw_url) else {
+            return kind.always_hosts_document().then(|| {
+                ChildBrowsingContextBootstrap::Url(
+                    Url::parse("about:blank").expect("static about:blank should parse"),
+                )
+            });
+        };
         if !kind.always_hosts_document()
             && (self.embedded_content_is_suppressed(handle)
                 || !self.embedded_content_selects_nested_document(handle, raw_url, &url))
         {
             return None;
         }
-        let bootstrap = if !kind.always_hosts_document() && url.scheme() == "javascript" {
+        let bootstrap = if !kind.always_hosts_document()
+            && !moli_url::is_about_blank(&url)
+            && !matches!(url.scheme(), "http" | "https" | "blob" | "data")
+        {
             // embed/object setup fetches its attribute resource. Preserve that
             // distinction from iframe/frame navigation so Fetch rejects the
-            // javascript scheme instead of executing it in the child realm.
+            // unsupported schemes instead of leaving a local bootstrap pending.
             ChildBrowsingContextBootstrap::Request(ChildBrowsingContextNavigationRequest {
                 url,
                 method: "GET".to_owned(),
@@ -383,7 +388,10 @@ impl PageScriptHost {
         Some(bootstrap)
     }
 
-    pub(super) fn embedded_content_is_suppressed(&self, handle: DomHandle) -> bool {
+    pub(in crate::native_bridge::context_host) fn embedded_content_is_suppressed(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
         let mut current = self.dom_host().parent_node(handle);
         while let Some(ancestor) = current {
             if self.dom_host().is_html_element_named(ancestor, "audio")

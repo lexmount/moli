@@ -524,6 +524,8 @@ impl PageScriptHost {
             ),
             script_preparation_errors:
                 super::script_preparation_errors::ScriptPreparationErrorState::default(),
+            object_resource_selections:
+                super::object_resource_selections::ObjectResourceSelectionState::default(),
             promise_rejection_tasks:
                 super::promise_rejection_tasks::PromiseRejectionTaskState::default(),
             pending_selectedcontent_updates: HashSet::new(),
@@ -1060,6 +1062,16 @@ impl PageScriptHost {
             .expect("a live Page Window must install its task capabilities before script preparation error admission")
             .dom_manipulation()
             .script_preparation_error()
+    }
+
+    pub(crate) fn page_object_resource_selection_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageObjectResourceSelectionSender {
+        self.page_task_capabilities
+            .get()
+            .expect("a live Page Window must install its task capabilities before object resource selection admission")
+            .dom_manipulation()
+            .object_resource_selection()
     }
 
     pub(crate) fn page_promise_rejection_sender(

@@ -1421,6 +1421,7 @@ pub(crate) enum DocumentLoadDelayReason {
     ParserDeferredScript,
     AsyncModuleScript,
     Image,
+    ObjectResourceSelection,
     Media,
     StyleLoadEvent,
     Navigation,

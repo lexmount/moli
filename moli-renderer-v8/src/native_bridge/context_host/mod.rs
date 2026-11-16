@@ -120,6 +120,7 @@ mod image_loads;
 mod input_images;
 pub(crate) use input_images::InputImageRequestId;
 mod image_resources;
+mod object_resource_selections;
 mod promise_rejection_tasks;
 mod script_preparation_errors;
 pub(crate) use image_resources::{
@@ -1073,6 +1074,7 @@ pub(crate) struct PageScriptHost {
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     service_worker_queries: service_worker_queries::ServiceWorkerQueryState,
     script_preparation_errors: script_preparation_errors::ScriptPreparationErrorState,
+    object_resource_selections: object_resource_selections::ObjectResourceSelectionState,
     promise_rejection_tasks: promise_rejection_tasks::PromiseRejectionTaskState,
     pending_selectedcontent_updates: HashSet<DomHandle>,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,

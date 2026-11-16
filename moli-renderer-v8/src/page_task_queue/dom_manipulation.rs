@@ -36,6 +36,10 @@ use super::{
         RendererPageImageLoadEventOwner, RendererPageImageLoadEventSender,
         RendererPageImageLoadEventTask,
     },
+    object_resource_selection::{
+        RendererPageObjectResourceSelectionOwner, RendererPageObjectResourceSelectionSender,
+        RendererPageObjectResourceSelectionTask,
+    },
     popup_close::{
         RendererPagePopupCloseOwner, RendererPagePopupCloseSender, RendererPagePopupCloseTask,
     },
@@ -112,6 +116,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
     ServiceWorkerQuery(RendererPageServiceWorkerQueryOwner),
     ScriptPreparationError(RendererPageScriptPreparationErrorOwner),
+    ObjectResourceSelection(RendererPageObjectResourceSelectionOwner),
     PromiseRejection(RendererPagePromiseRejectionOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
     MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleOwner),
@@ -136,6 +141,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
     ServiceWorkerQuery(RendererPageServiceWorkerQueryTask),
     ScriptPreparationError(RendererPageScriptPreparationErrorTask),
+    ObjectResourceSelection(RendererPageObjectResourceSelectionTask),
     PromiseRejection(RendererPagePromiseRejectionTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
     MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleTask),
@@ -171,6 +177,9 @@ impl RendererPageDomManipulationTask {
             }
             Self::ScriptPreparationError(task) => {
                 RendererPageDomManipulationOwner::ScriptPreparationError(task.owner())
+            }
+            Self::ObjectResourceSelection(task) => {
+                RendererPageDomManipulationOwner::ObjectResourceSelection(task.owner())
             }
             Self::PromiseRejection(task) => {
                 RendererPageDomManipulationOwner::PromiseRejection(task.owner())
@@ -212,6 +221,7 @@ impl RendererPageDomManipulationTask {
     fn is_cancelled(&self) -> bool {
         match self {
             Self::ElementToggle(task) => task.is_cancelled(),
+            Self::ObjectResourceSelection(task) => task.is_cancelled(),
             Self::FormNavigation(task) => task.is_cancelled(),
             _ => false,
         }
@@ -232,6 +242,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
     ServiceWorkerQuery(super::PageServiceWorkerQueryTurnAction),
     ScriptPreparationError(super::PageScriptPreparationErrorTurnAction),
+    ObjectResourceSelection(super::PageObjectResourceSelectionTurnAction),
     PromiseRejection(super::PagePromiseRejectionTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
     MainDocumentLifecycle(super::PageMainDocumentLifecycleTurnAction),
@@ -296,6 +307,10 @@ impl RendererPageDomManipulationSender {
 
     pub(crate) fn script_preparation_error(&self) -> RendererPageScriptPreparationErrorSender {
         RendererPageScriptPreparationErrorSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn object_resource_selection(&self) -> RendererPageObjectResourceSelectionSender {
+        RendererPageObjectResourceSelectionSender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn promise_rejection(&self) -> RendererPagePromiseRejectionSender {

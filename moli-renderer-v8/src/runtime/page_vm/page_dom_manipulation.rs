@@ -49,6 +49,11 @@ impl PageVm {
                 .map(|outcome| {
                     outcome.map_action(PageDomManipulationTurnAction::ScriptPreparationError)
                 }),
+            RendererPageDomManipulationTask::ObjectResourceSelection(task) => self
+                .apply_selected_page_object_resource_selection_turn(task)
+                .map(|outcome| {
+                    outcome.map_action(PageDomManipulationTurnAction::ObjectResourceSelection)
+                }),
             RendererPageDomManipulationTask::PromiseRejection(task) => self
                 .apply_selected_page_promise_rejection_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PromiseRejection)),
