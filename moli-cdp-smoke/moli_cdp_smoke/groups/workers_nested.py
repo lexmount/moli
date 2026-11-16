@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from ..assertions import SmokeError, assert_equal
+from ..assertions import SmokeError, assert_equal, wait_until
 from ..raw_cdp import connect_raw_cdp
 from ..serve import start_browser, stop_browser, wait_for_browser_endpoint
 
@@ -82,6 +82,7 @@ async def check_nested_worker_protocol(
         target = (await probe.command("Target.createTarget", {"url": "about:blank"}))[
             "targetId"
         ]
+        await probe.command("Target.setDiscoverTargets", {"discover": True})
         page = (
             await probe.command(
                 "Target.attachToTarget", {"targetId": target, "flatten": True}
@@ -111,9 +112,10 @@ async def check_nested_worker_protocol(
             },
             page,
         )
-        outer = (await probe.event("Target.attachedToTarget", page))["params"][
-            "sessionId"
+        outer_attachment = (await probe.event("Target.attachedToTarget", page))[
+            "params"
         ]
+        outer = outer_attachment["sessionId"]
         await probe.auto_attach(outer, True)
         await probe.command("Network.enable", session=outer)
         await probe.command("Runtime.runIfWaitingForDebugger", session=outer)
@@ -123,11 +125,23 @@ async def check_nested_worker_protocol(
             page,
         )
         assert_equal(boot["result"]["value"], "ready", "outer Worker executed")
-        if case == "script-failure":
-            fixture.hold(path, before_headers=True)
-        script_url = fixture.origin + (
-            path if case == "script-failure" else "/worker.js?inner-" + case
-        )
+        failed = case in ("script-failure", "failed-script-detach")
+        loading = case in ("late-auto-attach", "close-loading")
+        if case == "late-auto-attach":
+            await probe.auto_attach(outer, False)
+        gate_path = path if failed else "/worker.js"
+        if failed or loading:
+            fixture.hold(gate_path, before_headers=case != "close-loading")
+        script_url = fixture.origin + (path if failed else "/worker.js?inner-" + case)
+        known_targets: set[str] = set()
+        if case == "close-loading":
+            existing = await probe.command("Target.getTargets")
+            known_targets.update(t["targetId"] for t in existing["targetInfos"])
+            known_targets.update(
+                m["params"]["targetInfo"]["targetId"]
+                for m in probe.messages
+                if m.get("method") == "Target.targetCreated"
+            )
         create = await client.send(
             "Runtime.evaluate",
             {
@@ -142,7 +156,7 @@ async def check_nested_worker_protocol(
             session_id=outer,
         )
         request = None
-        if case == "script-failure":
+        if failed or loading:
             # Chromium announces the creator's request before response headers,
             # but can expose the provisional child target only after headers.
             request = await probe.wait(
@@ -152,16 +166,79 @@ async def check_nested_worker_protocol(
                     and m["params"]["request"]["url"] == script_url
                 )
             )
-            fixture.release(path)
+            if case == "late-auto-attach":
+                await probe.auto_attach(outer, True)
+                assert_equal(
+                    [
+                        m
+                        for m in probe.messages
+                        if m.get("method") == "Target.attachedToTarget"
+                        and m.get("sessionId") == outer
+                    ],
+                    [],
+                    "a loading child must not attach before its response headers",
+                )
+            elif case == "close-loading":
+                await wait_until(
+                    lambda: gate_path in fixture.sent_headers,
+                    "script headers received while body is held",
+                )
+                created = await probe.wait(
+                    lambda m: (
+                        m.get("method") == "Target.targetCreated"
+                        and m["params"]["targetInfo"]["type"] == "worker"
+                        and m["params"]["targetInfo"]["targetId"] not in known_targets
+                    )
+                )
+                loading_target = created["params"]["targetInfo"]["targetId"]
+                close_id = await client.send(
+                    "Target.closeTarget", {"targetId": loading_target}
+                )
+                closed = await probe.wait(lambda m: m.get("id") == close_id)
+                assert_equal(
+                    closed.get("error"),
+                    {
+                        "code": -32602,
+                        "message": "Specified target doesn't support closing",
+                    },
+                    "close is rejected while the Worker is still loading",
+                )
+                targets = await probe.command("Target.getTargets")
+                assert_equal(
+                    any(
+                        t["targetId"] == loading_target for t in targets["targetInfos"]
+                    ),
+                    True,
+                    "failed close retains loading target",
+                )
+            fixture.release(gate_path)
         attached = await probe.event("Target.attachedToTarget", outer)
         inner = attached["params"]["sessionId"]
         assert_equal(
             attached["params"]["waitingForDebugger"], True, "nested startup pause"
         )
-        if case == "script-failure":
+        if failed:
             assert request is not None
             await probe.command("Network.enable", session=inner)
             await probe.response(create, outer)
+            if case == "failed-script-detach":
+                await probe.auto_attach(outer, False)
+                await probe.event("Target.detachedFromTarget", outer, sessionId=inner)
+                child_target = attached["params"]["targetInfo"]["targetId"]
+                await probe.wait(
+                    lambda m: (
+                        m.get("method") == "Target.targetDestroyed"
+                        and m["params"]["targetId"] == child_target
+                    )
+                )
+                targets = await probe.command("Target.getTargets")
+                assert_equal(
+                    any(t["targetId"] == child_target for t in targets["targetInfos"]),
+                    False,
+                    "failed Worker is retired when its last debugger leaves",
+                )
+                state.record("native_nested_worker_" + case, {"events": probe.messages})
+                return
             await probe.command("Runtime.runIfWaitingForDebugger", session=inner)
             response = await probe.event(
                 "Network.responseReceived",
@@ -195,7 +272,7 @@ async def check_nested_worker_protocol(
                 result["result"]["value"], 2, "flattened child Inspector response"
             )
             await probe.command("Runtime.runIfWaitingForDebugger", session=inner)
-        else:
+        elif not loading:
             await probe.response(create, outer)
             if case == "disable-auto-attach":
                 await probe.auto_attach(outer, False)
@@ -212,7 +289,10 @@ async def check_nested_worker_protocol(
                 page if case == "detach-parent-session" else outer,
                 sessionId=outer if case == "detach-parent-session" else inner,
             )
-        if case != "script-failure":
+        if not failed:
+            if loading:
+                await probe.response(create, outer)
+                await probe.command("Runtime.runIfWaitingForDebugger", session=inner)
             boot = await probe.command(
                 "Runtime.evaluate",
                 {
@@ -229,10 +309,24 @@ async def check_nested_worker_protocol(
                 "booted",
                 "child executes after startup barrier release",
             )
+            if case == "late-auto-attach":
+                assert_equal(
+                    len(
+                        [
+                            m
+                            for m in probe.messages
+                            if m.get("method") == "Target.attachedToTarget"
+                            and m.get("sessionId") == outer
+                        ]
+                    ),
+                    1,
+                    "exactly one child attachment after loading",
+                )
         state.record("native_nested_worker_" + case, {"events": probe.messages})
     finally:
-        if case == "script-failure":
-            fixture.release(path)
+        for gate_path in (path, "/worker.js"):
+            if gate_path in fixture.gates:
+                fixture.release(gate_path)
         state.subresource_events.extend(m for m in probe.messages if "method" in m)
         if target:
             await probe.command("Target.closeTarget", {"targetId": target})
@@ -253,6 +347,9 @@ async def run_nested_worker_protocol_checks(
             "detach-session",
             "detach-parent-session",
             "script-failure",
+            "late-auto-attach",
+            "close-loading",
+            "failed-script-detach",
         ):
             await check_nested_worker_protocol(state, fixture, case, endpoint)
     finally:

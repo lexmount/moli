@@ -93,6 +93,7 @@ class _Fixture(AbstractContextManager):
         self.requests: list[dict[str, Any]] = []
         self.gates: dict[str, threading.Event] = {}
         self.header_gates: set[str] = set()
+        self.sent_headers: set[str] = set()
         self.lock = threading.Lock()
         fixture = self
 
@@ -152,7 +153,11 @@ class _Fixture(AbstractContextManager):
                     )
                 else:
                     body, kind = b"native-worker-body", "text/plain"
-                self.send_response(302 if "/http-empty-" in path else 200)
+                self.send_response(
+                    302 if "/http-empty-" in path or "/http-missing-" in path else 200
+                )
+                if "/http-empty-" in path or "/http-missing-" in path:
+                    self.send_header("Access-Control-Allow-Origin", "*")
                 if "/http-empty-" in path:
                     self.send_header("Location", "")
                 self.send_header("Content-Type", kind)
@@ -160,6 +165,7 @@ class _Fixture(AbstractContextManager):
                 self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.flush()
+                fixture.sent_headers.add(path)
                 if gate is not None:
                     gate.wait()
                 try:
@@ -178,9 +184,12 @@ class _Fixture(AbstractContextManager):
 
     def hold(self, path: str, *, before_headers: bool = False) -> None:
         with self.lock:
+            self.sent_headers.discard(path)
             self.gates[path] = threading.Event()
             if before_headers:
                 self.header_gates.add(path)
+            else:
+                self.header_gates.discard(path)
 
     def release(self, path: str) -> None:
         self.gates[path].set()
@@ -494,9 +503,12 @@ async def _check_redirect_responses(
     state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
 ) -> None:
     for decision in ("request-fulfill", "response-fulfill", "continue-response"):
-        for empty_location in (False, True):
+        for location_kind in ("missing", "empty", "target"):
             for mode in ("error", "follow", "manual"):
-                label = f"{decision}-{empty_location}-{mode}"
+                if location_kind == "target" and mode != "follow":
+                    continue
+                label = f"{decision}-{location_kind}-{mode}"
+                next_path = "/next-" + label
                 path = "/native-probe/synthetic-" + label
                 url = fixture.origin + path
                 await page.evaluate(
@@ -510,6 +522,29 @@ async def _check_redirect_responses(
                         {"requestId": pause["requestId"], "interceptResponse": True},
                     )
                     pause = await targets.pause(url, child, False, response=True)
+                    extra = await targets.event(
+                        "Network.responseReceivedExtraInfo",
+                        requestId=pause["networkId"],
+                    )
+                    assert_equal(
+                        extra.get("sessionId"), "page", "wire response ExtraInfo owner"
+                    )
+                    assert_equal(
+                        extra["params"]["statusCode"],
+                        200,
+                        "wire status before debugger override",
+                    )
+                    wire_headers = {
+                        k.lower(): v for k, v in extra["params"]["headers"].items()
+                    }
+                    assert_equal(
+                        wire_headers["content-type"], "text/plain", "wire Content-Type"
+                    )
+                    assert_equal(
+                        wire_headers["content-length"],
+                        str(len("native-worker-body")),
+                        "wire Content-Length",
+                    )
                 params: dict[str, Any] = {
                     "requestId": pause["requestId"],
                     "responseCode": 302,
@@ -518,8 +553,13 @@ async def _check_redirect_responses(
                         {"name": "Content-Type", "value": "text/plain"}
                     ],
                 }
-                if empty_location:
-                    params["responseHeaders"].append({"name": "Location", "value": ""})
+                if location_kind != "missing":
+                    params["responseHeaders"].append(
+                        {
+                            "name": "Location",
+                            "value": next_path if location_kind == "target" else "",
+                        }
+                    )
                 body = (
                     "native-worker-body"
                     if decision == "continue-response"
@@ -555,9 +595,28 @@ async def _check_redirect_responses(
                         "clone": body,
                     }
                 )
+                follows = (
+                    location_kind == "target"
+                    and decision != "continue-response"
+                    and mode == "follow"
+                )
+                if follows:
+                    expected = {
+                        "status": 200,
+                        "type": "basic",
+                        "bodyNull": False,
+                        "body": "native-worker-body",
+                        "clone": "native-worker-body",
+                    }
                 assert_equal(result, expected, "rewritten redirect " + label)
                 await targets.event(
-                    "Network.loadingFinished", requestId=pause["networkId"]
+                    "Network.loadingFinished",
+                    requestId=pause["networkId"],
+                )
+                assert_equal(
+                    fixture.hits[next_path],
+                    int(follows),
+                    "actual next-hop requests " + label,
                 )
                 assert_equal(
                     fixture.hits[path],
@@ -665,6 +724,78 @@ async def _check_empty_http_redirects(
             state.record(
                 f"native_worker_http_empty_{rewritten}_{mode}", {"response": result}
             )
+
+    await targets.page_cdp.send("Fetch.disable")
+    try:
+        for location_kind, foreign in (
+            ("empty", False),
+            ("missing", False),
+            ("empty", True),
+            ("missing", True),
+        ):
+            for mode in ("error", "follow", "manual"):
+                path = f"/native-probe/http-{location_kind}-ordinary-{mode}-{foreign}"
+                url = (
+                    fixture.origin.replace("127.0.0.1", "localhost")
+                    if foreign
+                    else fixture.origin
+                ) + path
+                await page.evaluate(
+                    '([url,redirect])=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url,redirect});}',
+                    [url, mode],
+                )
+                await wait_until(
+                    lambda: page.evaluate("nativeMessages.length>0"),
+                    "ordinary empty-Location response",
+                )
+                result = await page.evaluate("nativeMessages[0]")
+                expected = (
+                    {
+                        "status": 0,
+                        "type": "opaqueredirect",
+                        "bodyNull": True,
+                        "body": "",
+                        "clone": "",
+                    }
+                    if mode == "manual"
+                    else {
+                        "status": 302,
+                        "type": "cors" if foreign else "basic",
+                        "bodyNull": False,
+                        "body": "native-worker-body",
+                        "clone": "native-worker-body",
+                    }
+                )
+                assert_equal(
+                    result, expected, "ordinary Location " + location_kind + "/" + mode
+                )
+                request = await targets.request(url, child)
+                await targets.event(
+                    "Network.loadingFinished",
+                    requestId=request,
+                )
+                assert_equal(
+                    fixture.hits[path], 1, "one ordinary request with empty Location"
+                )
+                state.record(
+                    "native_worker_ordinary_"
+                    + location_kind
+                    + "_"
+                    + mode
+                    + "_"
+                    + str(foreign),
+                    {"response": result},
+                )
+    finally:
+        await targets.page_cdp.send(
+            "Fetch.enable",
+            {
+                "patterns": [
+                    {"urlPattern": "*native-probe*", "resourceType": kind}
+                    for kind in ("Fetch", "XHR")
+                ]
+            },
+        )
 
 
 async def _check_nested_worker(
