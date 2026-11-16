@@ -824,27 +824,16 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     };
 
-    let (
-        _loader,
-        document_url,
-        extra_http_headers,
-        _network_offline,
-        blocked_url_patterns,
-        _fetch_subresource_interception_classes,
-        policy_context,
-    ) = {
+    let (document_url, extra_http_headers, blocked_url_patterns, policy_context) = {
         let state = state.borrow();
         let Some(document_url) = state.current_script_url.clone() else {
             rv.set(make_rejected_promise(scope, "fetch: worker script url is unavailable").into());
             return;
         };
         (
-            state.loader.clone(),
             document_url,
             state.extra_http_headers.clone(),
-            state.network_offline,
             state.blocked_url_patterns.clone(),
-            state.subresource_interception_config(),
             state.policy_context,
         )
     };
@@ -900,87 +889,40 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
         )
     };
-    if let Some(violation) = csp_violation {
+    let request_error = if let Some(violation) = csp_violation {
         dispatch_worker_content_security_policy_violation_event_for_state(
             scope, &state, &violation,
         );
-        let message = worker_content_security_policy_error_message(&violation, "fetch");
-        record_worker_subresource_failure(
-            &state.borrow(),
-            document_url,
-            resolved_url,
-            method,
-            headers,
-            request_body_text(&body),
-            SubresourceResourceType::Fetch,
-            message.clone(),
-        );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
-    }
-
-    if let Err(error) = moli_url_policy::route_fetch_url(&resolved_url) {
-        let message = error.to_string();
-        record_worker_subresource_failure(
-            &state.borrow(),
-            document_url,
-            resolved_url,
-            method,
-            headers,
-            request_body_text(&body),
-            SubresourceResourceType::Fetch,
-            message.clone(),
-        );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
-    }
-
-    if should_request_be_blocked_due_to_bad_port(&resolved_url) {
-        let message = format!("fetch: blocked bad port for `{resolved_url}`");
-        record_worker_subresource_failure(
-            &state.borrow(),
-            document_url,
-            resolved_url,
-            method,
-            headers,
-            request_body_text(&body),
-            SubresourceResourceType::Fetch,
-            message.clone(),
-        );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
-    }
-
-    if let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
-        .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
-    {
-        rv.set(make_rejected_promise(scope, &error.to_string()).into());
-        return;
-    }
-
-    if worker_url_blocked(&blocked_url_patterns, &resolved_url) {
-        let message = BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned();
-        record_worker_subresource_failure(
-            &state.borrow(),
-            document_url,
-            resolved_url,
-            method,
-            headers,
-            request_body_text(&body),
-            SubresourceResourceType::Fetch,
-            message.clone(),
-        );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
-    }
-
-    if let Err(error) = crate::network_host::validate_no_cors_http_redirect_mode(
-        &moli_url::WebOrigin::from_url(&document_url),
-        &resolved_url,
-        request_mode,
-        redirect_mode,
-    ) {
-        let message = error.to_string();
+        Some(worker_content_security_policy_error_message(
+            &violation, "fetch",
+        ))
+    } else if let Err(error) = moli_url_policy::route_fetch_url(&resolved_url) {
+        Some(error.to_string())
+    } else if should_request_be_blocked_due_to_bad_port(&resolved_url) {
+        Some(format!("fetch: blocked bad port for `{resolved_url}`"))
+    } else {
+        // Invalid request modes reject before a request exists. Preserve that
+        // boundary, and the priority of the earlier admission failures.
+        if let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
+            .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
+        {
+            rv.set(make_rejected_promise(scope, &error.to_string()).into());
+            return;
+        }
+        if worker_url_blocked(&blocked_url_patterns, &resolved_url) {
+            Some(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
+        } else {
+            crate::network_host::validate_no_cors_http_redirect_mode(
+                &moli_url::WebOrigin::from_url(&document_url),
+                &resolved_url,
+                request_mode,
+                redirect_mode,
+            )
+            .err()
+            .map(|error| error.to_string())
+        }
+    };
+    if let Some(message) = request_error {
         record_worker_subresource_failure(
             &state.borrow(),
             document_url,

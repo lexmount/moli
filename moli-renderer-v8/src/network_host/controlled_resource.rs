@@ -5,10 +5,10 @@ mod fetch;
 mod result;
 mod service_worker;
 mod stream;
-pub(crate) use context::{ControlledXhrContext, XhrInterceptionRoute};
-use result::BufferedXhrResponse;
-pub(crate) use result::{XhrLoadResult, start_buffered_xhr};
-pub(crate) use stream::{ControlledResourceStream, ControlledXhrCompletion};
+pub(crate) use context::{ControlledResourceContext, XhrInterceptionRoute};
+use result::BufferedResourceResponse;
+pub(crate) use result::{ResourceLoadResult, start_buffered_xhr};
+pub(crate) use stream::{ControlledResourceCompletion, ControlledResourceStream};
 
 use moli_fetch::{FetchCancelHandle, Request, Response, ResponseHead};
 use tokio::sync::oneshot;
@@ -59,7 +59,7 @@ impl LoadedResponse {
         info: &PendingSubresourceFetchInfo,
         stream: Option<&mut ControlledResourceStream>,
         network_request_headers: Option<Vec<(String, String)>>,
-    ) -> Result<Option<BufferedXhrResponse>, String> {
+    ) -> Result<Option<BufferedResourceResponse>, String> {
         if let Some(stream) = stream {
             stream.start(
                 info,
@@ -86,7 +86,7 @@ impl LoadedResponse {
             return Ok(None);
         }
         let (response, body) = self.materialize().await?;
-        Ok(Some(BufferedXhrResponse { response, body }))
+        Ok(Some(BufferedResourceResponse { response, body }))
     }
 }
 
@@ -99,7 +99,7 @@ impl ControlledResourceLoad {
         self
     }
 
-    pub(crate) fn for_stylesheet(
+    pub(crate) fn new(
         interception: crate::network::interception_output::ResourceInterceptionContext,
         request: Request,
         info: PendingSubresourceFetchInfo,
@@ -133,10 +133,10 @@ impl ControlledResourceLoad {
         self.interception.request_action(self.info.clone(), pause)
     }
 
-    pub(crate) async fn run(self) -> XhrLoadResult {
+    pub(crate) async fn run(self) -> ResourceLoadResult {
         match self.run_with_stream(None).await {
-            ControlledXhrCompletion::Buffered(completed) => *completed,
-            ControlledXhrCompletion::Streamed { .. } => {
+            ControlledResourceCompletion::Buffered(completed) => *completed,
+            ControlledResourceCompletion::Streamed { .. } => {
                 unreachable!("buffered XHR has no streaming sink")
             }
         }
@@ -145,13 +145,13 @@ impl ControlledResourceLoad {
     pub(crate) async fn run_with_stream(
         mut self,
         mut stream: Option<ControlledResourceStream>,
-    ) -> ControlledXhrCompletion {
+    ) -> ControlledResourceCompletion {
         let result = self.run_inner(stream.as_mut()).await;
         let result = self.normalize_cancellation(result);
         self.load.finish();
         if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id()) {
             self.publish_completed();
-            return ControlledXhrCompletion::Streamed {
+            return ControlledResourceCompletion::Streamed {
                 internal_id: self.info.internal_id,
                 body_source_id,
                 result: result.map(|_| ()),
@@ -164,7 +164,7 @@ impl ControlledResourceLoad {
             }
             Err(error) => (Err(error), None),
         };
-        let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
+        let mut completed = ResourceLoadResult::new(self.info.clone(), result, network_headers);
         completed.csp_violations = std::mem::take(&mut self.csp_violations);
         completed.network_record = completed
             .network_record
@@ -180,7 +180,7 @@ impl ControlledResourceLoad {
             );
         }
         self.publish_completed();
-        ControlledXhrCompletion::Buffered(Box::new(completed))
+        ControlledResourceCompletion::Buffered(Box::new(completed))
     }
 
     fn normalize_cancellation<T>(&self, result: Result<T, String>) -> Result<T, String> {
@@ -386,7 +386,13 @@ impl ControlledResourceLoad {
     async fn run_inner(
         &mut self,
         mut stream: Option<&mut ControlledResourceStream>,
-    ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
+    ) -> Result<
+        (
+            Option<BufferedResourceResponse>,
+            Option<Vec<(String, String)>>,
+        ),
+        String,
+    > {
         use ResourceInterceptionDecision as D;
         let mut next_request_pause = self.initial_decision.is_some()
             || self

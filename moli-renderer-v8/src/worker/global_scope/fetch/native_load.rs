@@ -69,7 +69,7 @@ pub(super) fn start<'s>(
                 streaming_body_source_id: None,
             },
         );
-        let control = crate::network_host::controlled_xhr::ControlledXhrContext {
+        let control = crate::network_host::controlled_resource::ControlledResourceContext {
             interception: state
                 .interception_context
                 .clone()

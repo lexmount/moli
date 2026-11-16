@@ -8,8 +8,8 @@ use crate::{
     },
 };
 
-pub(crate) enum ControlledXhrCompletion {
-    Buffered(Box<super::XhrLoadResult>),
+pub(crate) enum ControlledResourceCompletion {
+    Buffered(Box<super::ResourceLoadResult>),
     Streamed {
         internal_id: u64,
         body_source_id: NetworkBodySourceId,
@@ -98,7 +98,7 @@ impl ControlledResourceStream {
     pub(super) fn body_source_id(&self) -> Option<NetworkBodySourceId> {
         match self {
             Self::Document(stream) => stream.body_source_id,
-            Self::WorkerFetch(stream) => stream.body_source_id,
+            Self::WorkerFetch(stream) => stream.body_source_id(),
         }
     }
     pub(super) fn start(

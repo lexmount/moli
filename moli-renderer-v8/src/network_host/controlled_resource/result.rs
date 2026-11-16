@@ -11,12 +11,12 @@ use crate::{
 /// The JS boundary needs a materialized Response, while Network can retain
 /// the original raw-byte capture. Keeping both here avoids copying the whole
 /// body back out of the Response or creating another disk-pool capture.
-pub(super) struct BufferedXhrResponse {
+pub(super) struct BufferedResourceResponse {
     pub(super) response: Response,
     pub(super) body: SubresourceResponseBody,
 }
 
-impl BufferedXhrResponse {
+impl BufferedResourceResponse {
     fn from_response(response: Response) -> Self {
         let body = SubresourceResponseBody::from_fetch_response(&response);
         Self { response, body }
@@ -24,7 +24,7 @@ impl BufferedXhrResponse {
 }
 
 #[derive(Debug)]
-pub(crate) struct XhrLoadResult {
+pub(crate) struct ResourceLoadResult {
     pub(crate) result: Result<Response, String>,
     pub(crate) info: PendingSubresourceFetchInfo,
     pub(crate) network_record: SubresourceNetworkRecord,
@@ -32,10 +32,10 @@ pub(crate) struct XhrLoadResult {
         Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
 }
 
-impl XhrLoadResult {
+impl ResourceLoadResult {
     pub(super) fn new(
         info: PendingSubresourceFetchInfo,
-        result: Result<BufferedXhrResponse, String>,
+        result: Result<BufferedResourceResponse, String>,
         network_headers: Option<Vec<(String, String)>>,
     ) -> Self {
         let record = match &result {
@@ -110,8 +110,8 @@ pub(crate) fn start_buffered_xhr(
     load: ResourceLoadLease,
     cancel: FetchCancelHandle,
     preflight_headers: Vec<(String, String)>,
-    control: Option<super::ControlledXhrContext>,
-) -> crossbeam_channel::Receiver<Result<XhrLoadResult, String>> {
+    control: Option<super::ControlledResourceContext>,
+) -> crossbeam_channel::Receiver<Result<ResourceLoadResult, String>> {
     let (tx, rx) = crossbeam_channel::bounded(1);
     load.task_runner().spawn(async move {
         let completed = match control {
@@ -144,7 +144,11 @@ pub(crate) fn start_buffered_xhr(
                     )?;
                     Ok(response)
                 });
-                XhrLoadResult::new(info, result.map(BufferedXhrResponse::from_response), None)
+                ResourceLoadResult::new(
+                    info,
+                    result.map(BufferedResourceResponse::from_response),
+                    None,
+                )
             }
         };
         let _ = tx.send(Ok(completed));
@@ -219,7 +223,7 @@ mod tests {
                 body: ResourceInterceptionBody::from_complete(captured),
             };
             let delivered = loaded.deliver(&info, None, None).await.unwrap().unwrap();
-            let completed = XhrLoadResult::new(info, Ok(delivered), None);
+            let completed = ResourceLoadResult::new(info, Ok(delivered), None);
             drop(loaded);
 
             assert_eq!(completed.result.as_ref().unwrap().body_bytes(), payload);

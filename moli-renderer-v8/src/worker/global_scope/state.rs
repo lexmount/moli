@@ -5,15 +5,6 @@ use crate::content_security_policy::ContentSecurityPolicy;
 use super::*;
 
 impl WorkerGlobalState {
-    pub(in crate::worker) fn subresource_interception_config(
-        &self,
-    ) -> SubresourceInterceptionClasses {
-        self.loader
-            .request_client()
-            .page_network_policy()
-            .subresource_interception_config()
-    }
-
     pub(crate) fn callback_invocation_allowed(&self) -> bool {
         !self.termination_requested.load(Ordering::Acquire) && !self.network_cancel.is_cancelled()
     }

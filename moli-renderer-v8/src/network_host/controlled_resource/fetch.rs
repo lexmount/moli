@@ -23,14 +23,14 @@ pub(crate) struct ControlledFetchStream {
     mode: RequestMode,
     credentials: RequestCredentialsMode,
     policy: SubresourcePolicyContext,
-    pub(super) body_source_id: Option<NetworkBodySourceId>,
-    response: Option<
-        Box<(
-            PendingSubresourceFetchInfo,
-            ResponseHead,
-            ResourceInterceptionBody,
-        )>,
-    >,
+    started: Option<Box<StartedFetchStream>>,
+}
+
+struct StartedFetchStream {
+    body_source_id: NetworkBodySourceId,
+    info: PendingSubresourceFetchInfo,
+    head: ResponseHead,
+    body: ResourceInterceptionBody,
     delivered: usize,
 }
 
@@ -61,10 +61,12 @@ impl ControlledFetchStream {
             mode,
             credentials,
             policy,
-            body_source_id: None,
-            response: None,
-            delivered: 0,
+            started: None,
         }
+    }
+
+    pub(super) fn body_source_id(&self) -> Option<NetworkBodySourceId> {
+        self.started.as_ref().map(|started| started.body_source_id)
     }
 
     pub(super) fn start(
@@ -109,7 +111,6 @@ impl ControlledFetchStream {
                 ),
             ));
         let body_source_id = super::super::new_network_body_source_id();
-        self.body_source_id = Some(body_source_id);
         let _ = self.completion.send(WorkerFetchEvent::StreamingStarted(
             WorkerFetchStreamingStarted {
                 fetch_id: self.fetch_id,
@@ -117,28 +118,30 @@ impl ControlledFetchStream {
                 head: head.clone(),
             },
         ));
-        self.response = Some(Box::new((info.clone(), head, body)));
+        self.started = Some(Box::new(StartedFetchStream {
+            info: info.clone(),
+            head,
+            body_source_id,
+            body,
+            delivered: 0,
+        }));
         Ok(())
     }
 
     pub(super) fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-        let handle = self
-            .response
-            .as_ref()
-            .expect("response precedes body")
-            .0
+        let started = self.started.as_mut().expect("response precedes body");
+        let handle = started
+            .info
             .network_request_handle
-            .unwrap();
-        self.delivered += bytes.len();
+            .expect("native Fetch identity");
+        started.delivered += bytes.len();
         self.interception
             .publish_network(ScriptNetworkOutputItem::SubresourceDataReceived(
                 SubresourceDataReceived::new(handle, bytes.len(), bytes.len()),
             ));
-        // A detached JS consumer does not cancel a keepalive transport. Its
-        // resource lease, rather than this delivery channel, owns cancellation.
         let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
             WorkerFetchStreamingChunk {
-                body_source_id: self.body_source_id.unwrap(),
+                body_source_id: started.body_source_id,
                 bytes,
             },
         ));
@@ -146,12 +149,15 @@ impl ControlledFetchStream {
     }
 
     pub(super) fn finish(&mut self, result: Result<(), String>) {
-        let (info, head, source) = *self
-            .response
+        let started = *self
+            .started
             .take()
             .expect("streamed response must have headers");
-        let handle = info.network_request_handle.unwrap();
-        let body = source.finish_capture(self.delivered);
+        let handle = started
+            .info
+            .network_request_handle
+            .expect("native Fetch identity");
+        let body = started.body.finish_capture(started.delivered);
         let terminal = match &result {
             Ok(()) => SubresourceBodyFinished::ready_after_streaming(handle, body.clone()),
             Err(error) => SubresourceBodyFinished::failed_with_partial_body(
@@ -167,8 +173,8 @@ impl ControlledFetchStream {
         let _ = self.completion.send(WorkerFetchEvent::StreamingFinished(
             WorkerFetchStreamingFinished {
                 fetch_id: self.fetch_id,
-                body_source_id: self.body_source_id.unwrap(),
-                head,
+                body_source_id: started.body_source_id,
+                head: started.head,
                 result: result.map(|()| body),
             },
         ));
@@ -236,7 +242,7 @@ impl super::ControlledResourceLoad {
                 Err(error) => result = Err(error.into_message()),
             }
         }
-        let mut record = super::result::XhrLoadResult::new(self.info.clone(), result, headers);
+        let mut record = super::result::ResourceLoadResult::new(self.info.clone(), result, headers);
         if let Err(error) = &record.result {
             record.network_record = failure_record(&self.info, network_error(error));
         } else if blocked_opaque {

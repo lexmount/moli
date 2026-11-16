@@ -1,7 +1,7 @@
 use crate::content_security_policy::ContentSecurityPolicy;
 
 use super::{OwnerDispatchScope, PageScriptHost};
-use crate::network_host::controlled_xhr::{ControlledXhrContext, XhrInterceptionRoute};
+use crate::network_host::controlled_resource::{ControlledResourceContext, XhrInterceptionRoute};
 use crate::types::SubresourceResourceType;
 use crate::{
     content_security_policy::{
@@ -93,7 +93,7 @@ impl PageScriptHost {
         let connect_policy = self
             .document_connect_policy_snapshot_for_owner(owner)
             .ok_or("XHR interception Document policy is unavailable")?;
-        Ok(XhrInterceptionRoute::Native(ControlledXhrContext {
+        Ok(XhrInterceptionRoute::Native(ControlledResourceContext {
             interception,
             connect_policy,
         }))

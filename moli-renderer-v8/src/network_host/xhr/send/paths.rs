@@ -1,7 +1,7 @@
 use super::super::delivery::{queue_xhr_failure_delivery, queue_xhr_response_delivery};
 use super::super::*;
 use super::request::PreparedXhrSendRequest;
-use crate::network_host::controlled_xhr::ControlledXhrContext;
+use crate::network_host::controlled_resource::ControlledResourceContext;
 use crate::service_worker_runtime::{ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination};
 use moli_fetch::{
     FetchCancelHandle, RequestRedirectMode, should_request_be_blocked_due_to_bad_port,
@@ -285,7 +285,7 @@ pub(super) fn spawn_network_xhr_fetch(
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     request_client: ResourceRequestClient,
-    control: Option<ControlledXhrContext>,
+    control: Option<ControlledResourceContext>,
 ) -> u64 {
     let request = prepared
         .request()
@@ -348,17 +348,17 @@ pub(super) fn spawn_network_xhr_fetch(
         );
         host.append_live_turn_owner_action(controlled.prepare_initial_pause());
         runner.spawn(async move {
-            use crate::network_host::controlled_xhr::{
-                ControlledResourceStream, ControlledXhrCompletion,
+            use crate::network_host::controlled_resource::{
+                ControlledResourceCompletion, ControlledResourceStream,
             };
             let completed = controlled
                 .run_with_stream(Some(ControlledResourceStream::new(completion_tx.clone())))
                 .await;
             let event = match completed {
-                ControlledXhrCompletion::Buffered(completed) => {
+                ControlledResourceCompletion::Buffered(completed) => {
                     crate::types::AsyncSubresourceFetchEvent::InterceptedXhrCompleted(completed)
                 }
-                ControlledXhrCompletion::Streamed {
+                ControlledResourceCompletion::Streamed {
                     internal_id,
                     body_source_id,
                     result,

@@ -72,9 +72,9 @@ use crate::network_host::{
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
-    PendingSubresourceFetchInfo, SubresourceInterceptionClasses, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceResourceType, SubresourceResponseBody,
-    WebSocketFrameDirection, WebSocketFrameOpcode,
+    PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceResourceType, SubresourceResponseBody, WebSocketFrameDirection,
+    WebSocketFrameOpcode,
 };
 use crate::queue_microtask::worker_queue_microtask_callback;
 use crate::runtime::{
