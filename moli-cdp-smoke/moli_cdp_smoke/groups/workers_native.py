@@ -16,8 +16,19 @@ from ..assertions import SmokeError, assert_equal, wait_until
 from ..diagnostics import new_cdp_session
 from ..state import SmokeState
 
+SERVICE_WORKER = r"""
+addEventListener('install', event => event.waitUntil(skipWaiting()));
+addEventListener('activate', event => event.waitUntil(clients.claim()));
+addEventListener('fetch', event => {
+  const path = new URL(event.request.url).pathname;
+  if (path === '/sw-controlled') event.respondWith(new Response('controlled'));
+  if (path === '/sw-synthetic-start') event.respondWith(Response.redirect(new URL('/sw-final',location.href).href,302));
+  if (path === '/sw-final') event.respondWith(new Response('SW final'));
+});
+"""
+
 SCRIPT = r"""
-let xhr, controller;
+let xhr, controller, innerWorker;
 function receive(data, reply) {
   if (data.kind === 'overlap') {
     fetch(data.base + '/overlap-fetch').then(r => r.text()).then(text => reply({fetch:text}), e => reply({fetchError:e.name}));
@@ -41,6 +52,17 @@ function receive(data, reply) {
       const clone = r.clone();
       reply({status:r.status,type:r.type,bodyNull:r.body === null,body:await r.text(),clone:await clone.text()});
     }, e => reply({error:e.name}));
+  } else if (data.kind === 'nested') {
+    innerWorker = new Worker(data.worker);
+    innerWorker.onmessage = event => {
+      if (event.data.ready) reply({nestedReady:true});
+      else reply({nested:event.data});
+    };
+  } else if (data.kind === 'nested-fetch') {
+    innerWorker.postMessage({kind:'fetch',url:data.url});
+  } else if (data.kind === 'post') {
+    fetch(data.url, {method:'POST',body:'worker-upload',headers:{'Content-Type':'text/plain'}})
+      .then(r=>r.text()).then(body=>reply({post:body}),e=>reply({error:e.name}));
   } else if (data.kind === 'close') close();
 }
 onmessage = event => receive(event.data, value => postMessage(value));
@@ -56,18 +78,47 @@ if (typeof SharedWorkerGlobalScope === 'undefined' || !(self instanceof SharedWo
 class _Fixture(AbstractContextManager):
     def __init__(self) -> None:
         self.hits: Counter[str] = Counter()
+        self.requests: list[dict[str, Any]] = []
         self.gates: dict[str, threading.Event] = {}
         self.lock = threading.Lock()
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                self.do_GET()
+
             def do_GET(self) -> None:
                 path = urlsplit(self.path).path
                 with fixture.lock:
                     fixture.hits[path] += 1
+                    body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                    fixture.requests.append(
+                        {
+                            "path": path,
+                            "method": self.command,
+                            "headers": dict(self.headers),
+                            "body": body.decode(),
+                        }
+                    )
                     gate = fixture.gates.get(path)
                 if path == "/worker.js":
                     body, kind = SCRIPT.encode(), "text/javascript"
+                elif path == "/sw.js":
+                    body, kind = SERVICE_WORKER.encode(), "text/javascript"
+                elif path == "/sw-network-start":
+                    self.send_response(302)
+                    self.send_header("Location", "/sw-final")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                elif path == "/post-redirect":
+                    self.send_response(303)
+                    self.send_header("Location", "/post-final")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                elif path == "/sw-final":
+                    body, kind = b"HTTP final", "text/plain"
                 elif path == "/page":
                     body, kind = (
                         b"<!doctype html><title>native Worker loading</title>",
@@ -117,6 +168,7 @@ class _Child:
         self.parent, self.session, self.events = parent, session, events
         self.sequence = 0
         self.pending: dict[int, asyncio.Future[Any]] = {}
+        self.listeners: dict[str, list[Any]] = {}
         parent.on("Target.receivedMessageFromTarget", self.receive)
 
     def receive(self, outer: dict[str, Any]) -> None:
@@ -132,6 +184,11 @@ class _Child:
                     future.set_result(message.get("result", {}))
         else:
             self.events.append({**message, "sessionId": self.session})
+            for callback in self.listeners.get(message["method"], []):
+                callback(message.get("params", {}))
+
+    def on(self, method: str, callback: Any) -> None:
+        self.listeners.setdefault(method, []).append(callback)
 
     async def send(self, method: str, params: dict[str, Any] | None = None) -> Any:
         self.sequence += 1
@@ -172,6 +229,8 @@ class _Targets:
         for method in (
             "Fetch.requestPaused",
             "Network.requestWillBeSent",
+            "Network.requestWillBeSentExtraInfo",
+            "Network.responseReceivedExtraInfo",
             "Network.loadingFinished",
             "Network.loadingFailed",
         ):
@@ -210,6 +269,22 @@ class _Targets:
         await self.enable(child, "shared_worker")
 
     async def enable(self, child: _Child, kind: str) -> None:
+        child.on("Target.attachedToTarget", lambda event: self.attach(child, event))
+        child.on(
+            "Target.detachedFromTarget",
+            lambda params: self.events.append(
+                {"method": "Target.detachedFromTarget", "params": params}
+            ),
+        )
+        await child.send(
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": True,
+                "flatten": False,
+                "filter": [{"type": "worker", "exclude": False}, {"exclude": True}],
+            },
+        )
         await child.send("Network.enable")
         if kind == "shared_worker" and self.fetch:
             await child.send(
@@ -272,10 +347,17 @@ class _Targets:
 
         def attached() -> bool:
             self.check()
-            return bool(set(self.children) - before)
+            return any(
+                self.targets[session]["url"] == url
+                for session in set(self.children) - before
+            )
 
         await wait_until(attached, "native Worker target attachment")
-        child = self.children[next(iter(set(self.children) - before))]
+        child = next(
+            self.children[session]
+            for session in set(self.children) - before
+            if self.targets[session]["url"] == url
+        )
         await page.evaluate("nativeReady")
         return child
 
@@ -321,11 +403,14 @@ class _Targets:
         assert_equal(event["params"]["loaderId"], "", "Worker loaderId")
         return event["params"]["requestId"]
 
-    async def pause(self, url: str, child: _Child, shared: bool) -> dict[str, Any]:
+    async def pause(
+        self, url: str, child: _Child, shared: bool, *, response: bool = False
+    ) -> dict[str, Any]:
         await wait_until(
             lambda: any(
                 e["method"] == "Fetch.requestPaused"
                 and e["params"]["request"]["url"] == url
+                and ("responseStatusCode" in e["params"]) == response
                 for e in self.events
             ),
             "native Worker Fetch pause",
@@ -335,6 +420,7 @@ class _Targets:
             for e in self.events
             if e["method"] == "Fetch.requestPaused"
             and e["params"]["request"]["url"] == url
+            and ("responseStatusCode" in e["params"]) == response
         )
         assert_equal(
             event["sessionId"],
@@ -372,6 +458,250 @@ async def _message(page: Any, field: str, value: Any) -> dict[str, Any]:
     return await page.evaluate(
         "([field,value])=>nativeMessages.find(m=>m[field]===value)", [field, value]
     )
+
+
+async def _check_redirect_responses(
+    state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
+) -> None:
+    for decision in ("request-fulfill", "response-fulfill", "continue-response"):
+        for empty_location in (False, True):
+            for mode in ("error", "follow", "manual"):
+                label = f"{decision}-{empty_location}-{mode}"
+                path = "/native-probe/synthetic-" + label
+                url = fixture.origin + path
+                await page.evaluate(
+                    '([url,redirect])=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url,redirect});}',
+                    [url, mode],
+                )
+                pause = await targets.pause(url, child, False)
+                if decision != "request-fulfill":
+                    await targets.page_cdp.send(
+                        "Fetch.continueRequest",
+                        {"requestId": pause["requestId"], "interceptResponse": True},
+                    )
+                    pause = await targets.pause(url, child, False, response=True)
+                params: dict[str, Any] = {
+                    "requestId": pause["requestId"],
+                    "responseCode": 302,
+                    "responsePhrase": "Found",
+                    "responseHeaders": [
+                        {"name": "Content-Type", "value": "text/plain"}
+                    ],
+                }
+                if empty_location:
+                    params["responseHeaders"].append({"name": "Location", "value": ""})
+                body = (
+                    "native-worker-body"
+                    if decision == "continue-response"
+                    else "synthetic"
+                )
+                if decision != "continue-response":
+                    params["body"] = base64.b64encode(body.encode()).decode()
+                await targets.page_cdp.send(
+                    "Fetch.continueResponse"
+                    if decision == "continue-response"
+                    else "Fetch.fulfillRequest",
+                    params,
+                )
+                await wait_until(
+                    lambda: page.evaluate("nativeMessages.length>0"),
+                    "rewritten Worker response",
+                )
+                result = await page.evaluate("nativeMessages[0]")
+                expected = (
+                    {
+                        "status": 0,
+                        "type": "opaqueredirect",
+                        "bodyNull": True,
+                        "body": "",
+                        "clone": "",
+                    }
+                    if mode == "manual"
+                    else {
+                        "status": 302,
+                        "type": "basic",
+                        "bodyNull": False,
+                        "body": body,
+                        "clone": body,
+                    }
+                )
+                assert_equal(result, expected, "rewritten redirect " + label)
+                await targets.event(
+                    "Network.loadingFinished", requestId=pause["networkId"]
+                )
+                assert_equal(
+                    fixture.hits[path],
+                    int(decision != "request-fulfill"),
+                    "no next hop " + label,
+                )
+                state.record("native_worker_synthetic_" + label, {"response": result})
+
+
+async def _check_nested_worker(
+    state: SmokeState,
+    fixture: _Fixture,
+    page: Any,
+    targets: _Targets,
+    outer: _Child,
+    shared: bool,
+) -> None:
+    marker = fixture.origin + f"/native-probe/nested-{shared}"
+    worker_url = fixture.origin + f"/worker.js?inner-{shared}"
+    await page.evaluate(
+        '([worker,url])=>{nativeMessages=[];nativePort.postMessage({kind:"nested",worker,url});}',
+        [worker_url, marker],
+    )
+    await wait_until(
+        lambda: any(info["url"] == worker_url for info in targets.targets.values()),
+        "nested Worker target",
+    )
+    inner = next(
+        targets.children[session]
+        for session, info in targets.targets.items()
+        if info["url"] == worker_url
+    )
+    if inner.parent is not outer:
+        raise SmokeError("nested Worker must attach through its creator's session")
+    # Playwright has its own attachment too; another debugger may resume the
+    # Worker before our Network.enable completes. Start the probe explicitly
+    # after this observer is installed, rather than racing initial script code.
+    await asyncio.gather(*targets.tasks)
+    await _message(page, "nestedReady", True)
+    await page.evaluate(
+        'url=>nativePort.postMessage({kind:"nested-fetch",url})', marker
+    )
+    request = await targets.request(marker, inner)
+    if not shared:
+        pause = await targets.pause(marker, inner, False)
+        await targets.page_cdp.send(
+            "Fetch.continueRequest", {"requestId": pause["requestId"]}
+        )
+    await wait_until(
+        lambda: page.evaluate("nativeMessages.some(m=>'nested' in m)"),
+        "nested Worker response",
+    )
+    result = await page.evaluate("nativeMessages.find(m=>'nested' in m)")
+    assert_equal(
+        result,
+        {
+            "nested": {
+                "status": 200,
+                "type": "basic",
+                "bodyNull": False,
+                "body": "native-worker-body",
+                "clone": "native-worker-body",
+            }
+        },
+        "nested Worker response",
+    )
+    await targets.event("Network.loadingFinished", requestId=request)
+    observers = [
+        e["sessionId"]
+        for e in targets.events
+        if e["method"] == "Network.requestWillBeSent"
+        and e["params"]["request"]["url"] == marker
+    ]
+    assert_equal(
+        observers, [inner.session], "inner request belongs only to inner Worker"
+    )
+    state.record(
+        "native_nested_worker_" + str(shared),
+        {"response": result, "events": targets.events.copy()},
+    )
+
+
+async def _check_network_extra_info(
+    state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
+) -> None:
+    await page.evaluate("document.cookie='native_worker_probe=present; Path=/'")
+    url = fixture.origin + "/post-redirect"
+    await page.evaluate(
+        'url=>{nativeMessages=[];nativePort.postMessage({kind:"post",url});}', url
+    )
+    await _message(page, "post", "native-worker-body")
+    request = await targets.request(url, child)
+    await targets.event("Network.loadingFinished", requestId=request)
+    extras = [
+        e["params"]
+        for e in targets.events
+        if e["method"] == "Network.requestWillBeSentExtraInfo"
+        and e["params"]["requestId"] == request
+    ]
+    assert_equal(len(extras), 2, "one ExtraInfo per HTTP hop")
+    first, last = (
+        {k.lower(): v for k, v in info["headers"].items()} for info in extras
+    )
+    assert_equal(first.get("content-type"), "text/plain", "POST wire content type")
+    assert_equal(
+        first.get("content-length"),
+        str(len("worker-upload")),
+        "POST wire content length",
+    )
+    for header in ("content-type", "content-length"):
+        assert_equal(last.get(header), None, "GET must not reuse POST " + header)
+    for info in extras:
+        sent = [
+            entry["cookie"]["name"]
+            for entry in info["associatedCookies"]
+            if not entry["blockedReasons"]
+        ]
+        if "native_worker_probe" not in sent:
+            raise SmokeError(f"missing actual request Cookie report: {info}")
+    received = [
+        r for r in fixture.requests if r["path"] in ("/post-redirect", "/post-final")
+    ]
+    assert_equal(
+        [r["method"] for r in received], ["POST", "GET"], "actual redirect methods"
+    )
+    assert_equal(
+        [r["body"] for r in received], ["worker-upload", ""], "actual redirect bodies"
+    )
+    state.record(
+        "native_worker_redirect_extra_info", {"events": extras, "requests": received}
+    )
+
+
+async def _check_service_worker_redirects(state: SmokeState, fixture: _Fixture) -> None:
+    context = await state.browser.new_context()
+    page = await context.new_page()
+    await page.goto(fixture.origin + "/page")
+    page_cdp = await new_cdp_session(context, page)
+    browser_cdp = await state.browser.new_browser_cdp_session()
+    targets = _Targets(page_cdp, browser_cdp)
+    try:
+        await page.evaluate("""async()=>{
+          await navigator.serviceWorker.register('/sw.js');
+          await navigator.serviceWorker.ready;
+          if(!navigator.serviceWorker.controller)await new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',resolve,{once:true}));
+        }""")
+        await targets.start()
+        child = await targets.worker(
+            page, fixture.origin + "/worker.js?controlled", False
+        )
+        for path, body, network_hits in (
+            ("/sw-controlled", "controlled", 0),
+            ("/sw-network-start", "HTTP final", 1),
+            ("/sw-synthetic-start", "SW final", 1),
+        ):
+            await page.evaluate(
+                'url=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url});}',
+                fixture.origin + path,
+            )
+            await _message(page, "body", body)
+            assert_equal(
+                fixture.hits["/sw-final"], network_hits, "network vs SW redirect chain"
+            )
+            state.record("native_worker_service_worker_" + path[1:])
+        await targets.event(
+            "Network.loadingFinished",
+            requestId=await targets.request(
+                fixture.origin + "/sw-network-start", child
+            ),
+        )
+    finally:
+        await targets.cleanup()
+        await browser_cdp.detach()
+        await context.close()
 
 
 async def run_native_worker_loading_group(state: SmokeState) -> None:
@@ -486,54 +816,29 @@ async def run_native_worker_loading_group(state: SmokeState) -> None:
                 fixture.release(stream_path)
                 state.record("native_worker_body_abort_" + str(shared))
 
-                for mode in () if shared else ("error", "follow", "manual"):
-                    url = base + "/synthetic-" + mode
-                    await page.evaluate(
-                        '([url,redirect])=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url,redirect});}',
-                        [url, mode],
+                if not shared:
+                    await _check_redirect_responses(
+                        state, fixture, page, targets, child
                     )
-                    pause = await targets.pause(url, child, shared)
-                    await control.send(
-                        "Fetch.fulfillRequest",
-                        {
-                            "requestId": pause["requestId"],
-                            "responseCode": 302,
-                            "body": base64.b64encode(b"synthetic").decode(),
-                        },
-                    )
-                    await wait_until(
-                        lambda page=page: page.evaluate("nativeMessages.length>0"),
-                        "synthetic Worker response",
-                    )
-                    result = await page.evaluate("nativeMessages[0]")
-                    expected = (
-                        {
-                            "status": 0,
-                            "type": "opaqueredirect",
-                            "bodyNull": True,
-                            "body": "",
-                            "clone": "",
-                        }
-                        if mode == "manual"
-                        else {
-                            "status": 302,
-                            "type": "basic",
-                            "bodyNull": False,
-                            "body": "synthetic",
-                            "clone": "synthetic",
-                        }
-                    )
-                    assert_equal(
-                        result, expected, "synthetic redirect without Location"
-                    )
-                    await targets.event(
-                        "Network.loadingFinished", requestId=pause["networkId"]
-                    )
-                    state.record(
-                        "native_worker_synthetic_" + str(shared) + "_" + mode,
-                        {"response": result},
+                    # Chromium exposes Worker on Window/DedicatedWorker only.
+                    await _check_nested_worker(
+                        state, fixture, page, targets, child, shared
                     )
 
+                if not shared:
+                    await page_cdp.send("Fetch.disable")
+                    await _check_network_extra_info(
+                        state, fixture, page, targets, child
+                    )
+                    await page_cdp.send(
+                        "Fetch.enable",
+                        {
+                            "patterns": [
+                                {"urlPattern": "*native-probe*", "resourceType": kind}
+                                for kind in ("Fetch", "XHR")
+                            ]
+                        },
+                    )
                 # The second client retains the SharedWorker's target and request.
                 if shared:
                     peer = await context.new_page()
@@ -635,7 +940,14 @@ async def run_native_worker_loading_group(state: SmokeState) -> None:
                     e for e in targets.events if e["method"].startswith("Network.")
                 )
             finally:
+                # Keep target routing evidence even when a scenario fails.
+                state.record(
+                    "native_worker_target_trace_" + str(shared),
+                    {"events": targets.events.copy()},
+                )
                 if not page.is_closed():
                     await targets.cleanup()
                 await browser_cdp.detach()
                 await context.close()
+
+        await _check_service_worker_redirects(state, fixture)
