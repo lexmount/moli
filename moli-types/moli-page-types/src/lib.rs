@@ -1154,6 +1154,7 @@ pub struct SubresourceRequestStarted {
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
+    request_extra_info_deferred: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1256,6 +1257,7 @@ impl SubresourceRequestStarted {
             resource_type,
             request_initiator_type,
             request_cookie_report,
+            request_extra_info_deferred: false,
         }
     }
 
@@ -1280,6 +1282,17 @@ impl SubresourceRequestStarted {
     pub fn with_keepalive(mut self, keepalive: bool) -> Self {
         self.keepalive = keepalive;
         self
+    }
+
+    /// Admission has browser cookie/header metadata, while CDP ExtraInfo must
+    /// still come from the later transport observation.
+    pub fn with_deferred_request_extra_info(mut self) -> Self {
+        self.request_extra_info_deferred = true;
+        self
+    }
+
+    pub fn request_extra_info_deferred(&self) -> bool {
+        self.request_extra_info_deferred
     }
 
     pub fn frame_id(&self) -> Option<&str> {

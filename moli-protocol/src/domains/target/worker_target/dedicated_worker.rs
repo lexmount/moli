@@ -92,6 +92,7 @@ pub(super) fn register_dedicated_worker_target(
             None,
             false,
             None,
+            true,
             &[],
         );
         if !events.is_empty() {
