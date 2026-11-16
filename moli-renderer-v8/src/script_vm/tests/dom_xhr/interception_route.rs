@@ -1,6 +1,6 @@
 use super::*;
 use crate::native_bridge::OwnerDispatchScope;
-use crate::network_host::controlled_xhr::XhrInterceptionRoute;
+use crate::network_host::controlled_resource::XhrInterceptionRoute;
 use crate::runtime::{
     PageId, RendererDocumentLifecycleJournalHandle, RendererOutputStreamIdentity,
     RendererTurnOutputJournal,

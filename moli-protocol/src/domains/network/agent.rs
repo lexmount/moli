@@ -1118,7 +1118,8 @@ fn update_active_renderer_subresource_requests(
                 active_requests.remove(&handle);
             }
         }
-        ScriptNetworkOutputItem::SubresourceResponseStarted(_)
+        ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
+        | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
         | ScriptNetworkOutputItem::SubresourceDataReceived(_)
         | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
         | ScriptNetworkOutputItem::WebSocketNetworkEvent(_)

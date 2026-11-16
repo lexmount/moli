@@ -1360,6 +1360,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         WorkerDevToolsHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
     let worker_inspector_tasks = devtools.inspector_tasks().clone();
     let network_cancel = devtools.network_cancel_handle();
+    let nested_worker_pause = devtools.nested_worker_pause_on_start();
     let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
 
@@ -1408,6 +1409,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 worker_isolate_handle,
                 worker_termination_requested,
                 worker_inspector_tasks,
+                nested_worker_pause,
             ));
         })
         .expect("failed to spawn worker thread");
@@ -1542,6 +1544,7 @@ async fn worker_main(
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     termination_requested: Arc<AtomicBool>,
     inspector_task_runner: WorkerInspectorTaskRunner,
+    nested_worker_pause: Arc<AtomicBool>,
 ) {
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
@@ -1719,6 +1722,7 @@ async fn worker_main(
         websocket_event_tx,
         websockets: std::collections::HashMap::new(),
         next_websocket_id: 0,
+        nested_worker_pause,
         next_nested_worker_id: 1,
         nested_worker_wrappers: std::collections::HashMap::new(),
         webcrypto_completion_tx,
@@ -3235,6 +3239,10 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        {
+            let scope = &mut v8::ContextScope::new(scope, ctx);
+            super::global_scope::terminate_nested_workers(scope, &state);
+        }
         retire_worker_module_runtime(ctx);
         crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);

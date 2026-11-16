@@ -549,7 +549,7 @@ fn prepare_context_sweep(
                         super::worker_target::dedicated_worker_auto_attach_owner_session_allowed(
                             conn,
                             owner_session_id,
-                            &target.owner_page,
+                            target,
                         ) && !owner_already_auto_attached_to_exact_target(
                             conn,
                             owner_session_id,

@@ -229,6 +229,31 @@ pub(in crate::domains) fn set_dedicated_worker_pause_on_start_owner(
     session_id: Option<&str>,
     enabled: bool,
 ) {
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    if let Some((context_id, target_id)) = conn.worker_resource_identity_for_owner(&owner) {
+        let pause = conn
+            .auto_attach_owner_sessions_for_target_type("worker")
+            .iter()
+            .any(|session| {
+                let scope = CommandOwnerScope::capture(conn, session.as_deref());
+                conn.worker_resource_identity_for_owner(&scope).as_ref()
+                    == Some(&(context_id.clone(), target_id.clone()))
+                    && conn.auto_attach_owner_waits_for_debugger_on_start(session.as_deref())
+            });
+        if let Some(context) = conn.browser_context_by_id(&context_id) {
+            let runtime = context.renderer_runtime();
+            if let Some(target) = context.dedicated_worker_target(&target_id) {
+                runtime.set_dedicated_worker_children_pause_on_start(
+                    target.renderer_instance_id,
+                    pause,
+                );
+            } else if let Some(target) = context.shared_worker_target(&target_id) {
+                runtime
+                    .set_shared_worker_children_pause_on_start(target.renderer_instance_id, pause);
+            }
+        }
+        return;
+    }
     conn.set_dedicated_worker_pause_on_start_owner(session_id, enabled);
     sync_dedicated_worker_pause_on_start_for_devtools(conn);
 }

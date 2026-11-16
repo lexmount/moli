@@ -72,9 +72,9 @@ use crate::network_host::{
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
-    PendingSubresourceFetchInfo, SubresourceInterceptionClasses, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceResourceType, SubresourceResponseBody,
-    WebSocketFrameDirection, WebSocketFrameOpcode,
+    PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceResourceType, SubresourceResponseBody, WebSocketFrameDirection,
+    WebSocketFrameOpcode,
 };
 use crate::queue_microtask::worker_queue_microtask_callback;
 use crate::runtime::{
@@ -231,3 +231,8 @@ pub(crate) use state::{
     worker_termination_requested,
 };
 pub(super) use timers::{TimerInfo, WorkerIsolateTimerQueues, worker_isolate_timer_queues};
+
+pub(in crate::worker) use nested_workers::terminate_nested_workers;
+
+mod nested_devtools;
+pub(crate) use nested_devtools::{prepare_nested_worker, start_nested_worker};

@@ -1119,7 +1119,7 @@ impl Handler for ResponseCollector {
         if line.is_empty() {
             if self.stop_at_redirect
                 && matches!(self.status, 301 | 302 | 303 | 307 | 308)
-                && self.headers.iter().any(|(name, _)| name == "location")
+                && crate::redirect_location(&self.headers).is_some()
             {
                 // The caller owns the next hop. Its unused body must not
                 // delay redirects, including libcurl's buffered auth path.

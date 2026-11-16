@@ -14,7 +14,9 @@ pub(super) fn dedicated_worker_target_is_current(
         .get(&renderer_instance_id)
         .is_some_and(|target| {
             target.target_id == target_id
-                && conn.target_page_output_residence_is_current(&target.owner_page)
+                && conn
+                    .browser_context_by_id(browser_context_id)
+                    .is_some_and(|context| context.dedicated_worker_owner_is_current(target))
         })
 }
 
@@ -27,8 +29,11 @@ pub(super) fn register_dedicated_worker_target(
     info: RendererDedicatedWorkerTargetInfo,
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
-    if info.owner_local_host_id != owner_renderer_page.owner_local_host_id()
-        || info.page_id != owner_renderer_page.page_id()
+    if info.owner
+        != (RendererDedicatedWorkerTargetOwner::Page {
+            owner_local_host_id: owner_renderer_page.owner_local_host_id(),
+            page_id: owner_renderer_page.page_id(),
+        })
     {
         return outputs;
     }
@@ -57,7 +62,7 @@ pub(super) fn register_dedicated_worker_target(
         };
         context.insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
             owner_page.clone(),
-            info.owner_local_host_id,
+            owner_renderer_page.owner_local_host_id(),
             info.instance_id,
             target_id.clone(),
             info.name,
@@ -106,6 +111,127 @@ pub(super) fn register_dedicated_worker_target(
     outputs
 }
 
+pub(super) fn nested_parent_metadata(
+    context: &crate::conn::BrowserContext,
+    parent: RendererWorkerTargetIdentity,
+) -> Option<(
+    crate::conn::DedicatedWorkerRootOwner,
+    String,
+    moli_core::RendererOwnerLocalHostId,
+)> {
+    match parent {
+        RendererWorkerTargetIdentity::Dedicated(instance) => {
+            let target = context.dedicated_worker_targets.get(&instance)?;
+            context.dedicated_worker_owner_is_current(target).then(|| {
+                (
+                    target.owner.clone(),
+                    target.target_id.clone(),
+                    target.renderer_owner_local_host_id,
+                )
+            })
+        }
+        RendererWorkerTargetIdentity::Shared(instance) => {
+            let id = context.shared_worker_target_id_for_renderer_instance(instance)?;
+            let target = context.shared_worker_target(id)?;
+            Some((
+                crate::conn::DedicatedWorkerRootOwner::SharedWorker(id.to_owned()),
+                id.to_owned(),
+                target.renderer_owner_local_host_id,
+            ))
+        }
+    }
+}
+
+pub(super) fn register_nested_worker_target(
+    conn: &mut CdpConnection,
+    context_id: &str,
+    parent: RendererWorkerTargetIdentity,
+    info: RendererDedicatedWorkerTargetInfo,
+) -> TargetPreparedOutputs {
+    let mut outputs = TargetPreparedOutputs::default();
+    let Some(context) = conn.browser_context_by_id(context_id) else {
+        return outputs;
+    };
+    if context
+        .dedicated_worker_targets
+        .contains_key(&info.instance_id)
+    {
+        return outputs;
+    }
+    let Some((owner, parent_id, local)) = nested_parent_metadata(context, parent) else {
+        return outputs;
+    };
+    let route = match parent {
+        RendererWorkerTargetIdentity::Dedicated(_) => CdpSessionRoute::DedicatedWorkerTarget {
+            browser_context_id: context_id.to_owned(),
+            target_id: parent_id.clone(),
+        },
+        RendererWorkerTargetIdentity::Shared(_) => CdpSessionRoute::SharedWorkerTarget {
+            browser_context_id: context_id.to_owned(),
+            target_id: parent_id.clone(),
+        },
+    };
+    let extra_sessions = conn.network_extra_info_event_session_ids_for_owner(
+        &CommandOwnerScope::for_route(route.clone()),
+    );
+    let sessions = conn.network_event_session_ids_for_owner(&CommandOwnerScope::for_route(route));
+    let (Ok(request_url), Ok(document_url)) = (
+        Url::parse(&info.request_url),
+        Url::parse(&info.document_url),
+    ) else {
+        return outputs;
+    };
+    let target_id = conn.gen_target_id();
+    let context = conn
+        .browser_context_by_id_mut(context_id)
+        .expect("nested target retains its browser context");
+    context.insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new_nested(
+        owner,
+        parent_id.clone(),
+        local,
+        info.instance_id,
+        target_id.clone(),
+        info.name,
+        extra_sessions,
+    ));
+    if let Some(target_info) = context.devtools_target_info(&target_id) {
+        outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerCreated {
+            browser_context_id: context_id.to_owned(),
+            renderer_instance_id: info.instance_id,
+            target_delta: PreparedTargetHostDelta::created(target_id.clone(), Some(target_info)),
+        });
+    }
+    for session in sessions {
+        let mut events = Vec::new();
+        network::emit_request_will_be_sent(
+            &mut events,
+            session.as_deref(),
+            &target_id,
+            "",
+            "",
+            monotonic_timestamp_seconds(),
+            &document_url,
+            &request_url,
+            "GET",
+            None,
+            &[],
+            DevToolsNetworkResourceType::Script,
+            SubresourceRequestInitiatorType::Other,
+            None,
+            false,
+            None,
+            &[],
+        );
+        outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
+            browser_context_id: context_id.to_owned(),
+            renderer_instance_id: info.instance_id,
+            target_id: target_id.clone(),
+            events,
+        });
+    }
+    outputs
+}
+
 pub(super) fn record_dedicated_worker_main_script(
     conn: &mut CdpConnection,
     browser_context_id: &str,
@@ -114,14 +240,13 @@ pub(super) fn record_dedicated_worker_main_script(
     outcome: crate::conn::DedicatedWorkerMainScriptOutcome,
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
-    let Some(owner_page) = conn
+    let Some(target) = conn
         .browser_context_by_id(browser_context_id)
         .and_then(|context| context.dedicated_worker_targets.get(&renderer_instance_id))
-        .map(|target| target.owner_page.clone())
     else {
         return outputs;
     };
-    let auto_attach_owners = dedicated_worker_auto_attach_owner_sessions(conn, &owner_page);
+    let auto_attach_owners = dedicated_worker_auto_attach_owner_sessions(conn, target);
     let attached_sessions = auto_attach_owners
         .into_iter()
         .map(|owner| {
@@ -274,21 +399,27 @@ pub(super) fn record_dedicated_worker_main_script(
 pub(in crate::domains::target) fn dedicated_worker_auto_attach_owner_session_allowed(
     conn: &CdpConnection,
     owner_session_id: Option<&str>,
-    owner_page: &TargetPageResidenceIdentity,
+    target: &crate::conn::DedicatedWorkerTargetState,
 ) -> bool {
-    let Some(owner_session_id) = owner_session_id else {
+    let Some(session) = owner_session_id else {
         return false;
     };
-    let owner = CommandOwnerScope::for_session(owner_session_id);
+    let owner = CommandOwnerScope::for_session(session);
+    if let Some(parent) = target.parent_target_id.as_deref() {
+        return matches!(owner.resolve_route(conn), Some(CdpSessionRoute::DedicatedWorkerTarget { target_id, .. } | CdpSessionRoute::SharedWorkerTarget { target_id, .. }) if target_id == parent);
+    }
+    let Some(page) = target.owner_page() else {
+        return false;
+    };
     (conn
         .target_page_residence_identity_for_owner(&owner)
         .as_ref()
-        == Some(owner_page)
+        == Some(page)
         || conn
             .pending_target_page_residence_identity_for_owner(&owner)
             .as_ref()
-            == Some(owner_page))
-        && conn.target_page_output_residence_is_current(owner_page)
+            == Some(page))
+        && conn.target_page_output_residence_is_current(page)
 }
 
 pub(super) fn shared_worker_auto_attach_owner_sessions(
@@ -321,7 +452,7 @@ pub(super) fn service_worker_auto_attach_owner_sessions(
 
 pub(super) fn dedicated_worker_auto_attach_owner_sessions(
     conn: &CdpConnection,
-    owner_page: &TargetPageResidenceIdentity,
+    target: &crate::conn::DedicatedWorkerTargetState,
 ) -> Vec<Option<String>> {
     conn.auto_attach_owner_sessions_for_target_type("worker")
         .into_iter()
@@ -329,7 +460,7 @@ pub(super) fn dedicated_worker_auto_attach_owner_sessions(
             dedicated_worker_auto_attach_owner_session_allowed(
                 conn,
                 owner_session_id.as_deref(),
-                owner_page,
+                target,
             )
         })
         .collect()
@@ -551,7 +682,7 @@ pub(in crate::domains) fn prepare_failed_dedicated_worker_retirements_for_owner(
         .dedicated_worker_targets
         .values()
         .filter(|worker| {
-            worker.owner_page.target_id() == Some(target_id.as_str())
+            worker.parent_target_id() == Some(target_id.as_str())
                 && worker.failed_load_waits_for_debugger()
                 && !worker.is_retiring()
         })
@@ -734,7 +865,10 @@ pub(super) fn prepare_dedicated_worker_target_retirement(
         && conn
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.dedicated_worker_targets.get(&renderer_instance_id))
-            .is_some_and(|target| conn.target_page_output_residence_is_current(&target.owner_page))
+            .is_some_and(|target| {
+                conn.browser_context_by_id(browser_context_id)
+                    .is_some_and(|context| context.dedicated_worker_owner_is_current(target))
+            })
         && conn
             .browser_context_by_id_mut(browser_context_id)
             .and_then(|context| {

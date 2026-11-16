@@ -113,7 +113,8 @@ impl TargetLogOutputQueueState {
                     );
                 }
             }
-            ScriptNetworkOutputItem::SubresourceRequestStarted(_)
+            ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
+            | ScriptNetworkOutputItem::SubresourceRequestStarted(_)
             | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
             | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)

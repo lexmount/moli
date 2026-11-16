@@ -7,6 +7,15 @@ use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorRe
 use super::service::SharedWorkerRuntimeService;
 
 impl SharedWorkerRuntimeService {
+    pub(crate) fn set_children_pause_on_start(
+        &self,
+        instance_id: SharedWorkerInstanceId,
+        pause: bool,
+    ) {
+        if let Some(host) = self.running_host_for_instance(instance_id) {
+            host.set_children_pause_on_start(pause);
+        }
+    }
     pub(crate) fn attach_runtime_inspector_session(
         &self,
         instance_id: SharedWorkerInstanceId,

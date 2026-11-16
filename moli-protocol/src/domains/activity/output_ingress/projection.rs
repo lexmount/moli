@@ -177,6 +177,7 @@ impl RendererOutputProjection {
                     conn,
                     &owner,
                     action,
+                    cursor.stream().residence(),
                     page_source,
                 );
                 (owner, outputs)

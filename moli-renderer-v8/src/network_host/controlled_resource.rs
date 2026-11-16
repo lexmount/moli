@@ -5,10 +5,10 @@ mod fetch;
 mod result;
 mod service_worker;
 mod stream;
-pub(crate) use context::{ControlledXhrContext, XhrInterceptionRoute};
-use result::BufferedXhrResponse;
-pub(crate) use result::{XhrLoadResult, start_buffered_xhr};
-pub(crate) use stream::{ControlledResourceStream, ControlledXhrCompletion};
+pub(crate) use context::{ControlledResourceContext, XhrInterceptionRoute};
+use result::BufferedResourceResponse;
+pub(crate) use result::{ResourceLoadResult, start_buffered_xhr};
+pub(crate) use stream::{ControlledResourceCompletion, ControlledResourceStream};
 
 use moli_fetch::{FetchCancelHandle, Request, Response, ResponseHead};
 use tokio::sync::oneshot;
@@ -59,7 +59,7 @@ impl LoadedResponse {
         info: &PendingSubresourceFetchInfo,
         stream: Option<&mut ControlledResourceStream>,
         network_request_headers: Option<Vec<(String, String)>>,
-    ) -> Result<Option<BufferedXhrResponse>, String> {
+    ) -> Result<Option<BufferedResourceResponse>, String> {
         if let Some(stream) = stream {
             stream.start(
                 info,
@@ -86,7 +86,7 @@ impl LoadedResponse {
             return Ok(None);
         }
         let (response, body) = self.materialize().await?;
-        Ok(Some(BufferedXhrResponse { response, body }))
+        Ok(Some(BufferedResourceResponse { response, body }))
     }
 }
 
@@ -99,7 +99,7 @@ impl ControlledResourceLoad {
         self
     }
 
-    pub(crate) fn for_stylesheet(
+    pub(crate) fn new(
         interception: crate::network::interception_output::ResourceInterceptionContext,
         request: Request,
         info: PendingSubresourceFetchInfo,
@@ -133,10 +133,10 @@ impl ControlledResourceLoad {
         self.interception.request_action(self.info.clone(), pause)
     }
 
-    pub(crate) async fn run(self) -> XhrLoadResult {
+    pub(crate) async fn run(self) -> ResourceLoadResult {
         match self.run_with_stream(None).await {
-            ControlledXhrCompletion::Buffered(completed) => *completed,
-            ControlledXhrCompletion::Streamed { .. } => {
+            ControlledResourceCompletion::Buffered(completed) => *completed,
+            ControlledResourceCompletion::Streamed { .. } => {
                 unreachable!("buffered XHR has no streaming sink")
             }
         }
@@ -145,13 +145,13 @@ impl ControlledResourceLoad {
     pub(crate) async fn run_with_stream(
         mut self,
         mut stream: Option<ControlledResourceStream>,
-    ) -> ControlledXhrCompletion {
+    ) -> ControlledResourceCompletion {
         let result = self.run_inner(stream.as_mut()).await;
         let result = self.normalize_cancellation(result);
         self.load.finish();
         if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id()) {
             self.publish_completed();
-            return ControlledXhrCompletion::Streamed {
+            return ControlledResourceCompletion::Streamed {
                 internal_id: self.info.internal_id,
                 body_source_id,
                 result: result.map(|_| ()),
@@ -164,7 +164,7 @@ impl ControlledResourceLoad {
             }
             Err(error) => (Err(error), None),
         };
-        let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
+        let mut completed = ResourceLoadResult::new(self.info.clone(), result, network_headers);
         completed.csp_violations = std::mem::take(&mut self.csp_violations);
         completed.network_record = completed
             .network_record
@@ -180,7 +180,7 @@ impl ControlledResourceLoad {
             );
         }
         self.publish_completed();
-        ControlledXhrCompletion::Buffered(Box::new(completed))
+        ControlledResourceCompletion::Buffered(Box::new(completed))
     }
 
     fn normalize_cancellation<T>(&self, result: Result<T, String>) -> Result<T, String> {
@@ -386,7 +386,13 @@ impl ControlledResourceLoad {
     async fn run_inner(
         &mut self,
         mut stream: Option<&mut ControlledResourceStream>,
-    ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
+    ) -> Result<
+        (
+            Option<BufferedResourceResponse>,
+            Option<Vec<(String, String)>>,
+        ),
+        String,
+    > {
         use ResourceInterceptionDecision as D;
         let mut next_request_pause = self.initial_decision.is_some()
             || self
@@ -428,9 +434,6 @@ impl ControlledResourceLoad {
                 next_request_pause = false;
             }
             if next_request_pause {
-                // ExtraInfo describes the first on-wire request of this hop.
-                // Authentication retries retain it; a redirect starts a new hop.
-                network_request_headers = None;
                 self.sync_info();
                 let rx = if let Some(rx) = self.initial_decision.take() {
                     rx
@@ -498,12 +501,16 @@ impl ControlledResourceLoad {
             }
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
-            let (response, mut is_synthetic, observed_request_headers) = match synthetic.take() {
-                Some(response) => (LoadedResponse::from_response(response), true, None),
+            let (response, body_from_network, observed_request_headers) = match synthetic.take() {
+                Some(response) => (LoadedResponse::from_response(response), false, None),
                 None => {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
                     }
+                    // Once this load falls back to HTTP, network redirects stay
+                    // on that transport. Only a SW-produced redirect can dispatch
+                    // a new FetchEvent on the next hop.
+                    self.service_worker = None;
                     let observed = super::async_fetch::fetch_subresource_hop(
                         &loader,
                         self.request.clone(),
@@ -514,13 +521,35 @@ impl ControlledResourceLoad {
                     .await?;
                     let (response, observation) = observed.into_parts();
                     let headers = observation.map(|observation| observation.into_headers());
-                    (response, false, headers)
+                    (response, true, headers)
                 }
             };
             if network_request_headers.is_none() {
                 network_request_headers = observed_request_headers;
+                if self.interception.is_worker()
+                    && let Some(headers) = &network_request_headers
+                {
+                    self.interception.publish_network(
+                        crate::types::ScriptNetworkOutputItem::SubresourceRequestExtraInfo {
+                            handle: self
+                                .info
+                                .network_request_handle
+                                .expect("native request handle"),
+                            info: Box::new(moli_fetch::NetworkRequestExtraInfo {
+                                headers: headers.clone(),
+                                cookie_report: response
+                                    .head
+                                    .request_cookie_report
+                                    .clone()
+                                    .unwrap_or_default(),
+                            }),
+                        },
+                    );
+                }
             }
             let mut response = response;
+            let mut body_from_network = body_from_network;
+            let mut intercepted_response = !body_from_network;
             if handle_auth_requests
                 && matches!(response.head.status, 401 | 407)
                 && let Some(challenge) = crate::protocol_types::extract_subresource_auth_challenge(
@@ -596,6 +625,7 @@ impl ControlledResourceLoad {
                 }
                 match self.decision(rx, InterceptionPhase::Response).await? {
                     D::ContinueResponse { status, headers } => {
+                        intercepted_response = true;
                         if let Some(status) = status {
                             response.head.status = status;
                             response.head.status_text = None;
@@ -614,7 +644,8 @@ impl ControlledResourceLoad {
                             self.synthetic_response(status, headers, body),
                         );
                         self.response_filter = None;
-                        is_synthetic = true;
+                        body_from_network = false;
+                        intercepted_response = true;
                     }
                     D::Fail(error) => return Err(error),
                     _ => unreachable!("response pause accepts only response decisions"),
@@ -624,13 +655,9 @@ impl ControlledResourceLoad {
                 SubresourceResponseTransition, advance_subresource_response,
             };
             let transition = if matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
-                && is_synthetic
+                && intercepted_response
                 && self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
-                && !response
-                    .head
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                && super::async_fetch::redirect_location(&response.head.headers).is_none()
             {
                 if self.response_filter.is_none() {
                     self.request.validate_cors_response_for_url(
@@ -643,10 +670,14 @@ impl ControlledResourceLoad {
                 super::response_hop::advance_validated_subresource_response(
                     &mut self.request,
                     response.head.clone(),
-                    false,
+                    network_request_headers.is_some(),
                 )?
             } else {
-                advance_subresource_response(&mut self.request, response.head.clone(), false)?
+                advance_subresource_response(
+                    &mut self.request,
+                    response.head.clone(),
+                    network_request_headers.is_some(),
+                )?
             };
             let manual = matches!(
                 transition,
@@ -671,7 +702,7 @@ impl ControlledResourceLoad {
                         self.request.credentials_mode,
                     )?;
                 }
-                if !is_synthetic {
+                if body_from_network {
                     self.cancel.adopt_response_progress(&hop_cancel);
                 }
                 if let Some(stream) = stream.as_deref_mut() {
@@ -680,7 +711,7 @@ impl ControlledResourceLoad {
                 let delivered = response
                     .deliver(
                         &self.info,
-                        if is_synthetic
+                        if !body_from_network
                             || manual
                             || (matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
                                 && self.request.request_mode == moli_fetch::RequestMode::NoCors)
@@ -695,6 +726,9 @@ impl ControlledResourceLoad {
                 return Ok((delivered, network_request_headers));
             }
             self.preflight_headers = self.request.request_headers.to_byte_strings();
+            // ExtraInfo belongs to the current HTTP hop, even with Fetch disabled.
+            // Authentication retries retain their first on-wire request snapshot.
+            network_request_headers = None;
             // Retire the previous hop's protocol correlation before installing
             // its next one. The stable native network handle keeps Network ID.
             self.interception.publish_continue(

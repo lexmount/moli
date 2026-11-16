@@ -627,6 +627,10 @@ pub enum ScriptNetworkOutputItem {
     SubresourceNetworkRecord(Box<SubresourceNetworkRecord>),
     SubresourceRequestStarted(Box<SubresourceRequestStarted>),
     SubresourceResponseStarted(Box<SubresourceResponseStarted>),
+    SubresourceRequestExtraInfo {
+        handle: SubresourceNetworkRequestHandle,
+        info: Box<NetworkRequestExtraInfo>,
+    },
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
     SubresourceBodyFinished(Box<SubresourceBodyFinished>),
@@ -1012,7 +1016,8 @@ impl ScriptExecutionReport {
                 state.bodies.insert(handle, *body);
                 self.try_materialize_staged_subresource_record(handle);
             }
-            ScriptNetworkOutputItem::SubresourceDataReceived(_)
+            ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
+            | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_) => {}
             ScriptNetworkOutputItem::WebSocketNetworkEvent(event) => {
                 self.websocket_network_events.push(event);
@@ -1164,6 +1169,7 @@ pub struct SubresourceResponseStarted {
     status: u16,
     status_text: Option<String>,
     response_headers: Vec<(String, Vec<u8>)>,
+    request_cookie_report: Option<StoredCookieQueryReport>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
     from_cache: bool,
     network_request_headers: Option<Vec<(String, String)>>,
@@ -1343,11 +1349,21 @@ impl SubresourceResponseStarted {
             status,
             status_text: None,
             response_headers,
+            request_cookie_report: None,
             cookie_set_reports,
             from_cache: false,
             network_request_headers: None,
             negotiated_http_version: None,
         }
+    }
+
+    pub fn with_request_cookie_report(mut self, report: Option<StoredCookieQueryReport>) -> Self {
+        self.request_cookie_report = report;
+        self
+    }
+
+    pub fn request_cookie_report(&self) -> Option<&StoredCookieQueryReport> {
+        self.request_cookie_report.as_ref()
     }
 
     pub fn with_status_text(mut self, status_text: Option<String>) -> Self {

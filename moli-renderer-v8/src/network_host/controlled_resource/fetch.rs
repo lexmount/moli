@@ -23,15 +23,14 @@ pub(crate) struct ControlledFetchStream {
     mode: RequestMode,
     credentials: RequestCredentialsMode,
     policy: SubresourcePolicyContext,
-    pub(super) body_source_id: Option<NetworkBodySourceId>,
-    response: Option<
-        Box<(
-            PendingSubresourceFetchInfo,
-            ResponseHead,
-            ResourceInterceptionBody,
-        )>,
-    >,
+    started: Option<Box<StartedFetchStream>>,
+}
+
+struct StartedFetchStream {
+    info: PendingSubresourceFetchInfo,
+    head: ResponseHead,
     delivered: usize,
+    delivery: WorkerFetchStreamingChunk,
 }
 
 impl ControlledFetchStream {
@@ -61,10 +60,14 @@ impl ControlledFetchStream {
             mode,
             credentials,
             policy,
-            body_source_id: None,
-            response: None,
-            delivered: 0,
+            started: None,
         }
+    }
+
+    pub(super) fn body_source_id(&self) -> Option<NetworkBodySourceId> {
+        self.started
+            .as_ref()
+            .map(|started| started.delivery.body_source_id)
     }
 
     pub(super) fn start(
@@ -101,6 +104,7 @@ impl ControlledFetchStream {
                         head.headers.clone(),
                         head.cookie_set_reports.clone(),
                     )
+                    .with_request_cookie_report(head.request_cookie_report.clone())
                     .with_status_text(head.status_text.clone())
                     .with_from_cache(head.from_cache)
                     .with_network_request_headers(network_request_headers.clone())
@@ -108,7 +112,6 @@ impl ControlledFetchStream {
                 ),
             ));
         let body_source_id = super::super::new_network_body_source_id();
-        self.body_source_id = Some(body_source_id);
         let _ = self.completion.send(WorkerFetchEvent::StreamingStarted(
             WorkerFetchStreamingStarted {
                 fetch_id: self.fetch_id,
@@ -116,41 +119,44 @@ impl ControlledFetchStream {
                 head: head.clone(),
             },
         ));
-        self.response = Some(Box::new((info.clone(), head, body)));
+        self.started = Some(Box::new(StartedFetchStream {
+            info: info.clone(),
+            head,
+            delivery: WorkerFetchStreamingChunk::new(body_source_id, body),
+            delivered: 0,
+        }));
         Ok(())
     }
 
     pub(super) fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-        let handle = self
-            .response
-            .as_ref()
-            .expect("response precedes body")
-            .0
+        let started = self.started.as_mut().expect("response precedes body");
+        let handle = started
+            .info
             .network_request_handle
-            .unwrap();
-        self.delivered += bytes.len();
+            .expect("native Fetch identity");
+        started.delivered += bytes.len();
         self.interception
             .publish_network(ScriptNetworkOutputItem::SubresourceDataReceived(
                 SubresourceDataReceived::new(handle, bytes.len(), bytes.len()),
             ));
-        // A detached JS consumer does not cancel a keepalive transport. Its
-        // resource lease, rather than this delivery channel, owns cancellation.
-        let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
-            WorkerFetchStreamingChunk {
-                body_source_id: self.body_source_id.unwrap(),
-                bytes,
-            },
-        ));
+        // Only publish a coalesced range. The native capture already owns
+        // these bytes, and transport completion never waits for Worker JS.
+        started
+            .delivery
+            .publish(started.delivered, &self.completion);
         Ok(())
     }
 
     pub(super) fn finish(&mut self, result: Result<(), String>) {
-        let (info, head, source) = *self
-            .response
+        let started = *self
+            .started
             .take()
             .expect("streamed response must have headers");
-        let handle = info.network_request_handle.unwrap();
-        let body = source.finish_capture(self.delivered);
+        let handle = started
+            .info
+            .network_request_handle
+            .expect("native Fetch identity");
+        let body = started.delivery.body.finish_capture(started.delivered);
         let terminal = match &result {
             Ok(()) => SubresourceBodyFinished::ready_after_streaming(handle, body.clone()),
             Err(error) => SubresourceBodyFinished::failed_with_partial_body(
@@ -166,8 +172,9 @@ impl ControlledFetchStream {
         let _ = self.completion.send(WorkerFetchEvent::StreamingFinished(
             WorkerFetchStreamingFinished {
                 fetch_id: self.fetch_id,
-                body_source_id: self.body_source_id.unwrap(),
-                head,
+                body_source_id: started.delivery.body_source_id,
+                delivery: started.delivery,
+                head: started.head,
                 result: result.map(|()| body),
             },
         ));
@@ -235,7 +242,7 @@ impl super::ControlledResourceLoad {
                 Err(error) => result = Err(error.into_message()),
             }
         }
-        let mut record = super::result::XhrLoadResult::new(self.info.clone(), result, headers);
+        let mut record = super::result::ResourceLoadResult::new(self.info.clone(), result, headers);
         if let Err(error) = &record.result {
             record.network_record = failure_record(&self.info, network_error(error));
         } else if blocked_opaque {
@@ -276,4 +283,140 @@ fn failure_record(
     )
     .with_request_handle(info.network_request_handle.expect("native Fetch identity"))
     .with_request_body_bytes(info.request_body_bytes.clone())
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    use crate::network::interception_output::ResourceInterceptionEvent;
+    use crate::types::SubresourceResourceType;
+    use moli_fetch::{FetchCancelHandle, StreamingRawResponse};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn blocked_worker_coalesces_large_body_without_delaying_network_terminal() {
+        for worker_exited in [false, true] {
+            let (sender, receiver) = mpsc::unbounded_channel();
+            let mut receiver = (!worker_exited).then_some(receiver);
+            let (chunks, body_rx) = mpsc::unbounded_channel();
+            let (complete, completion_rx) = tokio::sync::oneshot::channel();
+            let cancel = FetchCancelHandle::new();
+            let url = "https://worker.test/body".parse::<url::Url>().unwrap();
+            let response = StreamingRawResponse::new(
+                url.clone(),
+                200,
+                Vec::new(),
+                None,
+                Vec::new(),
+                false,
+                Vec::new(),
+                body_rx,
+                cancel.clone(),
+                completion_rx,
+            );
+            let pool = moli_disk_pool::DiskPool::new(None).unwrap();
+            let loaded = super::super::LoadedResponse::from_stream(response, Some(pool.clone()));
+            let info = PendingSubresourceFetchInfo {
+                internal_id: 1,
+                network_request_handle: Some(
+                    crate::network::interception_control::next_subresource_network_handle(),
+                ),
+                frame_id: None,
+                document_url: url.clone(),
+                url,
+                websocket_socket_id: None,
+                method: "GET".into(),
+                request_headers: Default::default(),
+                request_body: None,
+                request_body_bytes: None,
+                resource_type: SubresourceResourceType::Fetch,
+                request_cookie_report: None,
+            };
+            let terminals = Arc::new(AtomicUsize::new(0));
+            let observed = terminals.clone();
+            let interception = ResourceInterceptionContext::worker(None, move |event| {
+                if let ResourceInterceptionEvent::Network(item) = event
+                    && matches!(*item, ScriptNetworkOutputItem::SubresourceBodyFinished(_))
+                {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                }
+                true
+            });
+            let mut stream =
+                super::super::ControlledResourceStream::WorkerFetch(ControlledFetchStream::new(
+                    sender,
+                    1,
+                    interception,
+                    RequestMode::Cors,
+                    RequestCredentialsMode::SameOrigin,
+                    SubresourcePolicyContext::default(),
+                ));
+            const LENGTH: usize = 4 * 1024 * 1024;
+            for value in 0..4 {
+                chunks.send(vec![value; LENGTH / 4]).unwrap();
+            }
+            drop(chunks);
+            complete.send(Ok(())).unwrap();
+            assert!(
+                loaded
+                    .deliver(&info, Some(&mut stream), None)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!cancel.is_cancelled());
+            let super::super::ControlledResourceStream::WorkerFetch(stream) = &mut stream else {
+                unreachable!()
+            };
+            stream.finish(Ok(()));
+            assert_eq!(terminals.load(Ordering::SeqCst), 1);
+            // No Worker task has run. The response uses the existing disk
+            // capture, not a second queued allocation for every body chunk.
+            assert!(pool.diagnostics().disk_footprint_bytes >= LENGTH as u64);
+            if let Some(receiver) = &mut receiver {
+                let WorkerFetchEvent::StreamingStarted(_) = receiver.try_recv().unwrap() else {
+                    panic!("response headers")
+                };
+                let WorkerFetchEvent::StreamingChunk(chunk) = receiver.try_recv().unwrap() else {
+                    panic!("one coalesced body wake")
+                };
+                let mut delivered = 0;
+                let mut chunk = chunk;
+                loop {
+                    let range = chunk.take_range();
+                    assert_eq!(range.start, delivered);
+                    assert!(range.len() <= 64 * 1024);
+                    let bytes = chunk
+                        .body
+                        .read_captured_chunk(range.start, range.len())
+                        .unwrap();
+                    assert_eq!(bytes, vec![(range.start / (LENGTH / 4)) as u8; range.len()]);
+                    delivered = range.end;
+                    chunk.requeue(&stream.completion);
+                    match receiver.try_recv().unwrap() {
+                        WorkerFetchEvent::StreamingChunk(next) => chunk = next,
+                        WorkerFetchEvent::StreamingFinished(finished) => {
+                            if let Some(finished) = finished.after_body_delivery(&stream.completion)
+                            {
+                                assert_eq!(delivered, LENGTH);
+                                assert_eq!(finished.result.unwrap().len(), LENGTH);
+                                break;
+                            }
+                            let WorkerFetchEvent::StreamingChunk(next) =
+                                receiver.try_recv().unwrap()
+                            else {
+                                panic!("next bounded data turn")
+                            };
+                            chunk = next;
+                        }
+                        _ => panic!("data or completion"),
+                    }
+                }
+                assert!(receiver.try_recv().is_err());
+            }
+        }
+    }
 }

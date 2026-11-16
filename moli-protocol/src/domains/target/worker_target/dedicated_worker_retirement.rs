@@ -19,7 +19,7 @@ pub(crate) struct DedicatedWorkerRetirementIdentity {
     target_id: String,
     instance_id: u64,
     owner_local_host_id: moli_core::RendererOwnerLocalHostId,
-    owner_page: TargetPageResidenceIdentity,
+    owner: crate::conn::DedicatedWorkerRootOwner,
 }
 
 struct WorkerSessionRetirement {
@@ -79,7 +79,7 @@ impl PreparedDedicatedWorkerRetirement {
                 context
                     .dedicated_worker_targets
                     .values()
-                    .filter(|target| &target.owner_page == page && !target.is_retiring())
+                    .filter(|target| target.owner_page() == Some(page) && !target.is_retiring())
                     .map(|target| target.target_id.clone())
                     .collect::<Vec<_>>()
             })
@@ -112,7 +112,7 @@ impl PreparedDedicatedWorkerRetirement {
             target_id: target_id.to_owned(),
             instance_id: target.renderer_instance_id,
             owner_local_host_id: target.renderer_owner_local_host_id,
-            owner_page: target.owner_page.clone(),
+            owner: target.owner.clone(),
         };
         let renderer_runtime = context.renderer_runtime();
         let session_ids = target.session_ids();
@@ -463,7 +463,7 @@ impl DedicatedWorkerRetirementIdentity {
             .is_some_and(|target| {
                 target.target_id == self.target_id
                     && target.renderer_owner_local_host_id == self.owner_local_host_id
-                    && target.owner_page == self.owner_page
+                    && target.owner == self.owner
                     && target.is_retiring()
             })
     }

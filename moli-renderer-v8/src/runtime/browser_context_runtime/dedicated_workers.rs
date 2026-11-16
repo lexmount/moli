@@ -21,6 +21,7 @@ impl RendererBrowserContextRuntime {
             instance_id,
             DedicatedWorkerDevToolsTarget::Loading {
                 inspector_sessions: Vec::new(),
+                resume_on_attach: false,
             },
         );
         instance_id
@@ -36,7 +37,11 @@ impl RendererBrowserContextRuntime {
         let Some(target) = targets.get_mut(&instance_id) else {
             return;
         };
-        let DedicatedWorkerDevToolsTarget::Loading { inspector_sessions } = target else {
+        let DedicatedWorkerDevToolsTarget::Loading {
+            inspector_sessions,
+            resume_on_attach,
+        } = target
+        else {
             return;
         };
         let handle = handle.devtools_handle();
@@ -44,6 +49,9 @@ impl RendererBrowserContextRuntime {
         // concurrent detach must either remove a pending id or retire its token.
         for session in inspector_sessions.drain(..) {
             let _ = handle.attach_runtime_inspector_session(session);
+        }
+        if *resume_on_attach {
+            handle.run_if_waiting_for_debugger();
         }
         *target = DedicatedWorkerDevToolsTarget::Running {
             handle,
@@ -73,6 +81,12 @@ impl RendererBrowserContextRuntime {
         self.inner
             .dedicated_worker_pause_on_start_for_devtools
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_dedicated_worker_children_pause_on_start(&self, instance_id: u64, pause: bool) {
+        if let Some(handle) = self.dedicated_worker_devtools_handle(instance_id) {
+            handle.set_nested_worker_pause_on_start(pause);
+        }
     }
 
     fn dedicated_worker_devtools_handle(&self, instance_id: u64) -> Option<WorkerDevToolsHandle> {
@@ -205,7 +219,9 @@ impl RendererBrowserContextRuntime {
     ) -> bool {
         let mut targets = self.inner.dedicated_worker_devtools_targets.lock();
         match targets.get_mut(&instance_id) {
-            Some(DedicatedWorkerDevToolsTarget::Loading { inspector_sessions }) => {
+            Some(DedicatedWorkerDevToolsTarget::Loading {
+                inspector_sessions, ..
+            }) => {
                 if !inspector_sessions.contains(&inspector_session_id) {
                     inspector_sessions.push(inspector_session_id);
                 }
@@ -225,7 +241,9 @@ impl RendererBrowserContextRuntime {
     ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
         let mut targets = self.inner.dedicated_worker_devtools_targets.lock();
         match targets.get_mut(&instance_id)? {
-            DedicatedWorkerDevToolsTarget::Loading { inspector_sessions } => {
+            DedicatedWorkerDevToolsTarget::Loading {
+                inspector_sessions, ..
+            } => {
                 inspector_sessions.retain(|session| session != &inspector_session_id);
                 let (tx, rx) = oneshot::channel();
                 let _ = tx.send(Ok(()));
@@ -241,8 +259,19 @@ impl RendererBrowserContextRuntime {
         &self,
         instance_id: u64,
     ) -> bool {
-        self.dedicated_worker_devtools_handle(instance_id)
-            .is_some_and(|handle| handle.run_if_waiting_for_debugger())
+        let mut targets = self.inner.dedicated_worker_devtools_targets.lock();
+        match targets.get_mut(&instance_id) {
+            Some(DedicatedWorkerDevToolsTarget::Loading {
+                resume_on_attach, ..
+            }) => {
+                *resume_on_attach = true;
+                true
+            }
+            Some(DedicatedWorkerDevToolsTarget::Running { handle, .. }) => {
+                handle.run_if_waiting_for_debugger()
+            }
+            None => false,
+        }
     }
 
     pub fn close_dedicated_worker_for_devtools(&self, instance_id: u64) -> bool {
@@ -281,7 +310,9 @@ mod tests {
             .unwrap();
         {
             let targets = runtime.inner.dedicated_worker_devtools_targets.lock();
-            let DedicatedWorkerDevToolsTarget::Loading { inspector_sessions } = &targets[&instance]
+            let DedicatedWorkerDevToolsTarget::Loading {
+                inspector_sessions, ..
+            } = &targets[&instance]
             else {
                 panic!("worker is still loading");
             };
@@ -299,5 +330,51 @@ mod tests {
                 .lock()
                 .is_empty()
         );
+    }
+    #[tokio::test]
+    async fn debugger_release_during_script_load_reaches_the_eventual_worker() {
+        crate::ensure_v8_for_test();
+        let runtime = RendererBrowserContextRuntime::new();
+        let instance = runtime.allocate_dedicated_worker_instance_id();
+        runtime.attach_dedicated_worker_runtime_inspector_session(instance, Some("retired".into()));
+        runtime
+            .detach_dedicated_worker_runtime_inspector_session(instance, Some("retired".into()))
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(runtime.run_dedicated_worker_if_waiting_for_debugger_for_devtools(instance));
+        let request_client =
+            crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+                .unwrap();
+        let mut worker = crate::worker::spawn_worker_with_options(
+            crate::worker::WorkerSpawnOptions::new_with_request_client(
+                "postMessage('started');".into(),
+                "https://worker.test/loading.js".into(),
+                request_client.handle(),
+            )
+            .with_worker_context_runtime(runtime.worker_context_runtime())
+            .with_pause_evaluation_until_debugger(true),
+        );
+        runtime.attach_dedicated_worker_devtools_handle(instance, &worker, None);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match worker
+                    .recv()
+                    .await
+                    .expect("Worker remains live until startup")
+                {
+                    crate::worker::WorkerToParentMessage::Post(_) => break,
+                    crate::worker::WorkerToParentMessage::Error { message, .. } => {
+                        panic!("Worker startup: {message}")
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("loading-time debugger release must reach the script");
+        runtime.unregister_dedicated_worker_devtools_handle(instance);
+        worker.terminate_and_join();
     }
 }

@@ -197,6 +197,16 @@ impl ResourceInterceptionBody {
         }
     }
 
+    /// Read an already captured prefix on the consumer's thread. This never
+    /// starts a transport read or waits for network progress.
+    pub(crate) fn read_captured_chunk(
+        &self,
+        offset: usize,
+        size: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        self.captured.lock().read_chunk(offset, size)
+    }
+
     async fn receive(&self, state: &mut BodyState) -> Result<Option<Vec<u8>>> {
         let BodyState::Receiving(response) = state else {
             return Ok(None);

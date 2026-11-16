@@ -9,12 +9,12 @@ use crate::{
 /// An incomplete native owner is an error, never an ordinary network route.
 pub(crate) enum XhrInterceptionRoute {
     Ordinary,
-    Native(ControlledXhrContext),
+    Native(ControlledResourceContext),
     Compatibility,
 }
 
 impl XhrInterceptionRoute {
-    pub(crate) fn synchronous(self) -> Result<Option<ControlledXhrContext>, &'static str> {
+    pub(crate) fn synchronous(self) -> Result<Option<ControlledResourceContext>, &'static str> {
         match self {
             Self::Ordinary => Ok(None),
             Self::Native(context) => Ok(Some(context)),
@@ -25,12 +25,12 @@ impl XhrInterceptionRoute {
     }
 }
 
-pub(crate) struct ControlledXhrContext {
+pub(crate) struct ControlledResourceContext {
     pub(crate) interception: ResourceInterceptionContext,
     pub(crate) connect_policy: DocumentConnectPolicySnapshot,
 }
 
-impl ControlledXhrContext {
+impl ControlledResourceContext {
     pub(crate) fn load(
         self,
         mut request: moli_fetch::Request,
@@ -59,7 +59,7 @@ impl ControlledXhrContext {
     }
 }
 
-impl ControlledXhrContext {
+impl ControlledResourceContext {
     pub(crate) fn fetch_load(
         self,
         request: moli_fetch::Request,

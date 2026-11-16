@@ -1,6 +1,6 @@
 use super::*;
 use crate::network_host::ResolveContextUrlError;
-use crate::network_host::controlled_xhr::{ControlledXhrContext, start_buffered_xhr};
+use crate::network_host::controlled_resource::{ControlledResourceContext, start_buffered_xhr};
 use crossbeam_channel::{after, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -475,8 +475,8 @@ fn worker_xhr_request(
     }
     request
 }
-fn prepare_worker_xhr_control(state: &WorkerGlobalState) -> ControlledXhrContext {
-    ControlledXhrContext {
+fn prepare_worker_xhr_control(state: &WorkerGlobalState) -> ControlledResourceContext {
+    ControlledResourceContext {
         interception: state
             .interception_context
             .clone()
@@ -490,10 +490,12 @@ fn prepare_worker_xhr_control(state: &WorkerGlobalState) -> ControlledXhrContext
     }
 }
 
-fn worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourceFetchInfo {
+fn native_worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourceFetchInfo {
     PendingSubresourceFetchInfo {
-        internal_id: 0,
-        network_request_handle: None,
+        internal_id: crate::network::interception_control::next_subresource_request_id(),
+        network_request_handle: Some(
+            crate::network::interception_control::next_subresource_network_handle(),
+        ),
         frame_id: None,
         document_url: prepared.document_url.clone(),
         url: prepared.resolved_url.clone(),
@@ -507,20 +509,13 @@ fn worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourc
     }
 }
 
-fn native_worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourceFetchInfo {
-    let mut info = worker_xhr_info(prepared);
-    info.internal_id = crate::network::interception_control::next_subresource_request_id();
-    info.network_request_handle =
-        Some(crate::network::interception_control::next_subresource_network_handle());
-    info
-}
 fn send_synchronous_worker_xhr(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedWorkerXhrSendRequest,
     loader: crate::network::context::WorkerResourceLoader,
-    control: ControlledXhrContext,
+    control: ControlledResourceContext,
 ) {
     let request_url_text = prepared.resolved_url.to_string();
     let request = worker_xhr_request(&state.borrow(), &prepared);

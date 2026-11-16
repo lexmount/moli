@@ -443,27 +443,6 @@ pub(crate) fn emit_response_received_extra_info(
     );
 }
 
-pub(crate) fn emit_redirect_response_received_extra_info(
-    out: &mut impl CdpNetworkAutomationEventSink,
-    session_id: Option<&str>,
-    request_id: &str,
-    response_headers: &[(String, Vec<u8>)],
-    status: u16,
-    cookie_set_reports: &[StoredCookieSetReport],
-) {
-    if cookie_set_reports.is_empty() {
-        return;
-    }
-    emit_response_received_extra_info(
-        out,
-        session_id,
-        request_id,
-        response_headers,
-        status,
-        cookie_set_reports,
-    );
-}
-
 pub(crate) fn emit_response_received(
     out: &mut impl CdpNetworkAutomationEventSink,
     session_id: Option<&str>,
@@ -549,7 +528,7 @@ pub(crate) fn emit_response_received_without_extra_info_event(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_response_received_with_extra_info_delivery(
+pub(super) fn emit_response_received_with_extra_info_delivery(
     out: &mut impl CdpNetworkAutomationEventSink,
     session_id: Option<&str>,
     request_id: &str,

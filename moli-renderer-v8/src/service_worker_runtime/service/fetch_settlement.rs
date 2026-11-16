@@ -22,12 +22,8 @@ fn service_worker_redirect_target(
     if !is_redirect_status(response.head.status) {
         return Ok(None);
     }
-    let Some(location) = response
-        .head
-        .headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| moli_fetch::encode_redirect_location(value))
+    let Some(location) = crate::network_host::redirect_location(&response.head.headers)
+        .map(moli_fetch::encode_redirect_location)
     else {
         return Ok(None);
     };
@@ -585,11 +581,7 @@ impl ServiceWorkerRuntimeService {
         }
         if job.response_delivery == super::super::state::ServiceWorkerFetchResponseDelivery::Client
             && is_redirect_status(response.head.status)
-            && response
-                .head
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+            && crate::network_host::redirect_location(&response.head.headers).is_some()
             && job.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
         {
             self.complete_fetch_with_network_failure(
@@ -2129,6 +2121,20 @@ mod tests {
             assert_eq!(
                 service_worker_redirect_target(&job, &raw_response).unwrap(),
                 Some(url(expected))
+            );
+        }
+        for location in [b"".as_slice(), b" \t"] {
+            let empty = ServiceWorkerFetchResponse {
+                head: moli_fetch_types::FetchResponseHead {
+                    headers: vec![("Location".to_owned(), location.to_vec())],
+                    ..response.head.clone()
+                },
+                ..response.clone()
+            };
+            assert!(
+                service_worker_redirect_target(&job, &empty)
+                    .unwrap()
+                    .is_none()
             );
         }
         let next_url = service_worker_redirect_target(&job, &response)

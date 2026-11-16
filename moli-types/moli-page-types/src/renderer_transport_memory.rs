@@ -68,6 +68,8 @@ impl ScriptNetworkOutputItem {
             Self::SubresourceNetworkRecord(record) => network_record_charge(record),
             Self::SubresourceRequestStarted(request) => request_started_charge(request),
             Self::SubresourceResponseStarted(response) => response_started_charge(response),
+            Self::SubresourceRequestExtraInfo { info, .. } => headers_charge(&info.headers)
+                .saturating_add(cookie_query_charge(&info.cookie_report)),
             Self::SubresourceDataReceived(_) => 0,
             Self::SubresourceEventSourceMessageReceived(message) => [
                 message.event_name.as_str(),
@@ -308,6 +310,30 @@ fn request_started_charge(request: &SubresourceRequestStarted) -> usize {
         )
 }
 
+fn cookie_query_charge(report: &StoredCookieQueryReport) -> usize {
+    report
+        .included_cookies
+        .iter()
+        .chain(&report.excluded_cookies)
+        .fold(
+            std::mem::size_of_val(report)
+                .saturating_add(report.facade_exclusion_reasons.len().saturating_mul(32)),
+            |size, access| {
+                size.saturating_add(std::mem::size_of_val(access))
+                    .saturating_add(string_charge(&access.cookie.name))
+                    .saturating_add(string_charge(&access.cookie.value))
+                    .saturating_add(string_charge(&access.cookie.domain))
+                    .saturating_add(string_charge(&access.cookie.path))
+                    .saturating_add(access.site_for_cookies_url.as_ref().map_or(0, url_charge))
+                    .saturating_add(access.top_frame_origin_url.as_ref().map_or(0, url_charge))
+                    .saturating_add(
+                        (access.exclusion_reasons.len() + access.warning_reasons.len())
+                            .saturating_mul(32),
+                    )
+            },
+        )
+}
+
 fn response_started_charge(response: &SubresourceResponseStarted) -> usize {
     response
         .redirect_chain
@@ -330,6 +356,12 @@ fn response_started_charge(response: &SubresourceResponseStarted) -> usize {
                 .unwrap_or(0),
         )
         .saturating_add(response.cookie_set_reports.len().saturating_mul(256))
+        .saturating_add(
+            response
+                .request_cookie_report
+                .as_ref()
+                .map_or(0, cookie_query_charge),
+        )
 }
 
 fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {

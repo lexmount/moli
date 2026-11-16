@@ -8,7 +8,7 @@ use crate::{
     },
     worker::{
         WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerSecureContextPolicy,
-        WorkerSpawnOptions, spawn_worker_with_options,
+        WorkerSpawnOptions,
     },
 };
 
@@ -36,7 +36,11 @@ pub(crate) use dispatch::{
     flush_pending_worker_messages_for_listener, worker_has_message_delivery_listener,
 };
 pub(super) use error_event::new_worker_host_error_event;
+pub(crate) use methods::terminate_worker_wrapper;
 pub(super) use methods::{worker_post_message_callback, worker_terminate_callback};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+use crate::worker::spawn_worker_with_options;

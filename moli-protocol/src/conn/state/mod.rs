@@ -48,7 +48,8 @@ pub(crate) use devtools_renderer_channel::{
 };
 
 pub(crate) use dedicated_worker_target::{
-    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState,
+    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot, DedicatedWorkerRootOwner,
+    DedicatedWorkerTargetState,
 };
 pub(crate) use devtools_session::{
     DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,

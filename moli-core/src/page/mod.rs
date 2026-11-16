@@ -96,7 +96,7 @@ pub use moli_renderer_v8::{
     RendererCaptureScreenshotRequest, RendererCapturedDocumentEnvironment,
     RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererContentStripOptions,
     RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererDevToolsAgentToken, RendererDocumentHitTestResult,
+    RendererDedicatedWorkerTargetOwner, RendererDevToolsAgentToken, RendererDocumentHitTestResult,
     RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
@@ -140,7 +140,7 @@ pub use moli_renderer_v8::{
     RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
     RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody, RendererTextSearchMatch,
     RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
-    RuntimeConsoleMessageSnapshot, WorkerInspectorError,
+    RendererWorkerTargetIdentity, RuntimeConsoleMessageSnapshot, WorkerInspectorError,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,

@@ -6,6 +6,11 @@ use super::host::RendererSharedWorkerHost;
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 
 impl RendererSharedWorkerHost {
+    pub(super) fn set_children_pause_on_start(&self, pause: bool) {
+        if let Some(handle) = self.running_devtools_handle() {
+            handle.set_nested_worker_pause_on_start(pause);
+        }
+    }
     pub(super) fn attach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,

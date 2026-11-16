@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from moli_cdp_smoke.runner import group_listing
 from moli_cdp_smoke.supervisor import parse_args
-
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 CANCEL_WORKFLOW = WORKFLOW.with_name("cancel-pr-ci.yml")
@@ -59,7 +58,13 @@ class CiExecutionPolicyTests(unittest.TestCase):
 
     def test_chromium_overrides_follow_the_checked_out_group_registry(self) -> None:
         current = [group["name"] for group in group_listing()]
-        for groups in (current, [name for name in current if name != "fetch-headers"], ["network"]):
+        for groups in (
+            current,
+            [name for name in current if name != "fetch-headers"],
+            [name for name in current if name != "worker-loading"],
+            ["worker-loading"],
+            ["network"],
+        ):
             with self.subTest(groups=groups):
                 result, invocation = self.run_chromium_step(groups)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -70,7 +75,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                     args = parse_args(invocation)
                 self.assertEqual(args.chromium_bin_for_group, {
                     name: "/tmp/oracle with spaces=156/chrome"
-                    for name in ("dom-input", "fetch-headers") if name in groups
+                    for name in ("dom-input", "fetch-headers", "worker-loading") if name in groups
                 })
                 self.assertEqual(args.group, [])
                 self.assertTrue(args.strict_full_suite)

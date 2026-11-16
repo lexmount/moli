@@ -32,6 +32,10 @@ pub enum ResourceInterceptionEvent {
 pub(crate) struct WorkerInterceptionOutput {
     control: Option<ResourceInterceptionContext>,
     publish: Arc<dyn Fn(ResourceInterceptionEvent) -> bool + Send + Sync>,
+    target: Option<(
+        crate::runtime::RendererWorkerTargetIdentity,
+        crate::runtime::RendererTurnOutputJournal,
+    )>,
     closed: AtomicBool,
     closed_notify: tokio::sync::Notify,
 }
@@ -55,9 +59,36 @@ impl ResourceInterceptionContext {
         Self::Worker(Arc::new(WorkerInterceptionOutput {
             control,
             publish: Arc::new(publish),
+            target: None,
             closed: AtomicBool::new(false),
             closed_notify: tokio::sync::Notify::new(),
         }))
+    }
+
+    pub(crate) fn with_worker_target(
+        mut self,
+        identity: crate::runtime::RendererWorkerTargetIdentity,
+        journal: crate::runtime::RendererTurnOutputJournal,
+    ) -> Self {
+        let Self::Worker(output) = &mut self else {
+            unreachable!("Worker target requires a Worker observer")
+        };
+        Arc::get_mut(output)
+            .expect("target is bound before observer publication")
+            .target = Some((identity, journal));
+        self
+    }
+
+    pub(crate) fn worker_target(
+        &self,
+    ) -> Option<(
+        crate::runtime::RendererWorkerTargetIdentity,
+        crate::runtime::RendererTurnOutputJournal,
+    )> {
+        match self {
+            Self::Worker(output) => output.target.clone(),
+            Self::Document { .. } => None,
+        }
     }
 
     pub(crate) fn fork_worker_observer(&self) -> Self {
@@ -66,44 +97,42 @@ impl ResourceInterceptionContext {
             Self::Worker(output) => Self::Worker(Arc::new(WorkerInterceptionOutput {
                 control: output.control.clone(),
                 publish: output.publish.clone(),
+                target: output.target.clone(),
                 closed: AtomicBool::new(false),
                 closed_notify: tokio::sync::Notify::new(),
             })),
         }
     }
-    pub(crate) fn worker_control_closed(&self) -> bool {
+    fn control_root(&self) -> &Self {
         let mut control = self;
-        loop {
-            match control {
-                Self::Document { output, .. } => return output.is_closed(),
-                Self::Worker(output) => match &output.control {
-                    Some(parent) => control = parent,
-                    None => return output.closed.load(Ordering::Acquire),
-                },
+        while let Self::Worker(output) = control {
+            match &output.control {
+                Some(parent) => control = parent,
+                None => break,
             }
         }
+        control
     }
+
+    pub(crate) fn worker_control_closed(&self) -> bool {
+        match self.control_root() {
+            Self::Document { output, .. } => output.is_closed(),
+            Self::Worker(output) => output.closed.load(Ordering::Acquire),
+        }
+    }
+
     pub(crate) async fn worker_control_shutdown(&self) {
-        let mut control = self;
-        loop {
-            match control {
-                Self::Document { output, .. } => return output.shutdown().await,
-                Self::Worker(output) => {
-                    if let Some(parent) = &output.control {
-                        control = parent;
-                        continue;
-                    }
-                    loop {
-                        let notified = output.closed_notify.notified();
-                        tokio::pin!(notified);
-                        notified.as_mut().enable();
-                        if output.closed.load(Ordering::Acquire) {
-                            return;
-                        }
-                        notified.await;
-                    }
+        match self.control_root() {
+            Self::Document { output, .. } => output.shutdown().await,
+            Self::Worker(output) => loop {
+                let notified = output.closed_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if output.closed.load(Ordering::Acquire) {
+                    return;
                 }
-            }
+                notified.await;
+            },
         }
     }
 
@@ -139,12 +168,10 @@ impl ResourceInterceptionContext {
         info: PendingSubresourceFetchInfo,
         pause: ResourceInterceptionPause,
     ) -> bool {
-        match self {
-            Self::Document { output, .. } => output.publish(self.request_action(info, pause)),
+        let control = self.control_root();
+        match control {
+            Self::Document { output, .. } => output.publish(control.request_action(info, pause)),
             Self::Worker(output) => {
-                if let Some(control) = &output.control {
-                    return control.publish_request(info, pause);
-                }
                 if output.closed.load(Ordering::Acquire) {
                     return false;
                 }
@@ -161,7 +188,7 @@ impl ResourceInterceptionContext {
         event: PendingSubresourceContinueEvent,
         pause: Option<ResourceInterceptionPause>,
     ) -> bool {
-        match self {
+        match self.control_root() {
             Self::Document {
                 source_document,
                 output,
@@ -172,9 +199,6 @@ impl ResourceInterceptionContext {
                 network_pause: pause,
             }),
             Self::Worker(output) => {
-                if let Some(control) = &output.control {
-                    return control.publish_continue(event, pause);
-                }
                 if output.closed.load(Ordering::Acquire) {
                     return false;
                 }
@@ -220,3 +244,57 @@ impl PartialEq for ResourceInterceptionPolicy {
     }
 }
 impl Eq for ResourceInterceptionPolicy {}
+
+#[cfg(test)]
+mod control_root_tests {
+    use super::*;
+    use crate::types::{SubresourceDataReceived, SubresourceNetworkRequestHandle};
+    use std::future::Future as _;
+    use std::task::{Context, Waker};
+
+    #[tokio::test]
+    async fn nested_control_delegates_without_redirecting_its_network_observer() {
+        let controls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let networks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = controls.clone();
+        let root = ResourceInterceptionContext::worker(None, move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        let parent = ResourceInterceptionContext::worker(Some(root.clone()), |_| {
+            panic!("control must reach its root")
+        });
+        let count = networks.clone();
+        let child = ResourceInterceptionContext::worker(Some(parent), move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        assert!(child.publish_continue(
+            PendingSubresourceContinueEvent::Completed { internal_id: 1 },
+            None
+        ));
+        assert!(
+            child.publish_network(ScriptNetworkOutputItem::SubresourceDataReceived(
+                SubresourceDataReceived::new(SubresourceNetworkRequestHandle::new(1), 3, 3)
+            ))
+        );
+        assert_eq!(controls.load(Ordering::SeqCst), 1);
+        assert_eq!(networks.load(Ordering::SeqCst), 1);
+        child.close_worker_observer();
+        assert!(
+            !child.worker_control_closed(),
+            "observer retirement does not retire its inherited control"
+        );
+        let shutdown = child.worker_control_shutdown();
+        tokio::pin!(shutdown);
+        assert!(
+            shutdown
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        root.close_worker_observer();
+        shutdown.await;
+        assert!(child.worker_control_closed());
+    }
+}

@@ -866,20 +866,41 @@ impl CdpConnection {
             reason,
             parent_session_id,
         );
-        let released_debugger_barrier = plan
+        let released_debugger_targets = plan
             .detached_sessions()
             .iter()
-            .any(|session| session.target_id() == target_id && session.was_waiting_for_debugger());
+            .filter(|session| session.was_waiting_for_debugger())
+            .map(|session| session.target_id().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
         self.remove_detached_session_control_owner(session_id);
         if let Some(attached_state_delta_plan) = attached_state_delta_plan {
             plan.extend(attached_state_delta_plan);
         }
-        if released_debugger_barrier && !self.target_has_waiting_for_debugger_session(target_id) {
-            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
-                self,
+        for target_id in released_debugger_targets {
+            if self.target_has_waiting_for_debugger_session(&target_id) {
+                continue;
+            }
+            if let Some(super::CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id,
                 target_id,
-                &crate::conn::CommandResponseFlushContext::default(),
-            );
+            }) = self.target_session_route_for_target_id(&target_id)
+            {
+                if let Some(context) = self.browser_context_by_id(&browser_context_id)
+                    && let Some(worker) = context.dedicated_worker_target(&target_id)
+                {
+                    context
+                        .renderer_runtime()
+                        .run_dedicated_worker_if_waiting_for_debugger_for_devtools(
+                            worker.renderer_instance_id,
+                        );
+                }
+            } else {
+                crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
+                    self,
+                    &target_id,
+                    &crate::conn::CommandResponseFlushContext::default(),
+                );
+            }
         }
         plan
     }

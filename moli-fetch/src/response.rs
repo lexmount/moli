@@ -128,7 +128,8 @@ impl ResponseHead {
             && self
                 .headers
                 .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+                .is_some_and(|(_, value)| !value.trim_ascii().is_empty())
         {
             FetchResponseType::OpaqueRedirect
         } else if self.final_url.scheme() == "data" || !self.url_list().has_cross_origin_url(origin)

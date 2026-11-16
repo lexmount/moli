@@ -467,18 +467,30 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     return;
                 }
             };
-        let (script_url, script_source) = match materialize_nested_worker_script_source(
-            &resolved_url,
+        let devtools = crate::worker::prepare_nested_worker(
             &nested_context,
-            worker_options.worker_type,
-            worker_options.credentials_mode.0,
-        ) {
-            Ok(source) => source,
-            Err(message) => {
-                let _ =
-                    nested_context
-                        .wake_tx
-                        .send(crate::worker::WorkerMessage::NestedWorkerEvent {
+            &resolved_url,
+            worker_options.name.clone(),
+        );
+        let (script_url, script_source, network_response) =
+            match materialize_nested_worker_script_source(
+                &resolved_url,
+                &nested_context,
+                worker_options.worker_type,
+                worker_options.credentials_mode.0,
+            ) {
+                Ok(source) => source,
+                Err(error) => {
+                    if let Some(devtools) = &devtools {
+                        devtools.script_failed(
+                            &resolved_url,
+                            error.message.clone(),
+                            error.response,
+                        );
+                    }
+                    let message = error.message;
+                    let _ = nested_context.wake_tx.send(
+                        crate::worker::WorkerMessage::NestedWorkerEvent {
                             worker_id: nested_context.worker_id,
                             message: Box::new(crate::worker::WorkerToParentMessage::Error {
                                 message,
@@ -489,16 +501,17 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                                 phase: crate::worker::WorkerErrorPhase::Bootstrap,
                                 source: crate::worker::WorkerErrorSource::Runtime,
                             }),
-                        });
-                set_private_value(
-                    scope,
-                    worker,
-                    WORKER_ID_SLOT,
-                    v8::Number::new(scope, nested_context.worker_id.as_u64() as f64).into(),
-                );
-                return;
-            }
-        };
+                        },
+                    );
+                    set_private_value(
+                        scope,
+                        worker,
+                        WORKER_ID_SLOT,
+                        v8::Number::new(scope, nested_context.worker_id.as_u64() as f64).into(),
+                    );
+                    return;
+                }
+            };
         let mut network_policy = nested_context.network_policy.clone();
         let secure_context = Url::parse(&script_url).ok().is_some_and(|script_url| {
             nested_context
@@ -527,7 +540,9 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         .with_module_credentials_mode(worker_options.credentials_mode.0)
         .with_module_static_import_initiator_url(nested_context.base_url.clone())
         .with_module_static_import_content_security_policies(
-            nested_context.module_static_import_content_security_policies,
+            nested_context
+                .module_static_import_content_security_policies
+                .clone(),
         )
         .with_network_policy(network_policy)
         .with_policy_context(worker_policy_context)
@@ -550,7 +565,12 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         } else {
             options
         };
-        let mut worker_handle = spawn_worker_with_options(options);
+        let (mut worker_handle, devtools) = crate::worker::start_nested_worker(
+            options,
+            &nested_context,
+            network_response,
+            devtools,
+        );
         if let Some(mut rx) = worker_handle.take_receiver() {
             let wake_tx = nested_context.wake_tx.clone();
             let worker_id = nested_context.worker_id;
@@ -558,6 +578,16 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 .name(format!("nested-worker-pump:{worker_id}"))
                 .spawn(move || {
                     while let Some(message) = rx.blocking_recv() {
+                        if let Some(devtools) = &devtools {
+                            if let crate::worker::WorkerToParentMessage::RuntimeInspectorResponse(
+                                publication,
+                            ) = message
+                            {
+                                devtools.publish_response(publication);
+                                continue;
+                            }
+                            devtools.message(&message);
+                        }
                         let _ = wake_tx.send(crate::worker::WorkerMessage::NestedWorkerEvent {
                             worker_id,
                             message: Box::new(message),
@@ -817,14 +847,37 @@ fn child_context_handle_from_global<'s>(
         .map(|value| DomHandle::new(value as usize))
 }
 
+struct NestedWorkerScriptLoadError {
+    message: String,
+    response: Option<Box<crate::protocol_types::NavigationResponse>>,
+}
+impl From<String> for NestedWorkerScriptLoadError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            response: None,
+        }
+    }
+}
+
 fn materialize_nested_worker_script_source(
     script_url: &Url,
     context: &NestedWorkerContext,
     script_kind: WorkerScriptKind,
     module_credentials_mode: moli_fetch::RequestCredentialsMode,
-) -> Result<(String, String), String> {
+) -> Result<
+    (
+        String,
+        String,
+        Box<crate::protocol_types::NavigationResponse>,
+    ),
+    NestedWorkerScriptLoadError,
+> {
     if let Some(source) = materialize_worker_script_source(script_url)? {
-        return Ok((script_url.to_string(), source));
+        let response = Box::new(local_worker_main_script_network_response(
+            script_url, &source,
+        ));
+        return Ok((script_url.to_string(), source, response));
     }
     let loader = context.loader.clone();
     let resource_url = worker_script_resource_url(script_url);
@@ -844,23 +897,32 @@ fn materialize_nested_worker_script_source(
         .request_client()
         .fetch_text_for_worker_blocking_boundary(request)
         .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))?;
-    crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        &context.base_url,
-        &response.redirect_chain,
-        &response.final_url,
-    )
-    .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
-    moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-        .map_err(|error| error.to_string())?;
-    crate::worker::ensure_worker_script_mime_acceptable(
-        &response.final_url,
-        &response.headers,
-        response.body_bytes(),
-    )?;
-    let (head, body) = response.into_text_parts();
-    let mut final_url = head.final_url;
+    let validation = (|| -> Result<(), String> {
+        crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            &context.base_url,
+            &response.redirect_chain,
+            &response.final_url,
+        )
+        .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
+        moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
+            .map_err(|error| error.to_string())?;
+        crate::worker::ensure_worker_script_mime_acceptable(
+            &response.final_url,
+            &response.headers,
+            response.body_bytes(),
+        )
+    })();
+    if let Err(message) = validation {
+        return Err(NestedWorkerScriptLoadError {
+            message,
+            response: Some(Box::new(response.into())),
+        });
+    }
+    let response: crate::protocol_types::NavigationResponse = response.into();
+    let body = response.body_text().to_owned();
+    let mut final_url = response.final_url.clone();
     final_url.set_fragment(script_url.fragment());
-    Ok((final_url.to_string(), body))
+    Ok((final_url.to_string(), body, Box::new(response)))
 }
 
 fn worker_script_inherits_parent_service_worker_controller(script_url: &Url) -> bool {

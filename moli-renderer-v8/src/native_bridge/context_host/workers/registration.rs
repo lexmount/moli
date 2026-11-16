@@ -204,8 +204,10 @@ impl PageScriptHost {
         self.append_dedicated_worker_target_lifecycle(
             crate::runtime::RendererDedicatedWorkerTargetEvent::Created(
                 crate::runtime::RendererDedicatedWorkerTargetInfo {
-                    owner_local_host_id: page_token.local_host_id(),
-                    page_id: page_token.page_id(),
+                    owner: crate::runtime::RendererDedicatedWorkerTargetOwner::Page {
+                        owner_local_host_id: page_token.local_host_id(),
+                        page_id: page_token.page_id(),
+                    },
                     instance_id: renderer_instance_id,
                     request_url: request_url.to_string(),
                     document_url: document_url.to_string(),
@@ -664,8 +666,10 @@ impl PageScriptHost {
         self.append_dedicated_worker_target_lifecycle(
             crate::runtime::RendererDedicatedWorkerTargetEvent::Created(
                 crate::runtime::RendererDedicatedWorkerTargetInfo {
-                    owner_local_host_id: page_token.local_host_id(),
-                    page_id: page_token.page_id(),
+                    owner: crate::runtime::RendererDedicatedWorkerTargetOwner::Page {
+                        owner_local_host_id: page_token.local_host_id(),
+                        page_id: page_token.page_id(),
+                    },
                     instance_id: renderer_instance_id,
                     request_url: request_url.to_string(),
                     document_url: document_url.to_string(),
@@ -689,6 +693,7 @@ impl PageScriptHost {
     ) -> Option<crate::network::interception_output::ResourceInterceptionContext> {
         self.publish_live_turn_output_prefix();
         let journal = self.renderer_output_journal()?;
+        let worker_journal = journal.clone();
         Some(
             crate::network::interception_output::ResourceInterceptionContext::worker(
                 self.native_interception_context(),
@@ -706,6 +711,10 @@ impl PageScriptHost {
                     .expect("Worker target has a resolved source identity");
                     journal.try_publish_record(record)
                 },
+            )
+            .with_worker_target(
+                crate::runtime::RendererWorkerTargetIdentity::Dedicated(instance_id),
+                worker_journal,
             ),
         )
     }

@@ -147,6 +147,15 @@ impl LazySharedWorkerRuntime {
 }
 
 impl RendererBrowserContextRuntime {
+    pub fn set_shared_worker_children_pause_on_start(
+        &self,
+        instance_id: SharedWorkerInstanceId,
+        pause: bool,
+    ) {
+        if let Some(runtime) = self.shared_worker_runtime_if_initialized() {
+            runtime.set_children_pause_on_start(instance_id, pause);
+        }
+    }
     fn shared_worker_runtime_if_initialized(
         &self,
     ) -> Option<crate::shared_worker_runtime::SharedWorkerRuntimeService> {

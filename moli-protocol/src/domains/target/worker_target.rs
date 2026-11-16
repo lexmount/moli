@@ -12,12 +12,13 @@
 
 use moli_core::page::{
     RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererRuntimeInspectorMessage, RendererServiceWorkerConsoleMessage,
-    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
-    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
-    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
-    RendererServiceWorkerVersionStatus, RendererSharedWorkerConsoleMessage,
-    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RuntimeConsoleMessageSnapshot,
+    RendererDedicatedWorkerTargetOwner, RendererRuntimeInspectorMessage,
+    RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
+    RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
+    RendererServiceWorkerRunIdentity, RendererServiceWorkerTargetEvent,
+    RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
+    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerTargetInfo, RendererWorkerTargetIdentity, RuntimeConsoleMessageSnapshot,
     SubresourceRequestInitiatorType,
 };
 use moli_shared_worker::SharedWorkerInstanceId;

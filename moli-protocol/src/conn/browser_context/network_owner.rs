@@ -4,7 +4,7 @@ use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
 use super::*;
 use crate::automation::DevToolsNetworkDataType;
 use crate::conn::CdpSessionRoute;
-use crate::conn::{CapturedBody, TargetRuntimeSlot};
+use crate::conn::{CapturedBody, CommandOwnerScope, TargetRuntimeSlot};
 use crate::domains::network::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
     NetworkBacklogPreferredRequestId, PendingNetworkBacklogDeliverySnapshot,
@@ -835,6 +835,42 @@ impl CdpConnection {
             return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_set_network_offline(offline)
+    }
+}
+
+impl CdpConnection {
+    // Network-service ExtraInfo for a DedicatedWorker belongs to the root
+    // loader's target, while request/response/lifecycle observations stay on the
+    // Worker target. Query live subscriptions rather than its creation snapshot.
+    pub(crate) fn network_extra_info_event_session_ids_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Vec<Option<String>> {
+        if let Some(crate::conn::CdpSessionRoute::DedicatedWorkerTarget {
+            browser_context_id,
+            target_id,
+        }) = owner.resolve_route(self)
+            && let Some(context) = self.browser_context_by_id(&browser_context_id)
+            && let Some(worker) = context.dedicated_worker_target(&target_id)
+        {
+            let route = match &worker.owner {
+                crate::conn::DedicatedWorkerRootOwner::Page(page) => {
+                    crate::conn::CdpSessionRoute::PageTarget {
+                        browser_context_id,
+                        target_id: page.target_id().unwrap_or_default().to_owned(),
+                        session_key: moli_page_types::DevToolsSessionKey::Primary,
+                    }
+                }
+                crate::conn::DedicatedWorkerRootOwner::SharedWorker(target_id) => {
+                    crate::conn::CdpSessionRoute::SharedWorkerTarget {
+                        browser_context_id,
+                        target_id: target_id.clone(),
+                    }
+                }
+            };
+            return self.network_event_session_ids_for_owner(&CommandOwnerScope::for_route(route));
+        }
+        self.network_event_session_ids_for_owner(owner)
     }
 }
 

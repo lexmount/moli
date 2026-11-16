@@ -25,8 +25,8 @@ use super::events::{
 };
 use super::*;
 use crate::network::synchronous_load::{SynchronousLoadOutcome, wait_for_synchronous_load};
-use crate::network_host::controlled_xhr::{
-    ControlledXhrContext, XhrInterceptionRoute, start_buffered_xhr,
+use crate::network_host::controlled_resource::{
+    ControlledResourceContext, XhrInterceptionRoute, start_buffered_xhr,
 };
 use crate::runtime::RendererPageContextCancelReason;
 use moli_fetch::{FetchCancelHandle, RequestMode};
@@ -326,7 +326,7 @@ fn send_synchronous_network_xhr(
     host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
-    control: Option<ControlledXhrContext>,
+    control: Option<ControlledResourceContext>,
 ) {
     let request = prepared.request().with_request_mode(RequestMode::Cors);
 

@@ -12,10 +12,10 @@ use crate::domains::network::{NetworkBacklogPreferredRequestId, NetworkPreparedO
 
 use super::events::{
     emit_body_finished, emit_data_received, emit_event_source_message_received,
-    emit_loading_failed, emit_loading_finished, emit_redirect_response_received_extra_info,
-    emit_request_will_be_sent, emit_request_will_be_sent_extra_info, emit_response_received,
-    emit_websocket_closed, emit_websocket_created, emit_websocket_frame,
-    emit_websocket_frame_error, emit_websocket_handshake_response_received,
+    emit_loading_failed, emit_loading_finished, emit_request_will_be_sent,
+    emit_request_will_be_sent_extra_info, emit_response_received_extra_info,
+    emit_response_received_with_extra_info_delivery, emit_websocket_closed, emit_websocket_created,
+    emit_websocket_frame, emit_websocket_frame_error, emit_websocket_handshake_response_received,
     emit_websocket_will_send_handshake_request,
 };
 use super::output_queue::{
@@ -81,9 +81,33 @@ impl<'a> NetworkBacklogProjectionContext<'a> {
     }
 }
 
+fn emit_subresource_response_extra_info(
+    out: &mut Vec<BackgroundProtocolEvent>,
+    sessions: &[Option<String>],
+    request_id: &str,
+    headers: &[(String, Vec<u8>)],
+    status: u16,
+    cookies: &[moli_cookie_jar::StoredCookieSetReport],
+    has_network_info: bool,
+) {
+    if has_network_info || !cookies.is_empty() {
+        for session in sessions {
+            emit_response_received_extra_info(
+                out,
+                session.as_deref(),
+                request_id,
+                headers,
+                status,
+                cookies,
+            );
+        }
+    }
+}
+
 fn emit_subresource_redirect_events(
     out: &mut Vec<BackgroundProtocolEvent>,
     event_session_ids: &[Option<String>],
+    extra_info_session_ids: &[Option<String>],
     request_id: &str,
     frame_id: &str,
     loader_id: &str,
@@ -121,20 +145,22 @@ fn emit_subresource_redirect_events(
                         redirect.from_cache,
                         redirect.negotiated_http_version,
                     )),
-                    !redirect.cookie_set_reports.is_empty(),
+                    redirect.network_extra_info_available
+                        || !redirect.cookie_set_reports.is_empty(),
                     redirect.request_cookie_report.as_ref(),
                     &[],
                 );
             }
-            emit_redirect_response_received_extra_info(
-                out,
-                event_session_id.as_deref(),
-                request_id,
-                &redirect.headers,
-                redirect.status,
-                &redirect.cookie_set_reports,
-            );
         }
+        emit_subresource_response_extra_info(
+            out,
+            extra_info_session_ids,
+            request_id,
+            &redirect.headers,
+            redirect.status,
+            &redirect.cookie_set_reports,
+            redirect.network_extra_info_available,
+        );
     }
 }
 
@@ -171,12 +197,7 @@ fn emit_subresource_network_delivery_record(
             )
         }
         TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(output) => {
-            emit_staged_subresource_request_extra_info(
-                out,
-                output,
-                event_session_ids,
-                base_timestamp,
-            )
+            emit_staged_subresource_request_extra_info(conn, out, output, owner, base_timestamp)
         }
         TargetSubresourceNetworkDeliveryOutput::ResponseStarted(output) => {
             emit_staged_subresource_response_started(
@@ -269,6 +290,7 @@ fn emit_complete_subresource_network_delivery_record(
     base_timestamp: f64,
 ) -> bool {
     let initial_output_len = out.len();
+    let extra_info_sessions = conn.network_extra_info_event_session_ids_for_owner(owner);
     let request_id = delivery_output.request_id();
     let output = delivery_output.metadata();
     // The same native handshake record also feeds the dedicated WebSocket
@@ -284,9 +306,6 @@ fn emit_complete_subresource_network_delivery_record(
         runtime_slot.request_was_announced_by_fetch_pause(request_id);
     let announced_redirects = runtime_slot.fetch_pause_announced_redirects(request_id);
     runtime_slot.clear_fetch_pause_announced_request_id(request_id);
-    if event_session_ids.is_empty() {
-        return false;
-    }
     let record_frame_id = output.frame_id().unwrap_or(frame_id);
     let loader_id = output.loader_id();
     let record_document_url = output.document_url();
@@ -332,7 +351,7 @@ fn emit_complete_subresource_network_delivery_record(
     }
     if let Some(network_request_headers) = output.network_request_headers() {
         let request_cookie_report = output.request_cookie_report().cloned().unwrap_or_default();
-        for event_session_id in event_session_ids {
+        for event_session_id in &extra_info_sessions {
             emit_request_will_be_sent_extra_info(
                 out,
                 event_session_id.as_deref(),
@@ -355,6 +374,7 @@ fn emit_complete_subresource_network_delivery_record(
             emit_subresource_redirect_events(
                 out,
                 event_session_ids,
+                &extra_info_sessions,
                 request_id,
                 record_frame_id,
                 loader_id,
@@ -367,7 +387,7 @@ fn emit_complete_subresource_network_delivery_record(
             for event_session_id in event_session_ids {
                 // Complete records have already delivered their response and
                 // body. A matching rule cannot make them resumably paused.
-                emit_response_received(
+                emit_response_received_with_extra_info_delivery(
                     out,
                     event_session_id.as_deref(),
                     request_id,
@@ -383,11 +403,21 @@ fn emit_complete_subresource_network_delivery_record(
                     output.is_from_cache(),
                     output.negotiated_http_version(),
                     output.network_request_headers().is_some(),
+                    false,
                     resource_type,
                     &[],
                     None,
                 );
             }
+            emit_subresource_response_extra_info(
+                out,
+                &extra_info_sessions,
+                request_id,
+                response_headers,
+                *status,
+                output.cookie_set_reports(),
+                output.network_request_headers().is_some(),
+            );
             if let Some(response_body) = output.response_body() {
                 record_subresource_response_body_source(
                     conn,
@@ -445,9 +475,7 @@ fn emit_staged_subresource_request_started(
     base_timestamp: f64,
 ) -> bool {
     let initial_output_len = out.len();
-    if event_session_ids.is_empty() {
-        return false;
-    }
+    let extra_info_sessions = conn.network_extra_info_event_session_ids_for_owner(owner);
     let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let record_frame_id = output.frame_id().unwrap_or(frame_id);
@@ -494,25 +522,24 @@ fn emit_staged_subresource_request_started(
                         redirect.negotiated_http_version,
                     )
                 }),
-                output
-                    .redirect()
-                    .is_some_and(|redirect| !redirect.cookie_set_reports.is_empty()),
+                output.redirect().is_some_and(|redirect| {
+                    redirect.network_extra_info_available || !redirect.cookie_set_reports.is_empty()
+                }),
                 output.request_cookie_report(),
                 &[],
             );
         }
     }
     if let Some(redirect) = output.redirect() {
-        for session in event_session_ids {
-            emit_redirect_response_received_extra_info(
-                out,
-                session.as_deref(),
-                request_id,
-                &redirect.headers,
-                redirect.status,
-                &redirect.cookie_set_reports,
-            );
-        }
+        emit_subresource_response_extra_info(
+            out,
+            &extra_info_sessions,
+            request_id,
+            &redirect.headers,
+            redirect.status,
+            &redirect.cookie_set_reports,
+            redirect.network_extra_info_available,
+        );
         if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
             slot.record_fetch_pause_announced_redirect(request_id);
         }
@@ -526,16 +553,17 @@ fn emit_staged_subresource_request_started(
 }
 
 fn emit_staged_subresource_request_extra_info(
+    conn: &CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     delivery_output: &TargetSubresourceRequestExtraInfoNetworkDeliveryOutput,
-    event_session_ids: &[Option<String>],
+    owner: &CommandOwnerScope,
     base_timestamp: f64,
 ) -> bool {
     let initial_output_len = out.len();
     let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
-    for event_session_id in event_session_ids {
+    for event_session_id in conn.network_extra_info_event_session_ids_for_owner(owner) {
         emit_request_will_be_sent_extra_info(
             out,
             event_session_id.as_deref(),
@@ -558,9 +586,7 @@ fn emit_staged_subresource_response_started(
     base_timestamp: f64,
 ) -> bool {
     let initial_output_len = out.len();
-    if event_session_ids.is_empty() {
-        return false;
-    }
+    let extra_info_sessions = conn.network_extra_info_event_session_ids_for_owner(owner);
     let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let request = output.request();
@@ -574,6 +600,7 @@ fn emit_staged_subresource_response_started(
     emit_subresource_redirect_events(
         out,
         event_session_ids,
+        &extra_info_sessions,
         request_id,
         record_frame_id,
         loader_id,
@@ -597,7 +624,7 @@ fn emit_staged_subresource_response_started(
         } else {
             Vec::new()
         };
-        emit_response_received(
+        emit_response_received_with_extra_info_delivery(
             out,
             event_session_id.as_deref(),
             request_id,
@@ -613,11 +640,21 @@ fn emit_staged_subresource_response_started(
             output.is_from_cache(),
             output.negotiated_http_version(),
             output.network_request_headers().is_some(),
+            false,
             resource_type,
             &blocked_intercepts,
             fetch_request_id.as_deref(),
         );
     }
+    emit_subresource_response_extra_info(
+        out,
+        &extra_info_sessions,
+        request_id,
+        output.response_headers(),
+        output.status(),
+        output.cookie_set_reports(),
+        output.network_request_headers().is_some(),
+    );
     out.len() > initial_output_len
 }
 

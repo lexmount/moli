@@ -161,6 +161,7 @@ impl RendererProducerRegistrar {
 /// the SharedWorker constructor on Window.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerContextRuntime {
+    browser_context_runtime: Option<std::sync::Weak<RendererBrowserContextRuntimeInner>>,
     debugger_enabled: bool,
     shared_worker_pause_on_start: Arc<AtomicBool>,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
@@ -220,6 +221,7 @@ struct RendererBrowserContextRuntimeInner {
 enum DedicatedWorkerDevToolsTarget {
     Loading {
         inspector_sessions: Vec<Option<String>>,
+        resume_on_attach: bool,
     },
     Running {
         handle: crate::worker::WorkerDevToolsHandle,
@@ -782,6 +784,7 @@ impl RendererBrowserContextRuntime {
 
     pub(crate) fn worker_context_runtime(&self) -> RendererWorkerContextRuntime {
         RendererWorkerContextRuntime {
+            browser_context_runtime: Some(Arc::downgrade(&self.inner)),
             debugger_enabled: self.inner.debugger_enabled,
             shared_worker_pause_on_start: self
                 .inner
@@ -1030,6 +1033,13 @@ impl RendererStoragePartitionIdentity {
 }
 
 impl RendererWorkerContextRuntime {
+    pub(crate) fn browser_context_runtime(&self) -> Option<RendererBrowserContextRuntime> {
+        self.browser_context_runtime
+            .as_ref()?
+            .upgrade()
+            .map(|inner| RendererBrowserContextRuntime { inner })
+    }
+
     pub(crate) fn new(
         message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
         broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
@@ -1049,6 +1059,7 @@ impl RendererWorkerContextRuntime {
         debugger_enabled: bool,
     ) -> Self {
         Self {
+            browser_context_runtime: None,
             debugger_enabled,
             shared_worker_pause_on_start: Arc::new(AtomicBool::new(false)),
             message_port_registry,

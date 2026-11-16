@@ -632,10 +632,24 @@ pub enum RendererSharedWorkerTargetEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RendererWorkerTargetIdentity {
+    Dedicated(u64),
+    Shared(SharedWorkerInstanceId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererDedicatedWorkerTargetOwner {
+    Page {
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        page_id: super::PageId,
+    },
+    Worker(RendererWorkerTargetIdentity),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererDedicatedWorkerTargetInfo {
-    pub owner_local_host_id: super::RendererOwnerLocalHostId,
-    pub page_id: super::PageId,
+    pub owner: RendererDedicatedWorkerTargetOwner,
     pub instance_id: u64,
     pub request_url: String,
     pub document_url: String,
