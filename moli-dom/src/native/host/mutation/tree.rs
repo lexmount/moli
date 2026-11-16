@@ -806,33 +806,62 @@ impl DomHost {
                 effects
             }
             NodeType::ProcessingInstruction => {
-                let records_enabled = self.mutation_records_enabled();
-                let old_value = if records_enabled {
-                    self.node(handle)
-                        .and_then(Node::node_value)
-                        .map(str::to_owned)
-                } else {
-                    None
-                };
-                let Some(pi) = self
-                    .node_mut(handle)
-                    .and_then(|node| node.data_mut().as_processing_instruction_mut())
-                else {
-                    return DomMutationEffects::default();
-                };
-                if pi.data() == value {
-                    return DomMutationEffects::default();
-                }
-                pi.set_data(value.to_owned());
-                self.record_mutation(MutationScope::QueryState);
-                let mut effects = self.node_update_effects(handle);
-                if records_enabled {
-                    effects.mark_character_data_mutation(handle, old_value);
-                }
-                effects
+                self.set_processing_instruction_data_effects(handle, value.into(), false)
+                    .0
             }
             NodeType::DocumentType => DomMutationEffects::default(),
         }
+    }
+
+    pub fn set_processing_instruction_data_effects(
+        &mut self,
+        handle: DomHandle,
+        value: crate::native::DomStringValue,
+        record_equal_value: bool,
+    ) -> (DomMutationEffects, bool) {
+        self.edit_processing_instruction_effects(handle, record_equal_value, |instruction| {
+            let changed = instruction.data_value() != &value;
+            instruction.set_data(value);
+            changed
+        })
+    }
+
+    pub fn set_processing_instruction_attributes_effects(
+        &mut self,
+        handle: DomHandle,
+        attributes: crate::native::ProcessingInstructionAttributes,
+    ) -> (DomMutationEffects, bool) {
+        // Replacing the map serializes its data without reparsing the new text.
+        self.edit_processing_instruction_effects(handle, true, |instruction| {
+            instruction.replace_attributes(attributes)
+        })
+    }
+
+    fn edit_processing_instruction_effects(
+        &mut self,
+        handle: DomHandle,
+        record_equal_value: bool,
+        edit: impl FnOnce(&mut crate::native::ProcessingInstruction) -> bool,
+    ) -> (DomMutationEffects, bool) {
+        let records_enabled = self.mutation_records_enabled();
+        let Some(instruction) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_processing_instruction_mut())
+        else {
+            return (DomMutationEffects::default(), false);
+        };
+        let old_value = records_enabled.then(|| instruction.data().to_owned());
+        let changed = edit(instruction);
+        let mut effects = if changed {
+            self.record_mutation(MutationScope::QueryState);
+            self.node_update_effects(handle)
+        } else {
+            DomMutationEffects::default()
+        };
+        if records_enabled && (changed || record_equal_value) {
+            effects.mark_character_data_mutation(handle, old_value);
+        }
+        (effects, changed)
     }
 
     pub fn normalize_effects(&mut self, handle: DomHandle) -> DomMutationEffects {

@@ -1,3 +1,6 @@
+use super::super::DomStringValue;
+use super::ProcessingInstructionAttributes;
+
 #[derive(Debug, Clone)]
 pub struct Text {
     // Text shares the larger NodeData enum storage with elements, so retaining
@@ -68,27 +71,58 @@ impl Comment {
 
 #[derive(Debug, Clone)]
 pub struct ProcessingInstruction {
+    data: DomStringValue,
+    metadata: Box<ProcessingInstructionMetadata>,
+}
+
+// Keep the target and PI-only attribute map out of the common NodeData record.
+#[derive(Debug, Clone)]
+struct ProcessingInstructionMetadata {
     target: Box<str>,
-    data: Box<str>,
+    attributes: ProcessingInstructionAttributes,
 }
 
 impl ProcessingInstruction {
     pub fn new(target: String, data: String) -> Self {
+        let data = DomStringValue::from(data);
         Self {
-            target: target.into_boxed_str(),
-            data: data.into_boxed_str(),
+            metadata: Box::new(ProcessingInstructionMetadata {
+                target: target.into_boxed_str(),
+                attributes: ProcessingInstructionAttributes::from_data(&data),
+            }),
+            data,
         }
     }
 
     pub fn target(&self) -> &str {
-        &self.target
+        &self.metadata.target
     }
 
     pub fn data(&self) -> &str {
+        self.data.as_str_lossy()
+    }
+
+    pub fn data_value(&self) -> &DomStringValue {
         &self.data
     }
 
-    pub fn set_data(&mut self, data: impl Into<String>) {
-        self.data = data.into().into_boxed_str();
+    pub fn set_data(&mut self, data: impl Into<DomStringValue>) {
+        self.data = data.into();
+        self.metadata.attributes = ProcessingInstructionAttributes::from_data(&self.data);
+    }
+
+    pub fn attributes(&self) -> &ProcessingInstructionAttributes {
+        &self.metadata.attributes
+    }
+
+    pub(crate) fn replace_attributes(
+        &mut self,
+        attributes: ProcessingInstructionAttributes,
+    ) -> bool {
+        let serialized = attributes.serialize();
+        let changed = self.data != serialized;
+        self.data = serialized;
+        self.metadata.attributes = attributes;
+        changed
     }
 }

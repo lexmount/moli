@@ -5,6 +5,7 @@ use crate::{
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
 
+use super::processing_instruction::*;
 use super::*;
 
 #[derive(WebApiFunctionTemplate)]
@@ -44,6 +45,20 @@ struct TextPrototypeDeclaration {
 struct ProcessingInstructionPrototypeDeclaration {
     #[webapi(accessor_property, getter = processing_instruction_target_getter_callback)]
     target: (),
+    #[webapi(method, callback = processing_instruction_has_attributes)]
+    has_attributes: (),
+    #[webapi(method, callback = processing_instruction_get_attribute_names)]
+    get_attribute_names: (),
+    #[webapi(method, length = 1, callback = processing_instruction_get_attribute)]
+    get_attribute: (),
+    #[webapi(method, length = 2, callback = processing_instruction_set_attribute)]
+    set_attribute: (),
+    #[webapi(method, length = 1, callback = processing_instruction_remove_attribute)]
+    remove_attribute: (),
+    #[webapi(method, length = 1, callback = processing_instruction_toggle_attribute)]
+    toggle_attribute: (),
+    #[webapi(method, length = 1, callback = processing_instruction_has_attribute)]
+    has_attribute: (),
 }
 
 fn receiver_has_native_node<'a>(

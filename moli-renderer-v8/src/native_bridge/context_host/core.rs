@@ -1399,10 +1399,14 @@ impl PageScriptHost {
             .get(&handle)
             .map(|value| value.as_slice().to_vec())
             .or_else(|| {
-                self.dom_host()
-                    .node(handle)
-                    .and_then(moli_dom::native::Node::data_value)
-                    .map(utf16_units)
+                self.dom_host().node(handle).and_then(|node| {
+                    match node.as_processing_instruction() {
+                        Some(instruction) => {
+                            Some(instruction.data_value().utf16_units().into_owned())
+                        }
+                        None => node.data_value().map(utf16_units),
+                    }
+                })
             })
     }
 
@@ -1434,6 +1438,18 @@ impl PageScriptHost {
         units: &[u16],
         force_mutation_record: bool,
     ) -> bool {
+        if self
+            .dom_host()
+            .node(handle)
+            .and_then(moli_dom::native::Node::as_processing_instruction)
+            .is_some()
+        {
+            let value = moli_dom::native::DomStringValue::from_utf16(units);
+            let runtime: &mut DocumentRuntime = self;
+            return runtime.edit_processing_instruction(scope, host_ptr, handle, |dom| {
+                dom.set_processing_instruction_data_effects(handle, value, force_mutation_record)
+            });
+        }
         let old_value = force_mutation_record
             .then(|| {
                 self.dom_host()

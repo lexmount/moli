@@ -347,6 +347,27 @@ impl DocumentRuntime {
         changed
     }
 
+    pub(crate) fn edit_processing_instruction(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        handle: DomHandle,
+        edit: impl FnOnce(&mut moli_dom::native::DomHost) -> (DomMutationEffects, bool),
+    ) -> bool {
+        custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+            let (effects, changed) = edit(&mut self.dom_host);
+            if changed && unsafe { &*host_ptr }.has_dom_debugger_dom_breakpoints() {
+                unsafe { &mut *host_ptr }.break_on_dom_debugger_character_data_modified(handle);
+            }
+            self.apply_runtime_mutation_effects(
+                scope,
+                host_ptr,
+                effects,
+                RuntimeMutationOptions::js_dom_api(),
+            )
+        })
+    }
+
     pub(crate) fn queue_character_data_mutation_record(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
