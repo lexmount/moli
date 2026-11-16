@@ -46,6 +46,18 @@ function receive(data, reply) {
       try { reply({phase:'body',text:await r.text()}); }
       catch (e) { reply({phase:'body',sameReason:e === controller.signal.reason,reason:e}); }
     }, e => reply({phase:'fetch-error',error:e.name}));
+  } else if (data.kind === 'read-large') {
+    fetch(data.url).then(async response => {
+      importScripts(data.barrier);
+      const reader=response.body.getReader();
+      let total=0,maxChunk=0,reads=0;
+      for (;;) {
+        const {done,value}=await reader.read();
+        if(done)break;
+        total+=value.byteLength;maxChunk=Math.max(maxChunk,value.byteLength);reads++;
+      }
+      reply({large:total,maxChunk,reads});
+    }).catch(error=>reply({largeError:String(error)}));
   } else if (data.kind === 'abort-body') controller.abort('native-body-abort');
   else if (data.kind === 'fetch') {
     fetch(data.url, {redirect:data.redirect || 'follow'}).then(async r => {
@@ -80,6 +92,7 @@ class _Fixture(AbstractContextManager):
         self.hits: Counter[str] = Counter()
         self.requests: list[dict[str, Any]] = []
         self.gates: dict[str, threading.Event] = {}
+        self.header_gates: set[str] = set()
         self.lock = threading.Lock()
         fixture = self
 
@@ -101,8 +114,21 @@ class _Fixture(AbstractContextManager):
                         }
                     )
                     gate = fixture.gates.get(path)
+                if path in fixture.header_gates and gate is not None:
+                    gate.wait()
+                if path == "/missing-nested-worker.js":
+                    self.send_response(404)
+                    self.send_header("Content-Type", "text/javascript")
+                    self.send_header("Content-Length", "7")
+                    self.end_headers()
+                    self.wfile.write(b"missing")
+                    return
                 if path == "/worker.js":
                     body, kind = SCRIPT.encode(), "text/javascript"
+                elif path == "/reader-barrier.js":
+                    body, kind = b"void 0;", "text/javascript"
+                elif path == "/native-probe/read-large":
+                    body, kind = b"x" * (4 * 1024 * 1024), "application/octet-stream"
                 elif path == "/sw.js":
                     body, kind = SERVICE_WORKER.encode(), "text/javascript"
                 elif path == "/sw-network-start":
@@ -126,7 +152,9 @@ class _Fixture(AbstractContextManager):
                     )
                 else:
                     body, kind = b"native-worker-body", "text/plain"
-                self.send_response(200)
+                self.send_response(302 if "/http-empty-" in path else 200)
+                if "/http-empty-" in path:
+                    self.send_header("Location", "")
                 self.send_header("Content-Type", kind)
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Connection", "close")
@@ -148,9 +176,11 @@ class _Fixture(AbstractContextManager):
         self.thread.start()
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
 
-    def hold(self, path: str) -> None:
+    def hold(self, path: str, *, before_headers: bool = False) -> None:
         with self.lock:
             self.gates[path] = threading.Event()
+            if before_headers:
+                self.header_gates.add(path)
 
     def release(self, path: str) -> None:
         self.gates[path].set()
@@ -537,6 +567,106 @@ async def _check_redirect_responses(
                 state.record("native_worker_synthetic_" + label, {"response": result})
 
 
+async def _check_large_worker_reader(
+    state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
+) -> None:
+    path = "/native-probe/read-large"
+    barrier = "/reader-barrier.js"
+    fixture.hold(path)
+    fixture.hold(barrier)
+    try:
+        await page.evaluate(
+            '([url,barrier])=>{nativeMessages=[];nativePort.postMessage({kind:"read-large",url,barrier});}',
+            [fixture.origin + path, fixture.origin + barrier],
+        )
+        pause = await targets.pause(fixture.origin + path, child, False)
+        await targets.page_cdp.send(
+            "Fetch.continueRequest", {"requestId": pause["requestId"]}
+        )
+        await wait_until(
+            lambda: fixture.hits[barrier] == 1,
+            "Worker JS blocked before consuming the response",
+        )
+        fixture.release(path)
+        fixture.release(barrier)
+        await wait_until(
+            lambda: page.evaluate("nativeMessages.length>0"),
+            "bounded Worker stream consumption",
+        )
+        result = await page.evaluate("nativeMessages[0]")
+        assert_equal(
+            result.get("large"),
+            4 * 1024 * 1024,
+            "all captured bytes delivered before stream close",
+        )
+        await targets.event("Network.loadingFinished", requestId=pause["networkId"])
+        state.record("native_worker_bounded_reader", result)
+    finally:
+        fixture.release(path)
+        fixture.release(barrier)
+
+
+async def _check_empty_http_redirects(
+    state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
+) -> None:
+    for rewritten in (False, True):
+        for mode in ("error", "follow", "manual"):
+            path = f"/native-probe/http-empty-{rewritten}-{mode}"
+            url = fixture.origin + path
+            await page.evaluate(
+                '([url,redirect])=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url,redirect});}',
+                [url, mode],
+            )
+            pause = await targets.pause(url, child, False)
+            await targets.page_cdp.send(
+                "Fetch.continueRequest",
+                {"requestId": pause["requestId"], "interceptResponse": True},
+            )
+            pause = await targets.pause(url, child, False, response=True)
+            params: dict[str, Any] = {"requestId": pause["requestId"]}
+            if rewritten:
+                params.update(
+                    responseCode=302,
+                    responsePhrase="Found",
+                    responseHeaders=pause["responseHeaders"],
+                )
+            await targets.page_cdp.send("Fetch.continueResponse", params)
+            await wait_until(
+                lambda: page.evaluate("nativeMessages.length>0"),
+                "HTTP empty Location response",
+            )
+            result = await page.evaluate("nativeMessages[0]")
+            expected = (
+                {
+                    "status": 0,
+                    "type": "opaqueredirect",
+                    "bodyNull": True,
+                    "body": "",
+                    "clone": "",
+                }
+                if mode == "manual"
+                else {
+                    "status": 302,
+                    "type": "basic",
+                    "bodyNull": False,
+                    "body": "native-worker-body",
+                    "clone": "native-worker-body",
+                }
+            )
+            assert_equal(
+                result,
+                expected,
+                "HTTP 302 empty Location with original/rewritten headers",
+            )
+            await targets.event("Network.loadingFinished", requestId=pause["networkId"])
+            assert_equal(
+                fixture.hits[path], 1, "empty Location must not refetch the same URL"
+            )
+            state.record(
+                f"native_worker_http_empty_{rewritten}_{mode}", {"response": result}
+            )
+
+
 async def _check_nested_worker(
     state: SmokeState,
     fixture: _Fixture,
@@ -621,6 +751,61 @@ async def _check_network_extra_info(
     await _message(page, "post", "native-worker-body")
     request = await targets.request(url, child)
     await targets.event("Network.loadingFinished", requestId=request)
+    await wait_until(
+        lambda: (
+            len(
+                [
+                    e
+                    for e in targets.events
+                    if e["method"] == "Network.responseReceivedExtraInfo"
+                    and e["params"]["requestId"] == request
+                ]
+            )
+            == 2
+        ),
+        "both redirect response ExtraInfo events",
+    )
+    routed_extras = [
+        e
+        for e in targets.events
+        if e["method"] == "Network.requestWillBeSentExtraInfo"
+        and e["params"]["requestId"] == request
+    ]
+    assert_equal(
+        [e["sessionId"] for e in routed_extras],
+        ["page", "page"],
+        "DedicatedWorker request ExtraInfo belongs to Page",
+    )
+    response_extras = [
+        e
+        for e in targets.events
+        if e["method"] == "Network.responseReceivedExtraInfo"
+        and e["params"]["requestId"] == request
+    ]
+    assert_equal(
+        [e["sessionId"] for e in response_extras],
+        ["page", "page"],
+        "DedicatedWorker response ExtraInfo belongs to Page",
+    )
+    assert_equal(
+        [e["params"]["statusCode"] for e in response_extras],
+        [303, 200],
+        "ExtraInfo for every HTTP response, without Set-Cookie",
+    )
+    redirected = [
+        e
+        for e in targets.events
+        if e["method"] == "Network.requestWillBeSent"
+        and e["sessionId"] == child.session
+        and e["params"]["requestId"] == request
+        and "redirectResponse" in e["params"]
+    ]
+    assert_equal(len(redirected), 1, "one Worker redirect transition")
+    assert_equal(
+        redirected[0]["params"]["redirectHasExtraInfo"],
+        True,
+        "redirect ExtraInfo availability is independent of cookies",
+    )
     extras = [
         e["params"]
         for e in targets.events
@@ -820,6 +1005,12 @@ async def run_native_worker_loading_group(state: SmokeState) -> None:
                     await _check_redirect_responses(
                         state, fixture, page, targets, child
                     )
+                    await _check_large_worker_reader(
+                        state, fixture, page, targets, child
+                    )
+                    await _check_empty_http_redirects(
+                        state, fixture, page, targets, child
+                    )
                     # Chromium exposes Worker on Window/DedicatedWorker only.
                     await _check_nested_worker(
                         state, fixture, page, targets, child, shared
@@ -950,4 +1141,7 @@ async def run_native_worker_loading_group(state: SmokeState) -> None:
                 await browser_cdp.detach()
                 await context.close()
 
+        from .workers_nested import run_nested_worker_protocol_checks
+
+        await run_nested_worker_protocol_checks(state, fixture)
         await _check_service_worker_redirects(state, fixture)
