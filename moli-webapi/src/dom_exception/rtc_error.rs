@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::apply_webidl_constructor_prototype_fallback;
+use moli_v8_util::apply_webidl_constructor_prototype_fallback;
 use webidl::WebIdlDictionarySerialize;
 
 const ERROR_DETAIL: &str = "__moliRtcErrorDetail";
@@ -79,7 +79,7 @@ pub(super) fn install<'s>(
     PrototypeDeclaration::initialize_prototype_template(scope, prototype);
 }
 
-pub(crate) fn rtc_error_constructor_callback<'s>(
+pub fn rtc_error_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

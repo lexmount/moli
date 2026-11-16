@@ -11,11 +11,11 @@ use crate::{
         throw_range_error, throw_type_error, v8_string, v8str,
     },
 };
+use moli_webapi::dom_exception;
 
 mod core;
 mod custom_elements_registry;
 mod document_nodes;
-mod dom_exception;
 mod dom_implementation;
 mod elements;
 mod text_codecs;
@@ -34,10 +34,10 @@ pub(super) use document_nodes::{
 };
 pub(crate) use dom_exception::{
     WebTransportErrorClonePayload, WebTransportErrorSource, build_dom_exception_object,
-    build_quota_exceeded_error_object, build_web_transport_error_from_clone_payload,
-    dom_error_constructor_callback, dom_exception_clone_fields, dom_exception_constructor_callback,
-    initialize_websocket_error, install_dom_exception_template_bindings, new_dom_error_value,
-    new_dom_exception_value, new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
+    build_quota_exceeded_error_object, dom_error_constructor_callback, dom_exception_clone_fields,
+    dom_exception_constructor_callback, initialize_websocket_error,
+    install_dom_exception_template_bindings, new_dom_error_value, new_dom_exception_value,
+    new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
     new_websocket_error_value, quota_exceeded_error_clone_fields,
     quota_exceeded_error_constructor_callback, rtc_error_constructor_callback,
     throw_dom_exception_value, web_transport_error_clone_payload_from_object,
@@ -55,3 +55,18 @@ pub(super) use text_codecs::{
     install_text_codec_template_bindings, text_decoder_constructor_callback,
     text_encoder_constructor_callback,
 };
+
+pub(crate) fn build_web_transport_error_from_clone_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    payload: &WebTransportErrorClonePayload,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !super::exposed_interfaces::is_realm_interface_exposed(scope, "WebTransportError") {
+        throw_dom_exception_value(
+            scope,
+            "WebTransportError is not exposed in this realm.",
+            "DataCloneError",
+        );
+        return None;
+    }
+    dom_exception::build_web_transport_error_from_clone_payload(scope, payload)
+}

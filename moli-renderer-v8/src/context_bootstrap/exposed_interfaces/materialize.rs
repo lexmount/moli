@@ -174,7 +174,8 @@ pub(crate) fn ensure_intrinsic_interface_prototype<'s>(
 
 /// Reads an already registered prototype without materializing an interface.
 /// This is useful while creating an exception for a bootstrap failure.
-pub(crate) fn materialized_intrinsic_interface_prototype<'s>(
+#[cfg(test)]
+pub(super) fn materialized_intrinsic_interface_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {

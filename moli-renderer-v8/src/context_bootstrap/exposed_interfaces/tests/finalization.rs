@@ -449,3 +449,50 @@ fn assert_crypto_materialization(already_finalized: bool) {
         assert_eq!(lazy_getter_calls(), 0);
     });
 }
+
+#[test]
+fn native_exception_uses_the_realm_registry_before_eager_capture() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let registry = ExposedInterfaceTemplateRegistry::install(
+        scope,
+        crate::context_bootstrap::specs::constructor_specs(),
+        TemplateBuildProfile::Window,
+    )
+    .expect("template registry");
+    super::super::install::initialize_realm_interface_registry(scope, RealmKind::Window)
+        .expect("realm registry");
+    let global = context.global(scope);
+    assert_eq!(
+        global.set_lazy_data_property(
+            scope,
+            v8str(scope, "DOMException").into(),
+            counting_lazy_getter
+        ),
+        Some(true)
+    );
+    reset_lazy_getter_calls();
+    let error =
+        crate::context_bootstrap::build_dom_exception_object(scope, "native", "SyntaxError");
+    let prototype = ensure_intrinsic_interface_prototype(scope, "DOMException").unwrap();
+    assert!(
+        error
+            .get_prototype(scope)
+            .unwrap()
+            .strict_equals(prototype.into())
+    );
+    assert!(crate::web_api_interfaces::DOMException::is_instance(
+        scope, error
+    ));
+    assert_eq!(
+        lazy_getter_calls(),
+        0,
+        "native exceptions must not read the public binding during bootstrap"
+    );
+    let id = registry.id_by_name("DOMException").unwrap();
+    assert_eq!(registry.materialization_count(id), 1);
+}

@@ -17,7 +17,10 @@ use crate::web_api_interfaces;
 use crate::{
     network_host,
     queue_microtask::queue_microtask_callback,
-    util::{global_constructor_object, global_constructor_prototype, v8str},
+    util::{
+        constructor_object, constructor_prototype_object, global_constructor_object,
+        global_constructor_prototype, v8str,
+    },
     window_host,
 };
 use anyhow::{Result, anyhow};
@@ -444,12 +447,16 @@ pub(in crate::context_bootstrap) fn window_named_properties_template<'s>(
 pub(super) fn install_window_named_properties_object(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Result<()> {
-    let window_prototype = global_constructor_prototype(scope, "Window")
+    // V8 already instantiated the global Window template. During bootstrap,
+    // before author code, wire that constructor directly instead of asking
+    // the lazy interface resolver to materialize another Window surface.
+    let global = scope.get_current_context().global(scope);
+    let window_constructor = constructor_object(scope, global, "Window")
+        .ok_or_else(|| anyhow!("missing Window constructor"))?;
+    let window_prototype = constructor_prototype_object(scope, window_constructor)
         .ok_or_else(|| anyhow!("missing Window.prototype for named properties object"))?;
     let event_target_prototype = global_constructor_prototype(scope, "EventTarget")
         .ok_or_else(|| anyhow!("missing EventTarget.prototype for named properties object"))?;
-    let window_constructor = global_constructor_object(scope, "Window")
-        .ok_or_else(|| anyhow!("missing Window constructor"))?;
     let event_target_constructor = global_constructor_object(scope, "EventTarget")
         .ok_or_else(|| anyhow!("missing EventTarget constructor"))?;
     if !window_constructor

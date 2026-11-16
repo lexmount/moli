@@ -1,13 +1,14 @@
-use crate::{util::v8str, webidl};
+use moli_v8_util::v8str;
+use moli_webidl as webidl;
 
 // Missing defaulted DOMStrings need no allocation during conversion. Supplied
 // strings retain their V8 handles, including lone UTF-16 surrogates, instead of
 // copying SDP and candidate text through Rust strings and back into V8.
 #[derive(Default)]
-pub(super) struct DictionaryDomString<'s>(Option<v8::Local<'s, v8::String>>);
+pub struct DictionaryDomString<'s>(Option<v8::Local<'s, v8::String>>);
 
 impl<'s> DictionaryDomString<'s> {
-    pub(super) fn into_value(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::String> {
+    pub fn into_value(self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::String> {
         self.0.unwrap_or_else(|| v8str(scope, ""))
     }
 }
