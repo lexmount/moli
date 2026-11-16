@@ -49,6 +49,12 @@ pub(in crate::native_bridge) fn node_before_callback<'s>(
     if !require_child_node_receiver(scope, unsafe { &*runtime_ptr }, handle, "before") {
         return;
     }
+    let values = (0..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    let Some(values) = convert_node_or_string_arguments(scope, &values) else {
+        return;
+    };
     let Some(parent) = unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
@@ -56,14 +62,10 @@ pub(in crate::native_bridge) fn node_before_callback<'s>(
     else {
         return;
     };
-    let mut values = Vec::new();
-    for index in 0..args.length() {
-        let value = args.get(index);
-        if node_arg_handle(scope, runtime_ptr, value) == Some(handle) {
-            continue;
-        }
-        values.push(value);
-    }
+    let values = values
+        .into_iter()
+        .filter(|value| node_arg_handle(scope, runtime_ptr, *value) != Some(handle))
+        .collect::<Vec<_>>();
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
     let Some(inserted_handles) =
         child_node_insertion_handles(scope, runtime_ptr, document_handle, values)
@@ -109,6 +111,12 @@ pub(in crate::native_bridge) fn node_after_callback<'s>(
     if !require_child_node_receiver(scope, unsafe { &*runtime_ptr }, handle, "after") {
         return;
     }
+    let values = (0..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    let Some(values) = convert_node_or_string_arguments(scope, &values) else {
+        return;
+    };
     let Some(parent) = unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
@@ -116,8 +124,9 @@ pub(in crate::native_bridge) fn node_after_callback<'s>(
     else {
         return;
     };
-    let argument_handles = (0..args.length())
-        .filter_map(|index| node_arg_handle(scope, runtime_ptr, args.get(index)))
+    let argument_handles = values
+        .iter()
+        .filter_map(|value| node_arg_handle(scope, runtime_ptr, *value))
         .collect::<Vec<_>>();
     let mut reference_child = unsafe { &*runtime_ptr }
         .dom_host()
@@ -132,12 +141,9 @@ pub(in crate::native_bridge) fn node_after_callback<'s>(
         });
     }
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let Some(inserted_handles) = child_node_insertion_handles(
-        scope,
-        runtime_ptr,
-        document_handle,
-        (0..args.length()).map(|index| args.get(index)),
-    ) else {
+    let Some(inserted_handles) =
+        child_node_insertion_handles(scope, runtime_ptr, document_handle, values)
+    else {
         return;
     };
     let Some(inserted) =
@@ -179,6 +185,12 @@ pub(in crate::native_bridge) fn node_replace_with_callback<'s>(
     if !require_child_node_receiver(scope, unsafe { &*runtime_ptr }, handle, "replaceWith") {
         return;
     }
+    let values = (0..args.length())
+        .map(|index| args.get(index))
+        .collect::<Vec<_>>();
+    let Some(values) = convert_node_or_string_arguments(scope, &values) else {
+        return;
+    };
     let Some(parent) = unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
@@ -186,8 +198,9 @@ pub(in crate::native_bridge) fn node_replace_with_callback<'s>(
     else {
         return;
     };
-    let argument_handles = (0..args.length())
-        .filter_map(|index| node_arg_handle(scope, runtime_ptr, args.get(index)))
+    let argument_handles = values
+        .iter()
+        .filter_map(|value| node_arg_handle(scope, runtime_ptr, *value))
         .collect::<Vec<_>>();
     let mut reference_child = unsafe { &*runtime_ptr }
         .dom_host()
@@ -202,12 +215,9 @@ pub(in crate::native_bridge) fn node_replace_with_callback<'s>(
         });
     }
     let document_handle = insertion_document_handle(unsafe { &*runtime_ptr }, parent);
-    let Some(inserted_handles) = child_node_insertion_handles(
-        scope,
-        runtime_ptr,
-        document_handle,
-        (0..args.length()).map(|index| args.get(index)),
-    ) else {
+    let Some(inserted_handles) =
+        child_node_insertion_handles(scope, runtime_ptr, document_handle, values)
+    else {
         return;
     };
     let Some(replaced) =
