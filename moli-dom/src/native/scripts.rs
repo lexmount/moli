@@ -108,6 +108,26 @@ mod tests {
     }
 
     #[test]
+    fn shared_child_text_content_matches_empty_cdata_and_mixed_children() {
+        let mut dom =
+            NativeDom::new_xml(url::Url::parse("https://shared-child-text.test/").unwrap());
+        let parent = dom.create_element("script");
+        let assert_matches_direct_text = |dom: &NativeDom| {
+            let node = dom.node(parent).unwrap();
+            assert_eq!(
+                node.shared_direct_text_content(dom).as_ref(),
+                node.direct_text_content(dom)
+            );
+        };
+        assert_matches_direct_text(&dom);
+        let cdata = dom.create_cdata_section("CDATA only");
+        assert!(dom.append_child(parent, cdata));
+        assert_matches_direct_text(&dom);
+        mixed_text_children(&mut dom, parent);
+        assert_matches_direct_text(&dom);
+    }
+
+    #[test]
     fn script_text_includes_cdata_for_html_and_svg_and_preserves_empty_result() {
         let mut dom = NativeDom::new_xml(url::Url::parse("https://script-text.test/").unwrap());
         for namespace in ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg"] {
