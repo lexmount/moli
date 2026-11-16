@@ -460,6 +460,12 @@ impl PageScriptHost {
                             .as_ref()
                             .and_then(|entry| entry.pending_download_policy),
                         retiring: false,
+                        navigation_loader_id: existing
+                            .as_ref()
+                            .and_then(|entry| entry.navigation_loader_id.clone()),
+                        current_document_navigation_id: existing
+                            .as_ref()
+                            .and_then(|entry| entry.current_document_navigation_id()),
                         current_document_loader_id: existing.as_ref().and_then(|entry| {
                             entry.current_document_loader_id().map(ToOwned::to_owned)
                         }),

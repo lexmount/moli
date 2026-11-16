@@ -372,16 +372,25 @@ fn navigation_response_stage_request_paused_parts(
 }
 
 pub(crate) fn pending_subresource_response_stage_request_paused_event(
+    conn: &mut CdpConnection,
     session_id: Option<&str>,
     request_id: &str,
     pending: &PendingSubresourceFetchResponseRequest,
     blocked_intercepts: &[DevToolsNetworkInterceptId],
 ) -> BackgroundProtocolEvent {
-    let (payload, event) = pending_subresource_response_stage_request_paused_parts(
+    let (mut payload, event) = pending_subresource_response_stage_request_paused_parts(
         request_id,
         pending,
         blocked_intercepts,
     );
+    let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
+    if let Some((current, Some(previous))) = conn
+        .runtime_session_owner_slot_mut_for_owner(&owner)
+        .and_then(|slot| slot.navigation_fetch_hop_ids(&pending.network_request_id, session_id))
+        && current == request_id
+    {
+        payload["redirectedRequestId"] = json!(previous);
+    }
     BackgroundProtocolEvent::immediate_automation_event(
         LocalCdpEvent::FetchRequestPaused,
         payload,

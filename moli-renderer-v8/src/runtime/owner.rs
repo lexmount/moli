@@ -786,6 +786,7 @@ enum RenderRuntimeTurn {
         token: RendererPageToken,
         deadline: Instant,
         capture_policy: super::RendererPageStateCapturePolicy,
+        navigation: Option<super::RendererChildFrameNavigation>,
     },
     ClaimLivePageTopLevelNavigationHandoff {
         token: RendererPageToken,

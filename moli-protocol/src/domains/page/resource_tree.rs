@@ -599,7 +599,8 @@ fn frame_resource_snapshot(record: &SubresourceNetworkRecord) -> Option<FrameRes
 fn resource_type_appears_in_frame_tree(resource_type: SubresourceResourceType) -> bool {
     !matches!(
         resource_type,
-        SubresourceResourceType::Fetch
+        SubresourceResourceType::Document
+            | SubresourceResourceType::Fetch
             | SubresourceResourceType::EventSource
             | SubresourceResourceType::Xhr
             | SubresourceResourceType::Ping
@@ -744,6 +745,19 @@ mod tests {
             body.to_owned(),
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn resource_tree_excludes_child_navigation_documents() {
+        let records = [successful_record(
+            Some("child"),
+            "https://example.test/old",
+            "https://example.test/old",
+            SubresourceResourceType::Document,
+            "text/html",
+            "<p>old navigation",
+        )];
+        assert!(frame_resource_snapshots(&records).is_empty());
     }
 
     #[test]

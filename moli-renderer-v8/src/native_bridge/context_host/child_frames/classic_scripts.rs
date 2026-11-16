@@ -39,6 +39,7 @@ use crate::{
 };
 
 mod document_state;
+mod fetch;
 mod prepare;
 mod scheduler_bridge;
 
@@ -131,6 +132,7 @@ impl PageScriptHost {
             return None;
         }
         Some(ChildClassicScriptNetworkAttribution {
+            network_observed: false,
             frame_id: Some(snapshot.frame_id.0),
             document_url: snapshot.document_url,
             request_url,
@@ -237,7 +239,7 @@ impl PageScriptHost {
         let Some(loader) = self.document_resource_loader_for_owner(owner) else {
             return false;
         };
-        let Some(network_attribution) =
+        let Some(mut network_attribution) =
             self.child_classic_script_network_attribution(handle, owner, script.url.clone())
         else {
             return false;
@@ -300,20 +302,22 @@ impl PageScriptHost {
             crate::native_bridge::context_host::OwnerDispatchScope::Child(handle),
         );
         let document_url = network_attribution.document_url.clone();
+        let network = self.prepare_child_classic_script_network_load(
+            &task_loader,
+            &script_for_load,
+            &mut network_attribution,
+        );
         loader.spawn_resource_task(async move {
-            let outcome =
-                crate::planning::load_service_worker_aware_external_script_source_outcome(
-                    &script_for_load,
-                    &task_loader.fetch_context().request_origin(),
-                    task_loader.request_client(),
-                    task_loader.task_runner(),
-                    Some(&document_character_set),
-                    None,
-                    browser_context_runtime,
-                    client_id,
-                    document_url,
-                )
-                .await;
+            let outcome = fetch::load_child_classic_script(
+                network,
+                &script_for_load,
+                task_loader,
+                Some(&document_character_set),
+                browser_context_runtime,
+                client_id,
+                document_url,
+            )
+            .await;
             let _ = completion_tx.send_child_classic_script(ChildClassicScriptLoadCompletion {
                 owner,
                 load_id,
@@ -368,7 +372,9 @@ impl PageScriptHost {
         });
         let owner_current = realm_currentness
             .is_some_and(crate::frame_owner_model::FrameDocumentTaskRealmCurrentness::names_current_document_realm);
-        if let Some(network_result) = completion.network_result.as_deref() {
+        if let Some(network_result) = completion.network_result.as_deref()
+            && !completion.network_attribution.network_observed
+        {
             if owner_current {
                 self.record_get_subresource_network_result(
                     completion.network_attribution.frame_id.clone(),
@@ -673,7 +679,7 @@ impl PageScriptHost {
         &mut self,
         request: crate::frame_owner_model::FrameDocumentClassicScriptSourceLoadRequest,
         loader: crate::network::context::DocumentResourceLoader,
-        network_attribution: ChildClassicScriptNetworkAttribution,
+        mut network_attribution: ChildClassicScriptNetworkAttribution,
     ) {
         let request_target = *request.target();
         let document_character_set = self
@@ -722,20 +728,22 @@ impl PageScriptHost {
             crate::native_bridge::context_host::OwnerDispatchScope::Child(child_handle),
         );
         let document_url = network_attribution.document_url.clone();
+        let network = self.prepare_child_classic_script_network_load(
+            &task_loader,
+            &script_for_load,
+            &mut network_attribution,
+        );
         loader.spawn_resource_task(async move {
-            let outcome =
-                crate::planning::load_service_worker_aware_external_script_source_outcome(
-                    &script_for_load,
-                    &task_loader.fetch_context().request_origin(),
-                    task_loader.request_client(),
-                    task_loader.task_runner(),
-                    Some(&document_character_set),
-                    None,
-                    browser_context_runtime,
-                    client_id,
-                    document_url,
-                )
-                .await;
+            let outcome = fetch::load_child_classic_script(
+                network,
+                &script_for_load,
+                task_loader,
+                Some(&document_character_set),
+                browser_context_runtime,
+                client_id,
+                document_url,
+            )
+            .await;
             let _ = completion_tx.send_child_classic_script(ChildClassicScriptLoadCompletion {
                 owner: request_target.task_owner(),
                 load_id,
@@ -800,7 +808,9 @@ impl PageScriptHost {
             owner_target.owner_request_id(),
         );
         let (_owner_target, source_load) = owner.into_parts();
-        if let Some(network_result) = completion.network_result.as_deref() {
+        if let Some(network_result) = completion.network_result.as_deref()
+            && !completion.network_attribution.network_observed
+        {
             self.record_get_subresource_network_result(
                 completion.network_attribution.frame_id.clone(),
                 completion.network_attribution.document_url.clone(),
@@ -838,6 +848,9 @@ impl PageScriptHost {
         &mut self,
         completion: &ChildClassicScriptLoadCompletion,
     ) -> bool {
+        if completion.network_attribution.network_observed {
+            return false;
+        }
         let Some(network_result) = completion.network_result.as_deref() else {
             return false;
         };

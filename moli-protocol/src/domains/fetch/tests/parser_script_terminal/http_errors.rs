@@ -1,15 +1,22 @@
 use super::*;
 
-async fn script_response_terminal(status: u16, intercepted: bool, source: &'static str) {
+async fn script_response_terminal(
+    status: u16,
+    intercepted: bool,
+    source: &'static str,
+    child: bool,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
             Router::new()
-                .route("/page", get(|| async {
-                    ([("content-type", "text/html")],
-                     "<!doctype html><script>globalThis.bodyRan=false</script><script src='/app.js'></script>")
+                .route("/page", get(move || async move {
+                    ([("content-type", "text/html")], if child {"<!doctype html><iframe src='/child'></iframe>"} else {"<!doctype html><script>globalThis.bodyRan=false</script><script src='/app.js'></script>"})
+                }))
+                .route("/child", get(|| async {
+                    ([("content-type", "text/html")], "<!doctype html><script>globalThis.bodyRan=false</script><script src='/app.js'></script>")
                 }))
                 .route("/app.js", get(move || async move {
                     (StatusCode::from_u16(status).unwrap(), [("content-type", "text/javascript")], source)
@@ -120,7 +127,7 @@ async fn script_response_terminal(status: u16, intercepted: bool, source: &'stat
     }
     ctx.process_async(
         json!({"id": 5, "sessionId": "SID-1", "method": "Runtime.evaluate", "params": {
-            "expression": "bodyRan", "returnByValue": true,
+            "expression": if child {"document.querySelector('iframe').contentWindow.bodyRan"} else {"bodyRan"}, "returnByValue": true,
         }}),
     )
     .await;
@@ -134,18 +141,18 @@ async fn script_response_terminal(status: u16, intercepted: bool, source: &'stat
 #[tokio::test(flavor = "multi_thread")]
 async fn continued_http_error_scripts_keep_response_headers_and_fail_once() {
     for status in [400, 404, 500] {
-        script_response_terminal(status, true, "globalThis.bodyRan=true").await;
+        script_response_terminal(status, true, "globalThis.bodyRan=true", false).await;
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn unintercepted_http_error_script_keeps_response_headers_and_fails_once() {
-    script_response_terminal(404, false, "globalThis.bodyRan=true").await;
+    script_response_terminal(404, false, "globalThis.bodyRan=true", false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn successful_script_response_with_syntax_error_still_finishes_network_request() {
-    script_response_terminal(200, false, "function (").await;
+    script_response_terminal(200, false, "function (", false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -235,4 +242,13 @@ async fn fetch_and_xhr_http_error_responses_still_finish_and_remain_readable() {
         assert_eq!(terminals[0]["method"], "Network.loadingFinished");
     }
     server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_http_error_scripts_keep_response_headers_and_fail_once() {
+    for intercepted in [false, true] {
+        for status in [400, 404, 500] {
+            script_response_terminal(status, intercepted, "globalThis.bodyRan=true", true).await;
+        }
+    }
 }

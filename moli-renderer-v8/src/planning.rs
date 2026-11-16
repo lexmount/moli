@@ -591,7 +591,7 @@ pub(crate) fn external_script_source_load_outcome_from_result(
     }
 }
 
-fn external_script_source_load_outcome_from_response_inner(
+pub(crate) fn external_script_source_load_outcome_from_response_inner(
     script: &PreparedScript,
     response: crate::protocol_types::NavigationResponse,
     document_character_set: Option<&str>,

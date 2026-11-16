@@ -146,7 +146,7 @@ impl PageScriptHost {
         self.child_browsing_contexts
             .get_mut(&handle)
             .expect("initial-empty owner must retain its browsing context")
-            .set_current_document_loader_id(loader_id);
+            .set_current_document_loader_id(loader_id, None);
         let replaced_document_handle = self
             .child_browsing_context_document_handles
             .insert(handle, document_handle);

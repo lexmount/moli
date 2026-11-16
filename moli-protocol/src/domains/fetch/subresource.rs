@@ -206,7 +206,11 @@ fn prepare_subresource_fetch_pause_sources(
                 .and_then(|document| document.redirect.clone())
         });
         let per_hop_fetch = child_document.is_some()
-            || info.resource_type == moli_core::page::SubresourceResourceType::Fetch;
+            || matches!(
+                info.resource_type,
+                moli_core::page::SubresourceResourceType::Fetch
+                    | moli_core::page::SubresourceResourceType::Script
+            );
         let Some((request_id, network_request_id)) =
             conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
@@ -532,6 +536,17 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
 ) {
     for output in outputs {
         let network_request_id = output.network_output().network_request_id().to_owned();
+        // Service Worker dispatch can announce a native request before falling
+        // back to Fetch. Its ordered start already precedes this pause; only a
+        // new redirect hop needs another requestWillBeSent.
+        let native_start = output.network_output().redirect().is_none()
+            && output
+                .network_output()
+                .request_handle()
+                .is_some_and(|handle| {
+                    conn.runtime_session_owner_slot_for_owner(owner)
+                        .is_some_and(|slot| slot.has_native_request_announcement(handle))
+                });
         // Detached parser-script completions use the same native handle as
         // their pause, just like renderer-owned subresource completions.
         if let Some(handle) = output.network_output().request_handle()
@@ -582,6 +597,7 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
         }
         let network_events = network_session_ids
             .iter()
+            .filter(|_| !native_start)
             .flat_map(|session_id| {
                 network::fetch_subresource_initial_request_network_events(
                     session_id.as_deref(),
@@ -807,6 +823,7 @@ pub(super) fn next_chained_subresource_response_pause_event(
     pending.action_session_id = next.session_id.clone();
     pending.owner_kind = next.owner_kind;
     let event = pending_subresource_response_stage_request_paused_event(
+        conn,
         next.session_id.as_deref(),
         &next.request_id,
         &pending,

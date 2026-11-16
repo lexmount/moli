@@ -45,6 +45,13 @@ pub(super) struct ChildBrowsingContextEntry {
         Option<super::child_documents::ChildNavigationDownloadPolicy>,
     retiring: bool,
     current_document_loader_id: Option<String>,
+    /// Native admission token of the navigation that committed this Document.
+    /// A later pending or rejected navigation must not relabel its loader.
+    current_document_navigation_id: Option<u64>,
+    pub(super) navigation_loader_id: Option<(
+        crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
+        crate::runtime::RendererChildFrameNavigation,
+    )>,
     name: Option<String>,
     id: Option<String>,
     attribute_bootstrap: ChildBrowsingContextBootstrap,
@@ -502,12 +509,27 @@ impl ChildBrowsingContextEntry {
         self.current_document_loader_id.as_deref()
     }
 
-    pub(super) fn set_current_document_loader_id(&mut self, loader_id: String) {
+    pub(super) fn current_document_navigation_id(&self) -> Option<u64> {
+        self.current_document_navigation_id
+    }
+
+    pub(super) fn set_current_document_loader_id(
+        &mut self,
+        loader_id: String,
+        navigation_id: Option<u64>,
+    ) {
+        if let Some((_, navigation)) = &self.navigation_loader_id
+            && navigation.loader_id() == loader_id
+        {
+            navigation.commit();
+        }
         self.current_document_loader_id = Some(loader_id);
+        self.current_document_navigation_id = navigation_id;
     }
 
     pub(super) fn clear_current_document_loader_id(&mut self) {
         self.current_document_loader_id = None;
+        self.current_document_navigation_id = None;
     }
 
     pub(super) fn frame_identity_snapshot(&self) -> ChildBrowsingContextFrameIdentitySnapshot {

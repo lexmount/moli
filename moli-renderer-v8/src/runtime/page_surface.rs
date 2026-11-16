@@ -29,6 +29,11 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+mod child_frame_navigation;
+pub use child_frame_navigation::{
+    RendererChildFrameNavigation, RendererChildFrameNavigationOutcome,
+};
+
 mod auxiliary_document_response;
 pub(crate) use auxiliary_document_response::AuxiliaryDocumentResponseReceiver;
 pub use auxiliary_document_response::RendererAuxiliaryDocumentResponse;
@@ -5022,6 +5027,7 @@ pub enum RendererPageCommand {
     CompleteChildFrameLifecycleWorkBestEffort {
         timeout_ms: u64,
         loader: ResourceRequestClient,
+        navigation: Option<RendererChildFrameNavigation>,
     },
     SetDocumentContent {
         frame_id: String,
@@ -5383,6 +5389,9 @@ pub enum RendererPageCommand {
     DocumentStorageKeySnapshot,
     SearchResourceByLines(Box<RendererResourceSearchRequest>),
     ChildFrameTreeSnapshot,
+    ChildFrameNavigationIdentitySnapshot {
+        frame_id: String,
+    },
     ChildFrameOwnerNodeReference {
         inspector_session_id: Option<String>,
         frame_id: String,
@@ -5908,6 +5917,7 @@ impl RendererPageCommand {
                 | Self::LiveChildDefaultRuntimeRealmInventory
                 | Self::RuntimeConsoleMessagesWithContext
                 | Self::ChildFrameTreeSnapshot
+                | Self::ChildFrameNavigationIdentitySnapshot { .. }
                 | Self::PendingSubresourceRequestCount
         )
     }
@@ -5929,6 +5939,9 @@ impl RendererPageCommand {
             }
             Self::SetRuntimeBindingState { .. } => Some("SetRuntimeBindingState"),
             Self::ChildFrameTreeSnapshot => Some("ChildFrameTreeSnapshot"),
+            Self::ChildFrameNavigationIdentitySnapshot { .. } => {
+                Some("ChildFrameNavigationIdentitySnapshot")
+            }
             Self::ChildFrameOwnerNodeReference { .. } => Some("ChildFrameOwnerNodeReference"),
             Self::ChildFrameDocumentRootNodeReference { .. } => {
                 Some("ChildFrameDocumentRootNodeReference")
@@ -6294,6 +6307,10 @@ impl RendererRuntimeEvaluationResult {
 }
 
 pub enum RendererPageReply {
+    ChildFrameNavigation {
+        navigation_id: Option<u64>,
+        navigation: Option<RendererChildFrameNavigation>,
+    },
     WebMcp(std::result::Result<Option<u64>, moli_page_types::RendererWebMcpError>),
     NativeCommandReady(Box<RendererNativeCommandReadyResponse>),
     NativeCommandPublished,
@@ -6363,6 +6380,9 @@ pub enum RendererPageReply {
     NetworkResourceLoadPreparation(crate::network::RendererNetworkResourceLoadPreparation),
     AppManifestLoadPreparation(crate::RendererAppManifestLoadPreparation),
     ChildFrameTreeSnapshots(Vec<ChildFrameTreeSnapshot>),
+    ChildFrameNavigationIdentitySnapshot(
+        Option<moli_page_types::ChildFrameNavigationIdentitySnapshot>,
+    ),
     DocumentStartScriptResult(Option<(i64, bool)>),
     #[cfg(test)]
     DocumentLifecycleEvents(Vec<RendererDocumentLifecycleEvent>),

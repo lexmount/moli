@@ -154,6 +154,10 @@ impl NavigationResourceLoader {
         }
     }
 
+    pub(crate) async fn cancelled(&self) {
+        self.inner.cancel.cancelled().await;
+    }
+
     pub fn request_client(&self) -> &ResourceRequestClient {
         &self.request_client
     }

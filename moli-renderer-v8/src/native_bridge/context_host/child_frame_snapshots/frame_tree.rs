@@ -10,6 +10,21 @@ pub(in crate::native_bridge::context_host::child_frame_snapshots) fn child_brows
 }
 
 impl PageScriptHost {
+    pub(crate) fn child_browsing_context_navigation_identity_snapshot(
+        &self,
+        frame_id: &str,
+    ) -> Option<crate::protocol_types::ChildFrameNavigationIdentitySnapshot> {
+        let handle = self.child_browsing_context_handle_by_frame_id(frame_id)?;
+        let entry = self.child_browsing_contexts.get(&handle)?;
+        Some(
+            crate::protocol_types::ChildFrameNavigationIdentitySnapshot {
+                navigation_id: entry.current_document_navigation_id(),
+                loader_id: entry.current_document_loader_id()?.to_owned(),
+                url: self.child_browsing_context_current_url(handle)?.to_string(),
+            },
+        )
+    }
+
     pub(crate) fn child_browsing_context_child_frame_count(
         &mut self,
         handle: crate::document_runtime::DomHandle,

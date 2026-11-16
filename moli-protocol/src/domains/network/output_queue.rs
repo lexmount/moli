@@ -1367,6 +1367,7 @@ pub(crate) struct TargetSubresourceRequestStartedOutput {
     index: usize,
     loader_id: String,
     handle: SubresourceNetworkRequestHandle,
+    interception_request_announcement: bool,
     frame_id: Option<String>,
     document_url: Url,
     url: Url,
@@ -1389,8 +1390,9 @@ impl TargetSubresourceRequestStartedOutput {
         Self {
             delivery_order_index,
             index,
-            loader_id: loader_id.to_owned(),
+            loader_id: request.document_loader_id().unwrap_or(loader_id).to_owned(),
             handle: request.handle(),
+            interception_request_announcement: request.interception_request_announcement(),
             frame_id: request.frame_id().map(str::to_owned),
             document_url: request.document_url().clone(),
             url: request.url().clone(),
@@ -1402,6 +1404,10 @@ impl TargetSubresourceRequestStartedOutput {
             request_initiator_type: request.request_initiator_type(),
             request_cookie_report: request.request_cookie_report().cloned(),
         }
+    }
+
+    pub(crate) fn interception_request_announcement(&self) -> bool {
+        self.interception_request_announcement
     }
 
     pub(crate) fn delivery_order_index(&self) -> usize {
@@ -2527,6 +2533,15 @@ impl TargetWebSocketLifecycleDeliveryOutput {
 }
 
 impl TargetNetworkOutputQueue {
+    pub(crate) fn has_native_request_announcement(
+        &self,
+        handle: SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.staged_subresource_requests
+            .get(&handle)
+            .is_some_and(|request| !request.interception_request_announcement())
+    }
+
     pub(crate) fn subresource_record_count(&self) -> usize {
         self.subresource_record_count
     }

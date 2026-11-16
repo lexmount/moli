@@ -75,6 +75,7 @@ impl CdpConnection {
         &mut self,
         owner: CommandOwnerScope,
         timeout: std::time::Duration,
+        navigation: Option<moli_core::page::RendererChildFrameNavigation>,
     ) -> Result<PendingChildFrameLifecycleWork, String> {
         let storage = self
             .navigation_load_inputs_for_owner(&owner)
@@ -87,13 +88,20 @@ impl CdpConnection {
         let Some(page) = slot.loaded_page() else {
             return Err("NoDocumentLoaded".to_owned());
         };
-        let pending = engine
-            .start_page_child_frame_lifecycle_work_with_storage_best_effort(
+        let pending = match navigation {
+            Some(navigation) => engine.start_page_child_frame_navigation_completion_with_storage(
                 storage.into_navigation_storage(),
                 page,
                 timeout,
-            )
-            .map_err(|error| error.to_string())?;
+                navigation,
+            ),
+            None => engine.start_page_child_frame_lifecycle_work_with_storage_best_effort(
+                storage.into_navigation_storage(),
+                page,
+                timeout,
+            ),
+        }
+        .map_err(|error| error.to_string())?;
         Ok(PendingChildFrameLifecycleWork { owner, pending })
     }
 

@@ -38,7 +38,11 @@ pub fn is_fetch_cancelled(error: &anyhow::Error) -> bool {
         })
 }
 
-pub(crate) fn browser_network_error_text(error: &anyhow::Error) -> &'static str {
+/// Projects typed fetch causes into the browser's network error vocabulary.
+pub fn browser_network_error_text(error: &anyhow::Error) -> &'static str {
+    if let Some(failure) = error.downcast_ref::<crate::NetworkFetchFailureContext>() {
+        return failure.network_error_text();
+    }
     if is_fetch_cancelled(error) {
         return NET_ERR_ABORTED_ERROR_TEXT;
     }
@@ -47,7 +51,11 @@ pub(crate) fn browser_network_error_text(error: &anyhow::Error) -> &'static str 
         return "net::ERR_CACHE_MISS";
     }
 
-    let Some(error) = error.downcast_ref::<curl::Error>() else {
+    let Some(error) = error.downcast_ref::<curl::Error>().or_else(|| {
+        error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<curl::Error>())
+    }) else {
         return "net::ERR_FAILED";
     };
     if error.is_couldnt_resolve_host() {

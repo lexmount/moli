@@ -313,6 +313,13 @@ impl TargetNetworkAgentState {
         self.active_renderer_subresource_requests.is_empty()
     }
 
+    pub(crate) fn has_native_request_announcement(
+        &self,
+        handle: SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.output_queue.has_native_request_announcement(handle)
+    }
+
     fn output_queue_subresource_record_count(&self) -> usize {
         self.output_queue.subresource_record_count()
     }
@@ -536,6 +543,20 @@ impl TargetNetworkAgentState {
         self.artifacts
             .subresource_network_artifacts
             .replace_navigation_fetch_request_id(network_id, session_id, fetch_id)
+    }
+
+    pub(crate) fn navigation_fetch_hop_ids(
+        &self,
+        network_id: &str,
+        session_id: Option<&str>,
+    ) -> Option<(String, Option<String>)> {
+        self.artifacts
+            .subresource_network_artifacts
+            .fetch_pause_announced_request_ids
+            .get(network_id)?
+            .fetch_ids
+            .get(&session_id.map(str::to_owned))
+            .cloned()
     }
 
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
@@ -1883,7 +1904,7 @@ struct SubresourceNetworkArtifacts {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FetchPauseAnnouncement {
-    fetch_ids: HashMap<Option<String>, String>,
+    fetch_ids: HashMap<Option<String>, (String, Option<String>)>,
     announced_redirects: usize,
 }
 
@@ -1967,11 +1988,18 @@ impl SubresourceNetworkArtifacts {
         session_id: Option<String>,
         fetch_id: String,
     ) -> Option<String> {
-        self.fetch_pause_announced_request_ids
+        let announcement = self
+            .fetch_pause_announced_request_ids
             .entry(network_id)
-            .or_default()
+            .or_default();
+        let previous = announcement
             .fetch_ids
-            .insert(session_id, fetch_id)
+            .get(&session_id)
+            .map(|(id, _)| id.clone());
+        announcement
+            .fetch_ids
+            .insert(session_id, (fetch_id, previous.clone()));
+        previous
     }
 
     fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {

@@ -469,7 +469,7 @@ fn emit_staged_subresource_request_started(
             event_session_ids,
         );
     }
-    if !request_was_announced_by_fetch_pause {
+    if !request_was_announced_by_fetch_pause && !output.interception_request_announcement() {
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
                 out,

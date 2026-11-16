@@ -30,6 +30,8 @@ mod subresource_support;
 mod testing_support;
 mod wait_support;
 
+pub use crate::renderer::{RendererChildFrameNavigation, RendererChildFrameNavigationOutcome};
+
 use std::fmt;
 use std::sync::Arc;
 

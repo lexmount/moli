@@ -51,6 +51,7 @@ impl ControlledXhrContext {
             preflight_headers,
             initial_decision: None,
             request_initiator_type: crate::types::SubresourceRequestInitiatorType::Script,
+            initial_request_announced: false,
         }
     }
 }

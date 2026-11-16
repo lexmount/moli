@@ -99,6 +99,60 @@ impl PageScriptHost {
         }))
     }
 
+    pub(in crate::native_bridge::context_host) fn script_fetch_redirect_policy_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+        script: &crate::planning::PreparedScript,
+    ) -> Option<moli_fetch::RequestRedirectPolicy> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        let runtime = unsafe { &*self.document_runtime };
+        if runtime.bypass_content_security_policy() {
+            return None;
+        }
+        let mut policies = snapshot.policy_container.response_content_security_policies;
+        policies.extend(snapshot.policy_container.document_content_security_policies);
+        if let Some(document) = snapshot.document_handle {
+            policies.extend(runtime.meta_content_security_policies_for_document(document));
+        }
+        let endpoints = snapshot
+            .policy_container
+            .content_security_reporting_endpoints;
+        let origin_url = snapshot.document_handle.and_then(|document| {
+            url::Url::parse(
+                &self
+                    .document_security_origin(document)
+                    .ascii_serialization(),
+            )
+            .ok()
+        });
+        let document_url = if matches!(snapshot.document_url.scheme(), "http" | "https" | "file") {
+            snapshot.document_url
+        } else {
+            origin_url.unwrap_or(snapshot.document_url)
+        };
+        let metadata = script.fetch_metadata.clone();
+        Some(moli_fetch::RequestRedirectPolicy::new(
+            move |url, ordinal| {
+                let request = ContentSecurityPolicyScriptElementRequest {
+                    nonce: metadata.nonce.as_deref(),
+                    integrity: metadata.integrity.as_deref(),
+                    parser_inserted: metadata.parser_inserted,
+                };
+                let violation = crate::content_security_policy::content_security_policy_script_element_url_violation_with_redirect_status_disposition_reporting_endpoints_and_request(
+                &policies, &document_url, url,
+                if ordinal==0 {ContentSecurityPolicyRedirectStatus::NoRedirect} else {ContentSecurityPolicyRedirectStatus::FollowedRedirect},
+                ContentSecurityPolicyDisposition::Enforce, &endpoints, request,
+            );
+                violation.map_or(Ok(()), |violation| {
+                    Err(anyhow::anyhow!(
+                        "Script request blocked by Content Security Policy directive `{}`",
+                        violation.effective_directive
+                    ))
+                })
+            },
+        ))
+    }
+
     fn owner_document_policy_snapshot(
         &self,
         owner: OwnerDispatchScope,

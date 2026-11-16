@@ -235,6 +235,19 @@ impl PageScriptHost {
         );
     }
 
+    pub(in crate::native_bridge::context_host) fn queue_child_frame_navigation_stopped_event(
+        &mut self,
+        frame_id: String,
+        loader_id: String,
+    ) {
+        self.queue_child_frame_tree_event(
+            crate::protocol_types::ChildFrameTreeEventSnapshot::NavigationStopped {
+                frame_id,
+                loader_id,
+            },
+        );
+    }
+
     fn queue_child_frame_tree_event(
         &mut self,
         event: crate::protocol_types::ChildFrameTreeEventSnapshot,

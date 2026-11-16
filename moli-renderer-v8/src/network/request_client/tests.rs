@@ -1215,6 +1215,53 @@ async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cancelling_script_cache_owner_keeps_waiters_and_later_hits_live() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (arrived_tx, arrived_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request_head(&mut stream).await.unwrap();
+        arrived_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: max-age=60\r\nContent-Length: 2\r\nConnection: close\r\n\r\n42").await.unwrap();
+    });
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let request = browser_navigation_request(&format!("http://{addr}/shared.js"))?
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let producer_client = ResourceRequestClient::clone(&loader);
+    let producer_request = request.clone();
+    let first = tokio::spawn(async move {
+        producer_client
+            .fetch_cacheable_script_text_stream(producer_request)
+            .await
+    });
+    timeout(Duration::from_secs(5), arrived_rx).await??;
+    let second = loader.fetch_cacheable_script_text_stream(request.clone());
+    tokio::pin!(second);
+    tokio::select! {
+        biased;
+        result = &mut second => panic!("shared waiter completed before response release: {result:?}"),
+        () = std::future::ready(()) => {},
+    }
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    release_tx.send(()).unwrap();
+    let response = timeout(Duration::from_secs(5), second).await??;
+    assert_eq!(response.body_text(), "42");
+    let later = timeout(
+        Duration::from_secs(5),
+        loader.fetch_cacheable_script_text_stream(request),
+    )
+    .await??;
+    assert_eq!(later.body_text(), "42");
+    assert!(later.from_cache);
+    server.await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

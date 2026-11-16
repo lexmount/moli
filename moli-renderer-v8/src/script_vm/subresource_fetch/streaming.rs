@@ -449,7 +449,10 @@ impl ScriptVm {
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
             AsyncSubresourceFetchEvent::InterceptionOutputReady(output) => {
-                output.drain();
+                let report = output.drain();
+                self._context_host
+                    .borrow_mut()
+                    .record_observed_network_report(report);
                 Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
             }
             AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted {

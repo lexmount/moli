@@ -232,6 +232,13 @@ impl PageScriptHost {
         self.note_subresource_activity();
     }
 
+    pub(crate) fn record_observed_network_report(&mut self, output: ScriptNetworkOutput) {
+        if !output.is_empty() {
+            self.note_subresource_activity();
+            self.pending_network_output.extend(output.into_items());
+        }
+    }
+
     pub(crate) fn push_network_output_item(&mut self, item: ScriptNetworkOutputItem) {
         if let Some(source_document) = self.root_document_lifecycle_identity() {
             self.append_live_turn_observation(
@@ -402,7 +409,7 @@ impl PageScriptHost {
         )));
     }
 
-    fn get_subresource_network_record_with_initiator(
+    pub(super) fn get_subresource_network_record_with_initiator(
         frame_id: Option<String>,
         document_url: url::Url,
         request_url: url::Url,

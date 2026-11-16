@@ -1706,8 +1706,12 @@ async fn root_set_document_content_unloads_descendant_frame_before_clearing_pare
     .await;
     let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
     let pending = ctx.with_fixture(|conn| {
-        conn.start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
-            .expect("loaded page should expose child-frame lifecycle work")
+        conn.start_child_frame_lifecycle_work_for_owner(
+            owner,
+            std::time::Duration::from_secs(2),
+            None,
+        )
+        .expect("loaded page should expose child-frame lifecycle work")
     });
     let completed = pending
         .wait()

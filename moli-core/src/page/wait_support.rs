@@ -27,11 +27,16 @@ impl Page {
         &self,
         loader: &ResourceRequestClient,
         timeout: Duration,
+        navigation: Option<super::RendererChildFrameNavigation>,
     ) -> Result<PendingPageCommand> {
         let loader = loader.clone();
         let timeout_ms = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
         self.start_page_command(
-            RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort { timeout_ms, loader },
+            RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort {
+                timeout_ms,
+                loader,
+                navigation,
+            },
         )
     }
 

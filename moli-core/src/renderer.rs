@@ -28,6 +28,7 @@ pub(crate) use moli_renderer_v8::{
     ScriptRunOutcome,
 };
 pub use moli_renderer_v8::{
+    RendererChildFrameNavigation, RendererChildFrameNavigationOutcome,
     RendererDocumentChildNodeSnapshotEvents, RendererDocumentFrontendNodeIdsResolution,
     RendererDocumentNodeAttributesResolution, RendererDocumentNodePropertyResolution,
     RendererDocumentNodeReference, RendererDocumentNodeTextResolution,

@@ -933,6 +933,13 @@ impl TargetRuntimeSlot {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
+    pub(crate) fn has_native_request_announcement(
+        &self,
+        handle: moli_core::page::SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.network_agent.has_native_request_announcement(handle)
+    }
+
     pub(crate) fn record_fetch_pause_announced_redirect(&mut self, request_id: &str) {
         self.network_agent
             .record_fetch_pause_announced_redirect(request_id);
@@ -951,6 +958,15 @@ impl TargetRuntimeSlot {
     ) -> Option<String> {
         self.network_agent
             .replace_navigation_fetch_request_id(network_id, session_id, fetch_id)
+    }
+
+    pub(crate) fn navigation_fetch_hop_ids(
+        &self,
+        network_id: &str,
+        session_id: Option<&str>,
+    ) -> Option<(String, Option<String>)> {
+        self.network_agent
+            .navigation_fetch_hop_ids(network_id, session_id)
     }
 
     pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
@@ -1110,6 +1126,15 @@ impl TargetRuntimeSlot {
             && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
         {
             let loader_id = binding.loader_id.clone();
+            if let ScriptNetworkOutputItem::SubresourceRequestStarted(request) = item
+                && let Some(document_loader) = request.document_loader_id()
+            {
+                self.network_agent
+                    .record_subresource_request_id_for_handle_if_absent(
+                        request.handle(),
+                        document_loader.to_owned(),
+                    );
+            }
             self.log_output_queue
                 .ingest_renderer_network_output_item(item);
             return Some(
@@ -1125,6 +1150,10 @@ impl TargetRuntimeSlot {
             );
         }
 
+        if matches!(item, ScriptNetworkOutputItem::SubresourceRequestStarted(request) if request.document_loader_id().is_some())
+        {
+            return None;
+        }
         let event_session_ids = self
             .network_agent
             .event_session_ids(trigger_session_id, primary_session_id);

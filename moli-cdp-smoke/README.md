@@ -50,6 +50,18 @@ XHR retains its original raw-byte capture for Network consumers while the
 Window/Worker JS boundary materializes a response. Memory-allocation identity,
 disk extent lifetime, non-UTF-8 bytes and release are checked by Rust regressions.
 
+The default `child-network` group holds real HTTP and Service Worker responses
+to check shared-script owner detach, superseded child navigation identities,
+prompt cancellation and request starts during Service Worker waits, 204 loading
+termination, cached Document provenance, intercepted script redirect identities,
+and resource trees after repeated child navigation. It checks wire ordering and
+rejects duplicate initial Network announcements. A deep-frame case ensures
+navigation identity lookup does not depend on a bounded frame-tree snapshot.
+The nine contracts use the
+same expectations in Moli and Chromium (calibrated with Chromium 145.0.7632.6).
+Chromium may restart a canceled shared transfer and terminates a 204 navigation
+with loadingFailed; both preserve the surviving consumer and stop frame loading.
+
 The default `fetch-headers` group compares fetch, asynchronous XHR and synchronous
 XHR using real redirect and echo endpoints. It checks replayed upload headers,
 no-op method/body edits, fresh Content-Type values, generated Origin visibility,

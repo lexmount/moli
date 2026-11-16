@@ -146,6 +146,7 @@ impl RendererOwnerHandle {
             RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort {
                 timeout_ms,
                 loader: _,
+                navigation,
             } => {
                 let deadline = match checked_live_page_wait_deadline(
                     Instant::now(),
@@ -160,6 +161,7 @@ impl RendererOwnerHandle {
                         token,
                         deadline,
                         capture_policy,
+                        navigation,
                     },
                 ))
             }
@@ -689,12 +691,19 @@ impl RendererOwnerHandle {
         token: RendererPageToken,
         deadline: Instant,
         capture_policy: super::RendererPageStateCapturePolicy,
+        navigation: Option<super::RendererChildFrameNavigation>,
     ) -> RenderRuntimeDispatchOutcome {
         let mut entry = match take_entry_for_command_on_bound_owner_local_store(token) {
             Ok(entry) => entry,
             Err(error) => return Err(error).into(),
         };
-        let complete = entry.page_vm().child_frame_lifecycle_work_is_complete();
+        let complete = match &navigation {
+            Some(navigation) => entry
+                .page_vm()
+                .vm()
+                .child_frame_navigation_is_complete(navigation),
+            None => entry.page_vm().child_frame_lifecycle_work_is_complete(),
+        };
         if complete || Instant::now() >= deadline {
             // Admission predates the child work being observed. Freeze its
             // completed output now, including a load already published by an
@@ -721,6 +730,7 @@ impl RendererOwnerHandle {
                 token,
                 deadline,
                 capture_policy,
+                navigation,
             }),
             wake_token: token,
             ready_at: deadline,

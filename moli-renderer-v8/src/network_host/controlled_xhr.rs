@@ -1,4 +1,4 @@
-//! Shared native interception transport for XHR and stylesheet resources.
+//! Shared native interception transport for XHR and Document resources.
 
 mod context;
 mod result;
@@ -39,6 +39,7 @@ pub(crate) struct ControlledResourceLoad {
     preflight_headers: Vec<(String, String)>,
     initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
     request_initiator_type: SubresourceRequestInitiatorType,
+    initial_request_announced: bool,
 }
 
 use super::loaded_response::LoadedResponse;
@@ -81,7 +82,7 @@ impl LoadedResponse {
 }
 
 impl ControlledResourceLoad {
-    pub(crate) fn for_stylesheet(
+    pub(crate) fn for_resource(
         interception: crate::network::interception_output::ResourceInterceptionContext,
         request: Request,
         info: PendingSubresourceFetchInfo,
@@ -100,7 +101,13 @@ impl ControlledResourceLoad {
             preflight_headers: Vec::new(),
             initial_decision: None,
             request_initiator_type,
+            initial_request_announced: false,
         }
+    }
+
+    pub(crate) fn with_initial_request_announced(mut self) -> Self {
+        self.initial_request_announced = true;
+        self
     }
 
     /// The Page can publish request admission in the initiating turn. Network
@@ -131,6 +138,7 @@ impl ControlledResourceLoad {
         mut self,
         mut stream: Option<ControlledXhrStream>,
     ) -> ControlledXhrCompletion {
+        let initial_url = self.info.url.clone();
         let result = self.run_inner(stream.as_mut()).await;
         if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id) {
             self.publish_completed();
@@ -150,6 +158,7 @@ impl ControlledResourceLoad {
         let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
         completed.network_record = completed
             .network_record
+            .with_request_url(initial_url)
             .with_request_initiator_type(self.request_initiator_type);
         if completed.info.network_request_handle.is_some() {
             // Redirects already crossed their own native request-pause boundary.
@@ -289,6 +298,32 @@ impl ControlledResourceLoad {
         mut stream: Option<&mut ControlledXhrStream>,
     ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
         use ResourceInterceptionDecision as D;
+        if self.connect_policy.is_none() && !self.initial_request_announced {
+            let started = crate::types::SubresourceRequestStarted::new(
+                self.info
+                    .network_request_handle
+                    .expect("native resource has a network handle"),
+                self.info.frame_id.clone(),
+                self.info.document_url.clone(),
+                self.info.url.clone(),
+                self.info.method.clone(),
+                self.info.request_headers.clone(),
+                self.info.request_body.clone(),
+                self.info.resource_type,
+                self.request_initiator_type,
+                self.info.request_cookie_report.clone(),
+            )
+            .with_request_body_bytes(self.info.request_body_bytes.clone())
+            .with_interception_request_announcement();
+            if !self.output.publish_network(
+                self.source_document,
+                moli_page_types::ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+                    started,
+                )),
+            ) {
+                return Err("network interception output owner is closed".into());
+            }
+        }
         let mut next_request_pause = true;
         let mut intercept_response = false;
         let mut handle_auth_requests = false;

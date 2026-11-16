@@ -73,6 +73,7 @@ pub(super) struct PendingChildFrameNavigateCommand {
     activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
     url: String,
     wait: DevToolsNavigationWait,
+    frame_id: String,
     result_projection: NavigationResultProjection,
 }
 
@@ -86,6 +87,7 @@ pub(super) struct ChildFrameNavigationInput {
     pub(super) activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
     pub(super) url: String,
     pub(super) wait: DevToolsNavigationWait,
+    pub(super) frame_id: String,
     pub(super) result_projection: NavigationResultProjection,
 }
 
@@ -214,6 +216,7 @@ impl PendingChildFrameNavigateCommand {
             activity_binding: self.activity_binding,
             url: self.url,
             wait: self.wait,
+            frame_id: self.frame_id,
             result_projection: self.result_projection,
         };
         CompletedChildFrameNavigateCommand { input, completed }
@@ -816,7 +819,7 @@ fn protocol_neutral_navigate_result_payload(
     }
 }
 
-fn update_navigation_result_payload_identity(
+pub(super) fn update_navigation_result_payload_identity(
     result_projection: &mut NavigationResultProjection,
     frame_id: &str,
     loader_id: &str,
@@ -1078,15 +1081,22 @@ fn direct_navigation_result_from_fetch_continuation(
 }
 
 fn superseded_cdp_page_navigate_payload(state: &NavigationDispatchState) -> Option<Value> {
-    if state.result_projection.protocol() != FrontendProtocol::Cdp {
+    aborted_cdp_navigation_result_payload(&state.result_projection, &state.frame_id)
+}
+
+pub(super) fn aborted_cdp_navigation_result_payload(
+    result: &NavigationResultProjection,
+    frame_id: &str,
+) -> Option<Value> {
+    if result.protocol() != FrontendProtocol::Cdp {
         return None;
     }
-    let mut result = state.result_projection.payload().clone();
+    let mut result = result.payload().clone();
     let payload = result.as_object_mut()?;
     if !payload.contains_key("frameId") {
         return None;
     }
-    payload.insert("frameId".to_owned(), json!(state.frame_id));
+    payload.insert("frameId".to_owned(), json!(frame_id));
     payload.remove("loaderId");
     payload.insert("errorText".to_owned(), json!(NET_ERR_ABORTED_ERROR_TEXT));
     payload.insert("isDownload".to_owned(), json!(false));
@@ -1310,6 +1320,7 @@ fn start_child_frame_navigate_command(
                 activity_binding,
                 url: url.to_owned(),
                 wait,
+                frame_id: frame_id.to_owned(),
                 result_projection,
             }))
         }
@@ -1949,7 +1960,11 @@ fn merge_child_frame_tree_attachments_into_events(
             }) => {
                 *existing_parent_frame_id = parent_frame_id;
             }
-            Some(PagePreparedChildFrameTreeEvent::Detached { .. }) | None => {
+            Some(
+                PagePreparedChildFrameTreeEvent::Detached { .. }
+                | PagePreparedChildFrameTreeEvent::NavigationStopped { .. },
+            )
+            | None => {
                 events.push(PagePreparedChildFrameTreeEvent::Attached {
                     frame_id,
                     parent_frame_id,
@@ -2056,7 +2071,8 @@ fn emit_renderer_command_child_frame_document_opened_background_events_with_secu
 fn prepared_child_frame_tree_event_frame_id(event: &PagePreparedChildFrameTreeEvent) -> &str {
     match event {
         PagePreparedChildFrameTreeEvent::Attached { frame_id, .. }
-        | PagePreparedChildFrameTreeEvent::Detached { frame_id } => frame_id,
+        | PagePreparedChildFrameTreeEvent::Detached { frame_id }
+        | PagePreparedChildFrameTreeEvent::NavigationStopped { frame_id, .. } => frame_id,
     }
 }
 
@@ -2107,6 +2123,11 @@ pub(crate) fn emit_prepared_child_frame_activity(
     // Playwright associates the navigation Request after this start marker.
     // Publishing a later start would erase the request/loader association.
     for commit in &document.commits {
+        if document.document_networks.iter().any(|network| {
+            network.loader_id == commit.loader_id && network.snapshot.network_observed
+        }) {
+            continue;
+        }
         if conn
             .runtime_session_owner_slot_mut_for_owner(&owner)
             .is_some_and(|slot| slot.request_was_announced_by_fetch_pause(&commit.loader_id))
@@ -2362,6 +2383,21 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
                             frame_id.clone(),
                             parent_frame_id.clone(),
                         ));
+                    }
+                }
+            }
+            PagePreparedChildFrameTreeEvent::NavigationStopped {
+                frame_id,
+                loader_id,
+            } => {
+                if conn.browsing_context_owner(&frame_id).is_some() {
+                    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
+                        super::lifecycle::emit_navigation_frame_stopped_loading_background_events(
+                            out,
+                            session_id.as_deref(),
+                            &frame_id,
+                            &loader_id,
+                        );
                     }
                 }
             }

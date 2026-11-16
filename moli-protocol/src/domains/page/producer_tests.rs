@@ -1834,6 +1834,7 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
                 .expect("valid context-scoped collector");
         }
         let network = ChildFrameDocumentNetworkSnapshot {
+            network_observed: false,
             request_url: "https://example.test/child".into(),
             request_method: "GET".into(),
             request_headers: Vec::new(),
@@ -1974,6 +1975,7 @@ async fn child_frame_activity_emits_document_network_events_before_load_completi
     bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
     let mut background_events = Vec::new();
     let network = ChildFrameDocumentNetworkSnapshot {
+        network_observed: false,
         request_url: "https://example.test/child".to_owned(),
         request_method: "GET".to_owned(),
         request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
@@ -2123,6 +2125,7 @@ async fn stale_child_document_response_emits_network_without_navigation_or_lifec
             parent_frame_id: Some("TID-1".to_owned()),
             loader_id: "LID-RETIRED-CHILD".to_owned(),
             snapshot: ChildFrameDocumentNetworkSnapshot {
+                network_observed: false,
                 request_url: "https://example.test/retired-child".to_owned(),
                 request_method: "GET".to_owned(),
                 request_headers: Vec::new(),
@@ -2226,6 +2229,7 @@ async fn child_document_network_without_body_records_known_no_data() {
     conn.install_browser_context_fixture_for_test(bc);
     assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
     let snapshot = ChildFrameDocumentNetworkSnapshot {
+        network_observed: false,
         request_url: "https://example.test/legacy-child".to_owned(),
         request_method: "GET".to_owned(),
         request_headers: Vec::new(),
@@ -2511,6 +2515,7 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
             parent_frame_id: Some("TID-1".into()),
             loader_id: loader_id.into(),
             snapshot: ChildFrameDocumentNetworkSnapshot {
+                network_observed: false,
                 request_url: "https://example.test/child".into(),
                 request_method: "GET".into(),
                 request_headers: Vec::new(),

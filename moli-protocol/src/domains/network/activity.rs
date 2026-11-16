@@ -24,6 +24,7 @@ pub(crate) enum NetworkActivityOutput {
 
 #[derive(Debug, Default)]
 pub(crate) struct NetworkPreparedOutputs {
+    child_document_starts: Vec<(String, String, String)>,
     pending_subresource_continue_actions: Vec<PreparedSubresourceContinueAction>,
     automatic_subresource_continuations: Vec<fetch::PreparedSubresourceAutoContinue>,
     renderer_live: TargetNetworkBacklogPreparedDelivery,
@@ -104,10 +105,27 @@ impl PreparedSubresourceProjection {
 }
 
 impl NetworkPreparedOutputs {
+    pub(crate) fn with_child_document_start(
+        mut self,
+        item: &moli_core::page::ScriptNetworkOutputItem,
+    ) -> Self {
+        if let moli_core::page::ScriptNetworkOutputItem::SubresourceRequestStarted(request) = item
+            && let (Some(frame), Some(loader)) = (request.frame_id(), request.document_loader_id())
+        {
+            self.child_document_starts.push((
+                frame.to_owned(),
+                loader.to_owned(),
+                request.url().as_str().to_owned(),
+            ));
+        }
+        self
+    }
+
     pub(crate) fn from_renderer_live_delivery(
         renderer_live: TargetNetworkBacklogPreparedDelivery,
     ) -> Self {
         Self {
+            child_document_starts: Vec::new(),
             automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: Vec::new(),
             renderer_live,
@@ -134,6 +152,7 @@ impl NetworkPreparedOutputs {
         subresource_fetch_pauses: Vec<TargetSubresourceFetchPauseOutput>,
     ) -> Self {
         Self {
+            child_document_starts: Vec::new(),
             automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: Vec::new(),
             renderer_live: TargetNetworkBacklogPreparedDelivery::default(),
@@ -161,6 +180,7 @@ impl NetworkPreparedOutputs {
         response_body: Option<moli_core::network::ResourceInterceptionBody>,
     ) -> Self {
         Self {
+            child_document_starts: Vec::new(),
             automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions:
                 prepare_subresource_continue_action_for_renderer_record(
@@ -184,6 +204,8 @@ impl NetworkPreparedOutputs {
             .extend(other.automatic_subresource_continuations);
         self.pending_subresource_continue_actions
             .extend(other.pending_subresource_continue_actions);
+        self.child_document_starts
+            .extend(other.child_document_starts);
         self.renderer_live.extend(other.renderer_live);
         self.backlog.extend(other.backlog);
         self.subresource_fetch_pauses
@@ -193,6 +215,7 @@ impl NetworkPreparedOutputs {
     pub(crate) fn is_empty(&self) -> bool {
         self.automatic_subresource_continuations.is_empty()
             && self.pending_subresource_continue_actions.is_empty()
+            && self.child_document_starts.is_empty()
             && !self.renderer_live.has_delivery_output()
             && !self.backlog.has_delivery_output()
             && self.subresource_fetch_pauses.is_empty()
@@ -205,7 +228,7 @@ impl NetworkPreparedOutputs {
         {
             outputs.push(NetworkActivityOutput::PendingSubresourceContinueEvents);
         }
-        if self.renderer_live.has_delivery_output() {
+        if self.renderer_live.has_delivery_output() || !self.child_document_starts.is_empty() {
             outputs.push(NetworkActivityOutput::RendererNetworkLive);
         }
         if self.backlog.has_delivery_output() {
@@ -254,6 +277,7 @@ impl NetworkPreparedOutputs {
         actions: Vec<PreparedSubresourceContinueAction>,
     ) -> Self {
         Self {
+            child_document_starts: Vec::new(),
             automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: actions,
             renderer_live: TargetNetworkBacklogPreparedDelivery::default(),
@@ -400,6 +424,19 @@ impl NetworkPreparedOutputSlot {
         out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
         owner: &CommandOwnerScope,
     ) {
+        for (frame, loader, url) in std::mem::take(&mut self.outputs.child_document_starts) {
+            if conn.browsing_context_owner(&frame).is_some() {
+                crate::domains::page::emit_navigation_started_for_session_owner(
+                    conn,
+                    out,
+                    owner,
+                    &frame,
+                    &loader,
+                    &url,
+                    crate::domains::page::NavigationStartInitiator::RendererChildFrame,
+                );
+            }
+        }
         super::emit_prepared_renderer_network_live_background_events(
             conn,
             out,
@@ -489,6 +526,7 @@ pub(in crate::domains) fn network_backlog_prepared_outputs_for_owner(
         preferred_request_id,
     ) {
         outputs.extend(NetworkPreparedOutputs {
+            child_document_starts: Vec::new(),
             automatic_subresource_continuations: Vec::new(),
             pending_subresource_continue_actions: Vec::new(),
             renderer_live: TargetNetworkBacklogPreparedDelivery::default(),

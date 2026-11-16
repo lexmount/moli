@@ -102,6 +102,10 @@ pub(crate) enum PagePreparedChildFrameTreeEvent {
     Detached {
         frame_id: String,
     },
+    NavigationStopped {
+        frame_id: String,
+        loader_id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

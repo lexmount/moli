@@ -431,30 +431,37 @@ impl ResourceRequestClient {
                 stage = "script_text_request_start",
             );
         }
-        let cache_request = request.clone();
-        let result = self
-            .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
-            .await
-            .map_err(|error| format!("{error:#}"));
-        if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-            let status = result.as_ref().ok().map(|response| response.status);
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url,
-                cacheable = true,
-                cache_role = "owner",
-                status,
-                ok = result.is_ok(),
-                elapsed_ms = started.elapsed().as_millis(),
-                stage = "script_text_request_done",
-            );
-        }
-        self.resource_runtime
-            .memory_cache()
-            .lock()
-            .complete_script_text(&key, &load, &cache_request, &result);
-        load.finish(result.clone());
-        result.map_err(anyhow::Error::msg)
+        // The cache owns this producer. Retiring its first Document only drops
+        // one waiter; it must not strand other waiters in a pending cache entry.
+        let producer = Arc::clone(&load);
+        let client = self.clone();
+        self.resource_task_runner().spawn(async move {
+            let cache_request = request.clone();
+            let result = client
+                .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
+                .await
+                .map_err(|error| format!("{error:#}"));
+            if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
+                let status = result.as_ref().ok().map(|response| response.status);
+                tracing::info!(
+                    target: "moli_cdp_nav_timing",
+                    url,
+                    cacheable = true,
+                    cache_role = "owner",
+                    status,
+                    ok = result.is_ok(),
+                    elapsed_ms = started.elapsed().as_millis(),
+                    stage = "script_text_request_done",
+                );
+            }
+            client
+                .resource_runtime
+                .memory_cache()
+                .lock()
+                .complete_script_text(&key, &producer, &cache_request, &result);
+            producer.finish(result);
+        });
+        load.wait().await.map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn fetch_cacheable_script_text_callback_with_load<F>(
