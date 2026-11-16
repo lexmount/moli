@@ -670,10 +670,14 @@ impl ControlledResourceLoad {
                 super::response_hop::advance_validated_subresource_response(
                     &mut self.request,
                     response.head.clone(),
-                    false,
+                    network_request_headers.is_some(),
                 )?
             } else {
-                advance_subresource_response(&mut self.request, response.head.clone(), false)?
+                advance_subresource_response(
+                    &mut self.request,
+                    response.head.clone(),
+                    network_request_headers.is_some(),
+                )?
             };
             let manual = matches!(
                 transition,

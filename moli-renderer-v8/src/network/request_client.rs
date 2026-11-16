@@ -924,9 +924,23 @@ impl ResourceRequestClient {
                     .build()
                     .context("failed to build worker script fetch runtime")
                     .and_then(|runtime| {
-                        runtime.block_on(
-                            request_client.fetch_text_stream_with_cancel(request, cancel_handle),
-                        )
+                        runtime.block_on(async {
+                            let observed = request_client
+                                .fetch_text_stream_with_cancel_and_network_metadata(
+                                    request,
+                                    cancel_handle,
+                                )
+                                .await?;
+                            let (response, observation) = observed.into_parts();
+                            let cookie_report =
+                                response.request_cookie_report.clone().unwrap_or_default();
+                            Ok(response.with_network_request_extra_info(observation.map(
+                                |observation| moli_fetch::NetworkRequestExtraInfo {
+                                    headers: observation.into_headers(),
+                                    cookie_report,
+                                },
+                            )))
+                        })
                     });
                 let _ = response_tx.send(result);
             })

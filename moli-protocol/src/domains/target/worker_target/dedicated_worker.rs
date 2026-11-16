@@ -171,6 +171,9 @@ pub(super) fn register_nested_worker_target(
             target_id: parent_id.clone(),
         },
     };
+    let extra_sessions = conn.network_extra_info_event_session_ids_for_owner(
+        &CommandOwnerScope::for_route(route.clone()),
+    );
     let sessions = conn.network_event_session_ids_for_owner(&CommandOwnerScope::for_route(route));
     let (Ok(request_url), Ok(document_url)) = (
         Url::parse(&info.request_url),
@@ -189,7 +192,7 @@ pub(super) fn register_nested_worker_target(
         info.instance_id,
         target_id.clone(),
         info.name,
-        sessions.clone(),
+        extra_sessions,
     ));
     if let Some(target_info) = context.devtools_target_info(&target_id) {
         outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerCreated {

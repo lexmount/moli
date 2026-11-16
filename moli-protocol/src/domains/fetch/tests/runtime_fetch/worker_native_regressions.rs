@@ -128,6 +128,7 @@ async fn check_worker_redirect_extra_info(shared: bool) {
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &format!("{origin}/page"), "SID-1", "TID-1").await;
     ctx.observe_worker_network_for_test(None).await;
+    command(&mut ctx, 56_098, "Network.enable", json!({})).await;
     enable_runtime_async(&mut ctx, "SID-1", 56_100).await;
     let ready=command(&mut ctx,56_101,"Runtime.evaluate",json!({
         "expression":format!("document.cookie='worker_probe=sent;Path=/';new Promise(resolve=>{{globalThis.nativeWorker=new {}('/worker.js');globalThis.nativePort={};nativePort.onmessage=e=>resolve(e.data);{};}})", if shared {"SharedWorker"} else {"Worker"}, if shared {"nativeWorker.port"} else {"nativeWorker"},if shared {"nativePort.start()"} else {"void 0"}),
@@ -147,6 +148,11 @@ async fn check_worker_redirect_extra_info(shared: bool) {
                 && event["params"]["request"]["url"] == format!("{origin}/start")
         })
         .unwrap();
+    let extra_session = if shared {
+        started["sessionId"].clone()
+    } else {
+        json!("SID-1")
+    };
     let request_id = started["params"]["requestId"].clone();
     wait_until_scheduler_message(&mut ctx, "native redirect terminal", |event| {
         event["method"] == "Network.loadingFinished" && event["params"]["requestId"] == request_id
@@ -161,6 +167,42 @@ async fn check_worker_redirect_extra_info(shared: bool) {
         })
         .collect::<Vec<_>>();
     assert_eq!(extras.len(), 2, "{extras:?}");
+    assert!(
+        extras
+            .iter()
+            .all(|event| event["sessionId"] == extra_session),
+        "request ExtraInfo must follow the loader owner: {extras:?}"
+    );
+    let response_extras = ctx
+        .sent
+        .iter()
+        .filter(|event| {
+            event["method"] == "Network.responseReceivedExtraInfo"
+                && event["params"]["requestId"] == request_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        response_extras.len(),
+        2,
+        "response ExtraInfo for 303 and 200 without Set-Cookie: {response_extras:?}"
+    );
+    assert_eq!(response_extras[0]["params"]["statusCode"], 303);
+    assert_eq!(response_extras[1]["params"]["statusCode"], 200);
+    assert!(
+        response_extras
+            .iter()
+            .all(|event| event["sessionId"] == extra_session)
+    );
+    let redirect = ctx
+        .sent
+        .iter()
+        .find(|event| {
+            event["method"] == "Network.requestWillBeSent"
+                && event["params"]["requestId"] == request_id
+                && event["params"].get("redirectResponse").is_some()
+        })
+        .expect("Worker redirect request");
+    assert_eq!(redirect["params"]["redirectHasExtraInfo"], true);
     let header = |index: usize, name: &str| {
         extras[index]["params"]["headers"]
             .as_object()
