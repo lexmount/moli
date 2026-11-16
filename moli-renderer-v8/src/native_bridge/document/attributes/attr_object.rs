@@ -9,10 +9,10 @@ mod state;
 
 pub(in crate::native_bridge) use reference::AttrReference;
 
-pub(crate) use cache::live_get_attribute_node_object;
 pub(in crate::native_bridge) use cache::{
     clear_live_attr_cache_entry, clear_live_attr_cache_entry_ns, live_get_attribute_node_ns_object,
 };
+pub(crate) use cache::{detach_cached_attr_for_removal, live_get_attribute_node_object};
 pub(in crate::native_bridge::document) use cache::{
     live_attr_cache_object, namespace_attr_cache_key, set_attr_cache_entry,
 };

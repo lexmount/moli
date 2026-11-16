@@ -861,35 +861,6 @@ pub(crate) fn write_detached_native_attribute_ns_appending_to_current_reaction_q
     true
 }
 
-pub(crate) fn remove_detached_native_attribute_appending_to_current_reaction_queue<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    element: v8::Local<'s, v8::Object>,
-    name: &str,
-) -> bool {
-    let Some((runtime_ptr, handle)) = detached_native_element_runtime_and_handle(scope, element)
-    else {
-        return false;
-    };
-    clear_detached_iframe_context_before_navigation_attribute_change(
-        scope,
-        runtime_ptr,
-        element,
-        handle,
-        name,
-        None,
-    );
-    let removed = crate::native_bridge::element::remove_live_element_attribute_appending_to_current_reaction_queue(
-        scope,
-        runtime_ptr,
-        handle,
-        name,
-    );
-    if removed {
-        detached_record_tree_mutation(scope, element);
-    }
-    true
-}
-
 pub(crate) fn remove_detached_native_attribute_ns_appending_to_current_reaction_queue<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,

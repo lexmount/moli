@@ -2,9 +2,7 @@ use super::*;
 use crate::custom_elements;
 use crate::dom::native::Attribute;
 use crate::native_bridge::element::{
-    remove_live_element_attribute_appending_to_current_reaction_queue,
     remove_live_element_attribute_ns_appending_to_current_reaction_queue,
-    set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
 };
 use crate::native_bridge::node::node_runtime_and_handle_from_object_or_detached;
@@ -111,7 +109,7 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
         );
         return Some(v8::undefined(scope).into());
     };
-    let Some(mut metadata) = detached_attr_node_metadata(scope, state) else {
+    let Some(metadata) = detached_attr_node_metadata(scope, state) else {
         return Some(v8::null(scope).into());
     };
     let owner = object_property_as_object(scope, state, "ownerElement");
@@ -128,18 +126,6 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, element) else {
         return Some(v8::null(scope).into());
     };
-    if metadata.namespace_uri.is_none() {
-        let Some(name) = unsafe { &*runtime_ptr }
-            .dom_host()
-            .dom()
-            .normalized_attribute_name(handle, &metadata.name)
-        else {
-            return Some(v8::null(scope).into());
-        };
-        metadata.name = name;
-        metadata.local_name = metadata.name.clone();
-        metadata.prefix = None;
-    }
     let old_metadata =
         live_native_attribute_metadata_for_target(unsafe { &*runtime_ptr }, handle, &metadata);
     let old = old_metadata.as_ref().and_then(|old_metadata| {
@@ -263,7 +249,7 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
         );
         return Some(v8::undefined(scope).into());
     };
-    let Some(mut metadata) = detached_attr_node_metadata(scope, state) else {
+    let Some(metadata) = detached_attr_node_metadata(scope, state) else {
         return Some(v8::null(scope).into());
     };
     let owner = object_property_as_object(scope, state, "ownerElement");
@@ -277,50 +263,32 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
         return Some(v8::undefined(scope).into());
     }
 
-    let old = if metadata.namespace_uri.is_some() {
-        native_attr_object_by_namespace(
-            scope,
-            element,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        )
-    } else {
-        let name = detached_attribute_name(scope, element, &metadata.name);
-        native_attr_object_by_name(scope, element, &name)
-    };
+    let old = native_attr_object_by_namespace(
+        scope,
+        element,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    );
     if old.is_some_and(|old| old.strict_equals(attr.into())) {
         return Some(attr.into());
     }
 
-    if metadata.namespace_uri.is_some() {
-        clear_live_attr_cache_entry_ns(
-            scope,
-            element,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        );
-        let _ = write_detached_native_attribute_ns_appending_to_current_reaction_queue(
-            scope,
-            element,
-            metadata.namespace_uri.as_deref(),
-            metadata.prefix.as_deref(),
-            &metadata.name,
-            &metadata.local_name,
-            &metadata.value,
-        );
-        cache_attached_attr_node(scope, element, attr, &metadata);
-    } else {
-        let name = detached_attribute_name(scope, element, &metadata.name);
-        clear_live_attr_cache_entry(scope, element, &name);
-        let _ = write_detached_native_attribute_appending_to_current_reaction_queue(
-            scope,
-            element,
-            &name,
-            &metadata.value,
-        );
-        metadata.name = name;
-        cache_attached_attr_node(scope, element, attr, &metadata);
-    }
+    clear_live_attr_cache_entry_ns(
+        scope,
+        element,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    );
+    let _ = write_detached_native_attribute_ns_appending_to_current_reaction_queue(
+        scope,
+        element,
+        metadata.namespace_uri.as_deref(),
+        metadata.prefix.as_deref(),
+        &metadata.name,
+        &metadata.local_name,
+        &metadata.value,
+    );
+    cache_attached_attr_node(scope, element, attr, &metadata);
 
     attach_attr_node(scope, state, element, &metadata.value);
     match old {
@@ -365,17 +333,12 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
         return Some(v8::null(scope).into());
     };
     let owner = object_property_as_object(scope, state, "ownerElement");
-    let current_value = if metadata.namespace_uri.is_some() {
-        read_detached_native_attribute_ns(
-            scope,
-            element,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        )
-    } else {
-        let name = detached_attribute_name(scope, element, &metadata.name);
-        read_detached_native_attribute(scope, element, &name)
-    };
+    let current_value = read_detached_native_attribute_ns(
+        scope,
+        element,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    );
     if !owner.is_some_and(|owner| owner.strict_equals(element.into())) || current_value.is_none() {
         throw_dom_exception(
             scope,
@@ -385,26 +348,18 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
         );
         return Some(v8::undefined(scope).into());
     }
-    if metadata.namespace_uri.is_some() {
-        let _ = remove_detached_native_attribute_ns_appending_to_current_reaction_queue(
-            scope,
-            element,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        );
-        clear_live_attr_cache_entry_ns(
-            scope,
-            element,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        );
-    } else {
-        let name = detached_attribute_name(scope, element, &metadata.name);
-        let _ = remove_detached_native_attribute_appending_to_current_reaction_queue(
-            scope, element, &name,
-        );
-        clear_live_attr_cache_entry(scope, element, &name);
-    }
+    let _ = remove_detached_native_attribute_ns_appending_to_current_reaction_queue(
+        scope,
+        element,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    );
+    clear_live_attr_cache_entry_ns(
+        scope,
+        element,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    );
     detach_attr_node(scope, state, current_value.as_deref().unwrap_or_default());
     Some(attr.into())
 }
@@ -445,16 +400,12 @@ fn live_native_attribute_metadata_for_target(
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) -> Option<DetachedAttrNodeMetadata> {
-    if metadata.namespace_uri.is_some() {
-        live_native_attribute_metadata_for_namespace(
-            runtime,
-            handle,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        )
-    } else {
-        live_native_attribute_metadata_for_name(runtime, handle, &metadata.name)
-    }
+    live_native_attribute_metadata_for_namespace(
+        runtime,
+        handle,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    )
 }
 
 fn live_native_attribute_metadata_for_name(
@@ -503,15 +454,11 @@ fn live_native_attribute_value_for_target(
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) -> Option<String> {
-    if metadata.namespace_uri.is_some() {
-        runtime.dom_host().get_attribute_ns(
-            handle,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        )
-    } else {
-        runtime.dom_host().get_attribute(handle, &metadata.name)
-    }
+    runtime.dom_host().get_attribute_ns(
+        handle,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    )
 }
 
 fn live_native_attr_object_from_metadata<'s>(
@@ -554,16 +501,12 @@ fn clear_live_attr_cache_for_metadata<'s>(
     element: v8::Local<'s, v8::Object>,
     metadata: &DetachedAttrNodeMetadata,
 ) {
-    if metadata.namespace_uri.is_some() {
-        clear_live_attr_cache_entry_ns(
-            scope,
-            element,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        );
-    } else {
-        clear_live_attr_cache_entry(scope, element, &metadata.name);
-    }
+    clear_live_attr_cache_entry_ns(
+        scope,
+        element,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    );
 }
 
 fn detach_replaced_live_attr_node<'s>(
@@ -594,26 +537,18 @@ fn set_live_attribute_node_native(
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) {
-    if metadata.namespace_uri.is_some() {
-        let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            metadata.namespace_uri.as_deref(),
-            metadata.prefix.as_deref(),
-            &metadata.local_name,
-            &metadata.name,
-            &metadata.value,
-        );
-    } else {
-        let _ = set_live_element_attribute_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            &metadata.name,
-            &metadata.value,
-        );
-    }
+    // Attr already carries its exact namespace/local-name identity, including
+    // mixed-case names attached to an element in an HTML document.
+    let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
+        scope,
+        runtime_ptr,
+        handle,
+        metadata.namespace_uri.as_deref(),
+        metadata.prefix.as_deref(),
+        &metadata.local_name,
+        &metadata.name,
+        &metadata.value,
+    );
 }
 
 fn remove_live_attribute_node_native(
@@ -622,22 +557,13 @@ fn remove_live_attribute_node_native(
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) {
-    if metadata.namespace_uri.is_some() {
-        let _ = remove_live_element_attribute_ns_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            metadata.namespace_uri.as_deref(),
-            &metadata.local_name,
-        );
-    } else {
-        let _ = remove_live_element_attribute_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            &metadata.name,
-        );
-    }
+    let _ = remove_live_element_attribute_ns_appending_to_current_reaction_queue(
+        scope,
+        runtime_ptr,
+        handle,
+        metadata.namespace_uri.as_deref(),
+        &metadata.local_name,
+    );
 }
 
 pub(super) fn nullable_state_string<'s>(

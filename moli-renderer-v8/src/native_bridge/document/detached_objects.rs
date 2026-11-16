@@ -77,7 +77,6 @@ pub(crate) use self::state_tree::{
     DetachedNativeAttributeSnapshot, read_detached_native_attribute,
     read_detached_native_attribute_names, read_detached_native_attribute_snapshot,
     read_detached_native_has_attribute,
-    remove_detached_native_attribute_appending_to_current_reaction_queue,
     remove_detached_native_attribute_ns_appending_to_current_reaction_queue,
     write_detached_native_attribute_appending_to_current_reaction_queue,
     write_detached_native_attribute_ns_appending_to_current_reaction_queue,

@@ -107,6 +107,10 @@ pub(super) use attributes::{
     build_named_node_map_wrapper_template, clear_live_attr_cache_entry,
     clear_live_attr_cache_entry_ns, live_get_attribute_node_ns_object,
 };
+pub(crate) use attributes::{
+    detach_cached_attr_for_removal, live_get_attribute_node_object, live_named_node_map_wrapper,
+    new_attr_object,
+};
 use attributes::{
     detached_create_attribute_method_callback, detached_create_attribute_ns_method_callback,
 };
@@ -116,9 +120,6 @@ pub(in crate::native_bridge) use attributes::{
 use attributes::{
     live_attr_cache_object, namespace_attr_cache_key, new_document_attr_object,
     set_attr_cache_entry,
-};
-pub(crate) use attributes::{
-    live_get_attribute_node_object, live_named_node_map_wrapper, new_attr_object,
 };
 pub(super) use construction::{
     bridge_create_comment_callback, bridge_create_element_callback,
@@ -173,7 +174,6 @@ pub(crate) use detached_objects::{
     preserve_detached_element_bridge_for_custom_prototype, read_detached_native_attribute,
     read_detached_native_attribute_names, read_detached_native_attribute_snapshot,
     read_detached_native_has_attribute,
-    remove_detached_native_attribute_appending_to_current_reaction_queue,
     remove_detached_native_attribute_ns_appending_to_current_reaction_queue,
     write_detached_native_attribute_appending_to_current_reaction_queue,
     write_detached_native_attribute_ns_appending_to_current_reaction_queue,

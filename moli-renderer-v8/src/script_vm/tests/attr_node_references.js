@@ -148,8 +148,11 @@
   const childAttribute = attribute(other.document, null, 'owned', 'value');
   const childOwner = other.document.createElement('div'); childOwner.setAttributeNode(childAttribute);
   const nextDocument = document.implementation.createHTMLDocument(''); nextDocument.adoptNode(childOwner);
-  check('adoption/owner-document', [true, true], () => [childAttribute.ownerDocument === nextDocument,
-    Node.prototype.cloneNode.call(childAttribute).ownerDocument === nextDocument]);
+  check('adoption/owner-document-and-clone-realm', [true, true, true, true], () => {
+    const clone = Node.prototype.cloneNode.call(childAttribute);
+    return [childAttribute.ownerDocument === nextDocument, clone.ownerDocument === nextDocument,
+      clone instanceof other.Attr, Object.getPrototypeOf(clone) === other.Attr.prototype];
+  });
   globalThis.__attrNodeReferenceFailures = rows.filter(row => !row.pass);
   globalThis.__nodeReplacementResults = {total: rows.length, passed: rows.filter(row => row.pass).length, failures: __attrNodeReferenceFailures, rows};
   return rows.every(row => row.pass);

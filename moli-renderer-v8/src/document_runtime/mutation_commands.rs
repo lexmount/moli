@@ -820,6 +820,36 @@ impl DocumentRuntime {
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
             host_ptr, handle, None, name, state,
         );
+        let attr_target = self
+            .dom_host
+            .normalized_attribute_name(handle, name)
+            .and_then(|name| {
+                self.dom_host
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .and_then(|element| {
+                        element
+                            .attributes()
+                            .iter()
+                            .find(|attribute| attribute.name_matches(&name))
+                    })
+                    .map(|attribute| {
+                        (
+                            (!attribute.namespace().is_empty())
+                                .then(|| attribute.namespace().to_owned()),
+                            attribute.local_name().to_owned(),
+                        )
+                    })
+            });
+        if let Some((namespace, local_name)) = attr_target {
+            crate::native_bridge::document::detach_cached_attr_for_removal(
+                scope,
+                host_ptr,
+                handle,
+                namespace.as_deref(),
+                &local_name,
+            );
+        }
         let (effects, old_value) = self
             .dom_host
             .remove_attribute_mutation_outcome(handle, name)
@@ -954,6 +984,9 @@ impl DocumentRuntime {
         let old_style_state = self.retained_old_style_state_for_impact(host_ptr, handle, state);
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
             host_ptr, handle, namespace, local_name, state,
+        );
+        crate::native_bridge::document::detach_cached_attr_for_removal(
+            scope, host_ptr, handle, namespace, local_name,
         );
         let (effects, old_value) = self
             .dom_host
