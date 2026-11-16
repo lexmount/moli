@@ -3,6 +3,16 @@ use super::super::events::{
 };
 use super::super::*;
 
+pub(crate) fn apply_xhr_streaming_failure(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    internal_id: u64,
+) {
+    if super::progress::xhr_stream_is_current(scope, xhr, internal_id) {
+        apply_xhr_failure(scope, xhr);
+    }
+}
+
 pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'_, v8::Object>) {
     super::clear_xhr_request_timers(scope, xhr);
     clear_xhr_active_request(scope, xhr);
