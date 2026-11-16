@@ -549,7 +549,7 @@ impl ControlledResourceLoad {
             }
             let mut response = response;
             let mut body_from_network = body_from_network;
-            let mut intercepted_head = !body_from_network;
+            let mut intercepted_response = !body_from_network;
             if handle_auth_requests
                 && matches!(response.head.status, 401 | 407)
                 && let Some(challenge) = crate::protocol_types::extract_subresource_auth_challenge(
@@ -625,7 +625,7 @@ impl ControlledResourceLoad {
                 }
                 match self.decision(rx, InterceptionPhase::Response).await? {
                     D::ContinueResponse { status, headers } => {
-                        intercepted_head |= status.is_some() || headers.is_some();
+                        intercepted_response = true;
                         if let Some(status) = status {
                             response.head.status = status;
                             response.head.status_text = None;
@@ -645,7 +645,7 @@ impl ControlledResourceLoad {
                         );
                         self.response_filter = None;
                         body_from_network = false;
-                        intercepted_head = true;
+                        intercepted_response = true;
                     }
                     D::Fail(error) => return Err(error),
                     _ => unreachable!("response pause accepts only response decisions"),
@@ -655,7 +655,7 @@ impl ControlledResourceLoad {
                 SubresourceResponseTransition, advance_subresource_response,
             };
             let transition = if matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
-                && intercepted_head
+                && intercepted_response
                 && self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
                 && super::async_fetch::redirect_location(&response.head.headers).is_none()
             {

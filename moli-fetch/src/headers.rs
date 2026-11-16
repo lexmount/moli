@@ -43,6 +43,18 @@ pub fn encode_redirect_location(value: &[u8]) -> Cow<'_, str> {
     percent_encoding::percent_encode(value, &percent_encoding::AsciiSet::EMPTY).into()
 }
 
+/// The effective redirect target after HTTP whitespace normalization. An empty
+/// Location has no next hop and must not cause a transport to discard its body.
+pub fn redirect_location(headers: &[(String, Vec<u8>)]) -> Option<&[u8]> {
+    let value = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("location"))?
+        .1
+        .as_slice()
+        .trim_ascii();
+    (!value.is_empty()).then_some(value)
+}
+
 pub(crate) fn parse_http_response_header_line(data: &[u8]) -> Option<(String, Vec<u8>)> {
     let end = data
         .iter()

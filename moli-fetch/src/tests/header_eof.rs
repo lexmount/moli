@@ -510,3 +510,23 @@ async fn https_header_eof_is_rejected_while_bare_cr_body_bytes_are_preserved() -
     assert!(client.shutdown().is_clean());
     Ok(())
 }
+
+#[tokio::test]
+async fn empty_redirect_location_preserves_the_body_on_every_transport() -> Result<()> {
+    for location in ["", "Location:\r\n", "Location: \t \r\n"] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/empty-redirect", listener.local_addr()?);
+        let response=format!("HTTP/1.1 302 Found\r\n{location}Content-Length: 13\r\nConnection: close\r\n\r\nredirect-body").into_bytes();
+        let server = tokio::spawn(serve_responses(listener, vec![response; 3]));
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        for mode in ["buffered", "html", "raw"] {
+            let (head, body) =
+                fetch_in_mode(&client, Request::get(&url)?.with_single_hop(), mode).await?;
+            assert_eq!(head.status, 302, "{mode}: {location:?}");
+            assert_eq!(body, b"redirect-body", "{mode}: {location:?}");
+            assert!(head.redirect_chain.is_empty());
+        }
+        assert_eq!(server.await??.len(), 3);
+    }
+    Ok(())
+}
