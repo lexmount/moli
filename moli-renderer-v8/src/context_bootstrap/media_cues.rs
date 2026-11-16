@@ -9,6 +9,9 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod cue_text;
+use cue_text::{CueNodeKind, parse_cue_text};
+
 pub(crate) const TEXT_TRACK_CUE_TRACK_SLOT: &str = "__moliTextTrackCueTrack";
 const TEXT_TRACK_CUE_START_TIME_SLOT: &str = "__moliTextTrackCueStartTime";
 const TEXT_TRACK_CUE_END_TIME_SLOT: &str = "__moliTextTrackCueEndTime";
@@ -476,8 +479,7 @@ fn text_track_cue_get_cue_as_html_callback<'s>(
     let Some(receiver) = text_track_cue_receiver(scope, &args) else {
         return;
     };
-    let text = receiver
-        .get(scope, v8str(scope, "text").into())
+    let text = get_private_value(scope, receiver, TEXT_TRACK_CUE_TEXT_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
@@ -503,242 +505,36 @@ fn append_vtt_cue_fragment(
     fragment: DomHandle,
     source: &str,
 ) {
-    if source.is_empty() {
-        let text_node = runtime.create_text_node("");
-        let _ = runtime.append_child(scope, runtime_ptr, fragment, text_node);
-        return;
-    }
-    let mut stack = vec![VttCueFragmentNode {
-        handle: fragment,
-        tag: VttCueFragmentTag::Root,
-    }];
-    let mut text = String::new();
-    let mut cursor = 0usize;
-    while cursor < source.len() {
-        let remaining = &source[cursor..];
-        if let Some(entity) = remaining.strip_prefix('&')
-            && let Some(end) = entity.find(';')
-        {
-            let name = &entity[..end];
-            if let Some(decoded) = decode_vtt_cue_entity(name) {
-                text.push(decoded);
-                cursor += end + 2;
-                continue;
+    let units = source.encode_utf16().collect::<Vec<_>>();
+    let document = runtime.document_handle();
+    let mut handles = Vec::new();
+    for node in parse_cue_text(&units) {
+        let child = match node.kind {
+            CueNodeKind::Text(text) => runtime.create_text_node(&String::from_utf16_lossy(&text)),
+            CueNodeKind::Timestamp(timestamp) => runtime
+                .create_processing_instruction_for_document(document, "timestamp", &timestamp),
+            CueNodeKind::Element {
+                tag,
+                classes,
+                annotation,
+            } => {
+                let child = runtime.create_element(tag.element_name());
+                for (name, units) in [
+                    (!classes.is_empty()).then_some(("class", classes)),
+                    tag.annotation_attribute().map(|name| (name, annotation)),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    let value = String::from_utf16_lossy(&units);
+                    let _ = runtime.set_attribute(scope, runtime_ptr, child, name, &value);
+                }
+                child
             }
-        }
-        if remaining.starts_with('<') {
-            let Some(end) = remaining.find('>') else {
-                break;
-            };
-            flush_vtt_cue_text(scope, runtime_ptr, runtime, &stack, &mut text);
-            let tag = &remaining[1..end];
-            apply_vtt_cue_tag(scope, runtime_ptr, runtime, &mut stack, tag);
-            cursor += end + 1;
-            continue;
-        }
-        let Some(ch) = remaining.chars().next() else {
-            break;
         };
-        text.push(ch);
-        cursor += ch.len_utf8();
-    }
-    flush_vtt_cue_text(scope, runtime_ptr, runtime, &stack, &mut text);
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum VttCueFragmentTag {
-    Root,
-    Element(&'static str),
-}
-
-#[derive(Clone, Copy, Debug)]
-struct VttCueFragmentNode {
-    handle: DomHandle,
-    tag: VttCueFragmentTag,
-}
-
-fn flush_vtt_cue_text(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    runtime: &mut PageScriptHost,
-    stack: &[VttCueFragmentNode],
-    text: &mut String,
-) {
-    if text.is_empty() {
-        return;
-    }
-    let text_node = runtime.create_text_node(text);
-    let parent = stack
-        .last()
-        .map(|node| node.handle)
-        .unwrap_or_else(|| stack[0].handle);
-    let _ = runtime.append_child(scope, runtime_ptr, parent, text_node);
-    text.clear();
-}
-
-fn apply_vtt_cue_tag(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    runtime: &mut PageScriptHost,
-    stack: &mut Vec<VttCueFragmentNode>,
-    raw: &str,
-) {
-    if let Some(close_name) = raw.strip_prefix('/') {
-        if close_name.starts_with(|ch: char| ch.is_ascii_whitespace()) {
-            return;
-        }
-        let close_name = close_name
-            .split(|ch: char| ch == '.' || ch.is_ascii_whitespace())
-            .next()
-            .unwrap_or("");
-        let close_name = canonical_vtt_cue_fragment_tag(close_name);
-        if stack
-            .last()
-            .is_some_and(|node| node.tag == VttCueFragmentTag::Element(close_name))
-            && stack.len() > 1
-        {
-            stack.pop();
-        }
-        return;
-    }
-
-    if raw.starts_with(|ch: char| ch.is_ascii_whitespace()) {
-        return;
-    }
-    let parsed = parse_vtt_cue_open_tag(raw);
-    let Some(parsed) = parsed else {
-        return;
-    };
-    if parsed.tag == "rt"
-        && !stack
-            .iter()
-            .any(|node| node.tag == VttCueFragmentTag::Element("ruby"))
-    {
-        return;
-    }
-    let element_name = if matches!(parsed.tag, "c" | "v") {
-        "span"
-    } else {
-        parsed.tag
-    };
-    let child = runtime.create_element(element_name);
-    if let Some(class_name) = parsed.class_name
-        && !class_name.is_empty()
-    {
-        let _ = runtime.set_attribute(scope, runtime_ptr, child, "class", &class_name);
-    }
-    if let Some(title) = parsed.title
-        && !title.is_empty()
-    {
-        let _ = runtime.set_attribute(scope, runtime_ptr, child, "title", &title);
-    }
-    let parent = stack
-        .last()
-        .map(|node| node.handle)
-        .unwrap_or_else(|| stack[0].handle);
-    let _ = runtime.append_child(scope, runtime_ptr, parent, child);
-    stack.push(VttCueFragmentNode {
-        handle: child,
-        tag: VttCueFragmentTag::Element(parsed.tag),
-    });
-}
-
-struct ParsedVttCueOpenTag {
-    tag: &'static str,
-    class_name: Option<String>,
-    title: Option<String>,
-}
-
-fn parse_vtt_cue_open_tag(raw: &str) -> Option<ParsedVttCueOpenTag> {
-    let mut boundary = raw.len();
-    for (index, ch) in raw.char_indices() {
-        if ch == '.' || ch.is_ascii_whitespace() {
-            boundary = index;
-            break;
-        }
-    }
-    let tag = canonical_vtt_cue_fragment_tag(&raw[..boundary]);
-    if !matches!(tag, "b" | "i" | "u" | "ruby" | "rt" | "c" | "v") {
-        return None;
-    }
-    let rest = &raw[boundary..];
-    let (class_part, title_part) = if let Some(title_start) = rest.find(char::is_whitespace) {
-        (&rest[..title_start], rest[title_start..].trim())
-    } else {
-        (rest, "")
-    };
-    let class_name = parse_vtt_cue_classes(class_part);
-    let title = (tag == "v" && !title_part.is_empty()).then(|| title_part.to_owned());
-    Some(ParsedVttCueOpenTag {
-        tag,
-        class_name,
-        title,
-    })
-}
-
-fn canonical_vtt_cue_fragment_tag(name: &str) -> &'static str {
-    match name {
-        "b" => "b",
-        "i" => "i",
-        "u" => "u",
-        "ruby" => "ruby",
-        "rt" => "rt",
-        "c" => "c",
-        "v" => "v",
-        _ => "",
-    }
-}
-
-fn parse_vtt_cue_classes(raw: &str) -> Option<String> {
-    let classes = raw
-        .split('.')
-        .skip(1)
-        .filter(|class_name| !class_name.is_empty())
-        .collect::<Vec<_>>();
-    (!classes.is_empty()).then(|| classes.join(" "))
-}
-
-#[cfg(test)]
-fn vtt_cue_text_content(source: &str) -> String {
-    let mut output = String::new();
-    let mut cursor = 0usize;
-    while cursor < source.len() {
-        let remaining = &source[cursor..];
-        if let Some(entity) = remaining.strip_prefix('&')
-            && let Some(end) = entity.find(';')
-        {
-            let name = &entity[..end];
-            if let Some(decoded) = decode_vtt_cue_entity(name) {
-                output.push(decoded);
-                cursor += end + 2;
-                continue;
-            }
-        }
-        if remaining.starts_with('<') {
-            let Some(end) = remaining.find('>') else {
-                break;
-            };
-            cursor += end + 1;
-            continue;
-        }
-        let Some(ch) = remaining.chars().next() else {
-            break;
-        };
-        output.push(ch);
-        cursor += ch.len_utf8();
-    }
-    output
-}
-
-fn decode_vtt_cue_entity(name: &str) -> Option<char> {
-    match name {
-        "amp" => Some('&'),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "lrm" => Some('\u{200e}'),
-        "rlm" => Some('\u{200f}'),
-        "nbsp" => Some('\u{00a0}'),
-        _ => None,
+        let parent = node.parent.map(|index| handles[index]).unwrap_or(fragment);
+        let _ = runtime.append_child(scope, runtime_ptr, parent, child);
+        handles.push(child);
     }
 }
 
@@ -1188,7 +984,19 @@ pub(super) fn install_media_cue_template_bindings<'s>(
 
 #[cfg(test)]
 mod tests {
-    use super::vtt_cue_text_content;
+    use super::{CueNodeKind, parse_cue_text};
+
+    fn vtt_cue_text_content(source: &str) -> String {
+        let units = source.encode_utf16().collect::<Vec<_>>();
+        let text = parse_cue_text(&units)
+            .into_iter()
+            .flat_map(|node| match node.kind {
+                CueNodeKind::Text(text) => text,
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        String::from_utf16(&text).unwrap()
+    }
 
     #[test]
     fn vtt_cue_text_content_decodes_entities_and_strips_tags() {
