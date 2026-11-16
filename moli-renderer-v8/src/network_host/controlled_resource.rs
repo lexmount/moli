@@ -549,7 +549,7 @@ impl ControlledResourceLoad {
             }
             let mut response = response;
             let mut body_from_network = body_from_network;
-            let mut intercepted_response = !body_from_network;
+            let mut continued_final_response = false;
             if handle_auth_requests
                 && matches!(response.head.status, 401 | 407)
                 && let Some(challenge) = crate::protocol_types::extract_subresource_auth_challenge(
@@ -625,7 +625,12 @@ impl ControlledResourceLoad {
                 }
                 match self.decision(rx, InterceptionPhase::Response).await? {
                     D::ContinueResponse { status, headers } => {
-                        intercepted_response = true;
+                        // This decision edits an existing response. It cannot
+                        // turn a transport's final response into a new hop.
+                        continued_final_response =
+                            !matches!(response.head.status, 301 | 302 | 303 | 307 | 308)
+                                || super::async_fetch::redirect_location(&response.head.headers)
+                                    .is_none();
                         if let Some(status) = status {
                             response.head.status = status;
                             response.head.status_text = None;
@@ -645,7 +650,6 @@ impl ControlledResourceLoad {
                         );
                         self.response_filter = None;
                         body_from_network = false;
-                        intercepted_response = true;
                     }
                     D::Fail(error) => return Err(error),
                     _ => unreachable!("response pause accepts only response decisions"),
@@ -654,10 +658,11 @@ impl ControlledResourceLoad {
             use super::response_hop::{
                 SubresourceResponseTransition, advance_subresource_response,
             };
-            let transition = if matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
-                && intercepted_response
-                && self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
-                && super::async_fetch::redirect_location(&response.head.headers).is_none()
+            let transition = if (continued_final_response
+                && self.request.redirect_mode() != moli_fetch::RequestRedirectMode::Manual)
+                || (matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
+                    && self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
+                    && super::async_fetch::redirect_location(&response.head.headers).is_none())
             {
                 if self.response_filter.is_none() {
                     self.request.validate_cors_response_for_url(

@@ -1126,6 +1126,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                 pending.resolver.clone(),
                 pending.document_url.clone(),
                 pending.request_mode,
+                pending.redirect_mode,
                 pending.request_method.clone(),
                 observable_head,
             ))
@@ -1145,9 +1146,22 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         }
         return;
     }
-    if let Some((resolver, document_url, request_mode, request_method, observable_head)) =
-        response_input
+    if let Some((
+        resolver,
+        document_url,
+        request_mode,
+        redirect_mode,
+        request_method,
+        observable_head,
+    )) = response_input
     {
+        let origin = (&document_url).into();
+        let mut metadata = started.head.fetch_metadata(&origin, request_mode);
+        metadata.response_type = started.head.fetch_response_type_for_redirect_mode(
+            &origin,
+            request_mode,
+            redirect_mode,
+        );
         let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_metadata(
             scope,
             crate::network_host::FetchResponseRequest {
@@ -1156,7 +1170,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             },
             observable_head,
             started.body_source_id,
-            started.head.fetch_metadata(&(&document_url).into(), request_mode),
+            metadata,
         );
         let resolver = v8::Local::new(scope, &resolver);
         let _ = resolver.resolve(scope, response_obj.into());
@@ -1189,6 +1203,13 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     let head = finished.head;
     match finished.result {
         Ok(body) => {
+            let timing_filter = head
+                .fetch_response_type_for_redirect_mode(
+                    &(&pending.document_url).into(),
+                    pending.request_mode,
+                    pending.redirect_mode,
+                )
+                .into();
             crate::context_bootstrap::record_resource_performance_entry(
                 scope,
                 pending.resource_timing.completed(
@@ -1197,7 +1218,7 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
                     pending.request_mode,
                     &head,
                     body.len(),
-                    None,
+                    Some(&timing_filter),
                 ),
             );
             close_pending_network_body_stream(scope, finished.body_source_id);
@@ -1279,6 +1300,22 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 }
             };
 
+            let mut metadata = crate::network_host::fetch_response_metadata(
+                &(&pending.document_url).into(),
+                &response_head,
+                pending.request_mode,
+                response_filter.as_ref(),
+            );
+            if response_filter.is_none() {
+                metadata.response_type = response_head.fetch_response_type_for_redirect_mode(
+                    &(&pending.document_url).into(),
+                    pending.request_mode,
+                    pending.redirect_mode,
+                );
+            }
+            let timing_filter = response_filter
+                .clone()
+                .unwrap_or_else(|| metadata.response_type.into());
             let entry = if opaque_response_blocked {
                 pending.resource_timing.failed(&pending.request_url)
             } else {
@@ -1288,16 +1325,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     pending.request_mode,
                     &response_head,
                     response.subresource_response_body().len(),
-                    response_filter.as_ref(),
+                    Some(&timing_filter),
                 )
             };
             crate::context_bootstrap::record_resource_performance_entry(scope, entry);
-            let mut metadata = crate::network_host::fetch_response_metadata(
-                &(&pending.document_url).into(),
-                &response_head,
-                pending.request_mode,
-                response_filter.as_ref(),
-            );
             if opaque_response_blocked {
                 metadata.response_type = crate::types::FetchResponseType::Opaque;
                 metadata.timing_allow_passed = false;

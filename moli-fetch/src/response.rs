@@ -123,8 +123,20 @@ impl ResponseHead {
         origin: &moli_url::WebOrigin,
         mode: crate::RequestMode,
     ) -> crate::FetchResponseType {
+        self.fetch_response_type_for_redirect_mode(origin, mode, crate::RequestRedirectMode::Manual)
+    }
+
+    /// A delivered 3xx is not necessarily a manual redirect: DevTools may edit
+    /// a final response's status without creating another transport hop.
+    pub fn fetch_response_type_for_redirect_mode(
+        &self,
+        origin: &moli_url::WebOrigin,
+        mode: crate::RequestMode,
+        redirect_mode: crate::RequestRedirectMode,
+    ) -> crate::FetchResponseType {
         use crate::FetchResponseType;
-        if matches!(self.status, 301 | 302 | 303 | 307 | 308)
+        if redirect_mode == crate::RequestRedirectMode::Manual
+            && matches!(self.status, 301 | 302 | 303 | 307 | 308)
             && self
                 .headers
                 .iter()

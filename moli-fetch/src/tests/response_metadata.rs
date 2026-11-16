@@ -107,5 +107,19 @@ fn empty_location_does_not_make_a_delivered_redirect_response_opaque() {
                 FetchResponseType::OpaqueRedirect
             }
         );
+        for redirect_mode in [
+            crate::RequestRedirectMode::Follow,
+            crate::RequestRedirectMode::Error,
+        ] {
+            assert_eq!(
+                head.fetch_response_type_for_redirect_mode(
+                    &origin,
+                    RequestMode::Cors,
+                    redirect_mode
+                ),
+                FetchResponseType::Basic,
+                "a final response edited to 302 remains readable: {redirect_mode:?}",
+            );
+        }
     }
 }
