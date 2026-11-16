@@ -754,6 +754,27 @@ fn window_open_named_lightweight_popup_reuses_without_recloning_session_storage(
         r#"{"sameWindow":true,"popupName":"sessionStorageTestWindow","initial":null,"openerFoo":"BAR","popupFoo":null}"#
     );
 }
+#[test]
+fn window_open_noopener_navigates_existing_named_lightweight_popup() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const popup = open("", "noopenerReuseWindow");
+              const reopened = open("about:blank#reused", "noopenerReuseWindow", "noopener");
+              return JSON.stringify({ reopened, href: popup.location.href, opener: popup.opener === window });
+            })()
+            "##,
+        )
+        .expect("noopener named popup reuse probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"reopened":null,"href":"about:blank#reused","opener":true}"#
+    );
+}
 #[tokio::test]
 async fn window_open_named_lightweight_popup_reuse_pushes_history_and_back_traverses() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

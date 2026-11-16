@@ -1978,3 +1978,95 @@ async fn auxiliary_initial_document_adoption_keeps_its_history_entry() {
     );
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn noopener_window_open_reuses_existing_named_window_and_frame() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().fallback(get(|| async { axum::response::Html("<p>page</p>") })),
+        "noopener-named-reuse",
+    );
+    let base = format!("http://{fixture_addr}");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/parent")).await;
+    evaluate_window_name_probe(
+        &mut opener,
+        3,
+        "const f=document.createElement('iframe');f.name='fr';f.src='/frame';document.body.append(f);true",
+    )
+    .await;
+    wait_for_value(&mut opener, "frames[0].location.pathname", json!("/frame")).await;
+    let before = fetch_server_json(addr, "/json/list")
+        .await
+        .as_array()
+        .unwrap()
+        .len();
+    evaluate_window_name_probe(&mut opener, 4, "window.p1=open('/first','w1');true").await;
+    wait_for_value(&mut opener, "p1.location.pathname", json!("/first")).await;
+    let targets = wait_for_target_list(addr, "the named popup is created", |targets| {
+        targets.len() == before + 1
+    })
+    .await;
+
+    // A familiar named window or frame is reused even with noopener, and
+    // window.open still returns null.
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 5, "open('/second','w1','noopener')===null").await,
+        true
+    );
+    wait_for_value(&mut opener, "p1.location.pathname", json!("/second")).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 6, "open('/third','fr','noopener')===null").await,
+        true
+    );
+    wait_for_value(&mut opener, "frames[0].location.pathname", json!("/third")).await;
+    assert_eq!(
+        fetch_server_json(addr, "/json/list")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        targets.len()
+    );
+
+    // A noopener open naming the opener itself navigates the opener, even
+    // when a popup with the same name exists.
+    evaluate_window_name_probe(&mut opener, 7, "window.p2=open('/shared','shared2');true").await;
+    wait_for_value(&mut opener, "p2.location.pathname", json!("/shared")).await;
+    let targets = wait_for_target_list(addr, "the shared2 popup is created", |targets| {
+        targets.len() == before + 2
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            8,
+            "window.name='shared2';open('#self2','shared2','noopener')===null"
+        )
+        .await,
+        true
+    );
+    wait_for_value(&mut opener, "location.hash", json!("#self2")).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 9, "p2.location.hash").await,
+        ""
+    );
+    assert_eq!(
+        fetch_server_json(addr, "/json/list")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        targets.len()
+    );
+    abort_test_cdp_server(server).await;
+}

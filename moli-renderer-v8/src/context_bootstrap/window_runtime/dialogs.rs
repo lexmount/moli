@@ -297,11 +297,14 @@ pub(crate) fn window_open_callback<'s>(
     }
     if let Some(target_window) =
         existing_named_child_window_for_window_open(scope, host_ptr, &parsed.target_name)
-        && !suppress_opener
         && (parsed.raw_url.is_empty()
             || navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None))
     {
-        rv.set(target_window.into());
+        if suppress_opener {
+            rv.set_null();
+        } else {
+            rv.set(target_window.into());
+        }
         return;
     }
     let host = unsafe { &mut *host_ptr };
