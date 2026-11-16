@@ -378,9 +378,9 @@ impl ResourceRequestClient {
             }
         };
 
-        let load = match lookup {
-            ScriptTextCacheLookup::Owner(load) => load,
-            ScriptTextCacheLookup::PendingWaiter(load) => {
+        let (load, _consumer) = match lookup {
+            ScriptTextCacheLookup::Owner(load, consumer) => (load, consumer),
+            ScriptTextCacheLookup::PendingWaiter(load, consumer) => {
                 let started = timing_enabled.then(Instant::now);
                 if let Some(url) = timing_url.as_deref() {
                     tracing::info!(
@@ -391,7 +391,7 @@ impl ResourceRequestClient {
                         stage = "script_text_cache_wait_start",
                     );
                 }
-                let result = load.wait().await.map_err(anyhow::Error::msg);
+                let result = load.wait(consumer).await.map_err(anyhow::Error::msg);
                 if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
                     let status = result.as_ref().ok().map(|response| response.status);
                     tracing::info!(
@@ -574,9 +574,9 @@ impl ResourceRequestClient {
             }
         };
 
-        let (load, owns_transport) = match lookup {
-            ScriptTextCacheLookup::Owner(load) => (load, true),
-            ScriptTextCacheLookup::PendingWaiter(load) => (load, false),
+        let (load, consumer, owns_transport) = match lookup {
+            ScriptTextCacheLookup::Owner(load, consumer) => (load, consumer, true),
+            ScriptTextCacheLookup::PendingWaiter(load, consumer) => (load, consumer, false),
             ScriptTextCacheLookup::CompletedHit(result) => {
                 let result = result
                     .map(response_with_memory_cache_hit)
@@ -616,23 +616,26 @@ impl ResourceRequestClient {
         }
         let callback_resource_load = resource_load.clone();
         let callback_timing_url = timing_url.clone();
-        let consumer = load.wait_callback(Box::new(move |result| {
-            callback_resource_load.finish();
-            if let (Some(started), Some(url)) = (started, callback_timing_url.as_deref()) {
-                let status = result.as_ref().ok().map(|response| response.status);
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    url,
-                    cacheable = true,
-                    cache_role,
-                    status,
-                    ok = result.is_ok(),
-                    elapsed_ms = started.elapsed().as_millis(),
-                    stage = "script_text_cache_wait_done",
-                );
-            }
-            callback(result.map_err(anyhow::Error::msg));
-        }));
+        let consumer = load.wait_callback(
+            consumer,
+            Box::new(move |result| {
+                callback_resource_load.finish();
+                if let (Some(started), Some(url)) = (started, callback_timing_url.as_deref()) {
+                    let status = result.as_ref().ok().map(|response| response.status);
+                    tracing::info!(
+                        target: "moli_cdp_nav_timing",
+                        url,
+                        cacheable = true,
+                        cache_role,
+                        status,
+                        ok = result.is_ok(),
+                        elapsed_ms = started.elapsed().as_millis(),
+                        stage = "script_text_cache_wait_done",
+                    );
+                }
+                callback(result.map_err(anyhow::Error::msg));
+            }),
+        );
         if let Some(consumer) = consumer {
             resource_load.attach_consumer_cancel(move || consumer.cancel());
         }
