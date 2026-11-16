@@ -284,9 +284,9 @@ pub(crate) fn emit_request_will_be_sent(
     if redirect_response.is_some_and(|(_, _, _, from_cache, _)| from_cache) {
         emit_request_served_from_cache(out, session_id, request_id);
     }
-    emit_cdp_network_automation_event(
+    emit_network_before_request_sent(
         out,
-        AutomationEvent::NetworkBeforeRequestSent(NetworkRequestEvent {
+        NetworkRequestEvent {
             target_id: DevToolsTargetId::from(frame_id),
             frame_id: (!frame_id.is_empty()).then(|| DevToolsFrameId::from(frame_id)),
             request_id: DevToolsRequestId::from(request_id),
@@ -341,8 +341,9 @@ pub(crate) fn emit_request_will_be_sent(
             network_id: None,
 
             auth_challenge: None,
-        }),
+        },
         session_id,
+        emit_request_extra_info,
     );
     if emit_request_extra_info && let Some(cookie_access_report) = cookie_access_report {
         emit_request_will_be_sent_extra_info(
@@ -978,7 +979,9 @@ fn emit_network_before_request_sent(
     if let Some(redirect_response) = network_event.redirect_response.as_ref() {
         params["redirectResponse"] = network_redirect_response_payload(redirect_response);
     }
-    if let Some(cookie_access_report) = network_event.request_cookie_report.as_ref() {
+    if include_cookie_header_from_access_report
+        && let Some(cookie_access_report) = network_event.request_cookie_report.as_ref()
+    {
         params["cookieAccessReport"] = cookie_query_report_to_json(cookie_access_report);
     }
     if let Some(bidi_request_initiator_type) = network_event.bidi_request_initiator_type.as_ref() {
@@ -1330,6 +1333,61 @@ mod tests {
             .into_iter()
             .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect()
+    }
+
+    #[test]
+    fn admission_cookie_snapshot_stays_in_bidi_sidecar_until_transport_is_observed() {
+        let url = Url::parse("https://example.test/app.js").unwrap();
+        let mut jar = moli_cookie_jar::BrowserCookieStore::default();
+        jar.set_document_cookie(&url, "fixture=one; Path=/");
+        let report = jar.cookie_access_report_for_request(
+            &url,
+            moli_cookie_jar::NetworkCookieRequestContext::subresource("GET")
+                .with_initiator_url(&url, &url),
+        );
+        assert_eq!(report.included_cookies.len(), 1);
+        for transport_observed in [false, true] {
+            let mut events = Vec::new();
+            emit_request_will_be_sent(
+                &mut events,
+                Some("SID-1"),
+                "REQ-1",
+                "FRAME-1",
+                "LOADER-1",
+                1.0,
+                &url,
+                &url,
+                "GET",
+                None,
+                &[],
+                DevToolsNetworkResourceType::Script,
+                SubresourceRequestInitiatorType::Script,
+                None,
+                false,
+                Some(&report),
+                transport_observed,
+                &[],
+            );
+            assert_eq!(events.len(), if transport_observed { 2 } else { 1 });
+            let (message, automation) = events.remove(0).into_parts();
+            if transport_observed {
+                assert_eq!(
+                    message["params"]["request"]["headers"]["Cookie"],
+                    "fixture=one"
+                );
+            } else {
+                assert!(
+                    message["params"]["request"]["headers"]
+                        .get("Cookie")
+                        .is_none()
+                );
+                assert!(message["params"].get("cookieAccessReport").is_none());
+            }
+            let Some(AutomationEvent::NetworkBeforeRequestSent(event)) = automation else {
+                panic!("BiDi must retain its request metadata independently of CDP JSON");
+            };
+            assert_eq!(event.request_cookie_report, Some(report.clone()));
+        }
     }
 
     #[test]
