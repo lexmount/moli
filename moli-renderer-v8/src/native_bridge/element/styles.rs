@@ -340,10 +340,10 @@ fn live_computed_style_viewport<'s>(
             if let Some(frame) = computed_style_target_child_frame_handle(scope, runtime, handle) {
                 return iframe_handle_viewport(runtime, frame);
             }
-            if !computed_style_target_is_in_flat_tree(runtime, handle) {
+            let document = runtime.dom_host().owner_document_handle(handle)?;
+            if !computed_style_target_is_in_document_flat_tree(runtime, handle, document) {
                 return None;
             }
-            let document = runtime.dom_host().owner_document_handle(handle)?;
             Some(style_viewport_for_document(runtime, document))
         }
         ComputedStyleTargetKey::PopupDocument(_) => None,
@@ -442,6 +442,9 @@ fn style_object_read_document<'s>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ComputedStyleTargetContext {
     ActiveDocument,
+    PopupDocument {
+        document_handle: DomHandle,
+    },
     ChildFrameDocument {
         frame_handle: DomHandle,
         rendered: bool,
@@ -452,7 +455,7 @@ pub(crate) enum ComputedStyleTargetContext {
 impl ComputedStyleTargetContext {
     pub(crate) fn returns_empty_style(self) -> bool {
         match self {
-            Self::ActiveDocument => false,
+            Self::ActiveDocument | Self::PopupDocument { .. } => false,
             Self::ChildFrameDocument { rendered, .. } => !rendered,
             Self::EmptyForDetached => true,
         }
@@ -463,7 +466,7 @@ impl ComputedStyleTargetContext {
             Self::ChildFrameDocument { frame_handle, .. } => {
                 iframe_handle_viewport(host, frame_handle).unwrap_or_default()
             }
-            Self::ActiveDocument => host.style_viewport(),
+            Self::ActiveDocument | Self::PopupDocument { .. } => host.style_viewport(),
             Self::EmptyForDetached => StyleViewport::default(),
         }
     }
@@ -475,6 +478,9 @@ pub(crate) fn computed_style_target_context(
     handle: DomHandle,
     requesting_child_window: Option<DomHandle>,
 ) -> ComputedStyleTargetContext {
+    let Some(document) = host.dom_host().owner_document_handle(handle) else {
+        return ComputedStyleTargetContext::EmptyForDetached;
+    };
     if let Some(frame_handle) = computed_style_target_child_frame_handle(scope, host, handle)
         .or_else(|| {
             computed_style_target_requesting_child_frame_handle(
@@ -493,6 +499,13 @@ pub(crate) fn computed_style_target_context(
     }
     if computed_style_target_is_in_flat_tree(host, handle) {
         ComputedStyleTargetContext::ActiveDocument
+    } else if host
+        .lightweight_popup_id_for_document_handle(document)
+        .is_some_and(|popup_id| host.lightweight_popup_is_open(popup_id))
+    {
+        ComputedStyleTargetContext::PopupDocument {
+            document_handle: document,
+        }
     } else {
         ComputedStyleTargetContext::EmptyForDetached
     }
@@ -536,7 +549,11 @@ pub(crate) fn style_viewport_for_document(
     host: &PageScriptHost,
     document: DomHandle,
 ) -> StyleViewport {
-    if document == host.document_handle() {
+    if document == host.document_handle()
+        || host
+            .lightweight_popup_id_for_document_handle(document)
+            .is_some_and(|popup_id| host.lightweight_popup_is_open(popup_id))
+    {
         return host.style_viewport();
     }
     host.child_browsing_context_host_for_document_handle(document)
@@ -819,6 +836,26 @@ fn iframe_handle_viewport_with_depth(
                 .with_device_pixel_ratio(parent_viewport.device_pixel_ratio)
         }),
     )
+}
+
+fn computed_style_target_is_in_document_flat_tree(
+    host: &PageScriptHost,
+    handle: DomHandle,
+    document: DomHandle,
+) -> bool {
+    let mut current = handle;
+    loop {
+        if current == document {
+            return host
+                .dom_host()
+                .node(current)
+                .is_some_and(crate::dom::native::Node::is_document);
+        }
+        match computed_style_flat_tree_step(host, current) {
+            ControlFlow::Break(_) => return false,
+            ControlFlow::Continue(parent) => current = parent,
+        }
+    }
 }
 
 fn computed_style_target_is_in_flat_tree(host: &PageScriptHost, handle: DomHandle) -> bool {
