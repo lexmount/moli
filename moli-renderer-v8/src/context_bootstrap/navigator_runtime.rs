@@ -19,6 +19,7 @@ pub(in crate::context_bootstrap) use self::clipboard::clipboard_item_constructor
 pub(crate) use self::navigator::build_lightweight_popup_window_navigator_object;
 pub(super) use self::navigator::install_navigator_template_bindings;
 pub(crate) use self::navigator::install_worker_navigator_runtime_state;
+pub(crate) use self::navigator::navigator_owner_dispatch_scope;
 pub(in crate::context_bootstrap) use self::navigator::{
     SERVICE_WORKER_OWNER_TOKEN_SLOT, STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT,
     STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT, STORAGE_MANAGER_CHILD_HANDLE_SLOT,

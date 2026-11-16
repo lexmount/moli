@@ -1099,6 +1099,20 @@ fn navigator_backing_owner<'s>(
     (owner_child, owner_popup)
 }
 
+pub(crate) fn navigator_owner_dispatch_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigator: v8::Local<'s, v8::Object>,
+) -> Option<OwnerDispatchScope> {
+    let backing = navigator_runtime_data_object(scope, navigator)?;
+    let (owner_child, owner_popup) = navigator_backing_owner(scope, backing);
+    Some(
+        owner_child
+            .map(OwnerDispatchScope::Child)
+            .or_else(|| owner_popup.map(OwnerDispatchScope::LightweightPopup))
+            .unwrap_or(OwnerDispatchScope::Top),
+    )
+}
+
 fn navigator_geolocation_secure_context_available(
     scope: &mut v8::PinScope<'_, '_>,
     owner_child: Option<DomHandle>,
