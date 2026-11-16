@@ -292,7 +292,7 @@ Kitesurf はリモートサービスのため、CPU、メモリ、プロセス�
 
 ### Web Fetch ベンチマーク
 
-[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) は実サイトに対して 430 タスクを実行するため、成功率にはサイトへのアクセスと正しい本文抽出の両方が含まれます。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) は保存済みの HTML 545 ページを使い、実サイトへのアクセスを除いた抽出品質だけを評価します。[ベンチマークの詳細](https://browser.lexmount.com/blog/webfetch-benchmark)。
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) は実サイトに対して 430 タスクを実行するため、成功率にはサイトへのアクセスと正しい本文抽出の両方が含まれます。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) は保存済みの HTML 545 ページを使い、実サイトへのアクセスを除いた抽出品質だけを評価します。[ベンチマークの詳細](https://browser.lexmount.com/blog/webfetch-benchmark)。
 
 結果を再現するには、[Webstone](https://github.com/lexmount/webstone) の Web Fetch トラックを実行してください（[ガイド](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。表はデータセットの 430 タスク版（v1.0.0）に基づきます。
 

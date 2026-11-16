@@ -294,7 +294,7 @@ Kitesurf es un servicio remoto, por lo que no se pueden medir su CPU, memoria ni
 
 ### Benchmarks de Web Fetch
 
-[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) ejecuta 430 tareas en sitios web activos, por lo que la tasa de éxito refleja tanto el acceso al sitio como la extracción correcta del contenido. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) procesa 545 páginas HTML guardadas y puntúa únicamente la calidad de extracción. [Leer el informe del benchmark](https://browser.lexmount.com/blog/webfetch-benchmark).
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) ejecuta 430 tareas en sitios web activos, por lo que la tasa de éxito refleja tanto el acceso al sitio como la extracción correcta del contenido. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) procesa 545 páginas HTML guardadas y puntúa únicamente la calidad de extracción. [Leer el informe del benchmark](https://browser.lexmount.com/blog/webfetch-benchmark).
 
 Para reproducir estos resultados, ejecuta el track de Web Fetch en [Webstone](https://github.com/lexmount/webstone) ([guía](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)). La tabla usa la edición v1.0.0 del conjunto de datos, con 430 tareas.
 

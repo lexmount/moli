@@ -292,7 +292,7 @@ Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源�
 
 ### Web Fetch 评测
 
-[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) 直接访问真实网站，共有 430 道任务，因此通过率同时反映网站能否访问，以及返回内容是否正确。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) 使用 545 份预先保存的 HTML，只比较正文提取质量，不包含真实网站访问。[查看完整评测报告](https://browser.lexmount.com/blog/webfetch-benchmark)。
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) 直接访问真实网站，共有 430 道任务，因此通过率同时反映网站能否访问，以及返回内容是否正确。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) 使用 545 份预先保存的 HTML，只比较正文提取质量，不包含真实网站访问。[查看完整评测报告](https://browser.lexmount.com/blog/webfetch-benchmark)。
 
 如需复现这些结果，请在 [Webstone](https://github.com/lexmount/webstone) 中运行 Web Fetch 评测（[指南](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)）。表格基于数据集的 430 道任务版本（v1.0.0）。
 

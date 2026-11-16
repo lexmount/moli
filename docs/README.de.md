@@ -293,7 +293,7 @@ Kitesurf ist ein entfernter Dienst, dessen CPU, Arbeitsspeicher und Prozessanzah
 
 ### Web-Fetch-Benchmarks
 
-[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch) ruft mit 430 Aufgaben Live-Websites auf. Die Erfolgsquote umfasst daher sowohl den Zugriff auf die Website als auch die korrekte Inhaltsextraktion. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) verarbeitet 545 gespeicherte HTML-Seiten und bewertet nur die Extraktionsqualität. [Benchmark-Bericht lesen](https://browser.lexmount.com/blog/webfetch-benchmark).
+[`lexbench-webfetch`](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) ruft mit 430 Aufgaben Live-Websites auf. Die Erfolgsquote umfasst daher sowohl den Zugriff auf die Website als auch die korrekte Inhaltsextraktion. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) verarbeitet 545 gespeicherte HTML-Seiten und bewertet nur die Extraktionsqualität. [Benchmark-Bericht lesen](https://browser.lexmount.com/blog/webfetch-benchmark).
 
 Zum Reproduzieren der Ergebnisse führen Sie den Web-Fetch-Track in [Webstone](https://github.com/lexmount/webstone) aus ([Anleitung](https://github.com/lexmount/webstone/blob/main/src/harness/web_fetch/README.md)). Die Tabelle verwendet die Edition v1.0.0 des Datensatzes mit 430 Aufgaben.
 
