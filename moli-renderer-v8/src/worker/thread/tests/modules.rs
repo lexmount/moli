@@ -5923,3 +5923,60 @@ async fn worker_json_imports_use_shared_response_mime_extraction() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn worker_module_internal_root_rejection_reports_one_bootstrap_error() {
+    ensure_v8();
+    let mut worker = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            addEventListener('unhandledrejection', () => postMessage('internal-rejection'));
+            throw new Error('root-evaluation-marker');
+        "#
+            .into(),
+            "https://module-promises.test/root.js".into(),
+        )
+        .with_script_kind(WorkerScriptKind::Module),
+    );
+    let message = timeout(TIMEOUT, worker.recv())
+        .await
+        .expect("root error deadline")
+        .expect("bootstrap error");
+    let WorkerToParentMessage::Error { message, .. } = message else {
+        panic!("internal evaluation promise escaped as an unhandled rejection: {message:?}");
+    };
+    assert!(message.contains("root-evaluation-marker"), "{message}");
+}
+
+#[tokio::test]
+async fn worker_module_internal_dynamic_rejection_uses_only_the_public_import_promise() {
+    for body in [
+        "throw new Error('dynamic-marker')",
+        "await 0; throw new Error('dynamic-marker')",
+    ] {
+        ensure_v8();
+        let module_url = format!("data:text/javascript,{}", body.replace(' ', "%20"));
+        let source = format!(
+            r#"
+            const rejections = [];
+            addEventListener('unhandledrejection', event => rejections.push(event.reason.message));
+            (async () => {{
+                let reason;
+                try {{ await import({module_url}); }} catch (error) {{ reason = error.message; }}
+                setTimeout(() => {{ postMessage({{reason, rejections}}); close(); }}, 0);
+            }})();
+        "#,
+            module_url = serde_json::to_string(&module_url).unwrap()
+        );
+        let mut worker = spawn_worker(source, "https://module-promises.test/classic.js".into());
+        let message = timeout(TIMEOUT, worker.recv())
+            .await
+            .expect("dynamic import deadline")
+            .expect("import result");
+        assert_eq!(
+            expect_post_json(message),
+            r#"{"reason":"dynamic-marker","rejections":[]}"#,
+            "{body}"
+        );
+    }
+}
