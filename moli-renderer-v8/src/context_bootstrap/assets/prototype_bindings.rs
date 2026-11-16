@@ -57,7 +57,6 @@ use super::super::{
     touch_runtime::install_touch_template_bindings,
     view_transition_runtime::install_view_transition_template_bindings,
     web_audio_runtime::install_web_audio_template_bindings,
-    webrtc::install_webrtc_template_bindings,
     websocket::{install_websocket_bindings, install_websocket_stream_bindings},
     window_runtime::storage_bucket_caches_getter_callback,
     window_runtime::storage_bucket_durability_callback,
@@ -79,6 +78,7 @@ use crate::{
     dom_parser::install_dom_parser_template_bindings, native_bridge::element, network_host,
     util::v8str,
 };
+use moli_webapi::rtc::install_template_bindings as install_webrtc_template_bindings;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]

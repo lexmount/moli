@@ -3801,6 +3801,7 @@ dependencies = [
  "moli-webapi-declare",
  "moli-webidl",
  "strum",
+ "url",
  "v8",
 ]
 

@@ -5,11 +5,10 @@ use super::{
     RTC_PEER_CONNECTION_CONFIGURATION_SLOT, RTC_PEER_CONNECTION_LOCAL_DESCRIPTION_SLOT,
     RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
 };
-use crate::{
-    util::{get_private_value, v8str},
-    web_api_interfaces, webidl,
-};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, v8str};
 use moli_webapi_declare::WebApiValue;
+use moli_webidl as webidl;
 use webidl::{SnapshotKind, SnapshotPrototype, WebIdlDictionarySerialize, WebIdlSnapshotValue};
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
