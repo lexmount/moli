@@ -12,8 +12,10 @@ mod clipboard_change;
 mod custom;
 pub mod error;
 pub mod font;
+pub mod message;
 mod payload;
 pub mod security_policy;
+pub mod storage;
 pub mod submit;
 mod templates;
 mod values;
@@ -38,23 +40,10 @@ pub const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
 const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
 pub const FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT: &str = "__moliFontFaceSetLoadEventFontfaces";
 
-fn kind_from_callback_data(data: v8::Local<'_, v8::Value>) -> Option<EventSubclassKind> {
-    let value = i32::try_from(v8::Local::<v8::Integer>::try_from(data).ok()?.value()).ok()?;
-    EventSubclassKind::from_i32(value)
-}
-
-fn required_arguments(kind: EventSubclassKind) -> i32 {
-    match kind {
-        EventSubclassKind::NavigateEvent
-        | EventSubclassKind::NavigationCurrentEntryChangeEvent
-        | EventSubclassKind::PromiseRejectionEvent
-        | EventSubclassKind::FormDataEvent => 2,
-        _ => 1,
-    }
-}
-
 enum SubclassInit<'s> {
     Custom(custom::CustomEventInit<'s>),
+    Message(message::MessageEventInit<'s>),
+    Storage(storage::StorageEventInitMembers<'s>),
     Values(values::ValueEventInit<'s>),
     Payload(payload::PayloadEventInit<'s>),
     ClipboardChange(clipboard_change::ClipboardChangeEventInitMembers<'s>),
@@ -69,6 +58,12 @@ impl<'s> SubclassInit<'s> {
         kind: EventSubclassKind,
     ) -> Option<Self> {
         Some(match kind {
+            EventSubclassKind::MessageEvent => {
+                Self::Message(message::parse_message_event_init(scope, args)?)
+            }
+            EventSubclassKind::StorageEvent => {
+                Self::Storage(storage::parse_storage_event_init(scope, args)?)
+            }
             EventSubclassKind::CustomEvent => {
                 Self::Custom(parse_event_dictionary(scope, args, "CustomEvent")?)
             }
@@ -106,6 +101,8 @@ impl<'s> SubclassInit<'s> {
     fn event_flags(&self) -> (bool, bool, bool) {
         match self {
             Self::Custom(init) => init.event_flags(),
+            Self::Message(init) => init.event_flags(),
+            Self::Storage(init) => init.event_flags(),
             Self::Values(init) => init.event_flags(),
             Self::Payload(init) => init.event_flags(),
             Self::ClipboardChange(init) => init.event_flags(),
@@ -121,6 +118,8 @@ impl<'s> SubclassInit<'s> {
     ) -> bool {
         match self {
             Self::Custom(init) => init.initialize(scope, event),
+            Self::Message(init) => message::initialize_message_event(scope, event, init),
+            Self::Storage(init) => storage::initialize_storage_event(scope, event, init),
             Self::Values(init) => init.initialize(scope, event),
             Self::Payload(init) => init.initialize(scope, event),
             Self::ClipboardChange(init) => {
@@ -173,7 +172,7 @@ fn constructor_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(kind) = kind_from_callback_data(args.data()) else {
+    let Some(kind) = EventSubclassKind::from_value(args.data()) else {
         throw_type_error(scope, "Invalid event subclass constructor.");
         return;
     };
@@ -187,7 +186,7 @@ fn constructor_callback<'s>(
         );
         return;
     }
-    if required_arguments(kind) == 2 && args.length() < 2 {
+    if kind.required_arguments() == 2 && args.length() < 2 {
         throw_type_error(
             scope,
             &format!(
@@ -224,7 +223,7 @@ fn template<'s>(
     let data: v8::Local<'s, v8::Value> = v8::Integer::new(scope, kind as i32).into();
     v8::FunctionTemplate::builder(constructor_callback)
         .data(data)
-        .length(required_arguments(kind))
+        .length(kind.required_arguments())
         .build(scope)
 }
 
@@ -233,7 +232,9 @@ pub fn build_template<'s>(
     kind: EventSubclassKind,
 ) -> Option<v8::Local<'s, v8::FunctionTemplate>> {
     match kind {
-        EventSubclassKind::CustomEvent
+        EventSubclassKind::MessageEvent
+        | EventSubclassKind::StorageEvent
+        | EventSubclassKind::CustomEvent
         | EventSubclassKind::ClipboardEvent
         | EventSubclassKind::CloseEvent
         | EventSubclassKind::CommandEvent
@@ -253,3 +254,5 @@ pub fn build_template<'s>(
         _ => None,
     }
 }
+
+pub use values::construct_original_page_transition_event;

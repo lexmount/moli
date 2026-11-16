@@ -20,31 +20,6 @@ struct InitEventArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "StorageEvent.initStorageEvent")]
-struct InitStorageEventArgs<'s> {
-    #[webidl(
-        required,
-        converter = "raw",
-        missing_message = "Failed to execute 'initStorageEvent': 1 argument required."
-    )]
-    event_type: webidl::DomString16,
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(index = 3, nullable, converter = "raw")]
-    key: Option<webidl::DomString16>,
-    #[webidl(name = "oldValue", index = 4, nullable, converter = "raw")]
-    old_value: Option<webidl::DomString16>,
-    #[webidl(name = "newValue", index = 5, nullable, converter = "raw")]
-    new_value: Option<webidl::DomString16>,
-    #[webidl(default = "", index = 6, converter = "usv_string")]
-    url: String,
-    #[webidl(index = 7, converter = "raw", nullable)]
-    storage_area: Option<super::web_storage::StorageReference<'s>>,
-}
-
-#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "UIEvent.initUIEvent")]
 struct InitUiEventArgs<'s> {
     #[webidl(
@@ -357,33 +332,4 @@ pub(super) fn composition_event_init_callback<'s>(
     LegacyTextEventInitDeclaration::new(view, 0.0, data)
         .initialize(scope, event)
         .expect("legacy CompositionEvent init declaration should initialize");
-}
-
-pub(super) fn storage_event_init_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let event = super::events::event_backing(scope, args.this());
-    let Some(parsed) = webidl::parse_args::<InitStorageEventArgs>(scope, &args) else {
-        return;
-    };
-    if !reinitialize_event_object(
-        scope,
-        event,
-        &parsed.event_type.0,
-        parsed.bubbles,
-        parsed.cancelable,
-    ) {
-        return;
-    }
-    super::events::define_storage_event_properties_utf16(
-        scope,
-        event,
-        parsed.key.as_ref().map(|value| value.0.as_slice()),
-        parsed.old_value.as_ref().map(|value| value.0.as_slice()),
-        parsed.new_value.as_ref().map(|value| value.0.as_slice()),
-        &parsed.url,
-        parsed.storage_area.map(|value| value.0.into()),
-    );
 }

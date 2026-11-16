@@ -5,9 +5,7 @@ pub fn event_subclass_kind<'s>(
     event: v8::Local<'s, v8::Object>,
 ) -> Option<EventSubclassKind> {
     event_private_value(scope, event, EVENT_SUBCLASS_KIND_SLOT)
-        .and_then(|value| v8::Local::<v8::Integer>::try_from(value).ok())
-        .and_then(|value| i32::try_from(value.value()).ok())
-        .and_then(EventSubclassKind::from_i32)
+        .and_then(EventSubclassKind::from_value)
 }
 
 pub fn new_uninitialized_before_unload_event<'s>(

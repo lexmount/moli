@@ -1,18 +1,20 @@
 use super::*;
 use crate::util::{get_private_value, v8_string, v8_string_from_utf16_units, v8str};
-use crate::webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
+pub(crate) use moli_webapi::events::subclasses::construct_original_page_transition_event;
 use moli_webapi_declare::WebApiObject;
 
 mod base;
 use moli_webapi::events::device;
 mod init;
 use moli_webapi::events::kind;
-mod message;
-pub(crate) use message::construct_original_message_event;
+pub(crate) use moli_webapi::events::subclasses::message::construct_original_message_event;
+pub(crate) use moli_webapi::events::subclasses::storage::construct_original_storage_event_utf16;
 mod methods;
 mod modifiers;
 mod subclasses;
-use moli_webapi::events::subclasses::submit;
+pub(crate) use moli_webapi::events::subclasses::submit::{
+    mark_agent_submit_event, take_submit_event_response,
+};
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
@@ -31,18 +33,6 @@ pub(in crate::context_bootstrap) use device::{
 pub(in crate::context_bootstrap) use value::{
     ValueEventKind, build_value_event_template, install_value_event_template_bindings,
 };
-
-pub(crate) use submit::{mark_agent_submit_event, take_submit_event_response};
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct PageTransitionEventInitDeclaration {
-    #[webapi(data_property, enumerable)]
-    bubbles: bool,
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-    #[webapi(data_property, enumerable)]
-    persisted: bool,
-}
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "PointerEvent", enumerable)]
@@ -119,82 +109,6 @@ pub(crate) fn construct_original_text_input_event<'s>(
     base::set_event_initialized(scope, backing, true);
     mark_event_trusted(scope, event);
     Some(event)
-}
-
-pub(crate) fn construct_original_page_transition_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    persisted: bool,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let event_ctor = super::exposed_interfaces::ensure_intrinsic_interface_constructor(
-        scope,
-        "PageTransitionEvent",
-    )
-    .ok()?;
-    let event_type = v8_string(scope, event_type)?;
-    let init = PageTransitionEventInitDeclaration::new(true, true, persisted)
-        .bind(scope)
-        .expect("PageTransitionEvent init declaration should bind");
-    let event = {
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let scope = try_catch.init();
-        event_ctor.new_instance(&scope, &[event_type.into(), init.into()])
-    }?;
-    mark_event_trusted(scope, event);
-    Some(event)
-}
-
-pub(crate) fn construct_original_storage_event_utf16<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    key: Option<&[u16]>,
-    old_value: Option<&[u16]>,
-    new_value: Option<&[u16]>,
-    url: &str,
-    storage_area: Option<v8::Local<'s, v8::Value>>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let event_ctor =
-        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "StorageEvent")
-            .ok()?;
-    let event_type = v8_string(scope, event_type)?;
-    let parsed = subclasses::StorageEventInitMembers::from_native(
-        key,
-        old_value,
-        new_value,
-        url,
-        storage_area,
-    );
-    let init = parsed.to_js_snapshot(scope, SnapshotPrototype::Null)?;
-    let event = {
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let scope = try_catch.init();
-        event_ctor.new_instance(&scope, &[event_type.into(), init.into()])
-    }?;
-    define_storage_event_properties_utf16(
-        scope,
-        event,
-        key,
-        old_value,
-        new_value,
-        url,
-        storage_area,
-    );
-    Some(event)
-}
-
-pub(in crate::context_bootstrap) fn define_storage_event_properties_utf16<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    key: Option<&[u16]>,
-    old_value: Option<&[u16]>,
-    new_value: Option<&[u16]>,
-    url: &str,
-    storage_area: Option<v8::Local<'s, v8::Value>>,
-) {
-    let event = event_backing(scope, event);
-    subclasses::StorageEventInitMembers::from_native(key, old_value, new_value, url, storage_area)
-        .initialize_own_snapshot(scope, event)
-        .expect("StorageEvent native payload");
 }
 
 pub(crate) use base::{
@@ -408,7 +322,6 @@ pub(crate) use wrappers::{
     set_event_private_value,
 };
 
-pub(in crate::context_bootstrap) use message::message_event_init_callback;
 pub(in crate::context_bootstrap) use wrappers::{
     event_platform_attribute_getter, event_value_attribute_getter,
 };

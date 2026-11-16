@@ -36,6 +36,21 @@ pub enum EventSubclassKind {
 }
 
 impl EventSubclassKind {
+    pub fn from_value(data: v8::Local<'_, v8::Value>) -> Option<Self> {
+        let value = i32::try_from(v8::Local::<v8::Integer>::try_from(data).ok()?.value()).ok()?;
+        Self::from_i32(value)
+    }
+
+    pub fn required_arguments(self) -> i32 {
+        match self {
+            Self::NavigateEvent
+            | Self::NavigationCurrentEntryChangeEvent
+            | Self::PromiseRejectionEvent
+            | Self::FormDataEvent => 2,
+            _ => 1,
+        }
+    }
+
     pub fn from_i32(value: i32) -> Option<Self> {
         match value {
             1 => Some(Self::UiEvent),

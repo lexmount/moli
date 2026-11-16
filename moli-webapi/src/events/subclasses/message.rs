@@ -1,7 +1,8 @@
+use super::super::init::EventInit;
 use super::{event_backing, reinitialize_event_object};
-use crate::context_bootstrap::events::EventInit;
-use crate::util::v8_string;
-use crate::{web_api_interfaces, webidl};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::v8_string;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 // Interface metadata for the Window | MessagePort | ServiceWorker union.
@@ -34,7 +35,7 @@ pub(super) struct MessageEventInit<'s> {
     last_event_id: webidl::DomString16,
     #[webidl(default = "", converter = "usv_string")]
     origin: String,
-    #[webidl(sequence, interface = crate::web_api_interfaces::MessagePort, default = Vec::new(), snapshot_frozen)]
+    #[webidl(sequence, interface = crate::interfaces::MessagePort, default = Vec::new(), snapshot_frozen)]
     ports: Vec<v8::Local<'s, v8::Object>>,
     #[webidl(nullable, interface = MessageEventSource)]
     source: Option<v8::Local<'s, v8::Object>>,
@@ -50,7 +51,7 @@ pub(super) fn parse_message_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<MessageEventInit<'s>> {
-    crate::context_bootstrap::events::parse_event_dictionary(scope, args, "MessageEvent")
+    super::super::init::parse_event_dictionary(scope, args, "MessageEvent")
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -74,7 +75,7 @@ struct InitMessageEventArgs<'s> {
     last_event_id: webidl::DomString16,
     #[webidl(nullable, interface = MessageEventSource)]
     source: Option<v8::Local<'s, v8::Object>>,
-    #[webidl(sequence, interface = crate::web_api_interfaces::MessagePort, default = Vec::new())]
+    #[webidl(sequence, interface = crate::interfaces::MessagePort, default = Vec::new())]
     ports: Vec<v8::Local<'s, v8::Object>>,
 }
 
@@ -96,9 +97,8 @@ pub(super) fn initialize_message_event<'s>(
         .expect("MessageEvent state should initialize");
 }
 
-/// Native producers supply already deserialized values. Their dense ports
-/// arrays must not run author-defined iterators or dictionary getters.
-pub(crate) fn construct_original_message_event<'s>(
+/// Native producers supply already deserialized values and dense port arrays.
+pub fn construct_original_message_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
     data: v8::Local<'s, v8::Value>,
@@ -107,36 +107,37 @@ pub(crate) fn construct_original_message_event<'s>(
     source: v8::Local<'s, v8::Value>,
     ports: v8::Local<'s, v8::Array>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor = super::super::exposed_interfaces::ensure_intrinsic_interface_constructor(
-        scope,
-        "MessageEvent",
-    )
-    .ok()?;
     let event_type = v8_string(scope, event_type)?;
-    let event = constructor.new_instance(scope, &[event_type.into()])?;
     let ports = (0..ports.length())
         .map(|index| ports.get_index(scope, index)?.try_into().ok())
         .collect::<Option<Vec<_>>>()?;
-    initialize_message_event(
-        scope,
-        event,
-        MessageEventInit {
-            base: EventInit::default(),
-            data: Some(data),
-            origin: origin.to_owned(),
-            last_event_id: webidl::DomString16(last_event_id.to_vec()),
-            source: if source.is_null_or_undefined() {
-                None
-            } else {
-                Some(source.try_into().ok()?)
-            },
-            ports,
+    let init = MessageEventInit {
+        base: EventInit::default(),
+        data: Some(data),
+        origin: origin.to_owned(),
+        last_event_id: webidl::DomString16(last_event_id.to_vec()),
+        source: if source.is_null_or_undefined() {
+            None
+        } else {
+            Some(source.try_into().ok()?)
         },
-    );
-    Some(event)
+        ports,
+    };
+    let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "MessageEvent")?;
+    super::construct_subclass(
+        scope,
+        wrapper,
+        super::EventSubclassKind::MessageEvent,
+        event_type,
+        init.event_flags(),
+        |scope, event| {
+            initialize_message_event(scope, event, init);
+            true
+        },
+    )
 }
 
-pub(in crate::context_bootstrap) fn message_event_init_callback<'s>(
+pub fn message_event_init_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,

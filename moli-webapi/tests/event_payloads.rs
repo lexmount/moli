@@ -120,6 +120,8 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
 
     for kind in [
         EventSubclassKind::CustomEvent,
+        EventSubclassKind::MessageEvent,
+        EventSubclassKind::StorageEvent,
         EventSubclassKind::CloseEvent,
         EventSubclassKind::ClipboardEvent,
         EventSubclassKind::CommandEvent,
@@ -319,6 +321,8 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         (interfaces::RTCDataChannel::DESCRIPTOR, "channel"),
         (interfaces::AudioBuffer::DESCRIPTOR, "buffer"),
         (interfaces::DataTransfer::DESCRIPTOR, "clipboard"),
+        (interfaces::MessagePort::DESCRIPTOR, "endpoint"),
+        (interfaces::Storage::DESCRIPTOR, "storage"),
         (interfaces::FormData::DESCRIPTOR, "form"),
         (interfaces::TextTrack::DESCRIPTOR, "track"),
         (interfaces::FontFace::DESCRIPTOR, "font"),
@@ -869,4 +873,108 @@ fn native_error_and_before_unload_factories_ignore_replaced_public_constructors(
         return true;
     })()"#).is_true());
     assert_eq!(state::event_initialized(scope, event), Some(false));
+}
+
+#[test]
+fn message_and_storage_events_preserve_native_references_and_conversion_order() {
+    check(
+        r#"(() => {
+        const payload = {}, order = [];
+        const message = new MessageEvent('message', new Proxy({
+            data: payload, origin: '\ud800', lastEventId: '\ud800', ports: [endpoint], source: endpoint,
+        }, {get(target, name) {order.push(name); return target[name];}}));
+        assert(order.join(',') === 'bubbles,cancelable,composed,data,lastEventId,origin,ports,source', order);
+        assert(message.data === payload && message.source === endpoint && message.ports[0] === endpoint);
+        assert(message.origin === '\ufffd' && message.lastEventId === '\ud800' && Object.isFrozen(message.ports));
+        const storageOrder = [];
+        const storageEvent = new StorageEvent('storage', new Proxy({
+            key: '\ud800', newValue: '\udfff', oldValue: null, storageArea: storage, url: '\ud800',
+        }, {get(target, name) {storageOrder.push(name); return target[name];}}));
+        assert(storageOrder.join(',') === 'bubbles,cancelable,composed,key,newValue,oldValue,storageArea,url', storageOrder);
+        assert(storageEvent.storageArea === storage && storageEvent.key === '\ud800');
+        assert(storageEvent.newValue === '\udfff' && storageEvent.oldValue === null && storageEvent.url === '\ufffd');
+        for (const [Ctor, init] of [
+            [MessageEvent, {source: {}}], [MessageEvent, {ports: [{}]}],
+            [StorageEvent, {storageArea: {}}],
+        ]) {
+            let caught; try {new Ctor('invalid', init);} catch (error) {caught = error;}
+            assert(caught instanceof TypeError, Ctor.name);
+        }
+        return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn message_and_storage_legacy_initializers_keep_converted_payloads() {
+    check(
+        r#"(() => {
+        const payload = {}, message = new MessageEvent('before', {composed: true});
+        message.initMessageEvent('after\ud800', true, true, payload, '\ud800', '\udfff', endpoint, [endpoint]);
+        assert(message.type === 'after\ud800' && message.bubbles && message.cancelable && message.composed);
+        assert(message.data === payload && message.origin === '\ufffd' && message.lastEventId === '\udfff');
+        assert(message.source === endpoint && message.ports[0] === endpoint && Object.isFrozen(message.ports));
+        const e = new StorageEvent('before', {composed: true});
+        e.initStorageEvent('after', true, false, '\ud800', null, '\udfff', '\ud800', storage);
+        assert(e.type === 'after' && e.bubbles && !e.cancelable && e.composed);
+        assert(e.key === '\ud800' && e.oldValue === null && e.newValue === '\udfff' && e.url === '\ufffd');
+        assert(e.storageArea === storage);
+        return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn native_message_and_storage_factories_do_not_read_author_constructors_or_iterators() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 37.25);
+    let endpoint = eval(scope, "endpoint");
+    let storage = eval(scope, "storage");
+    let ports = v8::Array::new_with_elements(scope, &[endpoint]);
+    let data = v8::Integer::new(scope, 7).into();
+    eval(
+        scope,
+        r#"
+        globalThis.OriginalMessage = MessageEvent; globalThis.OriginalStorage = StorageEvent;
+        for (const name of ['MessageEvent', 'StorageEvent']) {
+            Object.defineProperty(globalThis, name, {configurable: true, get() {throw new Error('public constructor');}});
+        }
+        Object.defineProperty(Array.prototype, Symbol.iterator, {configurable: true, get() {throw new Error('author iterator');}});
+    "#,
+    );
+    let message = subclasses::message::construct_original_message_event(
+        scope,
+        "message",
+        data,
+        "origin",
+        &[0xd800],
+        endpoint,
+        ports,
+    )
+    .unwrap();
+    publish(scope, "nativeMessage", message);
+    let storage = subclasses::storage::construct_original_storage_event_utf16(
+        scope,
+        "storage",
+        Some(&[0xd800]),
+        None,
+        Some(&[0xdfff]),
+        "url",
+        Some(storage),
+    )
+    .unwrap();
+    publish(scope, "nativeStorage", storage);
+    assert!(eval(scope, r#"(() => {
+        assert(nativeMessage instanceof OriginalMessage && nativeMessage.data === 7);
+        assert(nativeMessage.source === endpoint && nativeMessage.ports[0] === endpoint && Object.isFrozen(nativeMessage.ports));
+        assert(nativeMessage.lastEventId === '\ud800');
+        assert(nativeStorage instanceof OriginalStorage && nativeStorage.storageArea === storage);
+        assert(nativeStorage.key === '\ud800' && nativeStorage.newValue === '\udfff');
+        return true;
+    })()"#).is_true());
 }
