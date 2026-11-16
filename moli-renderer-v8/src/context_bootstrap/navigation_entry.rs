@@ -395,27 +395,31 @@ fn navigation_entry_index_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !navigation_entry_is_active(scope, args.this()) {
-        rv.set(v8::Number::new(scope, -1.0).into());
-        return;
+    let index = navigation_entry_index_value(scope, args.this());
+    rv.set(v8::Number::new(scope, index as f64).into());
+}
+
+pub(super) fn navigation_entry_index_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) -> i64 {
+    if !navigation_entry_is_active(scope, entry) {
+        return -1;
     }
-    let owner = runtime_window_owner(scope, args.this());
+    let owner = runtime_window_owner(scope, entry);
     if let Some(history) = window_history_for_holder(scope, owner)
         && let Some(entries) = history_entries(scope, history)
-        && let Some(entry) = native::entry(scope, args.this())
+        && let Some(entry) = native::entry(scope, entry)
     {
         let current_entry = navigation_current_entry(scope, owner);
         if let Some(visible_index) =
             visible_navigation_index_for_entry(scope, &entries, current_entry, &entry)
         {
-            rv.set(v8::Number::new(scope, visible_index as f64).into());
-            return;
+            return i64::from(visible_index);
         }
-        rv.set(v8::Number::new(scope, -1.0).into());
-        return;
+        return -1;
     }
-    let fallback = navigation_entry_initial_index(scope, args.this()).map_or(-1, i64::from);
-    rv.set(v8::Number::new(scope, fallback as f64).into());
+    navigation_entry_initial_index(scope, entry).map_or(-1, i64::from)
 }
 
 pub(super) fn navigation_current_entry_index<'s>(
