@@ -252,8 +252,8 @@ Moli est mesuré sur des suites publiques aux tâches fixes. Chaque ligne indiqu
 
 | Domaine | Suite | Mesure | Moli | Détails |
 | --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 tâches sur des sites en ligne | Part des tâches où le contenu demandé est obtenu depuis un site en ligne | **89,8 %**, premier des cinq navigateurs | [Web Fetch](#web-fetch) |
-| Extraction de contenu | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 pages figées | Score de qualité d'extraction par rapport aux annotations humaines (plus haut est meilleur) | **39,27 %**, premier des cinq | [Web Fetch](#web-fetch) |
+| Web Fetch · Sites en ligne | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 tâches sur des sites en ligne | Part des tâches où le contenu demandé est obtenu depuis un site en ligne | **89,8 %**, premier des cinq navigateurs | [Web Fetch](#web-fetch) |
+| Web Fetch · Pages figées | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 pages figées | Score de qualité d'extraction par rapport aux annotations humaines (plus haut est meilleur) | **39,27 %**, premier des cinq | [Web Fetch](#web-fetch) |
 | Automatisation du navigateur | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1 308 tâches comparables | Part des tâches CDP, d'outils d'automatisation et de plateforme Web réussies | **81,9 %** ; Chrome 99,8 % | [Automatisation du navigateur](#automatisation-du-navigateur) |
 | Consommation de ressources | Lexbench-Headless-Browser · 557 tâches terminées par tous les moteurs locaux | Temps CPU et mémoire de pointe médians par tâche | **15 %** du temps CPU de Chrome, **13 %** de sa mémoire | [Consommation de ressources](#consommation-de-ressources) |
 | Standards du Web | Tests [WPT](https://github.com/web-platform-tests/wpt) sélectionnés | Tests WPT réussis | **1 612 000** tests réussis en une exécution complète | — |

@@ -319,8 +319,8 @@ measured and links to the details.
 
 | Area | Suite | Measures | Moli | Details |
 | --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 live-site tasks | Share of tasks whose required content comes back from a live site | **89.8%**, first of five browsers | [Web Fetch](#web-fetch) |
-| Content extraction | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 saved pages | Extraction-quality score against human annotations (higher is better) | **39.27%**, first of five | [Web Fetch](#web-fetch) |
+| Web Fetch · Live sites | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 live-site tasks | Share of tasks whose required content comes back from a live site | **89.8%**, first of five browsers | [Web Fetch](#web-fetch) |
+| Web Fetch · Saved pages | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 saved pages | Extraction-quality score against human annotations (higher is better) | **39.27%**, first of five | [Web Fetch](#web-fetch) |
 | Browser automation | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 comparable tasks | Share of CDP, automation-tool and web-platform tasks that succeed | **81.9%**; Chrome 99.8% | [Browser automation](#browser-automation) |
 | Resource use | Lexbench-Headless-Browser · 557 tasks all local engines completed | Median CPU time and peak memory per task | **15%** of Chrome's CPU, **13%** of its memory | [Resource use](#resource-use) |
 | Web standards | Selected [WPT](https://github.com/web-platform-tests/wpt) tests | WPT tests passed | **1.612 million** tests passed in one full run | — |
