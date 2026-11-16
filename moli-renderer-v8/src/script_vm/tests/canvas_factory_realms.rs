@@ -28,3 +28,26 @@ fn canvas_factories_keep_the_canvas_realm_across_borrowed_calls_and_adoption() {
         return true;
     })()"#).unwrap(),"true");
 }
+
+#[test]
+fn canvas_2d_creation_samples_dimensions_only_for_its_backing_store() {
+    let mut vm = new_parsed_test_vm(
+        "https://canvas-factory-realms.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const canvas=document.createElement('canvas');
+        const reads=[];
+        Object.defineProperty(canvas,'width',{get(){reads.push('width');return 2;}});
+        Object.defineProperty(canvas,'height',{get(){reads.push('height');return 3;}});
+        const context=canvas.getContext('2d');
+        if(!(context instanceof CanvasRenderingContext2D))throw Error('context');
+        return JSON.stringify(reads);
+    })()"#
+        )
+        .unwrap(),
+        r#"["width","height"]"#
+    );
+}
