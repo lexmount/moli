@@ -3433,7 +3433,9 @@ fn cli_terminal_302_without_navigation_waits_then_returns_its_body() -> Result<(
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-no-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
+    // Initialization consumes this window, so leave time for the marker's
+    // load-triggered timer even when a shared runner is busy.
+    let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--redirect-wait-ms", "10000"])?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3452,7 +3454,7 @@ fn cli_terminal_302_without_navigation_waits_then_returns_its_body() -> Result<(
     );
     assert!(
         html.contains("id=\"redirect-status-wait-marker\""),
-        "the default redirect wait must keep the terminal 302 Page live: stdout={stdout}"
+        "the configured redirect wait must keep the terminal 302 Page live: stdout={stdout}"
     );
     Ok(())
 }

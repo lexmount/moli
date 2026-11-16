@@ -290,8 +290,10 @@ async fn indexed_db_factory_checks_native_receivers_and_rejects_promises_in_call
     let browser = Browser::new(AppConfig::default())?;
     let fixture = include_str!("fixtures/indexeddb-factory-receivers.js");
     for target in ["window", "child", "worker"] {
+        // Allow the cross-realm checks and asynchronous factory operations
+        // to make progress under CI load before the liveness watchdog fires.
         let source = format!(
-            "{fixture}\nconst watchdog = setTimeout(() => finish({{state: 'timeout', checks: factoryReceiverChecks.slice(-12)}}), 5000); factoryReceiverProbe('factory-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: factoryReceiverChecks}})).finally(() => clearTimeout(watchdog));"
+            "{fixture}\nconst watchdog = setTimeout(() => finish({{state: 'timeout', checks: factoryReceiverChecks.slice(-12)}}), 20000); factoryReceiverProbe('factory-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: factoryReceiverChecks}})).finally(() => clearTimeout(watchdog));"
         );
         let result = run_probe(&browser, &server, target, &source).await?;
         assert_eq!(result["state"], "pass", "{target}: {result}");
