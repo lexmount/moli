@@ -4,6 +4,7 @@
 //! V8-specific agents and the isolate-local executor remain under
 //! `script_vm::inspector`.
 
+#[cfg(feature = "devtools")]
 pub(crate) mod command;
 pub(crate) mod ingress;
 pub(crate) mod pause;

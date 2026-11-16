@@ -495,6 +495,7 @@ pub(crate) fn simple_object_has_event_listeners<'s>(
     false
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn simple_event_target_inspector_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,

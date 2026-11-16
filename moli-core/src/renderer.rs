@@ -9,23 +9,27 @@ pub(crate) use moli_renderer_v8::{
     DocumentCookieCapabilitySnapshot, DocumentCookieFacadeTelemetrySnapshot,
     DocumentCookieFirstOperation, DocumentCookieGetFreshnessStatus, DocumentCookieOwnerSnapshot,
     DocumentCookieSetReadinessStatus, DocumentCookieWriteCapabilitySnapshot, JsRuntime,
-    RendererAccessibilityPayloadsForObjectId, RendererAutofillTriggerOutcome,
-    RendererAutofillTriggerRequest, RendererCaptureScreencastFrameReply,
-    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererDocumentHitTestResult,
-    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry, RendererDomAttributeMutation,
-    RendererDomAttributeMutationOutcome, RendererDomDebuggerDomBreakpointResolution,
-    RendererDomDebuggerEventListenerBreakpoint, RendererDomDebuggerEventListenersResolution,
-    RendererDomDebuggerXhrBreakpoint, RendererDomFocusOutcome, RendererDomSnapshotCaptureOptions,
-    RendererDomSnapshotCapturePayload, RendererHtmlSerializeOptions,
-    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorIngressTicket, RendererLayoutMetrics, RendererMarkdownOptions,
-    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCommand,
-    RendererPageCommandPending, RendererPageCookieFacadeSnapshotReply, RendererPageHandle,
+    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest, RendererHtmlSerializeOptions,
+    RendererLayoutMetrics, RendererMarkdownOptions, RendererOwnerCommand, RendererOwnerHandle,
+    RendererOwnerReply, RendererPageCommand, RendererPageCommandPending, RendererPageHandle,
     RendererPageReply, RendererPageState, RendererPendingDownloadActivation,
-    RendererPerformanceMetricSnapshot, RendererRuntimeHeapUsage,
-    RendererRuntimeInspectorResponseSender, RendererRuntimeRemoteObjectResolution,
-    ScriptRunOutcome,
+    RendererPerformanceMetricSnapshot, RendererRuntimeRemoteObjectResolution, ScriptRunOutcome,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use moli_renderer_v8::{
+    RendererAccessibilityPayloadsForObjectId, RendererDocumentHitTestResult,
+    RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenerBreakpoint,
+    RendererDomDebuggerEventListenersResolution, RendererDomDebuggerXhrBreakpoint,
+    RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload,
+    RendererRuntimeInspectorResponseSender,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use moli_renderer_v8::{
+    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
+    RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry, RendererDomAttributeMutation,
+    RendererDomAttributeMutationOutcome, RendererDomFocusOutcome,
+    RendererPageCookieFacadeSnapshotReply, RendererRuntimeHeapUsage,
 };
 pub use moli_renderer_v8::{
     RendererDocumentChildNodeSnapshotEvents, RendererDocumentFrontendNodeIdsResolution,
@@ -33,12 +37,17 @@ pub use moli_renderer_v8::{
     RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
     RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomBidiNodeBindingResolution,
-    RendererDomBidiNodeSharedIdResolution, RendererDomEdit, RendererDomEditOutcome,
-    RendererDomFrontendNodeBindingResolution, RendererDomNodeCreationStackFrame,
-    RendererDomNodeCreationStackTrace, RendererDomNodeReference,
+    RendererDomBidiNodeSharedIdResolution, RendererDomFrontendNodeBindingResolution,
+    RendererDomNodeCreationStackFrame, RendererDomNodeCreationStackTrace, RendererDomNodeReference,
     RendererDomNodeStackTraceResolution, RendererDomSearchRegistration,
     RendererDomSearchResultNode, RendererDomSearchResultsResolution, RendererStyleSheetHeader,
     RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
+};
+#[cfg(feature = "devtools")]
+pub use moli_renderer_v8::{RendererDomEdit, RendererDomEditOutcome};
+#[cfg(feature = "devtools")]
+pub(crate) use moli_renderer_v8::{
+    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute, RendererInspectorIngressTicket,
 };
 
 pub use moli_renderer_v8::{PageVmInitStage, RendererReplyBoundary};

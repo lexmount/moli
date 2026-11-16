@@ -750,6 +750,7 @@ impl RendererOwnerHandle {
                     },
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
                 token,
                 inspector_session_id,

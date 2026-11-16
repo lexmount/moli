@@ -1,20 +1,24 @@
 use std::{fmt::Debug, sync::Arc};
 
 use anyhow::Result;
+#[cfg(feature = "devtools")]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+#[cfg(feature = "devtools")]
 use moli_encoding::{
     decode_classic_script_source, decode_html_document_with_fallback, decode_text_for_legacy_web,
     encoding_from_response_headers,
 };
-use moli_page_types::{
-    SubresourceNetworkOutcome, SubresourceNetworkRecord, SubresourceResourceType,
-};
+use moli_page_types::SubresourceResourceType;
+#[cfg(feature = "devtools")]
+use moli_page_types::{SubresourceNetworkOutcome, SubresourceNetworkRecord};
+#[cfg(feature = "devtools")]
 use moli_web_mime::{
     effective_response_mime_essence, is_dom_parser_xml_mime, is_html_document_mime,
     is_javascript_mime_essence, is_json_mime, is_text_mime_essence,
 };
 use url::Url;
 
+#[cfg(feature = "devtools")]
 use crate::runtime::RendererResourceTextSearchOutcome;
 
 use super::PageVm;
@@ -59,6 +63,7 @@ enum ResourceContentKind {
 }
 
 impl PageVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn search_resource_by_lines(
         &mut self,
         request: RendererResourceSearchRequest,
@@ -116,6 +121,7 @@ impl PageVm {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn select_main_document(
     resource: &RendererMainDocumentResource,
     materialize_limit: usize,
@@ -138,6 +144,7 @@ fn select_main_document(
     ))
 }
 
+#[cfg(feature = "devtools")]
 fn select_subresource(
     records: &[SubresourceNetworkRecord],
     frame_id: &str,
@@ -175,10 +182,12 @@ fn select_subresource(
     ))
 }
 
+#[cfg(feature = "devtools")]
 fn resource_has_searchable_content(body_len: usize, from_cache: bool) -> bool {
     body_len != 0 || from_cache
 }
 
+#[cfg(feature = "devtools")]
 fn resource_belongs_to_frame(
     record: &SubresourceNetworkRecord,
     frame_id: &str,
@@ -187,6 +196,7 @@ fn resource_belongs_to_frame(
     record.frame_id() == Some(frame_id) || (root_frame && record.frame_id().is_none())
 }
 
+#[cfg(feature = "devtools")]
 fn subresource_url_matches(record: &SubresourceNetworkRecord, requested_url: &str) -> bool {
     if resource_urls_match(record.url().as_str(), requested_url) {
         return true;
@@ -199,6 +209,7 @@ fn subresource_url_matches(record: &SubresourceNetworkRecord, requested_url: &st
     }
 }
 
+#[cfg(feature = "devtools")]
 fn decode_resource_content(
     bytes: &[u8],
     headers: &[(String, Vec<u8>)],
@@ -233,6 +244,7 @@ fn decode_resource_content(
     BASE64_STANDARD.encode(bytes)
 }
 
+#[cfg(feature = "devtools")]
 fn resource_urls_match(left: &str, right: &str) -> bool {
     match (url_without_fragment(left), url_without_fragment(right)) {
         (Some(left), Some(right)) => left == right,
@@ -240,6 +252,7 @@ fn resource_urls_match(left: &str, right: &str) -> bool {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn url_without_fragment(value: &str) -> Option<Url> {
     Url::parse(value).ok().map(|mut url| {
         url.set_fragment(None);

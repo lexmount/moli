@@ -356,6 +356,7 @@ impl ServiceWorkerRuntimeState {
         self.live_target_run(version_id).as_ref() == Some(run)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn target_output_journal(
         &self,
         version_id: ServiceWorkerVersionId,

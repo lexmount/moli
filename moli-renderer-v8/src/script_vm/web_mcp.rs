@@ -1,5 +1,8 @@
 use super::ScriptVm;
-use moli_page_types::{DevToolsSessionKey, RendererWebMcpCommand, RendererWebMcpError};
+#[cfg(feature = "devtools")]
+use moli_page_types::DevToolsSessionKey;
+#[cfg(feature = "devtools")]
+use moli_page_types::{RendererWebMcpCommand, RendererWebMcpError};
 
 impl ScriptVm {
     pub(super) fn queue_declarative_web_mcp(&mut self) {
@@ -29,6 +32,7 @@ impl ScriptVm {
             Ok(())
         });
     }
+    #[cfg(feature = "devtools")]
     pub(super) fn prepare_web_mcp_session(&mut self, session: &DevToolsSessionKey) {
         let inspector = &self.page_inspector;
         self.renderer_document_isolate
@@ -41,6 +45,7 @@ impl ScriptVm {
             .web_mcp
             .set_object_wrapper(self.page_inspector.object_wrapper());
     }
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_web_mcp_command(
         &mut self,
         session: DevToolsSessionKey,

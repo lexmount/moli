@@ -2,16 +2,18 @@ use crate::protocol_types::{
     ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
     ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
 };
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererDomMutationEventBatch;
 use crate::runtime::{
     DetachedParserScriptFetchContinuation, RendererDedicatedWorkerTargetEvent,
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleIdentity,
     RendererDocumentSourcedSameDocumentNavigation,
-    RendererDocumentSourcedTopLevelLocationNavigation, RendererDomMutationEventBatch,
-    RendererMainDocumentCommit, RendererPendingDownloadActivation,
-    RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
-    RendererPendingPopupActivation, RendererPendingTopLevelHistoryTraversal,
-    RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorMessageBatch,
-    RendererServiceWorkerTargetEvent, RendererSharedWorkerTargetEvent,
+    RendererDocumentSourcedTopLevelLocationNavigation, RendererMainDocumentCommit,
+    RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
+    RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
+    RendererPendingTopLevelHistoryTraversal, RendererRuntimeCommandCausalIdentity,
+    RendererRuntimeInspectorMessageBatch, RendererServiceWorkerTargetEvent,
+    RendererSharedWorkerTargetEvent,
 };
 use moli_page_types::{
     PendingRuntimeBindingCall, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
@@ -106,6 +108,7 @@ pub enum RendererOwnerAction {
 /// protocol-boundary responsibility.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
+    #[cfg(feature = "devtools")]
     WebMcp(moli_page_types::RendererWebMcpObservation),
     MainDocumentCommit {
         source_document: RendererDocumentLifecycleIdentity,
@@ -118,6 +121,7 @@ pub enum RendererProtocolObservation {
         item: ScriptNetworkOutputItem,
     },
     RuntimeBinding(PendingRuntimeBindingCall),
+    #[cfg(feature = "devtools")]
     DomMutations(RendererDomMutationEventBatch),
     RuntimeInspector(RendererRuntimeInspectorMessageBatch),
     RuntimeConsole(crate::runtime::RuntimeConsoleMessageSnapshot),
@@ -136,6 +140,7 @@ pub enum RendererProtocolObservation {
 pub enum RendererOutputItem {
     OwnerAction(RendererOwnerAction),
     Observation(RendererProtocolObservation),
+    #[cfg(feature = "devtools")]
     NativeTerminal(super::RendererNativeCommandTerminal),
 }
 
@@ -231,9 +236,9 @@ impl PendingRendererOutputRecord {
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::DedicatedWorkerRuntimeInspector),
-            RendererOutputItem::OwnerAction(_)
-            | RendererOutputItem::Observation(_)
-            | RendererOutputItem::NativeTerminal(_) => None,
+            RendererOutputItem::OwnerAction(_) | RendererOutputItem::Observation(_) => None,
+            #[cfg(feature = "devtools")]
+            RendererOutputItem::NativeTerminal(_) => None,
         }
     }
 

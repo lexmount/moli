@@ -162,6 +162,7 @@ pub(crate) fn replace_text_control_selection_for_insert_html(
     )
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn replace_text_control_selection_after_beforeinput(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,

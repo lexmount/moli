@@ -1,6 +1,7 @@
 mod fence;
 mod identity;
 mod item;
+#[cfg(feature = "devtools")]
 mod native_response;
 mod response_authority;
 mod transport;
@@ -22,6 +23,7 @@ pub use item::{
     RendererDocumentTitleChanged, RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
     RendererProtocolObservation,
 };
+#[cfg(feature = "devtools")]
 pub use native_response::{
     RendererCdpCall, RendererNativeCommandAdmission, RendererNativeCommandReadyResponse,
     RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,

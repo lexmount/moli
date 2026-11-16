@@ -2774,6 +2774,7 @@ __lm_snapshot_revocable_array.revoke();
         .await
         .expect("unsupported globals snapshot test page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn native_terminals_publish_before_waiters_are_polled() {
     use super::{RendererCdpCall, RendererNativeOperation, RendererNativeProtocolResponse};
@@ -2920,6 +2921,7 @@ async fn native_terminals_publish_before_waiters_are_polled() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn projected_native_success_and_error_publish_without_adapter_receipt() {
     use super::{RendererCdpCall, RendererNativeOperation, RendererNativeProtocolResponse};

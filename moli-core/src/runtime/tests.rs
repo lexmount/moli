@@ -2909,6 +2909,7 @@ async fn standalone_page_turn_follows_post_load_cookie_reload() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "devtools")]
 async fn standalone_selector_observes_replacement_document_before_load() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

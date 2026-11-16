@@ -1,20 +1,26 @@
 use anyhow::Result;
 
+#[cfg(feature = "devtools")]
+use super::PendingDevToolsIoCommandDispatch;
+#[cfg(feature = "devtools")]
 use super::document_cookie_diagnostics::{
     DocumentCookieFacadeTelemetrySnapshot, DocumentCookieOwnerSnapshot,
 };
+#[cfg(feature = "devtools")]
+use super::protocol_support::SubresourceInterceptionClasses;
 use super::protocol_support::{
-    EmulatedIdleOverride, EmulatedMediaOverrides, PermissionOverrideRegistration,
-    SubresourceInterceptionClasses, ViewportSurface,
+    EmulatedIdleOverride, EmulatedMediaOverrides, PermissionOverrideRegistration, ViewportSurface,
 };
-use super::{CompletedPageCommand, Page, PendingDevToolsIoCommandDispatch, PendingPageCommand};
-use crate::renderer::{
-    RendererPageCommand, RendererPageCookieFacadeSnapshotReply, RendererPageReply,
-    RendererRuntimeInspectorResponseSender,
-};
+use super::{CompletedPageCommand, Page, PendingPageCommand};
+#[cfg(feature = "devtools")]
+use crate::renderer::RendererPageCookieFacadeSnapshotReply;
+#[cfg(feature = "devtools")]
+use crate::renderer::RendererRuntimeInspectorResponseSender;
+use crate::renderer::{RendererPageCommand, RendererPageReply};
 use moli_renderer_v8::network::BrowserResourceRuntime;
 
 impl Page {
+    #[cfg(feature = "devtools")]
     pub async fn set_fetch_subresource_interception_async(
         &mut self,
         classes: SubresourceInterceptionClasses,
@@ -26,6 +32,7 @@ impl Page {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_set_fetch_subresource_interception(
         &self,
         classes: SubresourceInterceptionClasses,
@@ -33,6 +40,7 @@ impl Page {
         self.start_page_command(RendererPageCommand::SetFetchSubresourceInterception { classes })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_set_fetch_subresource_interception(
         &mut self,
         completion: CompletedPageCommand,
@@ -252,6 +260,7 @@ impl Page {
 
     /// Admits the DevTools IO-agent setting through the target's shared IO
     /// task FIFO without entering the renderer owner's Main command queue.
+    #[cfg(feature = "devtools")]
     pub fn start_set_script_execution_disabled_from_io(
         &self,
         disabled: bool,
@@ -268,6 +277,7 @@ impl Page {
 
     /// Publishes the terminal Emulation response through the concrete
     /// renderer DevTools session that owns this Page attachment.
+    #[cfg(feature = "devtools")]
     pub fn start_set_script_execution_disabled_from_io_with_response(
         &self,
         inspector_session_id: Option<String>,
@@ -435,6 +445,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn document_cookie_telemetry_snapshot_async(
         &mut self,
     ) -> Result<DocumentCookieFacadeTelemetrySnapshot> {
@@ -458,6 +469,7 @@ impl Page {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn document_cookie_owner_snapshot_async(
         &mut self,
     ) -> Result<DocumentCookieOwnerSnapshot> {
@@ -469,6 +481,7 @@ impl Page {
         self.start_page_command(RendererPageCommand::DocumentCookieOwnerSnapshot)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_document_cookie_owner_snapshot(
         &mut self,
         completion: CompletedPageCommand,

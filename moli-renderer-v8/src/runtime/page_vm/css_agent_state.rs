@@ -19,6 +19,7 @@ pub(in crate::runtime) struct RendererCssStyleSheetOwnerKey {
 }
 
 impl RendererCssAgentSessionState {
+    #[cfg(feature = "devtools")]
     pub(super) fn reset_for_document(&mut self, document_id: Option<DocumentId>) {
         if self.document_id == document_id {
             return;
@@ -29,6 +30,7 @@ impl RendererCssAgentSessionState {
         self.next_style_sheet_id = 0;
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn style_sheet_id_for_owner(
         &mut self,
         owner: RendererCssStyleSheetOwnerKey,
@@ -49,6 +51,7 @@ impl RendererCssAgentSessionState {
         (style_sheet_id, true)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn owner_for_style_sheet_id(
         &self,
         style_sheet_id: &str,
@@ -56,6 +59,7 @@ impl RendererCssAgentSessionState {
         self.style_sheet_owners_by_id.get(style_sheet_id).copied()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn discard_style_sheet_id(&mut self, style_sheet_id: &str) {
         let Some(owner) = self.style_sheet_owners_by_id.remove(style_sheet_id) else {
             return;
@@ -70,6 +74,7 @@ impl RendererCssAgentSessionState {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn discard_inactive_style_sheet_owners(
         &mut self,
         active_owners: &HashSet<RendererCssStyleSheetOwnerKey>,
@@ -93,6 +98,7 @@ impl RendererCssAgentSessionState {
 }
 
 impl PageVm {
+    #[cfg(feature = "devtools")]
     fn css_agent_state_for_session_mut(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -104,6 +110,7 @@ impl PageVm {
         state
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::runtime) fn register_document_style_sheet_owner(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -120,6 +127,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::runtime) fn active_document_style_sheet_owner_key(
         &self,
         handle: DomHandle,
@@ -131,6 +139,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::runtime) fn discard_inactive_document_style_sheet_owners(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -140,6 +149,7 @@ impl PageVm {
             .discard_inactive_style_sheet_owners(active_owners)
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::runtime) fn reset_css_agent_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -148,6 +158,7 @@ impl PageVm {
         self.css_agent_sessions.remove(&key);
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::runtime) fn document_style_sheet_owner(
         &mut self,
         inspector_session_id: Option<&str>,

@@ -59,6 +59,7 @@ pub(in crate::native_bridge) use self::getters::{
     node_get_attribute_callback, node_get_attribute_names_callback, node_get_attribute_ns_callback,
     node_has_attribute_callback, node_has_attribute_ns_callback, node_has_attributes_callback,
 };
+#[cfg(feature = "devtools")]
 pub(crate) use self::inspector::mutate_live_element_attribute_for_inspector;
 pub(in crate::native_bridge) use self::mutation::{
     node_remove_attribute_callback, node_remove_attribute_ns_callback, node_set_attribute_callback,

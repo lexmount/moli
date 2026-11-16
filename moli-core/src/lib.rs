@@ -21,12 +21,9 @@ pub use moli_page_types::{LayoutConfiguration, LayoutPolicy, OptionalResourceFet
 pub use moli_renderer_v8::ProcessEnvironmentOwner;
 pub use moli_renderer_v8::renderer_output_transport_channel;
 pub use moli_renderer_v8::{
-    PageId, RendererBrowserContextRuntimeId, RendererCdpCall, RendererDocumentLifecycleIdentity,
-    RendererDocumentTitleChanged, RendererNativeCommandReadyResponse,
-    RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
-    RendererNativeOperationStep, RendererNativeProtocolError, RendererNativeProtocolNotification,
-    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererOutputCursor,
-    RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
+    PageId, RendererBrowserContextRuntimeId, RendererDocumentLifecycleIdentity,
+    RendererDocumentTitleChanged, RendererOutputCursor, RendererOutputFence,
+    RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
     RendererOutputStreamIdentity, RendererOutputTransportDiagnostics,
@@ -37,6 +34,13 @@ pub use moli_renderer_v8::{
     RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorAsyncCompletion,
     RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,
     RendererRuntimeRemoteObjectResolution,
+};
+#[cfg(feature = "devtools")]
+pub use moli_renderer_v8::{
+    RendererCdpCall, RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
+    RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
+    RendererNativeProtocolError, RendererNativeProtocolNotification,
+    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate,
 };
 pub use moli_renderer_v8::{RendererPageAccessError, RendererPageCommand, RendererPageReply};
 

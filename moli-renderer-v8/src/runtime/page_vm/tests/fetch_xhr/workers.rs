@@ -123,7 +123,6 @@ async fn worker_url_busy_loop_can_be_terminated_after_message_burst() {
 }
 
 #[tokio::test]
-
 async fn worker_url_terminate_while_loading_drops_queued_messages_and_late_script_load() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_single_response_http_server(

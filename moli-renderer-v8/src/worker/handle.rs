@@ -3,12 +3,13 @@
 use crate::protocol_types::{
     SubresourceNetworkRecord, WebSocketFrameDirection, WebSocketFrameOpcode,
 };
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::runtime::WorkerInspectorError;
 use crate::runtime::{
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
-    ServiceWorkerClientFocus, ServiceWorkerClientFocusResult, ServiceWorkerClientMessage,
-    ServiceWorkerClientNavigate, ServiceWorkerClientNavigateResult, ServiceWorkerClientQuery,
-    ServiceWorkerClientQueryResult, ServiceWorkerClientsOpenWindow,
+    RendererRuntimeInspectorMessage, ServiceWorkerClientFocus, ServiceWorkerClientFocusResult,
+    ServiceWorkerClientMessage, ServiceWorkerClientNavigate, ServiceWorkerClientNavigateResult,
+    ServiceWorkerClientQuery, ServiceWorkerClientQueryResult, ServiceWorkerClientsOpenWindow,
     ServiceWorkerClientsOpenWindowResult, ServiceWorkerCloseNotification,
     ServiceWorkerFetchCompletion, ServiceWorkerFetchEvent, ServiceWorkerFetchStreamChunk,
     ServiceWorkerFetchStreamStarted, ServiceWorkerGetNotifications,
@@ -42,9 +43,11 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::{mpsc, oneshot};
+#[cfg(feature = "devtools")]
+use tokio::sync::oneshot;
 use url::Url;
 
 /// How to determine a worker's secure-context state during startup.
@@ -78,6 +81,8 @@ impl WorkerSecureContextPolicy {
 /// Message from the parent context to the worker.
 #[derive(Debug)]
 pub(crate) enum WorkerMessage {
+    /// Release bootstrap after the native owner has registered the Worker.
+    Start,
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
     /// A transferred `MessagePort` has queued work ready for delivery.
@@ -629,6 +634,7 @@ impl WorkerDevToolsHandle {
         &self.inspector_tasks
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_runtime_protocol_message(
         &self,
         inspector_session_id: Option<String>,
@@ -644,6 +650,7 @@ impl WorkerDevToolsHandle {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn attach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -651,6 +658,7 @@ impl WorkerDevToolsHandle {
         self.inspector_tasks.append_attach(inspector_session_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -658,6 +666,7 @@ impl WorkerDevToolsHandle {
         self.inspector_tasks.append_detach(inspector_session_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn run_if_waiting_for_debugger(&self) -> bool {
         self.inspector_tasks.append_run_if_waiting_for_debugger()
     }
@@ -758,6 +767,10 @@ impl WorkerHandle {
         let _ = self.tx.send(WorkerMessage::Terminate);
     }
 
+    pub(crate) fn start_evaluation(&self) -> bool {
+        self.tx.send(WorkerMessage::Start).is_ok()
+    }
+
     /// Send a message to the worker (`postMessage`).
     pub(crate) fn post_message(&self, payload: V8StructuredClonePayload) {
         let _ = self.tx.send(WorkerMessage::Post(payload));
@@ -777,6 +790,7 @@ impl WorkerHandle {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_runtime_protocol_message(
         &self,
         inspector_session_id: Option<String>,
@@ -792,6 +806,7 @@ impl WorkerHandle {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn attach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -800,6 +815,7 @@ impl WorkerHandle {
             .attach_runtime_inspector_session(inspector_session_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -808,6 +824,7 @@ impl WorkerHandle {
             .detach_runtime_inspector_session(inspector_session_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
         self.devtools.run_if_waiting_for_debugger()
     }

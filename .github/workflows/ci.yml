@@ -105,17 +105,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install AWS-LC build dependencies
+      - name: Install build and feature-check dependencies
         run: |
           set -eu
           apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+          apt-get install --yes --no-install-recommends cmake libclang-dev python3
 
       - name: Install clippy
         run: rustup component add clippy
 
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Check standalone DevTools feature contracts
+        run: python3 tools/devtools-size-ab.py --check-only --online --jobs 2
 
   nextest:
     name: Nextest

@@ -1,17 +1,26 @@
+#[cfg(feature = "devtools")]
 use crate::custom_elements;
+#[cfg(feature = "devtools")]
 use crate::document_runtime::DomHandle;
+#[cfg(feature = "devtools")]
 use crate::dom::native::Node;
+#[cfg(feature = "devtools")]
 use crate::native_bridge::document::clear_live_attr_cache_entry_ns;
+#[cfg(feature = "devtools")]
 use crate::native_bridge::{PageScriptHost, validate_attribute_name};
+#[cfg(feature = "devtools")]
 use crate::runtime::{RendererDomAttributeMutation, RendererDomAttributeMutationOutcome};
 
+#[cfg(feature = "devtools")]
 use super::super::{
     remove_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_appending_to_current_reaction_queue,
     update_iframe_snapshot_navigation,
 };
+#[cfg(feature = "devtools")]
 use super::mutation::attribute_target_for_remove_name;
 
+#[cfg(feature = "devtools")]
 fn attribute_value(
     runtime: &PageScriptHost,
     handle: DomHandle,
@@ -25,6 +34,7 @@ fn attribute_value(
         .map(str::to_owned)
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn mutate_live_element_attribute_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,

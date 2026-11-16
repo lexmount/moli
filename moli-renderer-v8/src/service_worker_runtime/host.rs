@@ -1,25 +1,27 @@
+#[cfg(feature = "devtools")]
 use crate::runtime::WorkerInspectorError;
-use anyhow::{Context as _, Result};
+#[cfg(feature = "devtools")]
+use anyhow::Context as _;
+use anyhow::Result;
 use std::sync::Arc;
 
 use moli_storage_key::MoliStorageKey;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-use crate::{
-    runtime::{
-        RendererRuntimeInspectorMessage, RendererServiceWorkerRunIdentity, ServiceWorkerFetchEvent,
-        ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent,
-        ServiceWorkerNavigationPreloadFailure, ServiceWorkerNavigationPreloadResponseStarted,
-        ServiceWorkerNavigationPreloadStreamChunk, ServiceWorkerNavigationPreloadStreamFinished,
-        ServiceWorkerNotificationEvent, ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
-        ServiceWorkerSyncEvent,
-    },
-    types::{NetworkBodySourceId, SubresourcePolicyContext},
-    worker::{
-        WorkerBootstrapCompletion, WorkerBootstrapSuccess, WorkerFetchHandlerType, WorkerHandle,
-        WorkerSpawnOptions, WorkerToParentMessage,
-    },
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererRuntimeInspectorMessage;
+use crate::runtime::{
+    RendererServiceWorkerRunIdentity, ServiceWorkerFetchEvent, ServiceWorkerLifecycleEvent,
+    ServiceWorkerMessageEvent, ServiceWorkerNavigationPreloadFailure,
+    ServiceWorkerNavigationPreloadResponseStarted, ServiceWorkerNavigationPreloadStreamChunk,
+    ServiceWorkerNavigationPreloadStreamFinished, ServiceWorkerNotificationEvent,
+    ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent, ServiceWorkerSyncEvent,
+};
+use crate::types::{NetworkBodySourceId, SubresourcePolicyContext};
+use crate::worker::{
+    WorkerBootstrapCompletion, WorkerBootstrapSuccess, WorkerFetchHandlerType, WorkerHandle,
+    WorkerSpawnOptions, WorkerToParentMessage,
 };
 
 use super::{
@@ -136,6 +138,7 @@ impl RendererServiceWorkerHost {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn attach_worker_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -150,6 +153,7 @@ impl RendererServiceWorkerHost {
         handle.attach_runtime_inspector_session(inspector_session_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) async fn dispatch_worker_runtime_protocol_message(
         &self,
         inspector_session_id: Option<String>,
@@ -180,6 +184,7 @@ impl RendererServiceWorkerHost {
             .context(WorkerInspectorError::ServiceUnavailable)?
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) async fn dispatch_worker_runtime_protocol_message_with_deferred_response(
         &self,
         inspector_session_id: Option<String>,
@@ -194,6 +199,7 @@ impl RendererServiceWorkerHost {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) async fn dispatch_worker_runtime_protocol_message_without_deferred_response(
         &self,
         inspector_session_id: Option<String>,
@@ -203,6 +209,7 @@ impl RendererServiceWorkerHost {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn detach_worker_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -217,6 +224,7 @@ impl RendererServiceWorkerHost {
         Some(handle.detach_runtime_inspector_session(inspector_session_id))
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
         let state = self.state.lock();
         let RendererServiceWorkerHostState::Running {
@@ -689,6 +697,7 @@ impl RendererServiceWorkerHost {
             handle: Some(handle),
         };
         drop(state);
+        #[cfg(feature = "devtools")]
         if service.take_devtools_evaluation_release_for_version(params.run_owner.version_id()) {
             self.run_if_waiting_for_debugger_for_devtools();
         }

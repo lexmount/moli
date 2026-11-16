@@ -200,6 +200,7 @@ fn new_selection_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v
 }
 
 /// Read native Selection state without consulting author-replaced accessors.
+#[cfg(feature = "devtools")]
 pub(crate) fn window_selection_is_collapsed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,

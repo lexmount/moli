@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
+#[cfg(feature = "devtools")]
 use anyhow::{Result, anyhow, bail, ensure};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use url::Url;
 
-use crate::{
-    RendererPageCommand, RendererSyntheticResponseBody, types::SubresourceRequestInitiatorType,
-};
+#[cfg(feature = "devtools")]
+use crate::RendererPageCommand;
+use crate::RendererSyntheticResponseBody;
+use crate::types::SubresourceRequestInitiatorType;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InterceptionPhase {
@@ -131,15 +133,41 @@ impl ResourceInterceptionPause {
         self.response_body.as_ref()
     }
 
+    /// Resume an unobserved native load without constructing a protocol command.
+    pub(crate) fn resume_unobserved(&self) -> bool {
+        let decision = match self.phase {
+            InterceptionPhase::Request => ResourceInterceptionDecision::ContinueRequest {
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: false,
+                handle_auth_requests: false,
+            },
+            InterceptionPhase::Response => ResourceInterceptionDecision::ContinueResponse {
+                status: None,
+                headers: None,
+            },
+            InterceptionPhase::Auth => ResourceInterceptionDecision::CancelAuth,
+        };
+        self.sender
+            .lock()
+            .take()
+            .is_some_and(|sender| sender.send(decision).is_ok())
+    }
+
     /// Releasing an interceptor changes native eligibility immediately. It
     /// must not enqueue a Page policy turn behind another session's pause.
+    #[cfg(feature = "devtools")]
     pub fn set_target_interception(&self, classes: crate::SubresourceInterceptionClasses) {
         self.target_policy.set_subresource_interception(classes);
     }
 
     /// Adapter for the existing Fetch command surface. Only the exhaustive
     /// native network command subset is accepted; other Page work stays queued.
+    #[cfg(feature = "devtools")]
     pub fn dispatch(&self, command: RendererPageCommand) -> Result<ResourceInterceptionReply> {
+        #[cfg(feature = "devtools")]
         use RendererPageCommand as C;
         use ResourceInterceptionDecision as D;
         use ResourceInterceptionReply as R;
@@ -283,6 +311,48 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn unobserved_pauses_resume_natively_and_only_once() {
+        for phase in [
+            InterceptionPhase::Request,
+            InterceptionPhase::Response,
+            InterceptionPhase::Auth,
+        ] {
+            let (pause, receiver) = ResourceInterceptionPause::new(
+                7,
+                phase,
+                crate::network::PageNetworkPolicy::default(),
+            );
+            let clone = pause.clone();
+            assert!(pause.resume_unobserved());
+            assert!(!clone.resume_unobserved());
+            assert!(matches!(
+                (phase, receiver.await.unwrap()),
+                (
+                    InterceptionPhase::Request,
+                    ResourceInterceptionDecision::ContinueRequest {
+                        url: None,
+                        method: None,
+                        body: None,
+                        headers: None,
+                        intercept_response: false,
+                        handle_auth_requests: false,
+                    }
+                ) | (
+                    InterceptionPhase::Response,
+                    ResourceInterceptionDecision::ContinueResponse {
+                        status: None,
+                        headers: None,
+                    }
+                ) | (
+                    InterceptionPhase::Auth,
+                    ResourceInterceptionDecision::CancelAuth
+                )
+            ));
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "devtools")]
     async fn decisions_are_native_one_shot_and_phase_scoped() {
         let (pause, rx) = ResourceInterceptionPause::new(
             7,

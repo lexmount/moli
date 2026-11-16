@@ -2,15 +2,15 @@ use super::super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost,
     child_frames::WebStorageScope,
 };
-use super::{
-    ChildBrowsingContextFrameSnapshot, DetachedChildBrowsingContextDocumentSnapshot,
-    MAX_CHILD_FRAME_TREE_DEPTH,
-    frame_tree::child_browsing_context_bootstrap_url_inherits_security_origin,
-};
+#[cfg(feature = "devtools")]
+use super::DetachedChildBrowsingContextDocumentSnapshot;
+use super::frame_tree::child_browsing_context_bootstrap_url_inherits_security_origin;
+use super::{ChildBrowsingContextFrameSnapshot, MAX_CHILD_FRAME_TREE_DEPTH};
 use crate::document_runtime::DomHandle;
 use url::Url;
 
 impl PageScriptHost {
+    #[cfg(feature = "devtools")]
     pub(crate) fn detached_child_browsing_context_document_snapshots_for_dom_snapshot(
         &mut self,
         top_frame_id: &str,
@@ -70,6 +70,7 @@ impl PageScriptHost {
         snapshots
     }
 
+    #[cfg(feature = "devtools")]
     fn detached_child_browsing_context_document_snapshots_in_markup(
         &mut self,
         parent_frame_id: &str,
@@ -100,6 +101,7 @@ impl PageScriptHost {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn collect_detached_child_browsing_context_document_snapshots(
         &mut self,
         document: &crate::dom::native::NativeDom,

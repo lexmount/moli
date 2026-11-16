@@ -1,18 +1,14 @@
-use crate::{
-    network::{ResourceRequestClient, SharedWebStorageStore},
-    page::{
-        CompletedPageCommand, DocumentStartScript, EmulatedMediaOverrides, NavigationResponse,
-        Page, PendingPageCommand, PermissionOverrideRegistration,
-        RendererInspectorSessionRestoreSnapshot, RendererMainDocumentCommit,
-        RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
-        RendererPendingDownloadActivation, RuntimeBindingRegistration,
-        RuntimeIsolatedWorldDefinition, SubresourceAuthCredentials, SubresourceInterceptionClasses,
-        ViewportSurface,
-    },
-    renderer::ExternalRawDocumentBodyStream,
-    renderer::JsRuntime,
-    renderer::PageVmInitStage,
+use crate::network::{ResourceRequestClient, SharedWebStorageStore};
+#[cfg(feature = "devtools")]
+use crate::page::CompletedPageCommand;
+use crate::page::{
+    DocumentStartScript, EmulatedMediaOverrides, NavigationResponse, Page, PendingPageCommand,
+    PermissionOverrideRegistration, RendererInspectorSessionRestoreSnapshot,
+    RendererMainDocumentCommit, RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
+    RendererPendingDownloadActivation, RuntimeBindingRegistration, RuntimeIsolatedWorldDefinition,
+    SubresourceAuthCredentials, SubresourceInterceptionClasses, ViewportSurface,
 };
+use crate::renderer::{ExternalRawDocumentBodyStream, JsRuntime, PageVmInitStage};
 use anyhow::{Context, Result, anyhow};
 use moli_cookie_jar::{SharedBrowserCookieStore, new_shared_browser_cookie_store};
 use moli_fetch::{
@@ -2085,6 +2081,7 @@ impl NavigationEngine {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn complete_page_child_frame_lifecycle_work_best_effort(
         &mut self,
         page: &mut Page,

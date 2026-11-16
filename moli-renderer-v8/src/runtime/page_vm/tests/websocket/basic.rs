@@ -540,7 +540,6 @@ async fn websocket_message_commits_child_navigation_before_document_script_ready
 }
 
 #[tokio::test]
-
 async fn websocket_binary_echo_delivers_arraybuffer_when_binary_type_requests_it() {
     run_page_vm_async_test(async move {
         let (url, server) = spawn_text_echo_websocket_server().await;

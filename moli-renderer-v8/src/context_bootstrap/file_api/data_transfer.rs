@@ -7,9 +7,11 @@ use crate::runtime::{
 use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
+#[cfg(feature = "devtools")]
+use moli_file_api::data_transfer::drag_effect_allowed_from_mask;
 use moli_file_api::data_transfer::{
     DataTransferItemSummary, child_entry_full_path, clear_data_removes_item,
-    contains_string_item_type, data_transfer_types_from_items, drag_effect_allowed_from_mask,
+    contains_string_item_type, data_transfer_types_from_items,
     drag_operations_mask_from_effect_allowed, normalize_drag_data_type, valid_drop_effect,
     valid_effect_allowed,
 };
@@ -1043,6 +1045,7 @@ pub(crate) fn create_native_drag_data_store(
     })
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn create_external_drag_data_store(
     scope: &mut v8::PinScope<'_, '_>,
     data: &RendererDragData,
@@ -1173,6 +1176,7 @@ pub(crate) fn populate_native_drag_data_store<'s>(
     append_drag_data_records(scope, records, data)
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn replace_drag_data_store_contents<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: &NativeDragDataStore,
@@ -1188,6 +1192,7 @@ pub(crate) fn replace_drag_data_store_contents<'s>(
     Some(())
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn update_drag_data_store_operations_mask(
     scope: &mut v8::PinScope<'_, '_>,
     store: &NativeDragDataStore,

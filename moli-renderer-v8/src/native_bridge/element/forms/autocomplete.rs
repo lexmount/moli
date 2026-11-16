@@ -164,6 +164,7 @@ fn idl_exposed_autofill_value(raw: Option<&str>, wears_autofill_anchor_mantle: b
     idl_value
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn autocomplete_field_name(
     runtime: &PageScriptHost,
     handle: DomHandle,

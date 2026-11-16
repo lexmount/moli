@@ -1,20 +1,22 @@
+#[cfg(feature = "devtools")]
+use crate::devtools::pause::RendererInspectorPausePrefaceGuard;
 use crate::devtools::pause::{
-    RendererInspectorPauseNotificationRoute, RendererInspectorPausePrefaceGuard,
-    RendererInspectorSessionOutboundRoute,
+    RendererInspectorPauseNotificationRoute, RendererInspectorSessionOutboundRoute,
 };
 use crate::inspector_session::InspectorSessionOutput;
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererDevToolsSessionOutputHost;
 use crate::runtime::{
-    PendingRendererOutputRecord, RendererCommandTurnOutputRecorder,
-    RendererDevToolsSessionOutputHost, RendererProtocolObservation,
+    PendingRendererOutputRecord, RendererCommandTurnOutputRecorder, RendererProtocolObservation,
     RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorResponseSender,
     RendererTurnOutputJournal,
 };
 use anyhow::Result;
 use moli_inspector_json::InspectorJson;
-use moli_page_types::{
-    DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorResponseDelivery,
-};
+#[cfg(feature = "devtools")]
+use moli_page_types::RendererInspectorResponseDelivery;
+use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use serde_json::Value;
 use std::{
     cell::RefCell,
@@ -123,6 +125,7 @@ impl InspectorOutbound {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn for_frontend(
         agent_token: RendererDevToolsAgentToken,
         session: DevToolsSessionKey,
@@ -136,6 +139,7 @@ impl InspectorOutbound {
         outbound
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn with_debugger_pauses_enabled(mut self, enabled: bool) -> Self {
         self.debugger_pauses_enabled = enabled;
         self
@@ -326,6 +330,7 @@ impl InspectorOutbound {
         let _ = output_journal.publish_pending();
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn stage_pause_preface(
         &self,
         messages: Vec<RendererRuntimeInspectorMessage>,
@@ -479,6 +484,7 @@ impl InspectorOutbound {
     /// destination. Internal Classic/BiDi adapter calls intentionally keep
     /// using `register_response_callback`, which always preserves their
     /// private adapter-reply capability.
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn register_frontend_response_callback(
         &self,
         callback: RendererRuntimeInspectorResponseSender,
@@ -487,6 +493,7 @@ impl InspectorOutbound {
         self.register_response_callback(callback);
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn route_frontend_response(
         &self,
         callback: RendererRuntimeInspectorResponseSender,
@@ -566,6 +573,7 @@ impl InspectorOutbound {
     /// must be frozen at this dispatch boundary so page commit can publish
     /// them before its exact cursor; leaving them in the agent-local queue
     /// would make a later turn rediscover output owned by page creation.
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn append_messages_after_to_output_journal(
         &self,
         snapshot_len: usize,
@@ -617,6 +625,7 @@ impl InspectorOutbound {
 
     // DOMDebugger's internal Runtime.callFunctionOn can execute JS, unlike the
     // synchronous stack-capture setter, so it still needs an unoccupied ID.
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn internal_dispatch_call_id_is_available(
         &self,
         call_id: i32,
@@ -638,6 +647,7 @@ impl InspectorOutbound {
                 .any(|message| message.value.id_i64() == Some(i64::from(call_id)))
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn values_after(&self, snapshot_len: usize) -> Vec<InspectorJson> {
         let state = self.state();
         let guard = state.borrow();
@@ -652,6 +662,7 @@ impl InspectorOutbound {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn take_pending_messages(&self) -> Vec<InspectorJson> {
         let state = self.state();
         let mut guard = state.borrow_mut();
@@ -662,6 +673,7 @@ impl InspectorOutbound {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     fn take_pending_tagged_messages_after(
         &self,
         snapshot_len: usize,
@@ -712,6 +724,7 @@ impl InspectorOutbound {
         routing.runtime_command_output = Some(recorder);
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn end_runtime_command_output(&self) {
         let snapshot_len = {
             let mut routing = self.response_routing.borrow_mut();
@@ -825,9 +838,11 @@ mod tests {
     use super::*;
     use crate::devtools::pause::RendererInspectorPauseBridge;
     use crate::runtime::{
-        PageId, RendererInspectorCommandRoute, RendererInspectorIngressTicket,
-        RendererInspectorPauseCommandEffect, RendererOutputItem, RendererOutputStreamIdentity,
+        PageId, RendererInspectorPauseCommandEffect, RendererOutputItem,
+        RendererOutputStreamIdentity,
     };
+    #[cfg(feature = "devtools")]
+    use crate::runtime::{RendererInspectorCommandRoute, RendererInspectorIngressTicket};
 
     fn routed_outbound() -> (
         InspectorOutbound,

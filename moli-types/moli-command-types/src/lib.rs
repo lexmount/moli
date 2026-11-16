@@ -5,7 +5,7 @@
 //! types; their implementations and lifetimes remain in the renderer.
 
 mod runtime;
-pub use runtime::RuntimeRealmInfo;
+pub use runtime::{InspectorPauseEffect, RuntimeRealmInfo, RuntimeTaskMode};
 
 #[cfg(feature = "devtools")]
 pub mod devtools;

@@ -271,6 +271,7 @@ impl PageNetworkPolicy {
         state.advance_revision();
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_browser_identity_override(
         &self,
         identity: Option<Arc<moli_browser_profile::BrowserIdentityProfile>>,

@@ -1,22 +1,40 @@
-use super::{
-    InspectorOutbound, RendererInspectorIsolateBackendHandle,
-    context_registry::DocumentInspectorContextGroupId,
-    v8_backend::{RendererInspectorIsolateBackend, RendererInspectorSessionExecutorRegistration},
-};
+use super::InspectorOutbound;
+#[cfg(feature = "devtools")]
+use super::RendererInspectorIsolateBackendHandle;
+use super::context_registry::DocumentInspectorContextGroupId;
+use super::v8_backend::RendererInspectorIsolateBackend;
+#[cfg(feature = "devtools")]
+use super::v8_backend::RendererInspectorSessionExecutorRegistration;
 use crate::protocol_types::RuntimeBindingRegistration;
 use crate::runtime::RendererTurnOutputJournal;
-use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
-use std::{collections::HashMap, rc::Rc};
+use moli_page_types::RendererDevToolsAgentToken;
+#[cfg(feature = "devtools")]
+use moli_page_types::{DevToolsSessionKey, V8InspectorSessionState};
+#[cfg(feature = "devtools")]
+use std::collections::HashMap;
+use std::rc::Rc;
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
 pub(in crate::script_vm) enum PageInspectorSessionTarget<'a> {
     Frontend(Option<&'a str>),
     InternalRuntimeEvaluate,
 }
 
+#[cfg(not(feature = "devtools"))]
+#[derive(Clone, Copy)]
+pub(in crate::script_vm) enum InternalInspectorSessionTarget {
+    InternalRuntimeEvaluate,
+}
+
+#[cfg(not(feature = "devtools"))]
+pub(in crate::script_vm) type PageInspectorSessionTarget<'a> = InternalInspectorSessionTarget;
+
 impl<'a> PageInspectorSessionTarget<'a> {
+    #[cfg(feature = "devtools")]
     pub(in crate::script_vm) fn frontend_session_id(self) -> Option<Option<&'a str>> {
         match self {
+            #[cfg(feature = "devtools")]
             Self::Frontend(inspector_session_id) => Some(inspector_session_id),
             Self::InternalRuntimeEvaluate => None,
         }
@@ -24,19 +42,21 @@ impl<'a> PageInspectorSessionTarget<'a> {
 }
 
 #[derive(Default)]
-pub(super) struct RendererDevToolsAgentSessions {
-    frontend: HashMap<DevToolsSessionKey, RendererDevToolsSession>,
+pub(super) struct RendererInspectorSessions {
+    #[cfg(feature = "devtools")]
+    frontend: HashMap<DevToolsSessionKey, RendererInspectorSession>,
+    #[cfg(feature = "devtools")]
     runtime_bindings_by_session: HashMap<DevToolsSessionKey, Vec<RuntimeBindingRegistration>>,
-    internal_runtime_evaluate: Option<RendererDevToolsSession>,
+    internal_runtime_evaluate: Option<RendererInspectorSession>,
 }
 
-pub(super) struct RendererDevToolsSessionDispatch {
+pub(super) struct RendererInspectorSessionDispatch {
     session: Rc<v8::inspector::V8InspectorSession>,
     outbound: InspectorOutbound,
     runtime_bindings_to_replay: Vec<RuntimeBindingRegistration>,
 }
 
-impl RendererDevToolsSessionDispatch {
+impl RendererInspectorSessionDispatch {
     pub(super) fn run<T>(
         self,
         op: impl FnOnce(
@@ -54,7 +74,8 @@ impl RendererDevToolsSessionDispatch {
 }
 
 #[derive(Clone)]
-pub(super) struct RendererDevToolsSessionConnection {
+#[cfg(feature = "devtools")]
+pub(super) struct RendererInspectorSessionConnection {
     debugger_pauses_enabled: bool,
     isolate_backend: RendererInspectorIsolateBackendHandle,
     context_group_id: DocumentInspectorContextGroupId,
@@ -62,7 +83,8 @@ pub(super) struct RendererDevToolsSessionConnection {
     output_journal: Option<RendererTurnOutputJournal>,
 }
 
-impl RendererDevToolsSessionConnection {
+#[cfg(feature = "devtools")]
+impl RendererInspectorSessionConnection {
     pub(super) fn new(
         isolate_backend: RendererInspectorIsolateBackendHandle,
         context_group_id: DocumentInspectorContextGroupId,
@@ -96,36 +118,39 @@ impl RendererDevToolsSessionConnection {
     }
 }
 
-impl RendererDevToolsAgentSessions {
+impl RendererInspectorSessions {
     pub(super) fn prepare_internal_runtime_evaluate(
         &mut self,
         backend: &mut RendererInspectorIsolateBackend,
         context_group_id: DocumentInspectorContextGroupId,
         agent_token: RendererDevToolsAgentToken,
         output_journal: Option<RendererTurnOutputJournal>,
-    ) -> RendererDevToolsSessionDispatch {
+    ) -> RendererInspectorSessionDispatch {
         let session = self.internal_runtime_evaluate.get_or_insert_with(|| {
-            RendererDevToolsSession::connect(
+            RendererInspectorSession::connect(
                 backend,
                 context_group_id,
                 InspectorOutbound::for_agent(agent_token).with_output_journal(output_journal),
+                #[cfg(feature = "devtools")]
                 None,
+                #[cfg(feature = "devtools")]
                 None,
             )
         });
-        RendererDevToolsSessionDispatch {
+        RendererInspectorSessionDispatch {
             session: Rc::clone(&session.session),
             outbound: session.outbound.clone(),
             runtime_bindings_to_replay: Vec::new(),
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn prepare_frontend(
         &mut self,
         backend: &mut RendererInspectorIsolateBackend,
-        connection: &RendererDevToolsSessionConnection,
+        connection: &RendererInspectorSessionConnection,
         session_key: DevToolsSessionKey,
-    ) -> RendererDevToolsSessionDispatch {
+    ) -> RendererInspectorSessionDispatch {
         let stored_runtime_bindings = self
             .runtime_bindings_by_session
             .get(&session_key)
@@ -133,7 +158,7 @@ impl RendererDevToolsAgentSessions {
             .unwrap_or_default();
         let session = self.frontend.entry(session_key.clone()).or_insert_with(|| {
             let outbound = connection.outbound(session_key.clone());
-            RendererDevToolsSession::connect(
+            RendererInspectorSession::connect(
                 backend,
                 connection.context_group_id,
                 outbound,
@@ -156,22 +181,24 @@ impl RendererDevToolsAgentSessions {
         session
             .replayed_runtime_bindings
             .extend(runtime_bindings_to_replay.iter().cloned());
-        RendererDevToolsSessionDispatch {
+        RendererInspectorSessionDispatch {
             session: Rc::clone(&session.session),
             outbound: session.outbound.clone(),
             runtime_bindings_to_replay,
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn v8_state(
         &self,
         session_key: &DevToolsSessionKey,
     ) -> Option<V8InspectorSessionState> {
         self.frontend
             .get(session_key)
-            .map(RendererDevToolsSession::v8_state)
+            .map(RendererInspectorSession::v8_state)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn v8_states(&self) -> Vec<(DevToolsSessionKey, V8InspectorSessionState)> {
         let mut states = self
             .frontend
@@ -182,17 +209,18 @@ impl RendererDevToolsAgentSessions {
         states
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn reattach_frontend(
         &mut self,
         backend: &mut RendererInspectorIsolateBackend,
-        connection: &RendererDevToolsSessionConnection,
+        connection: &RendererInspectorSessionConnection,
         session_key: DevToolsSessionKey,
         v8_state: &V8InspectorSessionState,
     ) {
         let previous = self.frontend.remove(&session_key);
         let (outbound, replayed_runtime_bindings) = match previous {
             Some(previous) => {
-                let RendererDevToolsSession {
+                let RendererInspectorSession {
                     session,
                     outbound,
                     replayed_runtime_bindings,
@@ -204,7 +232,7 @@ impl RendererDevToolsAgentSessions {
             }
             None => (connection.outbound(session_key.clone()), Vec::new()),
         };
-        let mut session = RendererDevToolsSession::connect(
+        let mut session = RendererInspectorSession::connect(
             backend,
             connection.context_group_id,
             outbound,
@@ -219,15 +247,16 @@ impl RendererDevToolsAgentSessions {
         self.frontend.insert(session_key, session);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn ensure_frontend(
         &mut self,
         backend: &mut RendererInspectorIsolateBackend,
-        connection: &RendererDevToolsSessionConnection,
+        connection: &RendererInspectorSessionConnection,
         session_key: DevToolsSessionKey,
     ) {
         self.frontend.entry(session_key.clone()).or_insert_with(|| {
             let outbound = connection.outbound(session_key.clone());
-            RendererDevToolsSession::connect(
+            RendererInspectorSession::connect(
                 backend,
                 connection.context_group_id,
                 outbound,
@@ -241,6 +270,7 @@ impl RendererDevToolsAgentSessions {
         });
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn retain_replayed_runtime_bindings(
         &mut self,
         session_key: &DevToolsSessionKey,
@@ -253,6 +283,7 @@ impl RendererDevToolsAgentSessions {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn set_runtime_bindings(
         &mut self,
         session_key: DevToolsSessionKey,
@@ -267,6 +298,7 @@ impl RendererDevToolsAgentSessions {
         self.retain_replayed_runtime_bindings(&session_key, bindings);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn runtime_bindings(
         &self,
         session_key: &DevToolsSessionKey,
@@ -277,12 +309,14 @@ impl RendererDevToolsAgentSessions {
             .unwrap_or_default()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn end_runtime_command_output(&self, session_key: &DevToolsSessionKey) {
         if let Some(session) = self.frontend.get(session_key) {
             session.outbound.end_runtime_command_output();
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn remove_frontend(&mut self, session_key: &DevToolsSessionKey) -> bool {
         let removed_configuration = self
             .runtime_bindings_by_session
@@ -297,6 +331,7 @@ impl RendererDevToolsAgentSessions {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn cancel_response_callback(&self, session_key: &DevToolsSessionKey, call_id: i32) {
         if let Some(session) = self.frontend.get(session_key) {
             session.outbound.cancel_response_callback(call_id);
@@ -309,6 +344,7 @@ impl RendererDevToolsAgentSessions {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn frontend_routes(&self) -> Vec<(DevToolsSessionKey, InspectorOutbound)> {
         self.frontend
             .iter()
@@ -316,6 +352,7 @@ impl RendererDevToolsAgentSessions {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn frontend_sessions(
         &self,
         session_keys: &[DevToolsSessionKey],
@@ -330,6 +367,7 @@ impl RendererDevToolsAgentSessions {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn frontend_session_and_outbound(
         &self,
         session_key: &DevToolsSessionKey,
@@ -340,6 +378,7 @@ impl RendererDevToolsAgentSessions {
     }
 
     pub(super) fn deactivate_all(&self) {
+        #[cfg(feature = "devtools")]
         for session in self.frontend.values() {
             session.outbound.deactivate();
         }
@@ -349,24 +388,33 @@ impl RendererDevToolsAgentSessions {
     }
 
     pub(super) fn frontend_len(&self) -> usize {
-        self.frontend.len()
+        #[cfg(feature = "devtools")]
+        {
+            self.frontend.len()
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            0
+        }
     }
 }
 
-struct RendererDevToolsSession {
+struct RendererInspectorSession {
     session: Rc<v8::inspector::V8InspectorSession>,
     outbound: InspectorOutbound,
+    #[cfg(feature = "devtools")]
     replayed_runtime_bindings: Vec<RuntimeBindingRegistration>,
+    #[cfg(feature = "devtools")]
     _executor_registration: Option<RendererInspectorSessionExecutorRegistration>,
 }
 
-impl RendererDevToolsSession {
+impl RendererInspectorSession {
     fn connect(
         backend: &mut RendererInspectorIsolateBackend,
         context_group_id: DocumentInspectorContextGroupId,
         mut outbound: InspectorOutbound,
-        state: Option<&V8InspectorSessionState>,
-        frontend_session_route: Option<(
+        #[cfg(feature = "devtools")] state: Option<&V8InspectorSessionState>,
+        #[cfg(feature = "devtools")] frontend_session_route: Option<(
             RendererInspectorIsolateBackendHandle,
             RendererDevToolsAgentToken,
             DevToolsSessionKey,
@@ -374,11 +422,17 @@ impl RendererDevToolsSession {
     ) -> Self {
         let native_binding = outbound.prepare_native_session_binding();
         let first_attach_state = b"{}";
+        #[cfg(feature = "devtools")]
         let first_attach = state.is_none();
+        #[cfg(not(feature = "devtools"))]
+        let first_attach = true;
+        #[cfg(feature = "devtools")]
         let state = state.map_or(
             first_attach_state.as_slice(),
             V8InspectorSessionState::as_bytes,
         );
+        #[cfg(not(feature = "devtools"))]
+        let state = first_attach_state.as_slice();
         let session = backend.connect_session(
             context_group_id,
             v8::inspector::Channel::new(Box::new(RendererInspectorChannel {
@@ -393,6 +447,7 @@ impl RendererDevToolsSession {
         }
         let session = Rc::new(session);
         *native_binding.borrow_mut() = Rc::downgrade(&session);
+        #[cfg(feature = "devtools")]
         let executor_registration =
             frontend_session_route.map(|(page_backend, agent_token, session_key)| {
                 page_backend.register_session_executor_route(
@@ -406,11 +461,14 @@ impl RendererDevToolsSession {
         Self {
             session,
             outbound,
+            #[cfg(feature = "devtools")]
             replayed_runtime_bindings: Vec::new(),
+            #[cfg(feature = "devtools")]
             _executor_registration: executor_registration,
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn v8_state(&self) -> V8InspectorSessionState {
         V8InspectorSessionState::from_bytes(self.session.state())
     }
@@ -432,6 +490,7 @@ impl v8::inspector::ChannelImpl for RendererInspectorChannel {
     fn flush_protocol_notifications(&self) {}
 }
 
+#[cfg(feature = "devtools")]
 pub(super) fn inspector_session_key(inspector_session_id: Option<&str>) -> DevToolsSessionKey {
     DevToolsSessionKey::from_wire_session_id(inspector_session_id.filter(|id| !id.is_empty()))
 }
@@ -450,7 +509,7 @@ mod tests {
         serde_json::from_slice(&json).expect("V8 Inspector session state should contain JSON")
     }
 
-    fn dispatch(session: &RendererDevToolsSession, request: &str) -> Vec<Value> {
+    fn dispatch(session: &RendererInspectorSession, request: &str) -> Vec<Value> {
         let snapshot = session.outbound.len();
         let _response_capture = session.outbound.capture_dispatch_responses();
         dispatch_with_runtime_defaults(&session.session, request, &session.outbound)
@@ -504,7 +563,7 @@ mod tests {
                 InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate())
                     .with_debugger_pauses_enabled(debugging)
             };
-            let session = RendererDevToolsSession::connect(
+            let session = RendererInspectorSession::connect(
                 &mut backend,
                 context_group_id,
                 outbound(),
@@ -534,7 +593,7 @@ mod tests {
             );
             let initial_state = session.v8_state();
             drop(session);
-            let session = RendererDevToolsSession::connect(
+            let session = RendererInspectorSession::connect(
                 &mut backend,
                 context_group_id,
                 outbound(),
@@ -560,7 +619,7 @@ mod tests {
             let state = session.v8_state();
             assert_eq!(state_json(&state)["Debugger"]["skipAllPauses"], false);
             drop(session);
-            let restored = RendererDevToolsSession::connect(
+            let restored = RendererInspectorSession::connect(
                 &mut backend,
                 context_group_id,
                 outbound(),
@@ -589,7 +648,7 @@ mod tests {
                 "disable and subsequent enable must follow V8's native reset behavior",
             );
         }
-        let session = RendererDevToolsSession::connect(
+        let session = RendererInspectorSession::connect(
             &mut backend,
             context_group_id,
             InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate()),
@@ -621,7 +680,7 @@ mod tests {
         let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
         let context_group_id = DocumentInspectorContextGroupId::next();
         let agent_token = RendererDevToolsAgentToken::allocate();
-        let connection = RendererDevToolsSessionConnection::new(
+        let connection = RendererInspectorSessionConnection::new(
             backend.handle(),
             context_group_id,
             agent_token,
@@ -633,7 +692,7 @@ mod tests {
             name: "bridge".to_owned(),
             execution_context_name: Some("utility".to_owned()),
         };
-        let mut sessions = RendererDevToolsAgentSessions::default();
+        let mut sessions = RendererInspectorSessions::default();
         sessions.set_runtime_bindings(session_key.clone(), std::slice::from_ref(&binding));
 
         let first_replay = sessions
@@ -682,8 +741,8 @@ mod tests {
             name: "bridge".to_owned(),
             execution_context_name: Some("utility".to_owned()),
         };
-        let mut first_agent_sessions = RendererDevToolsAgentSessions::default();
-        let mut replacement_agent_sessions = RendererDevToolsAgentSessions::default();
+        let mut first_agent_sessions = RendererInspectorSessions::default();
+        let mut replacement_agent_sessions = RendererInspectorSessions::default();
 
         first_agent_sessions
             .set_runtime_bindings(session_key.clone(), std::slice::from_ref(&binding));
@@ -735,7 +794,7 @@ mod tests {
             registration_id,
         );
 
-        let first_attach = RendererDevToolsSession::connect(
+        let first_attach = RendererInspectorSession::connect(
             &mut backend,
             context_group_id,
             InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate()),
@@ -789,7 +848,7 @@ mod tests {
         );
         drop(first_attach);
 
-        let restored = RendererDevToolsSession::connect(
+        let restored = RendererInspectorSession::connect(
             &mut backend,
             context_group_id,
             InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate()),
@@ -888,7 +947,7 @@ mod tests {
                 registration_id,
             );
 
-            let session = RendererDevToolsSession::connect(
+            let session = RendererInspectorSession::connect(
                 &mut backend,
                 context_group_id,
                 InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate()),
@@ -907,7 +966,7 @@ mod tests {
             RendererInspectorIsolateBackend::new(&mut replacement_isolate);
         let replacement_context_group_id = DocumentInspectorContextGroupId::next();
         let replacement_registration_id = DocumentInspectorContextRegistrationId::next();
-        let restored = RendererDevToolsSession::connect(
+        let restored = RendererInspectorSession::connect(
             &mut replacement_backend,
             replacement_context_group_id,
             InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate()),
@@ -961,7 +1020,7 @@ mod tests {
         let context_group_id = DocumentInspectorContextGroupId::next();
         let empty_state = V8InspectorSessionState::from_bytes(Vec::new());
 
-        let session = RendererDevToolsSession::connect(
+        let session = RendererInspectorSession::connect(
             &mut backend,
             context_group_id,
             InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate()),

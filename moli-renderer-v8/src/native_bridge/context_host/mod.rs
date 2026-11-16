@@ -85,6 +85,10 @@ mod core;
 mod dialogs;
 mod document_domain;
 mod document_script_ready_inputs;
+#[cfg(feature = "devtools")]
+mod dom_debugger;
+#[cfg(not(feature = "devtools"))]
+#[path = "dom_debugger_disabled.rs"]
 mod dom_debugger;
 mod element_toggle_events;
 mod event_callbacks;
@@ -126,7 +130,10 @@ mod message_ports;
 mod messages;
 mod module_owner_tasks;
 mod mouse_click;
-pub(crate) use mouse_click::{MouseReleaseFollowUp, common_flat_tree_ancestor};
+#[cfg(feature = "devtools")]
+pub(crate) use mouse_click::MouseReleaseFollowUp;
+#[cfg(feature = "devtools")]
+pub(crate) use mouse_click::common_flat_tree_ancestor;
 mod navigation;
 mod navigator_overrides;
 mod opfs_tasks;
@@ -188,9 +195,10 @@ pub(crate) use child_frame_runtime::{
     is_cross_origin_location_proxy, is_cross_origin_top_window_proxy,
     throw_cross_origin_location_security_error, throw_cross_origin_type_error,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use child_frame_snapshots::DetachedChildBrowsingContextDocumentSnapshot;
 pub(crate) use child_frame_snapshots::{
     ChildBrowsingContextFrameSnapshot, ChildBrowsingContextSnapshot,
-    DetachedChildBrowsingContextDocumentSnapshot,
 };
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;

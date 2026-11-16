@@ -61,6 +61,7 @@ impl CurrentInputEvent {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn keyboard(key: &str, modifiers: u8) -> Self {
         Self {
             kind: if key.eq_ignore_ascii_case("enter") {

@@ -1065,7 +1065,6 @@ async fn worker_arraybuffer_from_worker_arrives_as_arraybuffer_in_page_vm() {
 }
 
 #[tokio::test]
-
 async fn worker_messageport_transfer_from_window_to_worker_round_trips_messages() {
     run_page_vm_async_test(async move {
             let mut page_vm = test_page_vm();

@@ -1,4 +1,6 @@
-use super::types::{XPATH_ANY_TYPE, XPATH_BOOLEAN_TYPE, XPATH_NUMBER_TYPE, XPATH_STRING_TYPE};
+#[cfg(feature = "devtools")]
+use super::types::XPATH_ANY_TYPE;
+use super::types::{XPATH_BOOLEAN_TYPE, XPATH_NUMBER_TYPE, XPATH_STRING_TYPE};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
@@ -6,10 +8,12 @@ use std::ptr::NonNull;
 use markup5ever::{LocalName, Namespace, Prefix, ns};
 use moli_xpath::{
     Attribute as XPathAttribute, Document as XPathDocument, Dom as XPathDom,
-    Element as XPathElement, NamespaceResolver, Node as XPathNode, ParserError,
+    Element as XPathElement, NamespaceResolver, Node as XPathNode,
     ProcessingInstruction as XPathProcessingInstruction, SnapshotValue, Value,
-    evaluate_parsed_xpath, parse,
+    evaluate_parsed_xpath,
 };
+#[cfg(feature = "devtools")]
+use moli_xpath::{ParserError, parse};
 
 use crate::document_runtime::DomHandle;
 use crate::dom::native::{Attribute as DomAttribute, DomHost, Node as DomNode, NodeType};
@@ -72,6 +76,7 @@ struct NullNamespaceResolver;
 
 struct LiveXPathDom;
 
+#[cfg(feature = "devtools")]
 pub(super) fn evaluate_live_xpath(
     dom: &DomHost,
     expression: &str,
@@ -108,6 +113,7 @@ pub(super) fn evaluate_live_parsed_xpath(
     Ok(live_xpath_value(value))
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn evaluate_live_xpath_search_node_handles(
     dom: &DomHost,
     expression: &str,

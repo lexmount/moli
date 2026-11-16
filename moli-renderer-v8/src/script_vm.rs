@@ -7,42 +7,45 @@ use std::{
     time::Instant,
 };
 
-use crate::{
-    DocumentStartScript,
-    content_security_policy::ContentSecurityPolicyScriptElementRequest,
-    dom::{
-        NodeId,
-        native::{Attribute, DomHost, DomMutationEffects, NativeDom, NativeNodeId, NodeData},
-    },
-    frame_owner_model::{
-        ChildDocumentModulatorStore, DocumentId, FrameDocumentTaskOwner, FrameOwnerStore,
-        FrameRealmId, FrameScriptJob, FrameScriptJobKind,
-    },
-    inspector_microtasks::with_scoped_inspector_microtasks,
-    inspector_session::dispatch_with_runtime_defaults,
-    network::{ResourceRequestClient, context::DocumentResourceLoader},
-    page_task_queue::{
-        PageRuntimeWakeSender, PageTask, PageTaskSender, PostParseLifecycleWork,
-        RendererResourceCompletionSender, RuntimePageTaskSender,
-    },
-    runtime::{
-        RendererBrowserContextRuntime, RendererCountEntry, RendererMoliDomMemoryDiagnostics,
-        RendererMoliMemoryDiagnostics, RendererMoliMemoryScopeDiagnostics,
-        RendererMoliRuntimeMemoryDiagnostics, RendererPerformanceMetricSnapshot,
-        RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
-        RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
-        RendererRuntimeInspectorResponseSender, RendererRuntimeRealmInfo,
-        RendererScriptExecutionMemoryDiagnostics, RendererScriptSourceMemoryDiagnostics,
-        RendererScrollIntoViewResult, RuntimeConsoleMessageSnapshot,
-        SharedRendererBackendNodeRegistry,
-    },
-    runtime_binding_data::{build_runtime_binding_data, runtime_binding_callback},
-    script_provenance::CompiledStringProvenance,
-    types::ScriptObservableOutput,
+use crate::DocumentStartScript;
+use crate::content_security_policy::ContentSecurityPolicyScriptElementRequest;
+use crate::dom::NodeId;
+use crate::dom::native::{
+    Attribute, DomHost, DomMutationEffects, NativeDom, NativeNodeId, NodeData,
 };
+use crate::frame_owner_model::{
+    ChildDocumentModulatorStore, DocumentId, FrameDocumentTaskOwner, FrameOwnerStore, FrameRealmId,
+    FrameScriptJob, FrameScriptJobKind,
+};
+use crate::inspector_microtasks::with_scoped_inspector_microtasks;
+use crate::inspector_session::dispatch_with_runtime_defaults;
+use crate::network::ResourceRequestClient;
+use crate::network::context::DocumentResourceLoader;
+use crate::page_task_queue::{
+    PageRuntimeWakeSender, PageTask, PageTaskSender, PostParseLifecycleWork,
+    RendererResourceCompletionSender, RuntimePageTaskSender,
+};
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererScrollIntoViewResult;
+use crate::runtime::{
+    RendererBrowserContextRuntime, RendererCountEntry, RendererMoliDomMemoryDiagnostics,
+    RendererMoliMemoryDiagnostics, RendererMoliMemoryScopeDiagnostics,
+    RendererMoliRuntimeMemoryDiagnostics, RendererPerformanceMetricSnapshot,
+    RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
+    RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorResponseSender, RendererRuntimeRealmInfo,
+    RendererScriptExecutionMemoryDiagnostics, RendererScriptSourceMemoryDiagnostics,
+    RuntimeConsoleMessageSnapshot, SharedRendererBackendNodeRegistry,
+};
+use crate::runtime_binding_data::{build_runtime_binding_data, runtime_binding_callback};
+use crate::script_provenance::CompiledStringProvenance;
+use crate::types::ScriptObservableOutput;
 use anyhow::{Context, Result, anyhow};
+use moli_page_types::DevToolsSessionKey;
+#[cfg(feature = "devtools")]
+use moli_page_types::RendererDomDebuggerDomBreakpointType;
+#[cfg(feature = "devtools")]
 use moli_page_types::{
-    DevToolsSessionKey, RendererDomDebuggerDomBreakpointType,
     RendererDomDebuggerEventListenerBreakpoint, RendererDomDebuggerXhrBreakpoint,
     RendererInspectorProtocolConfiguration, V8InspectorSessionAttach,
 };
@@ -658,35 +661,34 @@ impl ScriptExecutionMemoryCounters {
     }
 }
 
-use super::native_bridge::element::ClientRect;
-use super::{
-    context_bootstrap::{set_window_navigator_identity, sync_global_location_runtime_state},
-    custom_elements,
-    document_runtime::{CurrentScriptContextSpec, DocumentRuntime, DomHandle},
-    dom::native::ShadowRootInclusion,
-    host::ScriptHandleSource,
-    host::{HostTimeoutRunResult, ScriptEventKind, ScriptEventTask},
-    module_runtime::{
-        ModuleScriptExecutionOutcome, ModuleSource, execute_external_module_script_graph,
-        execute_module_script_source, register_import_map_source,
-    },
-    native_bridge::{
-        PageScriptHost, RuntimeObservableContextToken, SharedPrebootstrappedChildDefaultContexts,
-        node_runtime_and_handle_from_object,
-    },
-    planning::PreparedScript,
-    renderer_resource_scheduler::RendererResourceScheduler,
-    runtime::{
-        RendererActivityDiagnostics, RendererInputDispatchOutcome, RendererPageContextCancelReason,
-        RendererPageContextCancelSender, RendererPageDiagnosticsSnapshot,
-        RendererRuntimeObservableSourceQueue, renderer_page_context_cancel_channel,
-    },
-    types::{
-        JsValueSnapshot, ScriptKind, ScriptMode, ScriptSourceKind, SubresourceInterceptionClasses,
-        SubresourceResourceType,
-    },
-    util::v8_string,
+use super::context_bootstrap::{set_window_navigator_identity, sync_global_location_runtime_state};
+use super::custom_elements;
+use super::document_runtime::{CurrentScriptContextSpec, DocumentRuntime, DomHandle};
+use super::dom::native::ShadowRootInclusion;
+use super::host::{HostTimeoutRunResult, ScriptEventKind, ScriptEventTask, ScriptHandleSource};
+use super::module_runtime::{
+    ModuleScriptExecutionOutcome, ModuleSource, execute_external_module_script_graph,
+    execute_module_script_source, register_import_map_source,
 };
+#[cfg(feature = "devtools")]
+use super::native_bridge::element::ClientRect;
+#[cfg(feature = "devtools")]
+use super::native_bridge::node_runtime_and_handle_from_object;
+use super::native_bridge::{
+    PageScriptHost, RuntimeObservableContextToken, SharedPrebootstrappedChildDefaultContexts,
+};
+use super::planning::PreparedScript;
+use super::renderer_resource_scheduler::RendererResourceScheduler;
+use super::runtime::{
+    RendererActivityDiagnostics, RendererInputDispatchOutcome, RendererPageContextCancelReason,
+    RendererPageContextCancelSender, RendererPageDiagnosticsSnapshot,
+    RendererRuntimeObservableSourceQueue, renderer_page_context_cancel_channel,
+};
+use super::types::{
+    JsValueSnapshot, ScriptKind, ScriptMode, ScriptSourceKind, SubresourceInterceptionClasses,
+    SubresourceResourceType,
+};
+use super::util::v8_string;
 
 #[cfg(test)]
 use super::native_bridge::PendingRuntimeBindingCall;
@@ -738,10 +740,13 @@ mod dedicated_worker_error_dispatch;
 mod devtools_resource_load;
 mod document_content;
 mod document_isolate;
+#[cfg(feature = "devtools")]
 mod dom_debugger;
+#[cfg(feature = "devtools")]
 mod dom_inspector;
 mod file_reading;
 mod related_page;
+#[cfg(feature = "devtools")]
 pub(crate) use dom_inspector::{DomInspectorEdit, DomInspectorEditOutcome};
 mod drop_cleanup;
 mod element_click;
@@ -753,13 +758,16 @@ mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
 mod indexed_db_task_body;
+#[cfg(feature = "devtools")]
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
 mod main_world;
 use main_world::MainWorld;
 mod native_drag_data;
-pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
+pub(crate) use inspector::dispatch_inspector_io_owner_wake;
+#[cfg(feature = "devtools")]
+pub(crate) use inspector::dispatch_inspector_main_owner_wake;
 mod document_context_transition;
 mod initial_window_document;
 mod isolated_worlds;
@@ -1347,6 +1355,7 @@ impl ScriptVm {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn dispatch_inspector_protocol_message_for_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1369,6 +1378,7 @@ impl ScriptVm {
     /// by this call, while the synthetic response ID must never enter the
     /// Page's concrete output stream. Marking the dispatch internal also keeps
     /// the replay from becoming a second live Runtime producer.
+    #[cfg(feature = "devtools")]
     pub(super) fn dispatch_internal_inspector_protocol_message_for_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1384,6 +1394,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn live_node_handle_for_runtime_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1486,6 +1497,7 @@ impl ScriptVm {
         self._context_host.borrow().renderer_dom_agent_state()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn dispatch_inspector_protocol_message_for_session_with_deferred_response_and_command_output(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1516,6 +1528,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn end_runtime_inspector_command_output(&self, inspector_session_id: Option<&str>) {
         self.page_inspector
             .end_runtime_command_output_for_session(inspector_session_id);
@@ -1558,6 +1571,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn cancel_runtime_inspector_response_for_session(
         &self,
         inspector_session_id: Option<&str>,
@@ -1567,6 +1581,7 @@ impl ScriptVm {
             .cancel_response_callback_for_session(inspector_session_id, call_id);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn initialize_inspector_session_after_attach(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1708,6 +1723,7 @@ impl ScriptVm {
         Ok(())
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn configure_dom_debugger_event_listener_breakpoint(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1723,6 +1739,7 @@ impl ScriptVm {
             );
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn configure_dom_debugger_xhr_breakpoint(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1734,6 +1751,7 @@ impl ScriptVm {
             .configure_dom_debugger_xhr_breakpoint(inspector_session_id, breakpoint, enabled);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn configure_dom_debugger_dom_breakpoint(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1753,6 +1771,7 @@ impl ScriptVm {
             );
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn clear_dom_debugger_dom_breakpoints_for_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1850,6 +1869,7 @@ impl ScriptVm {
         let deferred_call_id = deferred_response
             .as_ref()
             .map(|callback| callback.call_id());
+        #[cfg(feature = "devtools")]
         let captures_command_output = command_output.is_some();
         let messages = renderer_document_isolate
             .with_entered_renderer_document_isolate_and_inspector_mut(|isolate, inspector| {
@@ -1895,7 +1915,15 @@ impl ScriptVm {
                             outbound.begin_runtime_command_output(command_output);
                         }
                         if let Some(callback) = deferred_response {
-                            outbound.register_frontend_response_callback(callback);
+                            match target {
+                                #[cfg(feature = "devtools")]
+                                PageInspectorSessionTarget::Frontend(_) => {
+                                    outbound.register_frontend_response_callback(callback)
+                                }
+                                PageInspectorSessionTarget::InternalRuntimeEvaluate => {
+                                    outbound.register_response_callback(callback)
+                                }
+                            }
                         }
                         let _internal_response_capture = internal_dispatch_call_id
                             .map(|call_id| outbound.capture_internal_dispatch_response(call_id));
@@ -1949,6 +1977,7 @@ impl ScriptVm {
         let messages = match messages {
             Ok(messages) => messages,
             Err(error) => {
+                #[cfg(feature = "devtools")]
                 if captures_command_output
                     && let Some(inspector_session_id) = target.frontend_session_id()
                 {
@@ -1956,6 +1985,7 @@ impl ScriptVm {
                 }
                 if let Some(call_id) = deferred_call_id {
                     match target {
+                        #[cfg(feature = "devtools")]
                         PageInspectorSessionTarget::Frontend(inspector_session_id) => {
                             page_inspector.cancel_response_callback_for_session(
                                 inspector_session_id,
@@ -2141,6 +2171,7 @@ impl ScriptVmPageRealmBootstrap {
             .as_ref()
             .is_some_and(RendererPageScriptEnvironment::has_main_window_proxy);
         page_inspector.configure_debugger(document_settings.debugger_enabled);
+        #[cfg(feature = "devtools")]
         if !runtime_inspector_session_restore_snapshots.is_empty() {
             renderer_document_isolate.with_renderer_document_isolate_and_inspector_mut(
                 |_, backend| {
@@ -2665,12 +2696,14 @@ impl ScriptVm {
         self.page_context_cancel_tx.cancel(reason);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn register_internal_node_reference(&mut self, handle: DomHandle) -> Option<u64> {
         self._context_host
             .borrow_mut()
             .register_internal_node_reference(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn discard_internal_node_reference(&mut self, token: u64) {
         self._context_host
             .borrow_mut()
@@ -2854,6 +2887,7 @@ impl ScriptVm {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn map_child_viewport_point_to_parent_content(
     point: moli_layout::LayoutPoint,
     child_viewport: moli_layout::LayoutViewport,

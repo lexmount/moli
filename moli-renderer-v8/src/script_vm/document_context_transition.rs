@@ -153,6 +153,7 @@ impl ScriptVm {
             .root_document_lifecycle_identity();
         let page_inspector = &mut self.page_inspector;
         isolate.with_renderer_document_isolate_and_inspector_mut(|isolate, backend| {
+            #[cfg(feature = "devtools")]
             page_inspector
                 .reattach_v8_sessions(backend, &env.runtime_inspector_session_restore_snapshots);
             if let Some(commit) = env.main_document_commit.clone() {

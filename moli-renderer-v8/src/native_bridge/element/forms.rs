@@ -108,6 +108,7 @@ pub(in crate::native_bridge::element) fn textarea_setter_receiver<'s>(
     html_element_setter_receiver(scope, receiver, "HTMLTextAreaElement", member, "textarea")
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) use self::autocomplete::autocomplete_field_name;
 pub(in crate::native_bridge) use self::autocomplete::{
     input_autocomplete_getter_function, input_autocomplete_setter_function,
@@ -115,9 +116,8 @@ pub(in crate::native_bridge) use self::autocomplete::{
     textarea_autocomplete_getter_function, textarea_autocomplete_setter_function,
 };
 
-pub(crate) use self::form_element::{
-    autofill_related_form_control_elements, form_control_elements, form_data_control_elements,
-};
+#[cfg(feature = "devtools")]
+pub(crate) use self::form_element::autofill_related_form_control_elements;
 pub(in crate::native_bridge) use self::form_element::{
     fieldset_elements_getter_function, form_accept_charset_getter_function,
     form_accept_charset_setter_function, form_action_getter_function, form_action_setter_function,
@@ -132,6 +132,7 @@ pub(in crate::native_bridge) use self::form_element::{
     form_no_validate_getter_function, form_no_validate_setter_function,
     form_target_getter_function, form_target_setter_function,
 };
+pub(crate) use self::form_element::{form_control_elements, form_data_control_elements};
 pub(crate) use self::input::{cache_input_files_from_selected_files, input_files_for_object};
 pub(in crate::native_bridge) use self::input::{
     input_accept_getter_function, input_accept_setter_function, input_alt_getter_function,
@@ -227,19 +228,24 @@ pub(in crate::native_bridge) use self::simple_controls::{
     progress_max_setter_function, progress_position_getter_function,
     progress_value_getter_function, progress_value_setter_function,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use self::submission::perform_implicit_submission_from_control;
+pub(crate) use self::submission::submit_form_with_submit_event;
 pub(in crate::native_bridge) use self::submission::{
     FormAssociatedResetCallbackTiming, form_request_submit_callback, form_reset_callback,
     form_submit_callback, reset_form_default_action,
 };
-pub(crate) use self::submission::{
-    perform_implicit_submission_from_control, submit_form_with_submit_event,
-};
+#[cfg(feature = "devtools")]
+pub(crate) use self::text_control::replace_text_control_selection_after_beforeinput;
 pub(crate) use self::text_control::{
-    dispatch_text_control_event, is_text_control, is_text_control_user_editable,
+    dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
-    replace_text_control_selection_after_beforeinput,
-    replace_text_control_selection_for_insert_html, text_control_set_selection_range_internal,
-    text_control_set_selection_range_with_direction_internal, text_control_value,
+    replace_text_control_selection_for_insert_html, text_control_value,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use self::text_control::{
+    is_text_control_user_editable, text_control_set_selection_range_internal,
+    text_control_set_selection_range_with_direction_internal,
 };
 pub(in crate::native_bridge) use self::text_control::{
     text_control_select_callback, text_control_selection_direction_getter_function,

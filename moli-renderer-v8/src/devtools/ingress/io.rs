@@ -1,30 +1,29 @@
-use std::{
-    collections::{BTreeMap, VecDeque},
-    ffi::c_void,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::collections::BTreeMap;
+#[cfg(feature = "devtools")]
+use std::collections::VecDeque;
+use std::ffi::c_void;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(feature = "devtools")]
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use moli_v8_platform::{
     ProcessEnvironmentInvalidation, ProcessEnvironmentNotifications, ProcessEnvironmentNotifier,
 };
 use parking_lot::Mutex;
 
-use crate::{
-    devtools::{
-        ingress::lane::RendererDevToolsSessionLaneKey, pause::RendererInspectorPauseLoopWake,
-        route::RendererInspectorSessionExecutorRouteId,
-    },
-    runtime::{
-        RendererDevToolsIoCommandEnvelope, RendererDevToolsIoCommandKind,
-        RendererDevToolsIoCommandPayload, RendererInspectorCommandEnvelope,
-        RendererInspectorCommandRoute, RendererInspectorIngressTicket,
-        RendererInspectorPauseCommandEffect, RendererRuntimeInspectorResponseSender,
-    },
+#[cfg(feature = "devtools")]
+use crate::devtools::ingress::lane::RendererDevToolsSessionLaneKey;
+use crate::devtools::pause::RendererInspectorPauseLoopWake;
+use crate::devtools::route::RendererInspectorSessionExecutorRouteId;
+#[cfg(feature = "devtools")]
+use crate::runtime::{
+    RendererDevToolsIoCommandEnvelope, RendererDevToolsIoCommandKind,
+    RendererDevToolsIoCommandPayload, RendererInspectorCommandEnvelope,
+    RendererInspectorCommandRoute, RendererInspectorIngressTicket,
 };
+#[cfg(feature = "devtools")]
+use crate::runtime::{RendererInspectorPauseCommandEffect, RendererRuntimeInspectorResponseSender};
 
 type RendererInspectorInterruptCallback =
     unsafe extern "C" fn(v8::UnsafeRawIsolatePtr, *mut c_void);
@@ -46,6 +45,7 @@ impl RendererInspectorInterruptTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "devtools")]
 pub(crate) enum RendererInspectorIoCommandConsumer {
     Owner,
     Interrupt,
@@ -53,6 +53,7 @@ pub(crate) enum RendererInspectorIoCommandConsumer {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "devtools")]
 pub enum RendererRuntimeInspectorIoCommandClaim {
     Dispatched,
     SessionResponse {
@@ -62,11 +63,14 @@ pub enum RendererRuntimeInspectorIoCommandClaim {
     Canceled(String),
 }
 
+#[cfg(feature = "devtools")]
 type RendererInspectorIoFirstDispatchSender =
     tokio::sync::oneshot::Sender<RendererRuntimeInspectorIoCommandClaim>;
+#[cfg(feature = "devtools")]
 type RendererInspectorIoFirstDispatchReceiver =
     tokio::sync::oneshot::Receiver<RendererRuntimeInspectorIoCommandClaim>;
 
+#[cfg(feature = "devtools")]
 pub(crate) struct RendererInspectorIoCommand {
     command_id: u64,
     pub(crate) agent_token: RendererDevToolsAgentToken,
@@ -75,11 +79,13 @@ pub(crate) struct RendererInspectorIoCommand {
     claimed_by: Option<RendererInspectorIoCommandConsumer>,
 }
 
+#[cfg(feature = "devtools")]
 impl RendererInspectorIoCommand {
     pub(crate) fn command_id(&self) -> u64 {
         self.command_id
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
         self.envelope.ticket()
     }
@@ -123,6 +129,7 @@ impl RendererInspectorIoCommand {
     }
 }
 
+#[cfg(feature = "devtools")]
 pub struct RendererRuntimeInspectorIoCommandRoute {
     command_id: u64,
     ticket: RendererInspectorIngressTicket,
@@ -135,15 +142,18 @@ pub struct RendererRuntimeInspectorIoCommandRoute {
     ingress: RendererInspectorIoIngress,
 }
 
+#[cfg(feature = "devtools")]
 impl RendererRuntimeInspectorIoCommandRoute {
     pub fn command_id(&self) -> u64 {
         self.command_id
     }
 
+    #[cfg(feature = "devtools")]
     pub fn ticket(&self) -> &RendererInspectorIngressTicket {
         &self.ticket
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn wait_for_first_dispatch(
         mut self,
     ) -> Result<RendererRuntimeInspectorIoCommandClaim, &'static str> {
@@ -210,6 +220,7 @@ impl RendererRuntimeInspectorIoCommandRoute {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for RendererRuntimeInspectorIoCommandRoute {
     fn drop(&mut self) {
         self.ingress.cancel_queued_command(
@@ -252,13 +263,16 @@ impl RendererInspectorIoOwnerWake {
 }
 
 struct RendererInspectorIoState {
+    #[cfg(feature = "devtools")]
     commands: VecDeque<RendererInspectorIoCommand>,
     // Isolate-owned notifications, not session commands. They remain eligible
     // during session detach and an active command's nested debugger pause.
     environment_notifications: ProcessEnvironmentNotifications,
+    #[cfg(feature = "devtools")]
     active_command_id: Option<u64>,
     // One count per lane is enough: every detach guard completes at most once,
     // and commands stay blocked until all outstanding guards have completed.
+    #[cfg(feature = "devtools")]
     session_detaches: BTreeMap<RendererDevToolsSessionLaneKey, usize>,
     closed: bool,
     owner_wake_tx: Option<tokio::sync::mpsc::UnboundedSender<RendererInspectorIoOwnerWake>>,
@@ -266,9 +280,13 @@ struct RendererInspectorIoState {
 
 impl RendererInspectorIoState {
     fn has_ready(&self) -> bool {
-        !self.closed && (self.environment_notifications.has_pending() || self.has_ready_command())
+        let ready = self.environment_notifications.has_pending();
+        #[cfg(feature = "devtools")]
+        let ready = ready || self.has_ready_command();
+        !self.closed && ready
     }
 
+    #[cfg(feature = "devtools")]
     fn has_ready_command(&self) -> bool {
         !self.closed
             && self.active_command_id.is_none()
@@ -282,6 +300,7 @@ impl RendererInspectorIoState {
             })
     }
 
+    #[cfg(feature = "devtools")]
     fn drain_commands(
         &mut self,
         mut should_drain: impl FnMut(&RendererInspectorIoCommand) -> bool,
@@ -302,6 +321,7 @@ impl RendererInspectorIoState {
 
 /// Owns the target IO task slot only until the command reaches its executor.
 /// A later interrupt command must not wait for an asynchronous response.
+#[cfg(feature = "devtools")]
 pub(crate) struct RendererInspectorIoFirstDispatchGuard {
     ingress: RendererInspectorIoIngress,
     active_command_id: Option<u64>,
@@ -309,6 +329,7 @@ pub(crate) struct RendererInspectorIoFirstDispatchGuard {
     first_dispatch_tx: Option<RendererInspectorIoFirstDispatchSender>,
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for RendererInspectorIoFirstDispatchGuard {
     fn drop(&mut self) {
         let has_ready = self.finish_task(RendererRuntimeInspectorIoCommandClaim::Canceled(
@@ -320,6 +341,7 @@ impl Drop for RendererInspectorIoFirstDispatchGuard {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl RendererInspectorIoFirstDispatchGuard {
     /// Release IO admission at backend entry. Wakes post owner work, queue a
     /// V8 interrupt, or signal the pause loop; they do not dispatch inline.
@@ -340,6 +362,7 @@ impl RendererInspectorIoFirstDispatchGuard {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn finish_task(&mut self, claim: RendererRuntimeInspectorIoCommandClaim) -> bool {
         let Some(command_id) = self.active_command_id.take() else {
             return false;
@@ -394,9 +417,12 @@ impl RendererInspectorIoIngress {
             shared: Arc::new(RendererInspectorIoShared {
                 page_pause_wakes: Mutex::new(BTreeMap::new()),
                 state: Mutex::new(RendererInspectorIoState {
+                    #[cfg(feature = "devtools")]
                     commands: VecDeque::new(),
                     environment_notifications: ProcessEnvironmentNotifications::default(),
+                    #[cfg(feature = "devtools")]
                     active_command_id: None,
+                    #[cfg(feature = "devtools")]
                     session_detaches: BTreeMap::new(),
                     closed: false,
                     owner_wake_tx: None,
@@ -494,6 +520,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn enqueue_command(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -539,6 +566,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorIoCommand> {
         self.shared.owner_wake_armed.store(false, Ordering::Release);
         let command = self.claim_next(RendererInspectorIoCommandConsumer::Owner);
@@ -548,6 +576,7 @@ impl RendererInspectorIoIngress {
         command
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn claim_for_interrupt(&self) -> Option<RendererInspectorIoCommand> {
         let command = self.claim_next(RendererInspectorIoCommandConsumer::Interrupt);
         if command.is_none() {
@@ -560,11 +589,13 @@ impl RendererInspectorIoIngress {
         command
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn claim_for_pause(&self) -> Option<RendererInspectorIoCommand> {
         self.claim_next(RendererInspectorIoCommandConsumer::Pause)
     }
 
     #[cfg(test)]
+    #[cfg(feature = "devtools")]
     pub(crate) fn wait_and_claim_for_pause(
         &self,
         pause_bridge: &crate::devtools::pause::RendererInspectorPauseBridge,
@@ -574,6 +605,7 @@ impl RendererInspectorIoIngress {
             .ok()
     }
 
+    #[cfg(feature = "devtools")]
     fn claim_next(
         &self,
         consumer: RendererInspectorIoCommandConsumer,
@@ -603,6 +635,7 @@ impl RendererInspectorIoIngress {
         Some(command)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn first_dispatch_guard(
         &self,
         command: &mut RendererInspectorIoCommand,
@@ -624,6 +657,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn finish_first_dispatch(&self, command_id: u64) -> bool {
         let mut state = self.shared.state.lock();
         assert_eq!(
@@ -634,6 +668,7 @@ impl RendererInspectorIoIngress {
         state.has_ready()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn cancel_queued_command(&self, command_id: u64, message: &str) {
         let command = {
             let mut state = self.shared.state.lock();
@@ -648,6 +683,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn begin_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -673,6 +709,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -701,18 +738,36 @@ impl RendererInspectorIoIngress {
     }
 
     pub(crate) fn close(&self, message: &str) {
-        let commands = {
-            let mut state = self.shared.state.lock();
-            state.closed = true;
-            state.environment_notifications.close();
-            state.commands.drain(..).collect::<Vec<_>>()
-        };
+        let mut state = self.shared.state.lock();
+        state.closed = true;
+        state.environment_notifications.close();
+        #[cfg(feature = "devtools")]
+        let commands = state.commands.drain(..).collect::<Vec<_>>();
+        drop(state);
         self.shared.pause_wake.notify_all();
+        #[cfg(feature = "devtools")]
         for command in commands {
             fail_io_command(command, message);
         }
+        #[cfg(not(feature = "devtools"))]
+        let _ = message;
     }
 
+    /// Runtime environment notifications retain their wake acknowledgement
+    /// even when no protocol command queue is compiled.
+    #[cfg(not(feature = "devtools"))]
+    pub(crate) fn acknowledge_environment_wake(&self, interrupt: bool) {
+        if interrupt {
+            self.shared.interrupt_armed.store(false, Ordering::Release);
+        } else {
+            self.shared.owner_wake_armed.store(false, Ordering::Release);
+        }
+        if self.shared.state.lock().has_ready() {
+            self.notify_execution_opportunities();
+        }
+    }
+
+    #[cfg(feature = "devtools")]
     pub(crate) fn cancel_all_queued(&self, message: &str) {
         let commands = self
             .shared
@@ -799,15 +854,17 @@ impl RendererInspectorIoIngress {
 impl std::fmt::Debug for RendererInspectorIoIngress {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.shared.state.lock();
-        formatter
-            .debug_struct("RendererInspectorIoIngress")
-            .field("route_id", &self.route_id())
+        let mut debug = formatter.debug_struct("RendererInspectorIoIngress");
+        #[cfg(feature = "devtools")]
+        debug
             .field("queued_tasks", &state.commands.len())
+            .field("active_command_id", &state.active_command_id);
+        debug
+            .field("route_id", &self.route_id())
             .field(
                 "environment_notifications",
                 &state.environment_notifications.has_pending(),
             )
-            .field("active_command_id", &state.active_command_id)
             .field(
                 "interrupt_armed",
                 &self.shared.interrupt_armed.load(Ordering::Acquire),
@@ -817,6 +874,7 @@ impl std::fmt::Debug for RendererInspectorIoIngress {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn fail_io_command(mut command: RendererInspectorIoCommand, message: &str) {
     if let Some(first_dispatch_tx) = command.first_dispatch_tx.take() {
         let _ = first_dispatch_tx.send(RendererRuntimeInspectorIoCommandClaim::Canceled(
@@ -828,22 +886,22 @@ fn fail_io_command(mut command: RendererInspectorIoCommand, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        devtools::pause::RendererInspectorPauseBridge,
-        runtime::{
-            RendererDevToolsSessionOutputHost, RendererInspectorCommandEnvelope,
-            RendererInspectorIngressTicket, RendererOutputStreamIdentity,
-            RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
-            RendererRuntimeInspectorResponseChannel, RendererTurnOutputJournal,
-            renderer_output_transport_channel,
-        },
+    use crate::devtools::pause::RendererInspectorPauseBridge;
+    use crate::runtime::{
+        RendererDevToolsSessionOutputHost, RendererOutputStreamIdentity,
+        RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
+        RendererRuntimeInspectorResponseChannel, RendererTurnOutputJournal,
+        renderer_output_transport_channel,
     };
+    #[cfg(feature = "devtools")]
+    use crate::runtime::{RendererInspectorCommandEnvelope, RendererInspectorIngressTicket};
 
     fn ingress() -> RendererInspectorIoIngress {
         let pause_bridge = RendererInspectorPauseBridge::default();
         RendererInspectorIoIngress::new(pause_bridge.pause_loop_wake(), None)
     }
 
+    #[cfg(feature = "devtools")]
     fn enqueue(
         ingress: &RendererInspectorIoIngress,
         agent_token: RendererDevToolsAgentToken,
@@ -864,6 +922,7 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn io_ticket(session: &str) -> RendererInspectorIngressTicket {
         RendererInspectorIngressTicket::new(
             None,

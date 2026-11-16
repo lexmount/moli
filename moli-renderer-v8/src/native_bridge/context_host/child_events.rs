@@ -115,6 +115,7 @@ impl PageScriptHost {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn child_window_inspector_listener_snapshots(
         &self,
         target: ChildWindowEventTarget,

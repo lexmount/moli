@@ -102,6 +102,7 @@ impl ScriptVm {
         Ok(owner_realm_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn with_child_frame_realm_context_scope<T>(
         &mut self,
         execution_context_id: i64,
@@ -253,6 +254,7 @@ impl ScriptVm {
             .has_world_for_scope(Some(frame_id), name)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn has_isolated_world_for_owner(
         &self,
         devtools_session: Option<&DevToolsSessionKey>,
@@ -264,6 +266,7 @@ impl ScriptVm {
             .is_some()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_execution_context_id_for_isolated_context(
         &self,
         execution_context_id: i64,
@@ -272,6 +275,7 @@ impl ScriptVm {
             .inspector_execution_context_id(execution_context_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn isolated_execution_context_id_for_inspector_context(
         &self,
         execution_context_id: i64,
@@ -778,6 +782,7 @@ impl ScriptVm {
         retired_count
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn retire_isolated_worlds_for_devtools_session(
         &mut self,
         devtools_session: &DevToolsSessionKey,
@@ -1123,6 +1128,7 @@ impl ScriptVm {
         Ok(())
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn ensure_isolated_worlds_attached_to_inspector(&mut self) -> Result<()> {
         self.publish_prebootstrapped_isolated_window_contexts()?;
         let pending_ids = self
@@ -1199,6 +1205,7 @@ impl ScriptVm {
         self.ensure_isolated_world_for_owner(None, name, grant_universal_access)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn create_isolated_world_for_frame(
         &mut self,
         frame_id: &str,
@@ -1321,6 +1328,7 @@ impl ScriptVm {
         Ok(())
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_runtime_binding(&mut self, name: &str) -> Result<()> {
         self.remove_runtime_binding_from_default_context(name)?;
         let isolated_context_ids = self
@@ -1334,10 +1342,12 @@ impl ScriptVm {
         Ok(())
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_default_runtime_binding(&mut self, name: &str) -> Result<()> {
         self.remove_runtime_binding_from_default_context(name)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn run_document_start_script_now(
         &mut self,
         script: &DocumentStartScript,
@@ -1367,6 +1377,7 @@ impl ScriptVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn run_document_start_script_in_execution_context(
         &mut self,
         execution_context_id: i64,

@@ -26,40 +26,19 @@ pub(crate) fn unobserved(
                     let _ = parent.send(WorkerToParentMessage::SubresourceNetwork(record));
                 }
             }
-            E::Request { info, pause } => {
-                let _ = pause.dispatch(
-                    crate::RendererPageCommand::ContinuePendingSubresourceFetch {
-                        internal_id: info.internal_id,
-                        url: None,
-                        method: None,
-                        body: None,
-                        headers: None,
-                        intercept_response: false,
-                        handle_auth_requests: false,
-                    },
-                );
+            E::Request { pause, .. } => {
+                pause.resume_unobserved();
             }
             E::Continue {
                 event,
                 pause: Some(pause),
-            } => {
-                let command = match *event {
-                    crate::types::PendingSubresourceContinueEvent::ResponsePaused(info) => {
-                        crate::RendererPageCommand::ContinuePendingSubresourceResponse {
-                            internal_id: info.internal_id,
-                            response_code: None,
-                            response_headers: None,
-                        }
-                    }
-                    crate::types::PendingSubresourceContinueEvent::AuthRequired(info) => {
-                        crate::RendererPageCommand::CancelPendingSubresourceAuth {
-                            internal_id: info.internal_id,
-                        }
-                    }
-                    crate::types::PendingSubresourceContinueEvent::Completed { .. } => return true,
-                };
-                let _ = pause.dispatch(command);
-            }
+            } => match *event {
+                crate::types::PendingSubresourceContinueEvent::ResponsePaused(_)
+                | crate::types::PendingSubresourceContinueEvent::AuthRequired(_) => {
+                    pause.resume_unobserved();
+                }
+                crate::types::PendingSubresourceContinueEvent::Completed { .. } => {}
+            },
             E::Continue { .. } => {}
         }
         true
