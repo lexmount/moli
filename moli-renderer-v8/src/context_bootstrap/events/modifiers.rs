@@ -78,17 +78,6 @@ impl<'s> EventModifierInit<'s> {
         self.initialize_modifiers(scope, event);
     }
 
-    // TouchEvent keeps its key accessors in private state. Installing the own
-    // modifier properties used by Mouse/Keyboard events would change its shape.
-    pub(super) fn initialize_touch_event_base(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        event: v8::Local<'s, v8::Object>,
-    ) -> (bool, bool, bool, bool) {
-        self.ui.initialize(scope, event);
-        (self.alt_key, self.meta_key, self.ctrl_key, self.shift_key)
-    }
-
     fn initialize_modifiers(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -168,7 +157,9 @@ pub(in crate::context_bootstrap) fn event_get_modifier_state_callback<'s>(
         "Accel" => "Control",
         key => key,
     };
-    let bits = event_private_value(scope, args.this(), EVENT_MODIFIERS_SLOT)
+    let receiver =
+        moli_webapi_declare::web_api_object_target(scope, args.this()).unwrap_or(args.this());
+    let bits = event_private_value(scope, receiver, EVENT_MODIFIERS_SLOT)
         .and_then(|value| value.uint32_value(scope))
         .unwrap_or_default();
     let active = MODIFIER_KEYS

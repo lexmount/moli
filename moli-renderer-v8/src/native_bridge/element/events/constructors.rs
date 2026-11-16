@@ -1,8 +1,8 @@
 use crate::runtime::RendererPointerEventProperties;
-use crate::util::{serialize_v8_iter_array, v8_string, v8str};
+use crate::util::{v8_string, v8str};
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
-use super::{construct_event, event_constructor};
+use super::construct_event;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -107,30 +107,6 @@ struct WheelEventInitDeclaration<'scope> {
     meta_key: bool,
     shift_key: bool,
     view: v8::Local<'scope, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct TouchEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    touches: v8::Local<'scope, v8::Array>,
-    target_touches: v8::Local<'scope, v8::Array>,
-    changed_touches: v8::Local<'scope, v8::Array>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct TouchInitDeclaration<'scope> {
-    identifier: i32,
-    target: v8::Local<'scope, v8::Object>,
-    screen_x: f64,
-    screen_y: f64,
-    client_x: f64,
-    client_y: f64,
-    page_x: f64,
-    page_y: f64,
 }
 
 #[derive(WebApiObject)]
@@ -802,54 +778,39 @@ pub(crate) fn construct_touch_event_with_points<'s>(
     active_points: &[TouchEventPoint<'s>],
     changed_points: &[TouchEventPoint<'s>],
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let touch_ctor = event_constructor(scope, "Touch")?;
-    let touches = construct_touch_array(scope, touch_ctor, active_points)?;
-    let target_touch_points = active_points
+    let touches = construct_touches(scope, active_points)?;
+    let target_touches = touches
         .iter()
         .copied()
-        .filter(|point| point.is_target_touch)
-        .collect::<Vec<_>>();
-    let target_touches = construct_touch_array(scope, touch_ctor, &target_touch_points)?;
-    let changed_touches = construct_touch_array(scope, touch_ctor, changed_points)?;
-
-    let init =
-        TouchEventInitDeclaration::new(true, true, true, touches, target_touches, changed_touches)
-            .bind(scope)
-            .ok()?;
-    construct_event(scope, "TouchEvent", event_type, init)
-}
-
-fn construct_touch_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    touch_ctor: v8::Local<'s, v8::Function>,
-    points: &[TouchEventPoint<'s>],
-) -> Option<v8::Local<'s, v8::Array>> {
-    let touches = points
-        .iter()
-        .map(|point| construct_touch(scope, touch_ctor, *point))
-        .collect::<Option<Vec<_>>>()?;
-    serialize_v8_iter_array(scope, touches)
-}
-
-fn construct_touch<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    touch_ctor: v8::Local<'s, v8::Function>,
-    point: TouchEventPoint<'s>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let touch_init = TouchInitDeclaration::new(
-        point.identifier,
-        point.target,
-        // moli's window sits at the screen origin, so screen == client coords.
-        point.x,
-        point.y,
-        point.x,
-        point.y,
-        point.x,
-        point.y,
+        .zip(active_points)
+        .filter_map(|(touch, point)| point.is_target_touch.then_some(touch))
+        .collect();
+    let changed_touches = construct_touches(scope, changed_points)?;
+    crate::context_bootstrap::construct_native_touch_event(
+        scope,
+        event_type,
+        touches,
+        target_touches,
+        changed_touches,
     )
-    .bind(scope)
-    .ok()?;
-    touch_ctor.new_instance(scope, &[touch_init.into()])
+}
+
+fn construct_touches<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    points: &[TouchEventPoint<'s>],
+) -> Option<Vec<v8::Local<'s, v8::Object>>> {
+    points
+        .iter()
+        .map(|point| {
+            crate::context_bootstrap::construct_native_touch(
+                scope,
+                point.identifier,
+                point.target,
+                point.x,
+                point.y,
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn construct_keyboard_event<'s>(
