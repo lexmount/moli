@@ -112,8 +112,11 @@ fn chromium_network_authority(location: &str) -> bool {
     if host.is_empty() || !host.bytes().all(allowed_ascii_host_byte) {
         return false;
     }
+    // Ignore one root dot. Any further trailing dot leaves an empty final
+    // label, which must not expose a preceding numeric label to IPv4 parsing.
     let last = host
-        .trim_end_matches('.')
+        .strip_suffix('.')
+        .unwrap_or(host)
         .rsplit('.')
         .next()
         .unwrap_or_default();
@@ -137,6 +140,32 @@ fn allowed_ascii_host_byte(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_authorities_preserve_empty_final_labels_before_ipv4_detection() {
+        let base = Url::parse("http://source.test/page").unwrap();
+        for (location, valid) in [
+            ("http://xn--a.123/", false),
+            ("http://xn--a.123./", false),
+            ("http://xn--a.123../", true),
+            ("http://xn--a.123.../", true),
+            ("http://xn--a.0x7f./", false),
+            ("http://xn--a.0x7f../", true),
+            ("http://example%20host.123./", false),
+            ("http://example%20host.123../", true),
+        ] {
+            assert_eq!(
+                validate_network_redirect_location(
+                    &base,
+                    302,
+                    &[("location".into(), location.as_bytes().to_vec())],
+                )
+                .is_ok(),
+                valid,
+                "{location}",
+            );
+        }
+    }
 
     #[test]
     fn unicode_network_authorities_do_not_decode_nested_percent_escapes() {

@@ -3170,7 +3170,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 scope,
                 pending.resource_timing.failed(&pending.request_url),
             );
-            record_worker_fetch_failure(&state.borrow(), &pending, message.clone());
+            let network_error_text = completion
+                .network_error_text
+                .unwrap_or_else(|| message.clone());
+            record_worker_fetch_failure(&state.borrow(), &pending, network_error_text);
             if let Some(message) = v8_string(scope, &message) {
                 let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
             } else {

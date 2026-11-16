@@ -213,6 +213,90 @@ async fn manual_redirect_invalid_headers_preserve_cookies_by_credentials_mode() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn network_only_fetch_failures_preserve_transport_error_codes() {
+    // Reserve a non-listening port so the refused request cannot reach a
+    // different test's server while the asynchronous fetch is pending.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let refused_url = format!("http://{}/refused", socket.local_addr().unwrap());
+    for worker_mode in ["window", "http", "blob"] {
+        for refused in [false, true] {
+            let (base, _release, _requests, server) = redirect_server(true).await;
+            let mut ctx = TestContext::new();
+            with_loaded_http_document(&mut ctx, &format!("{base}/page"), "SID-1", "TID-1").await;
+            enable_runtime_async(&mut ctx, "SID-1", 65_000).await;
+            command(&mut ctx, 65_001, "Network.enable", json!({})).await;
+            let source = if refused {
+                refused_url.clone()
+            } else {
+                format!("{base}/redirect")
+            };
+            let fetch = fetch_expression(&source, worker_mode == "blob", false, false);
+            let fetch = if worker_mode == "http" {
+                let script = format!("{fetch}.then(postMessage)");
+                format!(
+                    "new Promise((resolve,reject)=>{{const w=new Worker('/worker.js');w.onmessage=e=>{{w.terminate();resolve(e.data)}};w.onerror=reject;w.postMessage({script:?})}})"
+                )
+            } else {
+                fetch
+            };
+            let result = command(
+                &mut ctx,
+                65_002,
+                "Runtime.evaluate",
+                json!({
+                    "expression":fetch,"awaitPromise":true,"returnByValue":true
+                }),
+            )
+            .await;
+            assert_eq!(
+                result["result"]["result"]["value"],
+                json!({"error":"TypeError"}),
+                "worker={worker_mode}, refused={refused}: {result}"
+            );
+            wait_until_messages(
+                &mut ctx,
+                Some("SID-1"),
+                "failed fetch request",
+                |messages| {
+                    messages.iter().any(|message| {
+                        message["method"] == "Network.requestWillBeSent"
+                            && message["params"]["request"]["url"] == source
+                    })
+                },
+            )
+            .await;
+            let request_id = ctx
+                .sent
+                .iter()
+                .find(|message| {
+                    message["method"] == "Network.requestWillBeSent"
+                        && message["params"]["request"]["url"] == source
+                })
+                .unwrap()["params"]["requestId"]
+                .clone();
+            assert_network_failure(
+                &mut ctx,
+                &request_id,
+                if refused {
+                    "net::ERR_CONNECTION_REFUSED"
+                } else {
+                    "net::ERR_INVALID_REDIRECT"
+                },
+            )
+            .await;
+            assert!(
+                ctx.sent
+                    .iter()
+                    .all(|message| message["method"] != "Fetch.requestPaused"),
+                "Network observation must not require Fetch interception"
+            );
+            server.abort();
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn manual_redirect_response_pause_preserves_connection_error_reason() {
     // Binding without listening reserves the port while deterministically
     // refusing connections, including when other tests allocate local ports.
@@ -293,7 +377,12 @@ async fn manual_redirect_response_pause_preserves_connection_error_reason() {
                     "worker={worker}, per_request={per_request}: {result}"
                 );
                 if !fulfill {
-                    assert_network_failure(&mut ctx, &pause, "net::ERR_CONNECTION_REFUSED").await;
+                    assert_network_failure(
+                        &mut ctx,
+                        &pause["params"]["networkId"],
+                        "net::ERR_CONNECTION_REFUSED",
+                    )
+                    .await;
                 }
                 server.abort();
             }
@@ -388,7 +477,12 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
                     "worker={worker}, preflight={preflight}, fulfill={fulfill}: {result}"
                 );
                 if !fulfill {
-                    assert_network_failure(&mut ctx, &pause, "net::ERR_INVALID_REDIRECT").await;
+                    assert_network_failure(
+                        &mut ctx,
+                        &pause["params"]["networkId"],
+                        "net::ERR_INVALID_REDIRECT",
+                    )
+                    .await;
                 }
                 assert_eq!(
                     *requests.lock(),
@@ -406,8 +500,7 @@ async fn manual_redirect_failed_response_pause_can_continue_or_fulfill() {
         }
     }
 }
-async fn assert_network_failure(ctx: &mut TestContext, pause: &Value, error_text: &str) {
-    let request_id = &pause["params"]["networkId"];
+async fn assert_network_failure(ctx: &mut TestContext, request_id: &Value, error_text: &str) {
     wait_until_messages(ctx, Some("SID-1"), "terminal network failure", |messages| {
         messages.iter().any(|message| {
             message["method"] == "Network.loadingFailed"

@@ -10,6 +10,8 @@ async fn manual_network_redirect_rejects_invalid_location_in_every_transport() -
             "http://example.test:abc/",
             "http://caf%C3%A9%2520domain.test/",
             "http://%2541.%C3%A9.test/",
+            "http://xn--a.123./",
+            "http://xn--a.0x7f./",
         ] {
             for status in [301, 302, 303, 307, 308] {
                 let server = ScriptedHttpServer::spawn(vec![
@@ -82,6 +84,9 @@ async fn manual_network_redirect_preserves_chromium_network_hosts() -> Result<()
             "http://caf%C3%A9%20domain.test/",
             "//example%20host.test/",
             "//xn--a.invalid/",
+            "http://xn--a.123../",
+            "http://xn--a.123.../",
+            "http://xn--a.0x7f../",
         ] {
             let server = ScriptedHttpServer::spawn(vec![
                 ScriptedResponse::status(302, "Found").with_header("Location", location),
