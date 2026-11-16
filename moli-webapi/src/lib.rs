@@ -48,3 +48,5 @@ pub mod resize_observer_entry;
 pub mod webgl_values;
 
 pub mod callbacks;
+
+pub mod headers;

@@ -1,15 +1,13 @@
 use super::super::store::headers_entries;
 use super::*;
-use crate::web_api_interfaces;
-use crate::{
-    callback_invocation::invoke_synchronous_webidl_callback_function,
-    util::{
-        get_private_object, get_private_value, materialize_hidden_function_template_prototype,
-        set_private_value,
-    },
-    webidl,
+use crate::callbacks::invoke_synchronous_webidl_callback_function;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
+    get_private_object, get_private_value, materialize_hidden_function_template_prototype,
+    set_private_value,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 
 const HEADERS_ITERATOR_TARGET_SLOT: &str = "__lmHeadersIteratorTarget";
 const HEADERS_ITERATOR_INDEX_SLOT: &str = "__lmHeadersIteratorIndex";
@@ -66,7 +64,7 @@ struct HeadersIteratorPrototypeDeclaration {
     next: (),
 }
 
-pub(in crate::network_host::headers) fn headers_keys_callback<'s>(
+pub fn headers_keys_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -81,7 +79,7 @@ pub(in crate::network_host::headers) fn headers_keys_callback<'s>(
     }
 }
 
-pub(in crate::network_host::headers) fn headers_values_callback<'s>(
+pub fn headers_values_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -96,7 +94,7 @@ pub(in crate::network_host::headers) fn headers_values_callback<'s>(
     }
 }
 
-pub(in crate::network_host::headers) fn headers_entries_callback<'s>(
+pub fn headers_entries_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -111,7 +109,7 @@ pub(in crate::network_host::headers) fn headers_entries_callback<'s>(
     }
 }
 
-pub(in crate::network_host::headers) fn headers_for_each_callback<'s>(
+pub fn headers_for_each_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,

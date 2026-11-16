@@ -3,7 +3,7 @@ mod iteration;
 mod mutation;
 
 use super::*;
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 
 pub(super) use self::access::{
     headers_get_callback, headers_get_set_cookie_callback, headers_has_callback,
@@ -55,7 +55,7 @@ struct HeadersPrototypeMethodsDeclaration {
     for_each: (),
 }
 
-pub(crate) fn install_headers_template_bindings<'s>(
+pub fn install_headers_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {

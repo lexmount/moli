@@ -2974,6 +2974,7 @@ dependencies = [
 name = "moli-fetch-types"
 version = "0.1.0"
 dependencies = [
+ "moli-web-mime",
  "serde",
  "strum",
  "url",
@@ -3794,7 +3795,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cssparser",
+ "http",
  "moli-canvas",
+ "moli-fetch-types",
  "moli-geometry",
  "moli-url",
  "moli-v8-test-util",
@@ -3803,6 +3806,7 @@ dependencies = [
  "moli-webapi-declare",
  "moli-webidl",
  "moli-webidl-callback",
+ "serde_json",
  "strum",
  "url",
  "v8",
