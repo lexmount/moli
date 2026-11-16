@@ -1,4 +1,3 @@
-use crate::conn::DrainedFetchRequests;
 use anyhow::Result;
 
 use super::*;
@@ -13,7 +12,7 @@ use crate::conn::state::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
-    DocumentStartScript, EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage,
+    DocumentStartScript, EmulatedDeviceMetrics, FetchRequestStage,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, InstalledNavigationPage,
     LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit, NETWORK_ERROR_PAGE_URL,
     NetworkErrorPageNavigation, PendingFetchNavigation, RuntimeBindingDefinition,
@@ -33,10 +32,6 @@ use url::Url;
 pub(super) struct TargetSessionOwnerMut<'a> {
     pub(super) browser_context: &'a mut BrowserContext,
     pub(super) target_id: String,
-    /// Frontend session that issued the command. This is distinct from
-    /// `session_key`: primary Page work may originate from either the root
-    /// frontend (`None`) or the Page's primary wire session.
-    pub(super) command_session_id: Option<String>,
     pub(super) session_key: DevToolsSessionKey,
 }
 
@@ -45,9 +40,6 @@ pub(super) struct TargetSessionOwnerRef<'a> {
     pub(super) target_id: String,
     pub(super) session_key: DevToolsSessionKey,
 }
-
-type FetchDisableStateWithSubresourceConfig =
-    (DrainedFetchRequests, SubresourceInterceptionClasses, bool);
 
 pub(crate) struct PendingPageTargetClose {
     target: PageTargetHost,
@@ -630,10 +622,6 @@ impl<'a> TargetSessionOwnerRef<'a> {
             .initial_empty_document_pending_cross_document_navigation()
     }
 
-    pub(super) fn aggregate_fetch_config(&self) -> TargetFetchConfig {
-        self.target().fetch_owner.config_snapshot()
-    }
-
     pub(super) fn runtime_slot(&self) -> &'a TargetRuntimeSlot {
         self.target().runtime_slot()
     }
@@ -736,12 +724,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .expect("resolved Page target owner must remain live")
     }
 
-    fn into_target_mut(self) -> &'a mut crate::conn::PageTargetHost {
-        self.browser_context
-            .page_target_mut(&self.target_id)
-            .expect("resolved Page target owner must remain live")
-    }
-
     fn page_snapshot(&self) -> Option<(String, String)> {
         let target = self.target();
         // Native history already describes the new Document. Until adoption,
@@ -806,106 +788,18 @@ impl<'a> TargetSessionOwnerMut<'a> {
         f(&mut self.target_mut().owner_state)
     }
 
-    fn resource_fetch_owner(&self) -> &crate::conn::state::TargetFetchOwner {
-        if let Some(target) = self.browser_context.worker_resource_target(&self.target_id) {
-            &target.fetch_owner
-        } else {
-            &self.target().fetch_owner
-        }
-    }
-    fn resource_fetch_owner_mut(&mut self) -> &mut crate::conn::state::TargetFetchOwner {
-        if self
-            .browser_context
-            .worker_resource_target(&self.target_id)
-            .is_some()
-        {
-            &mut self
-                .browser_context
-                .worker_resource_target_mut(&self.target_id)
-                .unwrap()
-                .fetch_owner
-        } else {
-            &mut self.target_mut().fetch_owner
-        }
-    }
-    pub(super) fn subresource_response_is_paused(&self, request_id: &str) -> bool {
-        self.resource_fetch_owner()
-            .subresource_response_is_paused(request_id)
-    }
-
+    #[cfg(test)]
     pub(super) fn configure_fetch(
         &mut self,
         command_session_id: Option<String>,
         handle_auth_requests: bool,
-        patterns: Vec<FetchInterceptionPattern>,
+        patterns: Vec<crate::conn::FetchInterceptionPattern>,
     ) -> moli_core::page::SubresourceInterceptionClasses {
         let target = self.target_mut();
         target
             .fetch_owner
             .configure(command_session_id, handle_auth_requests, patterns);
         target.fetch_owner.subresource_interception_config()
-    }
-
-    pub(super) fn add_network_intercept(
-        &mut self,
-        intercept_id: String,
-        command_session_id: Option<String>,
-        handle_auth_requests: bool,
-        auth_url_patterns: Vec<String>,
-        patterns: Vec<FetchInterceptionPattern>,
-    ) -> moli_core::page::SubresourceInterceptionClasses {
-        let target = self.target_mut();
-        target.fetch_owner.add_network_intercept(
-            intercept_id,
-            command_session_id,
-            handle_auth_requests,
-            auth_url_patterns,
-            patterns,
-        );
-        target.fetch_owner.subresource_interception_config()
-    }
-
-    pub(super) fn remove_network_intercept(
-        &mut self,
-        intercept_id: &str,
-    ) -> Option<moli_core::page::SubresourceInterceptionClasses> {
-        let target = self.target_mut();
-        target
-            .fetch_owner
-            .remove_network_intercept(intercept_id)
-            .then(|| target.fetch_owner.subresource_interception_config())
-    }
-
-    pub(super) fn reset_fetch_config_for_session_and_drain_pending_state(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> FetchDisableStateWithSubresourceConfig {
-        let fetch = self.resource_fetch_owner_mut();
-        let previous_subresource_config = fetch.subresource_interception_config();
-        let removed = fetch.remove_fetch_session(session_id);
-        let subresource_config = fetch.subresource_interception_config();
-        let pending = if removed {
-            fetch.drain_pending_requests_for_disable_session(session_id)
-        } else {
-            DrainedFetchRequests::default()
-        };
-        let page_update_required = removed && previous_subresource_config != subresource_config;
-        (pending, subresource_config, page_update_required)
-    }
-
-    pub(super) fn disable_target_fetch_and_drain_pending_state(
-        &mut self,
-    ) -> FetchDisableStateWithSubresourceConfig {
-        let fetch = self.resource_fetch_owner_mut();
-        let previous = fetch.subresource_interception_config();
-        fetch.reset_config();
-        let config = fetch.subresource_interception_config();
-        let pending = fetch.drain_pending_requests();
-        (pending, config, previous != config)
-    }
-
-    pub(super) fn drain_fetch_pending_state(&mut self) -> DrainedFetchRequests {
-        self.resource_fetch_owner_mut().drain_pending_requests()
     }
 
     fn take_crashed_page(&mut self) -> Option<Page> {
@@ -948,22 +842,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
     }
 
     pub(super) fn runtime_slot_mut(&mut self) -> &mut TargetRuntimeSlot {
-        if self
-            .browser_context
-            .worker_resource_target(&self.target_id)
-            .is_some()
-        {
-            return &mut self
-                .browser_context
-                .worker_resource_target_mut(&self.target_id)
-                .unwrap()
-                .runtime_slot;
-        }
         &mut self.target_mut().runtime_slot
-    }
-
-    pub(super) fn into_runtime_slot_mut(self) -> &'a mut TargetRuntimeSlot {
-        &mut self.into_target_mut().runtime_slot
     }
 
     pub(super) fn navigation_history_snapshot(
@@ -1425,7 +1304,10 @@ impl CdpConnection {
         pending: PendingFetchNavigation,
     ) -> Option<()> {
         self.target_session_owner_mut_for_owner(owner)?
-            .register_pending_fetch_navigation_request(pending)
+            .target_mut()
+            .fetch_owner
+            .register_pending_fetch_navigation_request(pending);
+        Some(())
     }
 
     pub(crate) fn commit_loaded_navigation_target_identity_for_owner(
@@ -1684,17 +1566,10 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<TargetFetchConfig> {
-        if let Some((context, target)) = self.worker_resource_identity_for_owner(owner) {
-            return Some(
-                self.browser_context_by_id(&context)?
-                    .worker_resource_target(&target)?
-                    .fetch_owner
-                    .config_snapshot(),
-            );
-        }
         Some(
-            self.target_session_owner_ref_for_owner(owner)?
-                .aggregate_fetch_config(),
+            self.resource_session_owner_ref_for_owner(owner)?
+                .fetch_owner
+                .config_snapshot(),
         )
     }
 
@@ -2451,21 +2326,12 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Option<&mut TargetRuntimeSlot> {
-        if let Some((context, target)) = self.worker_resource_identity_for_owner(owner) {
-            return Some(
-                &mut self
-                    .browser_context_by_id_mut(&context)?
-                    .worker_resource_target_mut(&target)?
-                    .runtime_slot,
-            );
-        }
-        let renderer_inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        let inspector_session = self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let slot = self
-            .target_session_owner_mut_for_owner(owner)?
-            .into_runtime_slot_mut();
+            .resource_session_owner_mut_for_owner(owner)?
+            .runtime_slot;
         if let Some(page) = slot.loaded_page_mut() {
-            page.set_renderer_devtools_command_session_id(renderer_inspector_session_id);
+            page.set_renderer_devtools_command_session_id(inspector_session);
         }
         Some(slot)
     }
@@ -2482,16 +2348,10 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<&TargetRuntimeSlot> {
-        if let Some((context, target)) = self.worker_resource_identity_for_owner(owner) {
-            return Some(
-                &self
-                    .browser_context_by_id(&context)?
-                    .worker_resource_target(&target)?
-                    .runtime_slot,
-            );
-        }
-        self.target_session_owner_ref_for_owner(owner)
-            .map(|owner| owner.runtime_slot())
+        Some(
+            self.resource_session_owner_ref_for_owner(owner)?
+                .runtime_slot,
+        )
     }
 
     pub(crate) fn runtime_session_owner_primary_session_id(
@@ -2905,7 +2765,6 @@ impl CdpConnection {
             .map(|browser_context| TargetSessionOwnerMut {
                 browser_context,
                 target_id: resolved.target_id,
-                command_session_id: owner.session_id().map(str::to_owned),
                 session_key: resolved.session_key,
             })
     }
@@ -3072,7 +2931,6 @@ mod tests {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut active,
                 target_id: "TID-active".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             owner.mutate_target_owner_state(|owner_state| {
@@ -3092,7 +2950,6 @@ mod tests {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut background,
                 target_id: "TID-background".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             owner.mutate_target_owner_state(|owner_state| {
@@ -3203,12 +3060,9 @@ mod tests {
     fn target_session_owner_mut_mutates_active_and_background_fetch_state() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut active,
-                target_id: "TID-active".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
+            let mut owner = active
+                .resource_target_mut("TID-active", None)
+                .expect("live resource target");
             assert!(owner.register_pending_subresource_fetch_request(
                 "FETCH-active".to_owned(),
                 pending_subresource_fetch(1),
@@ -3223,12 +3077,9 @@ mod tests {
 
         let mut background = background_target_context();
         {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut background,
-                target_id: "TID-background".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
+            let mut owner = background
+                .resource_target_mut("TID-background", None)
+                .expect("live resource target");
             assert!(owner.register_pending_subresource_fetch_request(
                 "FETCH-background".to_owned(),
                 pending_subresource_fetch(2),
@@ -3254,12 +3105,9 @@ mod tests {
 
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut active,
-                target_id: "TID-active".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
+            let mut owner = active
+                .resource_target_mut("TID-active", None)
+                .expect("live resource target");
             assert_eq!(
                 owner.configure_fetch(Some("SID-active".to_owned()), true, patterns.clone()),
                 SubresourceInterceptionClasses::ALL
@@ -3291,12 +3139,9 @@ mod tests {
 
         let mut background = background_target_context();
         {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut background,
-                target_id: "TID-background".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
+            let mut owner = background
+                .resource_target_mut("TID-background", None)
+                .expect("live resource target");
             assert_eq!(
                 owner.configure_fetch(Some("SID-background".to_owned()), true, patterns),
                 SubresourceInterceptionClasses::ALL
@@ -3342,7 +3187,6 @@ mod tests {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut active,
                 target_id: "TID-active".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             let (current_index, entries) = owner
@@ -3366,7 +3210,6 @@ mod tests {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut background,
                 target_id: "TID-background".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             let (current_index, entries) = owner
@@ -3395,7 +3238,6 @@ mod tests {
         let mut owner = TargetSessionOwnerMut {
             browser_context: &mut active,
             target_id: "FRAME-0".to_owned(),
-            command_session_id: Some("SID-active".to_owned()),
             session_key: DevToolsSessionKey::Primary,
         };
         owner.configure_fetch(
@@ -3449,7 +3291,6 @@ mod tests {
         let mut owner = TargetSessionOwnerMut {
             browser_context: &mut active,
             target_id: "FRAME-0".to_owned(),
-            command_session_id: None,
             session_key: DevToolsSessionKey::Primary,
         };
         let mut network_request_id_allocator = ConnectionNetworkRequestIdAllocator::default();
@@ -3531,7 +3372,6 @@ mod tests {
         let mut owner = TargetSessionOwnerMut {
             browser_context: &mut background,
             target_id: "TID-background".to_owned(),
-            command_session_id: Some("SID-background".to_owned()),
             session_key: DevToolsSessionKey::Primary,
         };
         let mut network_request_id_allocator = ConnectionNetworkRequestIdAllocator::default();
@@ -3612,7 +3452,6 @@ mod tests {
         let mut owner = TargetSessionOwnerMut {
             browser_context: &mut background,
             target_id: "TID-background".to_owned(),
-            command_session_id: None,
             session_key: DevToolsSessionKey::Primary,
         };
         let mut network_request_id_allocator = ConnectionNetworkRequestIdAllocator::default();
@@ -3848,7 +3687,6 @@ mod tests {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut background,
                 target_id: "TID-background".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             owner
@@ -3900,7 +3738,6 @@ mod tests {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut background,
                 target_id: "TID-background".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             owner
@@ -3952,7 +3789,6 @@ mod tests {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut background,
                 target_id: "TID-background".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             let installed = owner
