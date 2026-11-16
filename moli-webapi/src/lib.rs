@@ -17,6 +17,7 @@ pub mod dom_rect_list;
 pub mod dom_string_list;
 mod embedding;
 pub mod encoded_video_chunk;
+pub mod events;
 pub mod geolocation;
 pub mod geometry;
 pub mod geometry_clone;

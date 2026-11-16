@@ -1,15 +1,14 @@
 //! Constructible event payloads that do not require an animation or recording backend.
 
+use super::EventInit;
 use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state, set_event_private_value,
 };
-use crate::context_bootstrap::events::EventInit;
-use crate::{
-    util::{new_null_prototype_object, throw_type_error, v8str},
-    web_api_interfaces, webidl,
-};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{new_null_prototype_object, throw_type_error, v8str};
 use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 const NAME_SLOT: &str = "__moliValueEventName";
@@ -30,7 +29,7 @@ const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
 const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 
 #[derive(Clone, Copy)]
-pub(in crate::context_bootstrap) enum ValueEventKind {
+pub enum ValueEventKind {
     Animation,
     Transition,
     Blob,
@@ -300,11 +299,10 @@ fn payment_update_with_callback<'s>(
     // Only author-created payment events are currently produced. They must
     // reject updates even during dispatch, after Web IDL Promise conversion.
     // Trusted payment events require an interactive PaymentRequest backend.
-    crate::native_bridge::throw_dom_exception(
+    crate::embedding::throw_dom_exception_value(
         scope,
-        "InvalidStateError",
-        11,
         "updateWith requires a trusted event associated with an interactive payment request",
+        "InvalidStateError",
     );
 }
 
@@ -362,7 +360,7 @@ struct MidiConnectionEventInit<'s> {
     port: Option<v8::Local<'s, v8::Object>>,
 }
 
-pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
+pub fn install_value_event_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &str,
@@ -426,7 +424,7 @@ fn payload_getter<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn build_value_event_template<'s>(
+pub fn build_value_event_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     kind: ValueEventKind,
 ) -> v8::Local<'s, v8::FunctionTemplate> {

@@ -201,7 +201,22 @@ pub(crate) fn initialize_realm_interface_registry(
     // capture. Resolve through the realm cache from the start so an exception
     // never re-enters the Window's public lazy property or access checks.
     install_web_api_intrinsic_resolver(scope, resolve_web_api_intrinsic);
+    install_event_runtime(scope);
     Ok(())
+}
+
+fn install_event_runtime(scope: &mut v8::PinScope<'_, '_>) {
+    moli_webapi::events::install_runtime(
+        scope,
+        moli_webapi::events::EventRuntime {
+            timestamp: |scope| {
+                crate::context_bootstrap::dom_time_since_origin_millis(
+                    crate::context_bootstrap::current_performance_time_origin(scope),
+                )
+            },
+            initialize_wrapper: crate::context_bootstrap::events::initialize_event_wrapper,
+        },
+    );
 }
 
 /// Captures trusted eager constructor/prototype identities after realm
@@ -211,6 +226,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     global: v8::Local<'s, v8::Object>,
     realm_kind: RealmKind,
 ) -> Result<()> {
+    install_event_runtime(scope);
     let registry = ExposedInterfaceTemplateRegistry::current(scope)
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
     initialize_ecmascript_intrinsic_registry(scope, global);

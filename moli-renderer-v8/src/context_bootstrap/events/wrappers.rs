@@ -9,6 +9,11 @@ use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::context_bootstrap::{exposed_interfaces, world_wrappers};
 
+pub(crate) use moli_webapi::events::state::{
+    event_attribute, event_bool_attribute, event_private_value, new_event_state,
+    set_event_private_value,
+};
+
 const EVENT_ATTRIBUTE_GETTERS_SLOT: &str = "__moliEventAttributeGetters";
 
 // The callback carries the original V8 key. Its projection is chosen once when
@@ -71,10 +76,6 @@ impl AttributeProjection {
             }
         }
     }
-}
-
-pub(crate) fn new_event_state<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
-    crate::util::new_null_prototype_object(scope)
 }
 
 /// Bind a fresh wrapper without invoking a public constructor or inspecting an
@@ -339,44 +340,6 @@ pub(super) fn event_attribute_in_wrapper<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let value = event_attribute(scope, wrapper, property)?;
     AttributeProjection::for_property(property).project(scope, wrapper, value)
-}
-
-/// Engine reads must bypass the public wrapper, including own shadows and
-/// getters. Constructors initialize these fields on the private state directly.
-pub(crate) fn event_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'_, v8::Object>,
-    property: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let state = event_backing(scope, event);
-    state.get(scope, v8_string(scope, property)?.into())
-}
-
-pub(crate) fn event_bool_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'_, v8::Object>,
-    property: &str,
-) -> bool {
-    event_attribute(scope, event, property).is_some_and(|value| value.boolean_value(scope))
-}
-
-pub(crate) fn event_private_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'_, v8::Object>,
-    slot: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let state = event_backing(scope, event);
-    get_private_value(scope, state, slot)
-}
-
-pub(crate) fn set_event_private_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    event: v8::Local<'_, v8::Object>,
-    slot: &str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let state = event_backing(scope, event);
-    set_private_value(scope, state, slot, value);
 }
 
 #[cfg(test)]
