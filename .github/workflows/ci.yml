@@ -569,7 +569,9 @@ jobs:
           available_groups=$(uv run --project moli-cdp-smoke --no-sync python -c \
             'from moli_cdp_smoke.runner import group_listing; print(" ".join(group["name"] for group in group_listing()))')
           chromium_overrides=()
-          for group in dom-input fetch-headers; do
+          # The native Worker body-abort contract also requires the current
+          # oracle; locked Chromium 145 replaces the custom abort reason.
+          for group in dom-input fetch-headers worker-loading; do
             if [[ " $available_groups " == *" $group "* ]]; then
               chromium_overrides+=(--chromium-bin-for-group "$group=$CHROMIUM_CURRENT_ORACLE_BIN")
             fi

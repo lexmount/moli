@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import sys
 import unittest
 import weakref
+from types import SimpleNamespace
 from typing import Any
 
 from moli_cdp_smoke.assertions import SmokeError, wait_until
-from moli_cdp_smoke.helpers import attach_cdp_event_collector
+from moli_cdp_smoke.helpers import attach_cdp_event_collector, observe_worker_network
 
 
 class WaitDeadlineTests(unittest.IsolatedAsyncioTestCase):
@@ -75,6 +77,96 @@ class _Emitter:
 
 class _Payload:
     pass
+
+
+class _WorkerCdp(_Emitter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.commands: list[tuple[str, dict[str, Any]]] = []
+        self.children: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+
+    async def send(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.commands.append((method, params))
+        if method == "Target.sendMessageToTarget":
+            self.children.put_nowait((params["sessionId"], json.loads(params["message"])))
+        return {}
+
+    async def child_command(self) -> tuple[str, dict[str, Any]]:
+        return await asyncio.wait_for(self.children.get(), timeout=1)
+
+    def child_message(self, session: str, message: dict[str, Any]) -> None:
+        self.emit("Target.receivedMessageFromTarget", {
+            "sessionId": session, "message": json.dumps(message),
+        })
+
+    def attach(self, session: str, kind: str = "worker") -> None:
+        self.emit("Target.attachedToTarget", {
+            "sessionId": session, "targetInfo": {"type": kind},
+        })
+
+
+class WorkerNetworkObserverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_enable_ack_precedes_startup_and_forwards_to_the_requested_sink(self) -> None:
+        client, events = _WorkerCdp(), []
+        state = SimpleNamespace(cdp=client, subresource_events=[])
+        async with observe_worker_network(state, events):
+            client.attach("PAGE", "page")
+            self.assertTrue(client.children.empty())
+            client.attach("WORKER")
+            session, enable = await client.child_command()
+            self.assertEqual((session, enable["method"]), ("WORKER", "Network.enable"))
+            self.assertTrue(client.children.empty(), "startup raced Network.enable acknowledgement")
+            client.child_message(session, {"id": enable["id"], "result": {}})
+            resumed_session, resume = await client.child_command()
+            self.assertEqual((resumed_session, resume["method"]),
+                             (session, "Runtime.runIfWaitingForDebugger"))
+            client.child_message(session, {"id": resume["id"], "result": {}})
+            client.child_message(session, {
+                "method": "Network.requestWillBeSentExtraInfo", "params": {"requestId": "REQUEST"},
+            })
+            client.child_message(session, {"method": "Runtime.consoleAPICalled", "params": {}})
+            self.assertEqual(events, [{
+                "method": "Network.requestWillBeSentExtraInfo",
+                "params": {"requestId": "REQUEST"}, "sessionId": session,
+            }])
+            self.assertEqual(state.subresource_events, [])
+        self.assertFalse(client.commands[-1][1]["autoAttach"])
+        self.assertFalse(any(client.handlers.values()), "Worker listeners outlived their scope")
+
+    async def test_session_scoped_replies_do_not_resume_another_worker(self) -> None:
+        client = _WorkerCdp()
+        state = SimpleNamespace(cdp=client, subresource_events=[])
+        async with observe_worker_network(state):
+            client.attach("FIRST")
+            client.attach("SECOND")
+            first, second = await client.child_command(), await client.child_command()
+            self.assertEqual([command[1]["method"] for command in [first, second]],
+                             ["Network.enable", "Network.enable"])
+            for session, enable in [second, first]:
+                client.child_message(session, {"id": enable["id"], "result": {}})
+                resumed_session, resume = await client.child_command()
+                self.assertEqual(resumed_session, session)
+                self.assertEqual(resume["method"], "Runtime.runIfWaitingForDebugger")
+                client.child_message(session, {"id": resume["id"], "result": {}})
+                client.child_message(session, {
+                    "method": "Network.responseReceivedExtraInfo", "params": {"statusCode": 401},
+                })
+            self.assertEqual([event["sessionId"] for event in state.subresource_events],
+                             [second[0], first[0]])
+
+    async def test_failed_enable_keeps_startup_blocked_and_cleans_up(self) -> None:
+        client = _WorkerCdp()
+        state = SimpleNamespace(cdp=client, subresource_events=[])
+        with self.assertRaisesRegex(SmokeError, "worker Network.enable failed"):
+            async with observe_worker_network(state):
+                client.attach("WORKER")
+                session, enable = await client.child_command()
+                client.child_message(session, {
+                    "id": enable["id"], "error": {"code": -32000, "message": "retired"},
+                })
+        self.assertTrue(client.children.empty(), "failed Network.enable released startup")
+        self.assertFalse(client.commands[-1][1]["autoAttach"])
+        self.assertFalse(any(client.handlers.values()))
 
 
 class EventCollectorLifetimeTests(unittest.IsolatedAsyncioTestCase):

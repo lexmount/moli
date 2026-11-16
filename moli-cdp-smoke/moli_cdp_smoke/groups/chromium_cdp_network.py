@@ -11,7 +11,7 @@ from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..config import is_moli_browser
 from ..fixture import FixtureServer
-from ..helpers import attach_cdp_event_collector, run_worker_command
+from ..helpers import attach_cdp_event_collector, observe_worker_network, run_worker_command
 
 from .chromium_cdp_support import _alternate_loopback_origin, _has_event
 
@@ -1065,8 +1065,9 @@ async def _verify_chromium_worker_cancel_auth_response_sample(state: SmokeState)
                 worker_task.cancel()
             await state.cdp.send("Fetch.disable")
 
-    await verify("fetch")
-    await verify("xhr")
+    async with observe_worker_network(state, events):
+        await verify("fetch")
+        await verify("xhr")
     state.record("chromium_worker_cancel_auth_response_sample")
 
 async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> None:
@@ -1239,8 +1240,9 @@ async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> N
 
     # Chromium caches successful HTTP auth credentials by origin. Dedicated
     # fixture ports keep both cases and all later auth smokes independent.
-    await verify("fetch")
-    await verify("xhr")
+    async with observe_worker_network(state, events):
+        await verify("fetch")
+        await verify("xhr")
     await state.page.goto(f"{state.fixture}/plain")
 
     state.record("chromium_worker_auth_extra_info_sample")

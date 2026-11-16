@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import weakref
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -114,6 +115,58 @@ class CdpEvents(list[dict[str, Any]]):
 
 def attach_cdp_event_collector(client: Any, methods: list[str]) -> CdpEvents:
     return CdpEvents(client, methods)
+
+
+@asynccontextmanager
+async def observe_worker_network(
+    state: SmokeState, events: list[dict[str, Any]] | None = None,
+) -> AsyncIterator[None]:
+    # Both browsers publish Network on the Worker target. Enable its agent
+    # before releasing startup; the Page only owns Fetch interception.
+    observed = state.subresource_events if events is None else events
+    pending: dict[tuple[str, int], asyncio.Future[Any]] = {}
+    tasks: list[asyncio.Task[Any]] = []
+
+    def received(event: dict[str, Any]) -> None:
+        message = json.loads(event["message"])
+        key = (event["sessionId"], message.get("id"))
+        if key in pending and not pending[key].done():
+            pending[key].set_result(message)
+        if message.get("method", "").startswith("Network."):
+            observed.append({**message, "sessionId": event["sessionId"]})
+
+    async def enable(event: dict[str, Any]) -> None:
+        session = event["sessionId"]
+        for identifier, method in enumerate(["Network.enable", "Runtime.runIfWaitingForDebugger"], 1):
+            result = asyncio.get_running_loop().create_future()
+            pending[session, identifier] = result
+            await state.cdp.send("Target.sendMessageToTarget", {
+                "sessionId": session, "message": json.dumps({"id": identifier, "method": method}),
+            })
+            response = await asyncio.wait_for(result, timeout=5)
+            if "error" in response:
+                raise SmokeError(f"worker {method} failed: {response}")
+
+    def attached(event: dict[str, Any]) -> None:
+        if event["targetInfo"]["type"] == "worker":
+            tasks.append(asyncio.create_task(enable(event)))
+
+    state.cdp.on("Target.attachedToTarget", attached)
+    state.cdp.on("Target.receivedMessageFromTarget", received)
+    try:
+        await state.cdp.send("Target.setAutoAttach", {
+            "autoAttach": True, "waitForDebuggerOnStart": True, "flatten": False,
+            "filter": [{"type": "worker", "exclude": False}, {"exclude": True}],
+        })
+        yield
+    finally:
+        await state.cdp.send("Target.setAutoAttach", {
+            "autoAttach": False, "waitForDebuggerOnStart": False, "flatten": False,
+        })
+        state.cdp.remove_listener("Target.attachedToTarget", attached)
+        state.cdp.remove_listener("Target.receivedMessageFromTarget", received)
+        if tasks:
+            await asyncio.gather(*tasks)
 
 
 async def wait_for_document_request(
