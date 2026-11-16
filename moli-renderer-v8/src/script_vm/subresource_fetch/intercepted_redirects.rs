@@ -17,10 +17,7 @@ pub(super) fn follow_intercepted_redirect(
         // Preserve that failure before rejecting an error-mode redirect.
         request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
         if request.redirect_mode() == RequestRedirectMode::Error
-            && head
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+            && crate::network_host::redirect_location(&head.headers).is_some()
         {
             return Err("fetch: redirect mode is error".to_owned());
         }

@@ -74,7 +74,10 @@ async fn fulfilled_worker_redirect_modes_are_checked_after_response_security() {
             }]}),
         )
         .await;
-        for &(status, redirect, mode, foreign) in &cases {
+        for ((status, redirect, mode, foreign), empty_location) in cases
+            .iter()
+            .flat_map(|case| [(*case, false), (*case, true)])
+        {
             let id = 53_010 + index * 4;
             index += 1;
             let base = if foreign {
@@ -111,6 +114,12 @@ async fn fulfilled_worker_redirect_modes_are_checked_after_response_security() {
                 "requestId":pause["params"]["requestId"],"responseCode":status,
                 "responseHeaders":[{"name":"Content-Type","value":if mode=="no-cors" {"application/json"} else {"text/plain"}},{"name":"X-Probe","value":"visible"}]
             });
+            if empty_location {
+                params["responseHeaders"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"name":"Location","value":""}));
+            }
             if fulfill {
                 params["body"] = json!("Ym9keQ==");
             }
@@ -135,8 +144,7 @@ async fn fulfilled_worker_redirect_modes_are_checked_after_response_security() {
             )
             .await;
             let value = &response["result"]["result"]["value"];
-            let failure =
-                (foreign && mode == "cors") || (!fulfill && redirect == "error" && status != 200);
+            let failure = foreign && mode == "cors";
             if failure {
                 assert_eq!(
                     value["error"], "TypeError",

@@ -3,6 +3,7 @@ mod intercepted_headers;
 mod native_xhr;
 mod navigation_disable;
 mod worker_delivery_abort;
+mod worker_native_regressions;
 mod worker_redirect_modes;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsAddNetworkInterceptCommand,

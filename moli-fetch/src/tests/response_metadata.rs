@@ -90,3 +90,22 @@ fn response_metadata_url_list_keeps_real_redirects_to_the_same_url() {
         [head.final_url.clone(), head.final_url.clone()]
     );
 }
+
+#[test]
+fn empty_location_does_not_make_a_delivered_redirect_response_opaque() {
+    let mut head = redirected_head(true);
+    head.status = 302;
+    head.redirect_chain.clear();
+    let origin = moli_url::WebOrigin::from_url(&head.final_url);
+    for location in [b"".as_slice(), b" \t", b"/target"] {
+        head.headers = vec![("Location".to_owned(), location.to_vec())];
+        assert_eq!(
+            head.fetch_response_type(&origin, RequestMode::Cors),
+            if location.trim_ascii().is_empty() {
+                FetchResponseType::Basic
+            } else {
+                FetchResponseType::OpaqueRedirect
+            }
+        );
+    }
+}

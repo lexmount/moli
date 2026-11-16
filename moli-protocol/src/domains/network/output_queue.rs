@@ -19,6 +19,7 @@ pub(crate) struct TargetNetworkOutputQueue {
     websocket_event_count: usize,
     next_delivery_order_index: usize,
     completed_subresource_handles: HashSet<SubresourceNetworkRequestHandle>,
+    staged_request_extra_info: HashSet<SubresourceNetworkRequestHandle>,
     websocket_handshake_recorded_socket_ids: HashSet<u64>,
     pending_websocket_lifecycle_events: HashMap<u64, Vec<WebSocketLifecycleEvent>>,
     staged_subresource_requests:
@@ -2690,12 +2691,22 @@ impl TargetNetworkOutputQueue {
                 );
                 *subresource_index += 1;
             }
+            ScriptNetworkOutputItem::SubresourceRequestExtraInfo { handle, info } => {
+                if self.append_subresource_request_extra_info(
+                    *subresource_index,
+                    *handle,
+                    info.headers.clone(),
+                    info.cookie_report.clone(),
+                ) {
+                    *subresource_index += 1;
+                }
+            }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
                 self.append_missing_subresource_request_extra_info(
                     *subresource_index,
                     response.handle(),
                     response.network_request_headers(),
-                    None,
+                    response.request_cookie_report(),
                 );
                 if self.append_subresource_response_started(*subresource_index, response) {
                     *subresource_index += 1;
@@ -2868,6 +2879,9 @@ impl TargetNetworkOutputQueue {
         document_loader_id: &str,
         request: &SubresourceRequestStarted,
     ) {
+        if request.redirect().is_some() {
+            self.staged_request_extra_info.remove(&request.handle());
+        }
         let delivery_order_index = self.next_delivery_order_index();
         let output = Arc::new(
             TargetSubresourceRequestStartedOutput::from_page_request_started(
@@ -2923,6 +2937,9 @@ impl TargetNetworkOutputQueue {
         let Some(request) = self.staged_subresource_requests.get(&handle).cloned() else {
             return false;
         };
+        if !self.staged_request_extra_info.insert(handle) {
+            return false;
+        }
         let delivery_order_index = self.next_delivery_order_index();
         let output = TargetSubresourceRequestExtraInfoOutput::new(
             delivery_order_index,
@@ -2947,7 +2964,9 @@ impl TargetNetworkOutputQueue {
         let Some(request) = self.staged_subresource_requests.get(&handle) else {
             return;
         };
-        if request.request_cookie_report().is_some() {
+        if request.request_cookie_report().is_some()
+            || self.staged_request_extra_info.contains(&handle)
+        {
             return;
         }
         let request_headers = network_request_headers
@@ -3003,17 +3022,12 @@ impl TargetNetworkOutputQueue {
         index: usize,
         body: &SubresourceBodyFinished,
     ) -> bool {
-        let Some(request) = self
-            .staged_subresource_requests
-            .get(&body.handle())
-            .cloned()
-        else {
+        let Some(request) = self.staged_subresource_requests.remove(&body.handle()) else {
             return false;
         };
-        let response = self
-            .staged_subresource_responses
-            .get(&body.handle())
-            .cloned();
+        let response = self.staged_subresource_responses.remove(&body.handle());
+        self.completed_subresource_handles.insert(body.handle());
+        self.staged_request_extra_info.remove(&body.handle());
         let delivery_order_index = self.next_delivery_order_index();
         let output = TargetSubresourceBodyFinishedOutput::from_page_body_finished(
             delivery_order_index,
@@ -3354,6 +3368,97 @@ mod tests {
     }
 
     #[test]
+    fn terminal_delivery_releases_upload_staging_for_all_completion_paths() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Upload {
+            bytes: Vec<u8>,
+            drops: Arc<AtomicUsize>,
+        }
+        impl AsRef<[u8]> for Upload {
+            fn as_ref(&self) -> &[u8] {
+                &self.bytes
+            }
+        }
+        impl Drop for Upload {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut queue = TargetNetworkOutputQueue::default();
+        let url = Url::parse("https://example.test/upload").unwrap();
+        for index in 0..48 {
+            {
+                let handle = SubresourceNetworkRequestHandle::new(100 + index);
+                let upload = bytes::Bytes::from_owner(Upload {
+                    bytes: vec![b'x'; 128 * 1024],
+                    drops: drops.clone(),
+                });
+                let request = SubresourceRequestStarted::new(
+                    handle,
+                    None,
+                    url.clone(),
+                    url.clone(),
+                    "POST".into(),
+                    Vec::new().into(),
+                    None,
+                    SubresourceResourceType::Fetch,
+                    SubresourceRequestInitiatorType::Script,
+                    None,
+                )
+                .with_request_body_bytes(Some(upload));
+                queue.append_renderer_output_item_for_loader(
+                    &ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+                    "",
+                );
+                match index % 3 {
+                    0 => queue.append_renderer_output_item_for_loader(
+                        &ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(
+                            SubresourceBodyFinished::ready(
+                                handle,
+                                SubresourceResponseBody::from_bytes(vec![]),
+                            ),
+                        )),
+                        "",
+                    ),
+                    1 => queue.append_renderer_output_item_for_loader(
+                        &ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+                            subresource_record(SubresourceResourceType::Fetch, url.as_str())
+                                .with_request_handle(handle),
+                        )),
+                        "",
+                    ),
+                    _ => queue.append_renderer_output_item_for_loader(
+                        &ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+                            SubresourceNetworkRecord::failure(
+                                None,
+                                url.clone(),
+                                url.clone(),
+                                "POST".into(),
+                                Vec::new().into(),
+                                None,
+                                SubresourceResourceType::Fetch,
+                                "net::ERR_ABORTED".into(),
+                            )
+                            .with_request_handle(handle),
+                        )),
+                        "",
+                    ),
+                }
+            }
+            assert!(queue.staged_subresource_requests.is_empty());
+            assert!(queue.staged_subresource_responses.is_empty());
+            assert!(queue.staged_request_extra_info.is_empty());
+            queue.discard_observed_delivery_outputs(queue.subresource_record_count(), 0, 0);
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                index as usize + 1,
+                "completed upload is no longer rooted by the live-request queue"
+            );
+        }
+    }
+
+    #[test]
     fn staged_subresource_outputs_deliver_ordered_events_with_stable_request_id() {
         let handle = SubresourceNetworkRequestHandle::new(7);
         let document_url = Url::parse("https://example.com/").expect("document URL should parse");
@@ -3393,14 +3498,8 @@ mod tests {
         append_concrete_items_for_test(&mut output_queue, &items, "LOADER-1");
         assert_eq!(output_queue.subresource_record_count(), 3);
 
-        let staged_request = output_queue
-            .staged_subresource_requests
-            .get(&handle)
-            .expect("request should remain staged");
-        let staged_response = output_queue
-            .staged_subresource_responses
-            .get(&handle)
-            .expect("response should remain staged");
+        assert!(output_queue.staged_subresource_requests.is_empty());
+        assert!(output_queue.staged_subresource_responses.is_empty());
         let request_output = match output_queue.delivery_outputs.outputs[0].output() {
             TargetNetworkDeliveryOutput::Subresource(output) => match output.as_ref() {
                 TargetSubresourcePlanOutput::RequestStarted(output) => output,
@@ -3428,15 +3527,13 @@ mod tests {
                 panic!("third output should be a subresource")
             }
         };
-        assert!(Arc::ptr_eq(staged_request, request_output));
-        assert!(Arc::ptr_eq(staged_request, &response_output.request));
-        assert!(Arc::ptr_eq(staged_request, &body_output.request));
-        assert!(Arc::ptr_eq(staged_response, response_output));
+        assert!(Arc::ptr_eq(request_output, &response_output.request));
+        assert!(Arc::ptr_eq(request_output, &body_output.request));
         assert!(
             body_output
                 .response
                 .as_ref()
-                .is_some_and(|response| Arc::ptr_eq(staged_response, response))
+                .is_some_and(|response| Arc::ptr_eq(response_output, response))
         );
 
         let activity = PendingSubresourceNetworkActivity::from_sessions(vec![

@@ -393,6 +393,18 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
     }
 }
 
+/// HttpResponseHeaders normalizes optional HTTP whitespace before Chromium
+/// decides whether a synthetic response contains a redirect target.
+pub(crate) fn redirect_location(headers: &[(String, Vec<u8>)]) -> Option<&[u8]> {
+    let value = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("location"))?
+        .1
+        .as_slice();
+    let value = value.trim_ascii();
+    (!value.is_empty()).then_some(value)
+}
+
 pub(crate) fn next_redirect_url(
     final_url: &url::Url,
     status: u16,
@@ -402,10 +414,7 @@ pub(crate) fn next_redirect_url(
     if !matches!(status, 301 | 302 | 303 | 307 | 308) {
         return Ok(None);
     }
-    let Some(location) = headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| moli_fetch::encode_redirect_location(value))
+    let Some(location) = redirect_location(headers).map(moli_fetch::encode_redirect_location)
     else {
         return Ok(None);
     };

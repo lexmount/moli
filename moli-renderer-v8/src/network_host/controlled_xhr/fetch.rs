@@ -101,6 +101,7 @@ impl ControlledFetchStream {
                         head.headers.clone(),
                         head.cookie_set_reports.clone(),
                     )
+                    .with_request_cookie_report(head.request_cookie_report.clone())
                     .with_status_text(head.status_text.clone())
                     .with_from_cache(head.from_cache)
                     .with_network_request_headers(network_request_headers.clone())

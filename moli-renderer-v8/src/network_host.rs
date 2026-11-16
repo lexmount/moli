@@ -1,4 +1,4 @@
-pub(crate) use async_fetch::next_redirect_url;
+pub(crate) use async_fetch::{next_redirect_url, redirect_location};
 
 mod async_fetch;
 mod beacon;
