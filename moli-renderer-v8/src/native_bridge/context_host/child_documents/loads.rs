@@ -233,7 +233,9 @@ impl PageScriptHost {
             request: child_document_load_request(bootstrap)
                 .map(|request| {
                     configure_child_document_navigation_request(
-                        request,
+                        request.with_navigation_destination(
+                            self.navigation_destination_for_child_context(handle),
+                        ),
                         &initiator_url,
                         &browser_context,
                     )

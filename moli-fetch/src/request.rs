@@ -68,6 +68,9 @@ pub struct Request {
     pub priority_hints: RequestPriorityHints,
     pub browser_request_metadata: Option<BrowserRequestMetadata>,
     browser_navigation_kind: BrowserNavigationRequestKind,
+    /// An admitted destination survives redirects and cookie-context rebinding.
+    /// Legacy navigation callers derive document/iframe until an owner sets it.
+    navigation_destination: Option<NavigationRequestDestination>,
     context: RequestContext,
     referrer_source: ReferrerSource,
     /// Retained independently so Fetch can reset an explicit selection to client.
@@ -290,6 +293,30 @@ pub enum BrowserNavigationRequestKind {
     #[default]
     Navigate,
     Reload,
+}
+
+/// The native destination of a navigation, independent of the resource's MIME
+/// type and of author or interception supplied Fetch Metadata headers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NavigationRequestDestination {
+    #[default]
+    Document,
+    Frame,
+    Iframe,
+    Embed,
+    Object,
+}
+
+impl NavigationRequestDestination {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Document => "document",
+            Self::Frame => "frame",
+            Self::Iframe => "iframe",
+            Self::Embed => "embed",
+            Self::Object => "object",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
@@ -664,6 +691,7 @@ impl Request {
             priority_hints: RequestPriorityHints::default(),
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
+            navigation_destination: None,
             context: RequestContext::Http,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
@@ -703,6 +731,7 @@ impl Request {
             priority_hints: RequestPriorityHints::default(),
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
+            navigation_destination: None,
             context: RequestContext::Http,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
@@ -775,6 +804,7 @@ impl Request {
             priority_hints: RequestPriorityHints::default(),
             browser_request_metadata: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
+            navigation_destination: None,
             context: RequestContext::Http,
             referrer_source: ReferrerSource::Client,
             client_referrer_url: None,
@@ -981,6 +1011,23 @@ impl Request {
 
     pub fn browser_navigation_kind(&self) -> BrowserNavigationRequestKind {
         self.browser_navigation_kind
+    }
+
+    pub fn with_navigation_destination(
+        mut self,
+        destination: NavigationRequestDestination,
+    ) -> Self {
+        self.navigation_destination = Some(destination);
+        self
+    }
+
+    pub fn navigation_destination(&self) -> NavigationRequestDestination {
+        self.navigation_destination
+            .unwrap_or(if self.priority_hints.subframe_context {
+                NavigationRequestDestination::Iframe
+            } else {
+                NavigationRequestDestination::Document
+            })
     }
 
     pub fn without_inferred_referrer(mut self) -> Self {
@@ -1609,10 +1656,6 @@ impl Request {
 
     pub(crate) fn is_navigation_request(&self) -> bool {
         self.request_mode == RequestMode::Navigate
-    }
-
-    pub(crate) fn is_subframe_navigation_request(&self) -> bool {
-        self.is_navigation_request() && self.priority_hints.subframe_context
     }
 
     pub(crate) fn is_top_level_navigation_request(&self) -> bool {

@@ -79,12 +79,12 @@ pub use referrer_policy::{
     response_referrer_policy_from_headers, sanitized_referrer_url,
 };
 pub use request::{
-    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, Request, RequestAuth,
-    RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
-    RequestHeaderOverride, RequestMode, RequestOverrides, RequestPriorityHints,
-    RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy, RequestResourceType,
-    ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
-    SubresourceRequestMetadata,
+    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy,
+    NavigationRequestDestination, Request, RequestAuth, RequestAuthScheme, RequestAuthTarget,
+    RequestCacheMode, RequestCredentialsMode, RequestHeaderOverride, RequestMode, RequestOverrides,
+    RequestPriorityHints, RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy,
+    RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
+    ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
 };
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{

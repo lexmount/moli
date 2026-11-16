@@ -1299,14 +1299,27 @@ impl PageScriptHost {
         }
         self.clear_pending_service_worker_child_client(handle);
         let storage_key = service_worker_first_party_storage_key(document_url);
-        let client_id = self
-            .browser_context_runtime
-            .register_reserved_service_worker_client(
-                document_url.clone(),
-                storage_key,
-                ServiceWorkerClientFrameType::Nested,
-                None,
-            );
+        let bypass = crate::service_worker_runtime::ServiceWorkerRequestDestination::from(
+            self.navigation_destination_for_child_context(handle),
+        )
+        .bypasses_service_worker();
+        let client_id = if bypass {
+            self.browser_context_runtime
+                .register_reserved_service_worker_client_bypassing_service_worker(
+                    document_url.clone(),
+                    storage_key,
+                    ServiceWorkerClientFrameType::Nested,
+                    None,
+                )
+        } else {
+            self.browser_context_runtime
+                .register_reserved_service_worker_client(
+                    document_url.clone(),
+                    storage_key,
+                    ServiceWorkerClientFrameType::Nested,
+                    None,
+                )
+        };
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.set_pending_service_worker_client_id(client_id);
         } else {

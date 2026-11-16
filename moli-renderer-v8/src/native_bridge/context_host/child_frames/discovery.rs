@@ -29,6 +29,19 @@ impl ChildFrameOwnerElementKind {
 }
 
 impl PageScriptHost {
+    pub(in crate::native_bridge::context_host) fn navigation_destination_for_child_context(
+        &self,
+        handle: DomHandle,
+    ) -> moli_fetch::NavigationRequestDestination {
+        use moli_fetch::NavigationRequestDestination as Destination;
+        match self.child_frame_owner_element_kind(handle) {
+            Some(ChildFrameOwnerElementKind::Frame) => Destination::Frame,
+            Some(ChildFrameOwnerElementKind::Embed) => Destination::Embed,
+            Some(ChildFrameOwnerElementKind::Object) => Destination::Object,
+            _ => Destination::Iframe,
+        }
+    }
+
     pub(in crate::native_bridge::context_host) fn child_browsing_context_initial_live_bootstrap(
         attribute_bootstrap: &ChildBrowsingContextBootstrap,
     ) -> ChildBrowsingContextBootstrap {

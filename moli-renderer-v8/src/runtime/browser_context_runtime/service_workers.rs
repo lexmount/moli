@@ -170,7 +170,7 @@ impl RendererBrowserContextRuntime {
             request_client,
             resource_task_runner,
             completion_tx,
-            ServiceWorkerRequestDestination::Iframe,
+            request.navigation_destination().into(),
         )
         .await
     }
@@ -409,7 +409,7 @@ impl RendererBrowserContextRuntime {
             )
     }
 
-    fn register_reserved_service_worker_client_bypassing_service_worker(
+    pub(crate) fn register_reserved_service_worker_client_bypassing_service_worker(
         &self,
         document_url: Url,
         storage_key: String,
@@ -797,11 +797,10 @@ fn main_resource_fetch_event_redirect_mode(
     destination: ServiceWorkerRequestDestination,
     request_redirect_mode: moli_fetch::RequestRedirectMode,
 ) -> moli_fetch::RequestRedirectMode {
-    match destination {
-        ServiceWorkerRequestDestination::Document | ServiceWorkerRequestDestination::Iframe => {
-            moli_fetch::RequestRedirectMode::Manual
-        }
-        _ => request_redirect_mode,
+    if destination.is_navigation() {
+        moli_fetch::RequestRedirectMode::Manual
+    } else {
+        request_redirect_mode
     }
 }
 
