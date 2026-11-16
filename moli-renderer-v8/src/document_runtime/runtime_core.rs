@@ -122,7 +122,7 @@ impl DocumentRuntime {
             parser_discovered_modulepreloads: HashSet::new(),
             modulepreload_invalid_as_link_errors: HashSet::new(),
             style_source_document_sync_pending: false,
-            pending_devtools_dom_mutations: Vec::new(),
+            pending_devtools_dom_mutations: Default::default(),
             #[cfg(test)]
             pending_runtime_binding_calls: Vec::new(),
             pending_inspector_issues: Vec::new(),

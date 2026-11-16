@@ -4,6 +4,93 @@ use crate::dom::native::{DomHost, DomMutationEffects, DomMutationRecordKind, Nat
 
 type DomHandle = NativeNodeId;
 
+#[derive(Debug, Default)]
+pub(super) struct DevToolsDomMutationQueue {
+    facts: Vec<DevToolsDomMutationFact>,
+    last_was_parser_character_data: bool,
+}
+
+impl DevToolsDomMutationQueue {
+    pub(super) fn take(&mut self) -> Vec<DevToolsDomMutationFact> {
+        self.last_was_parser_character_data = false;
+        std::mem::take(&mut self.facts)
+    }
+
+    pub(super) fn extend(
+        &mut self,
+        facts: Vec<DevToolsDomMutationFact>,
+        source: crate::mutation_coordinator::DomMutationSource,
+    ) {
+        use crate::mutation_coordinator::DomMutationSource;
+
+        if source != DomMutationSource::ParserTreeSink {
+            self.last_was_parser_character_data = false;
+            self.facts.extend(facts);
+            return;
+        }
+
+        for mut fact in facts {
+            // The tokenizer can append one entity or raw-text fragment at a
+            // time. Retaining every growing prefix until the next Inspector
+            // output boundary makes a single text node consume quadratic space.
+            // Only fold adjacent parser updates; JS mutations and structural or
+            // whitespace visibility changes must retain their event ordering.
+            if self.last_was_parser_character_data
+                && let Some(previous) = self.facts.last_mut()
+                && previous.coalesce_parser_character_data(&mut fact)
+            {
+                continue;
+            }
+            self.last_was_parser_character_data =
+                matches!(fact, DevToolsDomMutationFact::CharacterData { .. });
+            self.facts.push(fact);
+        }
+    }
+}
+
+impl DevToolsDomMutationFact {
+    fn coalesce_parser_character_data(&mut self, next: &mut Self) -> bool {
+        let (
+            Self::CharacterData {
+                target,
+                is_text,
+                old_value,
+                value,
+                parent,
+                snapshot,
+                ..
+            },
+            Self::CharacterData {
+                target: next_target,
+                is_text: next_is_text,
+                old_value: next_old_value,
+                value: next_value,
+                parent: next_parent,
+                snapshot: next_snapshot,
+                ..
+            },
+        ) = (self, next)
+        else {
+            return false;
+        };
+        if target != next_target || is_text != next_is_text || parent != next_parent {
+            return false;
+        }
+        let whitespace = crate::runtime::page_dom::inspector_whitespace_text_value;
+        if *is_text
+            && (whitespace(old_value) != whitespace(value)
+                || whitespace(next_old_value) != whitespace(next_value))
+        {
+            return false;
+        }
+        // Keep the first old value and the latest payload. No other DOM change
+        // occurred between these facts, so parent/sibling metadata stays valid.
+        std::mem::swap(value, next_value);
+        std::mem::swap(snapshot, next_snapshot);
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DevToolsDomMutationFact {
     Attribute {
@@ -252,6 +339,106 @@ fn collect_light_tree_subtree_handles(dom_host: &DomHost, root: DomHandle) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutation_coordinator::DomMutationSource;
+
+    fn text_fixture(value: &str) -> (DomHost, DomHandle) {
+        let dom = crate::parser::HtmlParser::SCRIPTING_ENABLED.parse(
+            url::Url::parse("https://example.test/").unwrap(),
+            "<!doctype html><html><body></body></html>".to_owned(),
+        );
+        let mut host = DomHost::from_dom(dom);
+        let text = host.create_text_node(value);
+        let body = host.document_body_handle().unwrap();
+        host.append_child_effects(body, text);
+        host.set_devtools_mutation_records_enabled(true);
+        (host, text)
+    }
+
+    fn queue_text_change(
+        queue: &mut DevToolsDomMutationQueue,
+        host: &mut DomHost,
+        text: DomHandle,
+        value: &str,
+        source: DomMutationSource,
+    ) {
+        let effects = host.set_text_content_effects(text, value);
+        queue.extend(capture_devtools_dom_mutation_facts(host, &effects), source);
+    }
+
+    fn text_values(facts: &[DevToolsDomMutationFact]) -> Vec<(&str, &str)> {
+        facts
+            .iter()
+            .filter_map(|fact| match fact {
+                DevToolsDomMutationFact::CharacterData {
+                    old_value, value, ..
+                } => Some((old_value.as_str(), value.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn parser_text_coalescing_preserves_script_structural_and_output_boundaries() {
+        let (mut host, text) = text_fixture("seed");
+        let mut queue = DevToolsDomMutationQueue::default();
+        let parser = DomMutationSource::ParserTreeSink;
+        queue_text_change(&mut queue, &mut host, text, "seed-a", parser);
+        queue_text_change(&mut queue, &mut host, text, "seed-ab", parser);
+        queue_text_change(
+            &mut queue,
+            &mut host,
+            text,
+            "script",
+            DomMutationSource::JsDomApi,
+        );
+        queue_text_change(&mut queue, &mut host, text, "script-c", parser);
+        queue_text_change(&mut queue, &mut host, text, "script-cd", parser);
+        let body = host.document_body_handle().unwrap();
+        let sibling = host.create_text_node("sibling");
+        let effects = host.append_child_effects(body, sibling);
+        queue.extend(capture_devtools_dom_mutation_facts(&host, &effects), parser);
+        queue_text_change(&mut queue, &mut host, text, "script-cde", parser);
+        let facts = queue.take();
+        assert_eq!(
+            text_values(&facts),
+            vec![
+                ("seed", "seed-ab"),
+                ("seed-ab", "script"),
+                ("script", "script-cd"),
+                ("script-cd", "script-cde"),
+            ]
+        );
+        assert!(matches!(facts[3], DevToolsDomMutationFact::ChildList(_)));
+        queue_text_change(&mut queue, &mut host, text, "next-output", parser);
+        assert_eq!(
+            text_values(&queue.take()),
+            vec![("script-cde", "next-output")]
+        );
+    }
+
+    #[test]
+    fn parser_text_coalescing_preserves_whitespace_visibility_transitions() {
+        let (mut host, text) = text_fixture(" ");
+        let mut queue = DevToolsDomMutationQueue::default();
+        for value in ["  ", " \t ", "visible", "visible-a", "visible-ab", " "] {
+            queue_text_change(
+                &mut queue,
+                &mut host,
+                text,
+                value,
+                DomMutationSource::ParserTreeSink,
+            );
+        }
+        assert_eq!(
+            text_values(&queue.take()),
+            vec![
+                (" ", " \t "),
+                (" \t ", "visible"),
+                ("visible", "visible-ab"),
+                ("visible-ab", " "),
+            ]
+        );
+    }
 
     #[test]
     fn prepublished_removal_is_scoped_to_its_inspector_session() {

@@ -5,6 +5,7 @@ mod browsing_context_mutations;
 mod custom_element_lifecycle;
 mod document_turns;
 mod dom_mutation_state;
+mod dom_tracking;
 mod inserted_resource_lifecycle;
 mod layout_and_tables;
 mod parser_blocking_scripts;
