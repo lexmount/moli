@@ -247,14 +247,57 @@ Dokument und Stil haben genau eine verbindliche Datenquelle: die Integration aus
 
 ## Benchmarks
 
-Moli wird mit öffentlichen Benchmarks mit festen Aufgaben gemessen. Jede Zeile nennt, was gemessen wird, und verweist auf die Details.
+Die folgenden Messwerte zeigen Molis derzeitigen Funktionsumfang. Sie decken reale Websites, Automatisierungsclients, Prüfungen des Chromium-/WPT-Verhaltens und eine große nextest-Regressionssuite ab.
 
-| Bereich | Benchmark | Messgröße | Moli | Details |
-| --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 Aufgaben auf Live-Websites; [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 gespeicherte Seiten | Anteil bestandener Aufgaben auf Live-Websites; Bewertung der Extraktionsqualität auf gespeicherten Seiten | **89,8 %** und **39,27 %**, in beiden Platz eins von fünf Browsern | [Web Fetch](#web-fetch) |
-| Browser-Automatisierung | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1.308 vergleichbare Aufgaben | Anteil gelungener Aufgaben zu CDP, Automatisierungswerkzeugen und der Web-Plattform | **81,9 %**; Chrome 99,8 % | [Browser-Automatisierung](#browser-automatisierung) |
-| Ressourcenverbrauch | Lexbench-Headless-Browser · 557 Aufgaben, die alle lokalen Engines abgeschlossen haben | Median von CPU-Zeit und Spitzenspeicher pro Aufgabe | **15 %** der CPU-Zeit von Chrome, **13 %** seines Speichers | [Ressourcenverbrauch](#ressourcenverbrauch) |
-| Webstandards | Ausgewählte [WPT](https://github.com/web-platform-tests/wpt)-Tests | Bestandene WPT-Tests | **1,612 Millionen** bestandene Tests in einem vollständigen Lauf | — |
+| Test | Messgröße | Moli |
+| --- | --- | --- |
+| [Gemischter Crawling-Test im öffentlichen Web](#gemischter-crawling-test-im-öffentlichen-web) | Brauchbare Seiten aus 192 öffentlichen URLs | 103 Seiten (53,6 %), 73 MiB RSS im Median |
+| [Beispiel eines Agenten-Workloads](#beispiel-eines-agenten-workloads) | Start, Latenz und Speicher einer Agenten-Episode | CDP bereit nach 34,85 ms (Chromium 169,37 ms) |
+| [WPT-Tests](#wpt-tests) | Ausgewählte Web-Plattform-Tests | 1,612 Millionen bestanden |
+| [Molis Ergebnisse in Lexbench-Headless-Browser](#molis-ergebnisse-in-lexbench-headless-browser) | 1.308 Automatisierungsaufgaben; CPU und Speicher | 81,9 % Erfolg; 15 % der CPU-Zeit und 13 % des Speichers von Chrome |
+| [Web Fetch](#web-fetch) | 430 Aufgaben auf Live-Websites; 545 gespeicherte Seiten | 89,8 % und 39,27 %, in beiden Platz eins von fünf Browsern |
+
+### Gemischter Crawling-Test im öffentlichen Web
+
+Getestet wurden 192 öffentliche URLs großer chinesischer und internationaler Websites. Als Erfolg zählte ausschließlich eine Seite, die nach Ausführung von JavaScript inhaltlich verwertbare Ergebnisse lieferte — ein bloßer HTTP-200-Status, eine Verifizierungsseite, eine Anmeldesperre, eine leere Antwort oder eine reine App-Hülle galten nicht als Erfolg.
+
+| Browser | Verwertbare Seiten | Erfolgsquote | Medianzeit | Median-RSS |
+| --- | ---: | ---: | ---: | ---: |
+| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
+| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
+| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
+| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+
+### Beispiel eines Agenten-Workloads
+
+| Metrik | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP bereit | 34.85 ms | 169.37 ms |
+| Aktive Episodendauer p50 | 33.40 ms | 57.13 ms |
+| PSS-Spitzenwert | 102.46 MiB | 348.82 MiB |
+| Maximale Prozesse / Threads | 1 / 24 | 11 / 123 |
+
+### WPT-Tests
+
+In der aktuellen WPT-Auswahl zur Überprüfung von Molis Funktionsumfang als Agenten-Browser wurden bei einem vollständigen Lauf **1,612 Millionen Tests bestanden**.
+
+### Molis Ergebnisse in Lexbench-Headless-Browser
+
+Der vollständige Aufgabenbestand von [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) umfasst 1.928 Aufgaben zu rohem CDP, 13 fest versionierten Automatisierungswerkzeugen wie Playwright, Puppeteer und Selenium sowie zur Semantik der Web-Plattform. Da Kitesurf nur als entfernter Endpunkt verfügbar ist, verwendet die folgende Grafik 1.308 vergleichbare Aufgaben. Für alle Browser gelten dieselben Regeln zur Aufgabenauswahl.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="Erfolgsquote von fünf Headless-Browsern über 1.308 vergleichbare Aufgaben: Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+</picture>
+
+**Moli 0.1.1 bestand 1.071 Aufgaben und erreichte 81,88 %**. Kitesurf erreichte 62,08 %, Lightpanda 53,29 % und Obscura 44,88 %; Chrome kam als Referenz-Engine auf 99,85 %. Kitesurf lief mit k=1, nicht abgedeckte Aufgaben zählen als nicht bestanden, und die Reproduktionsbedingungen eines entfernten Dienstes unterscheiden sich von denen lokaler Binärdateien. Die vollständigen Ergebnisse stehen im [Fünf-Engine-Bericht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md) des Benchmarks.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="Aufgaben-Erfolgsquote gegen den Median des Spitzenspeichers pro Aufgabe für die vier lokalen Engines: Chrome bei 99,9 % und 697 MiB, Moli bei 80,7 % und 92 MiB, Lightpanda bei 43,8 % und 34 MiB, Obscura bei 39,5 % und 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+</picture>
+
+Kitesurf ist ein entfernter Dienst, dessen CPU, Arbeitsspeicher und Prozessanzahl nicht messbar sind. Der Ressourcenvergleich umfasst daher nur die vier lokalen Engines. Ein separater Lauf mit 557 Aufgaben berücksichtigt nur Arbeiten, die alle vier abgeschlossen haben. Molis Median pro Aufgabe lag bei **100,6 ms CPU-Zeit** und **92 MiB Spitzenspeicher**; Chrome erreichte **687 ms** beziehungsweise **697 MiB**. Damit lag Moli bei rund 15 % der CPU-Zeit und 13 % des Spitzenspeichers von Chrome. Methodik und vollständige Daten stehen in der [Ressourcenübersicht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) des Benchmarks.
 
 ### Web Fetch
 
@@ -309,52 +352,6 @@ Die Extraktion des Hauptinhalts wird gegenüber menschlichen Annotationen bewert
 | Kitesurf | 524/545 | 33,43 % | 36,99 % | 80,70 % | 19,32 % | 18,25 % | 11,87 % |
 
 </details>
-
-</details>
-
-<details>
-<summary>Gemischter Crawling-Test im öffentlichen Web · 192 öffentliche URLs</summary>
-
-Als Erfolg zählte ausschließlich eine Seite, die nach Ausführung von JavaScript inhaltlich verwertbare Ergebnisse lieferte — ein bloßer HTTP-200-Status, eine Verifizierungsseite, eine Anmeldesperre, eine leere Antwort oder eine reine App-Hülle galten nicht als Erfolg.
-
-| Browser | Verwertbare Seiten | Erfolgsquote | Medianzeit | Median-RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
-
-</details>
-
-### Browser-Automatisierung
-
-Der vollständige Aufgabenbestand von [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) umfasst 1.928 Aufgaben zu rohem CDP, 13 fest versionierten Automatisierungswerkzeugen wie Playwright, Puppeteer und Selenium sowie zur Semantik der Web-Plattform. Da Kitesurf nur als entfernter Endpunkt verfügbar ist, verwendet die folgende Grafik 1.308 vergleichbare Aufgaben. Für alle Browser gelten dieselben Regeln zur Aufgabenauswahl.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
-  <img alt="Erfolgsquote von fünf Headless-Browsern über 1.308 vergleichbare Aufgaben: Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
-</picture>
-
-**Moli 0.1.1 bestand 1.071 Aufgaben und erreichte 81,88 %**. Kitesurf erreichte 62,08 %, Lightpanda 53,29 % und Obscura 44,88 %; Chrome kam als Referenz-Engine auf 99,85 %. Kitesurf lief mit k=1, nicht abgedeckte Aufgaben zählen als nicht bestanden, und die Reproduktionsbedingungen eines entfernten Dienstes unterscheiden sich von denen lokaler Binärdateien. Die vollständigen Ergebnisse stehen im [Fünf-Engine-Bericht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md) des Benchmarks.
-
-### Ressourcenverbrauch
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
-  <img alt="Aufgaben-Erfolgsquote gegen den Median des Spitzenspeichers pro Aufgabe für die vier lokalen Engines: Chrome bei 99,9 % und 697 MiB, Moli bei 80,7 % und 92 MiB, Lightpanda bei 43,8 % und 34 MiB, Obscura bei 39,5 % und 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
-</picture>
-
-Kitesurf ist ein entfernter Dienst, dessen CPU, Arbeitsspeicher und Prozessanzahl nicht messbar sind. Der Ressourcenvergleich umfasst daher nur die vier lokalen Engines. Ein separater Lauf mit 557 Aufgaben berücksichtigt nur Arbeiten, die alle vier abgeschlossen haben. Molis Median pro Aufgabe lag bei **100,6 ms CPU-Zeit** und **92 MiB Spitzenspeicher**; Chrome erreichte **687 ms** beziehungsweise **697 MiB**. Damit lag Moli bei rund 15 % der CPU-Zeit und 13 % des Spitzenspeichers von Chrome. Methodik und vollständige Daten stehen in der [Ressourcenübersicht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) des Benchmarks.
-
-<details>
-<summary>Beispiel-Workload eines Agenten · eine Episode, Moli vs. Chromium</summary>
-
-| Metrik | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP bereit | 34.85 ms | 169.37 ms |
-| Aktive Episodendauer p50 | 33.40 ms | 57.13 ms |
-| PSS-Spitzenwert | 102.46 MiB | 348.82 MiB |
-| Maximale Prozesse / Threads | 1 / 24 | 11 / 123 |
 
 </details>
 

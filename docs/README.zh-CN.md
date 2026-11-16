@@ -246,14 +246,57 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 
 ## 测试数据
 
-Moli 在任务固定的公开评测集上进行测试。每一行说明测量的是什么，并链接到详情。
+下面的实测数据展示了 Moli 目前的能力区间。测试覆盖真实网站、自动化客户端、Chromium/WPT 行为验证，以及大规模的 nextest 回归测试套件。
 
-| 方向 | 评测集 | 测量内容 | Moli | 详情 |
-| --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 道真实网站任务；[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 份网页快照 | 真实网站任务的通过比例；网页快照上的正文提取质量得分 | **89.8%** 和 **39.27%**，两项均为五个浏览器中第一 | [Web Fetch](#web-fetch) |
-| 浏览器自动化 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 道可比任务 | CDP、自动化工具和 Web 平台任务的成功比例 | **81.9%**；Chrome 99.8% | [浏览器自动化](#浏览器自动化) |
-| 资源占用 | Lexbench-Headless-Browser · 所有本地引擎都完成的 557 道任务 | 单题 CPU 时间和内存峰值的中位数 | Chrome CPU 时间的 **15%**、内存峰值的 **13%** | [资源占用](#资源占用) |
-| Web 标准 | 选定的 [WPT](https://github.com/web-platform-tests/wpt) 测试 | 通过的 WPT 测试数 | 一次完整运行通过 **161.2 万**项测试 | — |
+| 测试 | 测量内容 | Moli |
+| --- | --- | --- |
+| [公开网页混合抓取测试](#公开网页混合抓取测试) | 192 个公开 URL 中取得有效内容的页面 | 103 个页面（53.6%），RSS 中位数 73 MiB |
+| [智能体工作负载样例](#智能体工作负载样例) | 单个智能体回合的启动、延迟和内存 | CDP 就绪 34.85 ms（Chromium 169.37 ms） |
+| [WPT 测试](#wpt-测试) | 选定的 Web 平台测试 | 通过 161.2 万项 |
+| [Moli 在 Lexbench-Headless-Browser 评测中的表现](#moli-在-lexbench-headless-browser-评测中的表现) | 1,308 道自动化任务；CPU 与内存 | 成功率 81.9%；CPU 时间为 Chrome 的 15%，内存为 13% |
+| [Web Fetch](#web-fetch) | 430 道真实网站任务；545 份网页快照 | 89.8% 和 39.27%，两项均为五个浏览器中第一 |
+
+### 公开网页混合抓取测试
+
+测试对象是 192 个公开 URL，覆盖中国国内和国际主流网站。判定成功的标准是：页面必须生成有实际意义的 JavaScript 执行后内容——仅仅返回 HTTP 200、验证质询页面、登录墙、空响应，或者只有外壳的应用界面，都不计入成功。
+
+| 浏览器 | 有效页面 | 成功率 | 中位耗时 | RSS 中位数 |
+| --- | ---: | ---: | ---: | ---: |
+| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
+| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
+| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
+| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+
+### 智能体工作负载样例
+
+| 指标 | Moli | Chromium |
+| --- | ---: | ---: |
+| CDP 就绪 | 34.85 ms | 169.37 ms |
+| 回合活跃时间 p50 | 33.40 ms | 57.13 ms |
+| PSS 峰值 | 102.46 MiB | 348.82 MiB |
+| 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
+
+### WPT 测试
+
+在目前用于验证 Moli 智能体浏览器功能范围的 WPT 测试集合中，一次完整运行有 **161.2 万项测试通过**。
+
+### Moli 在 Lexbench-Headless-Browser 评测中的表现
+
+[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) 的完整任务集包含 1,928 道任务，覆盖裸 CDP、Playwright、Puppeteer、Selenium 等 13 个固定版本的自动化工具及 Web 平台语义。为了加入仅提供远程端点的 Kitesurf，下图采用其中 1,308 道可比任务，所有浏览器使用相同的任务筛选规则。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="五个无头浏览器在 1,308 道可比任务上的成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
+</picture>
+
+**Moli 0.1.1 通过了 1,071 道任务，成功率为 81.88%**，高于 Kitesurf 的 62.08%、Lightpanda 的 53.29% 和 Obscura 的 44.88%；参照引擎 Chrome 为 99.85%。Kitesurf 以 k=1 运行，未覆盖任务按未通过计，远程服务的复现条件也与本地二进制不同。完整结果见 benchmark 的[五引擎报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="四个本地引擎的任务成功率与单题内存峰值中位数：Chrome 99.9%、697 MiB，Moli 80.7%、92 MiB，Lightpanda 43.8%、34 MiB，Obscura 39.5%、39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+</picture>
+
+Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源对比只覆盖四个本地引擎。在另一轮 557 道任务的测试中，只统计四个引擎都完成的工作。Moli 单题 CPU 中位数为 **100.6 ms**，内存峰值中位数为 **92 MiB**；Chrome 分别为 **687 ms** 和 **697 MiB**。Moli 的 CPU 时间约为 Chrome 的 15%，内存峰值约为 13%。测试方法和完整数据见 benchmark 的[资源报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)。
 
 ### Web Fetch
 
@@ -308,52 +351,6 @@ Moli 在真实网站和网页快照上与其他四个浏览器对比。点击标
 | Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
 
 </details>
-
-</details>
-
-<details>
-<summary>公开网页混合抓取测试 · 192 个公开 URL</summary>
-
-判定成功的标准是：页面必须生成有实际意义的 JavaScript 执行后内容——仅仅返回 HTTP 200、验证质询页面、登录墙、空响应，或者只有外壳的应用界面，都不计入成功。
-
-| 浏览器 | 有效页面 | 成功率 | 中位耗时 | RSS 中位数 |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
-
-</details>
-
-### 浏览器自动化
-
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) 的完整任务集包含 1,928 道任务，覆盖裸 CDP、Playwright、Puppeteer、Selenium 等 13 个固定版本的自动化工具及 Web 平台语义。为了加入仅提供远程端点的 Kitesurf，下图采用其中 1,308 道可比任务，所有浏览器使用相同的任务筛选规则。
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
-  <img alt="五个无头浏览器在 1,308 道可比任务上的成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
-</picture>
-
-**Moli 0.1.1 通过了 1,071 道任务，成功率为 81.88%**，高于 Kitesurf 的 62.08%、Lightpanda 的 53.29% 和 Obscura 的 44.88%；参照引擎 Chrome 为 99.85%。Kitesurf 以 k=1 运行，未覆盖任务按未通过计，远程服务的复现条件也与本地二进制不同。完整结果见 benchmark 的[五引擎报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)。
-
-### 资源占用
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
-  <img alt="四个本地引擎的任务成功率与单题内存峰值中位数：Chrome 99.9%、697 MiB，Moli 80.7%、92 MiB，Lightpanda 43.8%、34 MiB，Obscura 39.5%、39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
-</picture>
-
-Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源对比只覆盖四个本地引擎。在另一轮 557 道任务的测试中，只统计四个引擎都完成的工作。Moli 单题 CPU 中位数为 **100.6 ms**，内存峰值中位数为 **92 MiB**；Chrome 分别为 **687 ms** 和 **697 MiB**。Moli 的 CPU 时间约为 Chrome 的 15%，内存峰值约为 13%。测试方法和完整数据见 benchmark 的[资源报告](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)。
-
-<details>
-<summary>智能体工作负载样例 · 单个回合，Moli 对比 Chromium</summary>
-
-| 指标 | Moli | Chromium |
-| --- | ---: | ---: |
-| CDP 就绪 | 34.85 ms | 169.37 ms |
-| 回合活跃时间 p50 | 33.40 ms | 57.13 ms |
-| PSS 峰值 | 102.46 MiB | 348.82 MiB |
-| 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
 
 </details>
 
