@@ -1,6 +1,7 @@
-use crate::context_bootstrap::events::EventInit;
-use crate::util::v8_string;
-use crate::webidl;
+use super::super::init::EventInit;
+use super::*;
+use moli_v8_util::v8_string;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 /// Convert EventInit first, followed by ErrorEventInit's own members in lexical
@@ -26,7 +27,7 @@ pub(super) fn parse_error_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<ErrorEventInit<'s>> {
-    crate::context_bootstrap::events::parse_event_dictionary(scope, args, "ErrorEvent")
+    super::super::init::parse_event_dictionary(scope, args, "ErrorEvent")
 }
 
 impl<'s> ErrorEventInit<'s> {
@@ -48,7 +49,7 @@ impl<'s> ErrorEventInit<'s> {
 /// Runtime reports carry already converted payloads. Use the protected
 /// constructor with no dictionary so author getters and replacements never
 /// participate in native error reporting.
-pub(crate) fn construct_original_error_event<'s>(
+pub fn construct_original_error_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     filename: &str,
@@ -56,15 +57,14 @@ pub(crate) fn construct_original_error_event<'s>(
     colno: u32,
     error: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor =
-        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
-            scope,
-            "ErrorEvent",
-        )
-        .ok()?;
+    let constructor = v8::Local::<v8::Function>::try_from(moli_v8_util::global_constructor_object(
+        scope,
+        "ErrorEvent",
+    )?)
+    .ok()?;
     let event_type = v8_string(scope, "error")?;
     let event = constructor.new_instance(scope, &[event_type.into()])?;
-    let state = super::super::event_backing(scope, event);
+    let state = event_backing(scope, event);
     ErrorEventInit {
         base: EventInit {
             cancelable: true,

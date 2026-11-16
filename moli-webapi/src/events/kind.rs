@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::context_bootstrap) enum EventSubclassKind {
+pub enum EventSubclassKind {
     UiEvent = 1,
     FocusEvent = 2,
     TextEvent = 3,
@@ -36,7 +36,7 @@ pub(in crate::context_bootstrap) enum EventSubclassKind {
 }
 
 impl EventSubclassKind {
-    pub(super) fn from_i32(value: i32) -> Option<Self> {
+    pub fn from_i32(value: i32) -> Option<Self> {
         match value {
             1 => Some(Self::UiEvent),
             2 => Some(Self::FocusEvent),
@@ -75,7 +75,7 @@ impl EventSubclassKind {
         }
     }
 
-    pub(super) fn constructor_name(self) -> &'static str {
+    pub fn constructor_name(self) -> &'static str {
         match self {
             Self::UiEvent => "UIEvent",
             Self::FocusEvent => "FocusEvent",

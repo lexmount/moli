@@ -400,3 +400,19 @@ pub fn set_event_private_value(
     let state = event_backing(scope, event);
     set_private_value(scope, state, slot, value);
 }
+
+/// Returns a value payload without projecting DOM targets or platform objects.
+pub fn event_value_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if event_initialized(scope, args.this()).is_none() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let state = event_backing(scope, args.this());
+    if let Some(value) = state.get(scope, args.data()) {
+        rv.set(value);
+    }
+}

@@ -6,16 +6,16 @@ use moli_webapi_declare::WebApiObject;
 mod base;
 use moli_webapi::events::device;
 mod init;
-mod kind;
+use moli_webapi::events::kind;
 mod message;
 pub(crate) use message::construct_original_message_event;
 mod methods;
 mod modifiers;
 mod subclasses;
+use moli_webapi::events::subclasses::submit;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
-mod submit;
 mod ui;
 use moli_webapi::events::value;
 pub(in crate::context_bootstrap) use ui::initialize_legacy_ui_event;
@@ -32,22 +32,7 @@ pub(in crate::context_bootstrap) use value::{
     ValueEventKind, build_value_event_template, install_value_event_template_bindings,
 };
 
-const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
-const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";
-const CLOSE_EVENT_REASON_SLOT: &str = "__moliCloseEventReason";
-const SUBMIT_EVENT_SUBMITTER_SLOT: &str = "__moliSubmitEventSubmitter";
-const SUBMIT_EVENT_AGENT_INVOKED_SLOT: &str = "__moliSubmitEventAgentInvoked";
-const SUBMIT_EVENT_RESPONSE_SLOT: &str = "__moliSubmitEventResponse";
 pub(crate) use submit::{mark_agent_submit_event, take_submit_event_response};
-pub(super) use submit::{
-    submit_event_agent_invoked_getter_function, submit_event_respond_with_callback,
-};
-const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
-const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
-const CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT: &str = "__moliClipboardEventClipboardData";
-const CLIPBOARD_CHANGE_EVENT_TYPES_SLOT: &str = "__moliClipboardChangeEventTypes";
-const CLIPBOARD_CHANGE_EVENT_CHANGE_ID_SLOT: &str = "__moliClipboardChangeEventChangeId";
-const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct PageTransitionEventInitDeclaration {
@@ -136,60 +121,6 @@ pub(crate) fn construct_original_text_input_event<'s>(
     Some(event)
 }
 
-const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
-
-pub(in crate::context_bootstrap) fn new_uninitialized_before_unload_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype =
-        super::exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "BeforeUnloadEvent")
-            .ok()?;
-    let wrapper = v8::Object::new(scope);
-    if wrapper.set_prototype(scope, prototype.into()) != Some(true) {
-        return None;
-    }
-    let event = new_event_state(scope);
-    base::initialize_event_object(scope, event, "", false, false);
-    base::set_event_initialized(scope, event, false);
-    set_private_value(
-        scope,
-        event,
-        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
-        v8str(scope, "").into(),
-    );
-    web_api_interfaces::initialize(scope, event, "BeforeUnloadEvent").ok()?;
-    initialize_event_wrapper(scope, wrapper, event)?;
-    Some(wrapper)
-}
-
-pub(super) fn before_unload_event_return_value_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if let Some(value) =
-        event_private_value(scope, args.this(), BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT)
-    {
-        rv.set(value);
-    }
-}
-
-pub(super) fn before_unload_event_return_value_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(value) = args.get(0).to_string(scope) else {
-        return;
-    };
-    set_event_private_value(
-        scope,
-        args.this(),
-        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
-        value.into(),
-    );
-}
-
 pub(crate) fn construct_original_page_transition_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -273,16 +204,6 @@ pub(crate) use base::{
     initialize_event_object_with_type, mark_event_trusted, reinitialize_event_object,
     set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
-
-fn event_subclass_kind<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-) -> Option<EventSubclassKind> {
-    crate::context_bootstrap::event_private_value(scope, event, EVENT_SUBCLASS_KIND_SLOT)
-        .and_then(|value| v8::Local::<v8::Integer>::try_from(value).ok())
-        .and_then(|value| i32::try_from(value.value()).ok())
-        .and_then(EventSubclassKind::from_i32)
-}
 
 pub(crate) fn event_is_error_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -409,6 +330,11 @@ pub(super) use methods::{
     event_stop_immediate_propagation_callback, event_stop_propagation_callback,
     event_time_stamp_getter_function, set_event_default_prevented,
 };
+pub(in crate::context_bootstrap) use moli_webapi::events::subclasses::new_uninitialized_before_unload_event;
+use moli_webapi::events::subclasses::{
+    EVENT_SUBCLASS_KIND_SLOT, FORM_DATA_EVENT_FORM_DATA_SLOT, SUBMIT_EVENT_SUBMITTER_SLOT,
+    event_subclass_kind,
+};
 pub(super) use subclasses::{
     build_event_subclass_template, pointer_event_get_predicted_events_callback,
 };
@@ -433,42 +359,6 @@ pub(in crate::context_bootstrap) fn finalize_pointer_event_realm_bindings<'s>(
     SecurePointerEventPrototypeRuntimeDeclaration::default()
         .initialize(scope, prototype)
         .map_err(|error| anyhow::anyhow!("failed to initialize PointerEvent.prototype: {error}"))
-}
-
-pub(super) fn close_event_was_clean_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value = crate::context_bootstrap::event_private_value(
-        scope,
-        args.this(),
-        CLOSE_EVENT_WAS_CLEAN_SLOT,
-    )
-    .unwrap_or_else(|| v8::Boolean::new(scope, false).into());
-    rv.set(value);
-}
-
-pub(super) fn close_event_code_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value =
-        crate::context_bootstrap::event_private_value(scope, args.this(), CLOSE_EVENT_CODE_SLOT)
-            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-    rv.set(value);
-}
-
-pub(super) fn close_event_reason_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value =
-        crate::context_bootstrap::event_private_value(scope, args.this(), CLOSE_EVENT_REASON_SLOT)
-            .unwrap_or_else(|| v8str(scope, "").into());
-    rv.set(value);
 }
 
 pub(crate) fn submit_event_submitter_value<'s>(
@@ -512,17 +402,6 @@ pub(super) fn form_data_event_form_data_getter_function<'s>(
     }
 }
 
-pub(super) fn track_event_track_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value =
-        crate::context_bootstrap::event_private_value(scope, args.this(), TRACK_EVENT_TRACK_SLOT)
-            .unwrap_or_else(|| v8::null(scope).into());
-    rv.set(value);
-}
-
 pub(crate) use wrappers::{
     event_attribute, event_bool_attribute, event_callback_values, event_private_value,
     initialize_event_wrapper, new_event_state, new_event_wrapper, node_event_callback_values,
@@ -543,52 +422,3 @@ mod ui_properties;
 pub(in crate::context_bootstrap) use ui_properties::ui_event_which_getter_function;
 
 pub(crate) use self::base::event_trusted;
-
-pub(super) fn clipboard_event_clipboard_data_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ClipboardEvent) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let value = event_private_value(scope, args.this(), CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT)
-        .unwrap_or_else(|| v8::null(scope).into());
-    rv.set(value);
-}
-
-pub(super) fn clipboard_change_event_types_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ClipboardChangeEvent) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let Some(value) = event_private_value(scope, args.this(), CLIPBOARD_CHANGE_EVENT_TYPES_SLOT)
-    else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    rv.set(value);
-}
-
-pub(super) fn clipboard_change_event_change_id_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ClipboardChangeEvent) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let Some(value) =
-        event_private_value(scope, args.this(), CLIPBOARD_CHANGE_EVENT_CHANGE_ID_SLOT)
-    else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    rv.set(value);
-}

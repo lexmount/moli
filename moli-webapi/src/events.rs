@@ -9,8 +9,10 @@ pub mod audio;
 pub mod device;
 pub mod ice_error_event;
 pub mod init;
+pub mod kind;
 pub mod speech;
 pub mod state;
+pub mod subclasses;
 pub mod value;
 pub mod webrtc;
 

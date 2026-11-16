@@ -5,12 +5,12 @@ use super::{
         font_face_set_entries_callback, font_face_set_for_each_callback,
         font_face_set_has_callback, font_face_set_keys_callback, font_face_set_load_callback,
         font_face_set_values_callback, install_font_face_set_event_handler_accessors,
-        install_font_face_set_load_event_template_accessors,
         install_font_face_set_template_accessors, install_font_face_template_accessors,
     },
     specs::ConstructorSpec,
 };
 use crate::web_api_interfaces;
+use moli_webapi::events::subclasses::font::install_font_face_set_load_event_template_accessors;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]

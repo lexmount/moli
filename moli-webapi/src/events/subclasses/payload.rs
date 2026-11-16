@@ -1,6 +1,7 @@
-use super::super::{EventInit, parse_event_dictionary};
+use super::super::init::{EventInit, parse_event_dictionary};
 use super::*;
-use crate::{web_api_interfaces, webidl};
+use crate::interfaces as web_api_interfaces;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 #[derive(webidl::WebIdlDictionary)]

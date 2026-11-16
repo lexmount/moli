@@ -8,6 +8,7 @@
 use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::context_bootstrap::{exposed_interfaces, world_wrappers};
+pub(in crate::context_bootstrap) use moli_webapi::events::state::event_value_attribute_getter;
 
 pub(crate) use moli_webapi::events::state::{
     event_attribute, event_bool_attribute, event_private_value, new_event_state,
@@ -315,14 +316,6 @@ fn event_attribute_getter<'s, const PROJECTION: u8>(
     if let Some(value) = projection.project(scope, args.this(), value) {
         rv.set(value);
     }
-}
-
-pub(in crate::context_bootstrap) fn event_value_attribute_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    event_attribute_getter::<0>(scope, args, rv);
 }
 
 pub(in crate::context_bootstrap) fn event_platform_attribute_getter<'s>(

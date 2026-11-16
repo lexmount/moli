@@ -37,3 +37,18 @@ pub fn read_event_init<'s>(
     parse_event_dictionary::<EventInit>(scope, args, "Event")
         .map(|init| (init.bubbles, init.cancelable, init.composed))
 }
+
+pub fn event_type_argument<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    constructor_name: &'static str,
+) -> Option<v8::Local<'s, v8::String>> {
+    if args.length() == 0 {
+        moli_v8_util::throw_type_error(
+            scope,
+            &format!("Failed to construct '{constructor_name}': 1 argument required."),
+        );
+        return None;
+    }
+    args.get(0).to_string(scope)
+}
