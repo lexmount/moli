@@ -9,6 +9,10 @@ impl DocumentRuntime {
     /// This preflight runs before changing the tree, so fallback never replays a commit.
     pub(crate) fn parser_mutation_needs_window_realm(&self, mutation: &ParserDomMutation) -> bool {
         if !self.document_content_security_policies().is_empty()
+            || !self
+                .policy_container
+                .inherited_meta_content_security_policies
+                .is_empty()
             || !self.response_content_security_policies().is_empty()
             || !self
                 .response_content_security_report_only_policies()
