@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::apply_webidl_constructor_prototype_fallback;
+use moli_v8_util::apply_webidl_constructor_prototype_fallback;
 use webidl::WebIdlEnum;
 
 const SOURCE_SLOT: &str = "__moliWebTransportErrorSource";
@@ -7,7 +7,7 @@ const STREAM_ERROR_CODE_SLOT: &str = "__moliWebTransportErrorStreamErrorCode";
 
 #[derive(Clone, Copy, Debug, webidl::WebIdlEnum)]
 #[webidl(name = "WebTransportErrorSource")]
-pub(crate) enum WebTransportErrorSource {
+pub enum WebTransportErrorSource {
     Stream,
     Session,
 }
@@ -70,7 +70,7 @@ pub(super) fn install<'s>(
     PrototypeDeclaration::initialize_prototype_template(scope, prototype);
 }
 
-pub(crate) fn web_transport_error_constructor_callback<'s>(
+pub fn web_transport_error_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -116,13 +116,13 @@ fn slot_getter<'s>(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct WebTransportErrorClonePayload {
-    pub(crate) message: Vec<u16>,
-    pub(crate) source: WebTransportErrorSource,
-    pub(crate) stream_error_code: Option<u32>,
+pub struct WebTransportErrorClonePayload {
+    pub message: Vec<u16>,
+    pub source: WebTransportErrorSource,
+    pub stream_error_code: Option<u32>,
 }
 
-pub(crate) fn web_transport_error_clone_payload_from_object<'s>(
+pub fn web_transport_error_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<WebTransportErrorClonePayload> {
@@ -162,26 +162,11 @@ fn declaration<'s>(
     Some(ObjectDeclaration::new(message, source, code))
 }
 
-pub(crate) fn build_web_transport_error_from_clone_payload<'s>(
+pub fn build_web_transport_error_from_clone_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: &WebTransportErrorClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if !crate::context_bootstrap::exposed_interfaces::is_realm_interface_exposed(
-        scope,
-        "WebTransportError",
-    ) {
-        throw_dom_exception_value(
-            scope,
-            "WebTransportError is not exposed in this realm.",
-            "DataCloneError",
-        );
-        return None;
-    }
-    crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "WebTransportError",
-    )
-    .ok()?;
+    global_constructor_prototype(scope, "WebTransportError")?;
     let object = declaration(scope, payload)?.bind(scope).ok()?;
     capture_dom_exception_stack(scope, object);
     Some(object)

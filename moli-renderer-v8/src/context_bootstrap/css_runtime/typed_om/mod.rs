@@ -2,14 +2,13 @@ use crate::{
     css_style::top_level_comma_separated_component_values,
     detached_css_style::css_style_declaration_exposes_property_name,
     native_bridge,
-    util::{get_private_object, get_private_value, set_private_value, throw_type_error, v8_string},
+    util::{get_private_object, set_private_value, throw_type_error, v8_string},
     webidl, window_host,
 };
-use cssparser::{Parser, Token};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod map;
-mod values;
+use moli_webapi::css_values as values;
 
 pub(in crate::context_bootstrap) use values::{
     css_keyword_value_constructor_callback, css_unit_value_constructor_callback,

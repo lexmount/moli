@@ -1,13 +1,11 @@
 use super::{dictionary_string::DictionaryDomString, ice_candidate_parser::parse_ice_candidate};
-use crate::web_api_interfaces;
-use crate::{
-    util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, get_private_value,
-        throw_type_error, v8str,
-    },
-    webidl,
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
+    apply_webidl_constructor_prototype_fallback, callback_data_index_value, get_private_value,
+    throw_type_error, v8str,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "RTCIceCandidateInit")]
@@ -105,7 +103,7 @@ struct IceCandidateJsonDeclaration<'scope> {
     username_fragment: v8::Local<'scope, v8::Value>,
 }
 
-pub(super) fn install_ice_candidate_template_bindings<'s>(
+pub fn install_ice_candidate_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -115,7 +113,7 @@ pub(super) fn install_ice_candidate_template_bindings<'s>(
     );
 }
 
-pub(in crate::context_bootstrap) fn rtc_ice_candidate_constructor_callback<'s>(
+pub fn rtc_ice_candidate_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

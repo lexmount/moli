@@ -220,6 +220,74 @@ pub fn global_constructor_prototype<'s>(
         .or_else(|| constructor_prototype(scope, global, name))
 }
 
+pub fn callable_relevant_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mut callable: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Context>> {
+    // V8's GetFunctionRealm unwraps Proxy chains. Bound functions are created
+    // in their target function's context, so their creation context already
+    // identifies the target realm through the public embedding API.
+    while callable.is_proxy() {
+        let proxy = v8::Local::<v8::Proxy>::try_from(callable).ok()?;
+        callable = proxy.get_target(scope);
+    }
+    v8::Local::<v8::Object>::try_from(callable)
+        .ok()?
+        .get_creation_context(scope)
+}
+
+pub fn new_target_realm_constructor_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    new_target: v8::Local<'s, v8::Value>,
+    constructor_name: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = callable_relevant_context(scope, new_target)?;
+    let prototype = {
+        let context_scope = &mut v8::ContextScope::new(scope, context);
+        let prototype = global_constructor_prototype(context_scope, constructor_name)?;
+        v8::Global::new(context_scope, prototype)
+    };
+    Some(v8::Local::new(scope, &prototype))
+}
+
+pub fn receiver_uses_new_target_realm_object_fallback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    new_target: v8::Local<'s, v8::Value>,
+) -> bool {
+    let Some(receiver_prototype) = receiver.get_prototype(scope) else {
+        return false;
+    };
+    let Some(object_prototype) =
+        new_target_realm_constructor_prototype(scope, new_target, "Object")
+    else {
+        return false;
+    };
+    receiver_prototype.strict_equals(object_prototype.into())
+}
+
+pub fn apply_webidl_constructor_prototype_fallback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    new_target: v8::Local<'s, v8::Value>,
+    default_constructor_name: &str,
+) {
+    // V8 has already read `NewTarget.prototype` while preparing the native
+    // constructor receiver. Do not read it again: a Proxy getter must run only
+    // once. V8 represents a non-object result with NewTarget's realm-local
+    // Object prototype, which lets us replace precisely that fallback with
+    // the WebIDL interface's default prototype from the same realm.
+    if !receiver_uses_new_target_realm_object_fallback(scope, receiver, new_target) {
+        return;
+    }
+    let Some(prototype) =
+        new_target_realm_constructor_prototype(scope, new_target, default_constructor_name)
+    else {
+        return;
+    };
+    let _ = receiver.set_prototype(scope, prototype.into());
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::pin;

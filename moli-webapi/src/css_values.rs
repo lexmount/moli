@@ -1,5 +1,8 @@
-use super::*;
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
+use cssparser::{Parser, Token};
+use moli_v8_util::{get_private_value, set_private_value, throw_type_error, v8_string};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
 
 const CSS_STYLE_VALUE_TEXT_SLOT: &str = "__moliCssStyleValueText";
 const CSS_KEYWORD_VALUE_VALUE_SLOT: &str = "__moliCssKeywordValueValue";
@@ -82,7 +85,7 @@ struct CssKeywordValueConstructorArgs {
     keyword: String,
 }
 
-pub(super) fn install_typed_value_template_bindings<'s>(
+pub fn install_typed_value_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -102,7 +105,7 @@ pub(super) fn install_typed_value_template_bindings<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn css_keyword_value_constructor_callback<'s>(
+pub fn css_keyword_value_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -127,7 +130,7 @@ pub(in crate::context_bootstrap) fn css_keyword_value_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(in crate::context_bootstrap) fn css_unit_value_constructor_callback<'s>(
+pub fn css_unit_value_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -152,7 +155,7 @@ pub(in crate::context_bootstrap) fn css_unit_value_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(super) fn style_value_from_text<'s>(
+pub fn style_value_from_text<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     text: &str,
     allow_keyword: bool,

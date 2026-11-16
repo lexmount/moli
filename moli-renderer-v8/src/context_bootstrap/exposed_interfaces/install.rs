@@ -197,6 +197,10 @@ pub(crate) fn initialize_realm_interface_registry(
     let registry = ExposedInterfaceTemplateRegistry::current(scope)
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
     IntrinsicInterfaceRegistry::initialize_for_current_context(scope, registry.len(), realm_kind)?;
+    // Native values can be built during Window bootstrap, before eager
+    // capture. Resolve through the realm cache from the start so an exception
+    // never re-enters the Window's public lazy property or access checks.
+    install_web_api_intrinsic_resolver(scope, resolve_web_api_intrinsic);
     Ok(())
 }
 
@@ -257,7 +261,6 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
     moli_webapi::install_realm_callbacks(
         scope,
         moli_webapi::RealmCallbacks {
-            dom_exception: crate::context_bootstrap::new_most_derived_dom_exception_value,
             point_mutated: crate::context_bootstrap::svg_runtime::reflect_svg_point_mutation,
         },
     );

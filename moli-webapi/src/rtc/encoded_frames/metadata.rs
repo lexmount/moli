@@ -1,4 +1,4 @@
-use crate::webidl;
+use moli_webidl as webidl;
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 #[derive(webidl::WebIdlDictionary)]

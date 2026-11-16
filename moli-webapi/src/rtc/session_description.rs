@@ -1,13 +1,20 @@
-use super::{RtcSessionDescriptionInitDeclaration, dictionary_string::DictionaryDomString};
-use crate::web_api_interfaces;
-use crate::{
-    util::{
-        apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
-        get_private_value, throw_type_error, v8str,
-    },
-    webidl,
+use super::dictionary_string::DictionaryDomString;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
+    apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
+    get_private_value, throw_type_error, v8str,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webidl as webidl;
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+pub struct RtcSessionDescriptionInitDeclaration<'scope> {
+    #[webapi(data_property, enumerable)]
+    r#type: v8::Local<'scope, v8::Value>,
+    #[webapi(data_property, enumerable)]
+    sdp: v8::Local<'scope, v8::String>,
+}
 
 const DESCRIPTION_TYPE_SLOT: &str = "__moliRtcSessionDescriptionType";
 const DESCRIPTION_SDP_SLOT: &str = "__moliRtcSessionDescriptionSdp";
@@ -15,7 +22,7 @@ const DESCRIPTION_SLOTS: &[&str] = &[DESCRIPTION_TYPE_SLOT, DESCRIPTION_SDP_SLOT
 
 #[derive(Clone, Copy, PartialEq, Eq, webidl::WebIdlEnum)]
 #[webidl(name = "RTCSdpType", rename_all = "kebab-case")]
-pub(super) enum SdpType {
+pub enum SdpType {
     Offer,
     Pranswer,
     Answer,
@@ -26,11 +33,11 @@ pub(super) enum SdpType {
 // description algorithms retain their own state and SDP constraints.
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "RTCSessionDescriptionInit")]
-pub(super) struct SessionDescriptionInit<'s> {
+pub struct SessionDescriptionInit<'s> {
     #[webidl(converter = "raw", default = DictionaryDomString::default())]
-    pub(super) sdp: DictionaryDomString<'s>,
+    pub sdp: DictionaryDomString<'s>,
     #[webidl(converter = "enum")]
-    pub(super) r#type: Option<SdpType>,
+    pub r#type: Option<SdpType>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -41,7 +48,7 @@ struct SessionDescriptionArgs<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::RTCSessionDescription)]
+#[webapi(interface = web_api_interfaces::RTCSessionDescription, require_prototype)]
 struct SessionDescriptionObjectDeclaration<'scope> {
     #[webapi(slot = DESCRIPTION_TYPE_SLOT)]
     r#type: v8::Local<'scope, v8::Value>,
@@ -60,7 +67,7 @@ struct SessionDescriptionPrototypeDeclaration {
     to_json: (),
 }
 
-pub(super) fn install_session_description_template_bindings<'s>(
+pub fn install_session_description_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
@@ -70,7 +77,7 @@ pub(super) fn install_session_description_template_bindings<'s>(
     );
 }
 
-pub(in crate::context_bootstrap) fn rtc_session_description_constructor_callback<'s>(
+pub fn rtc_session_description_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -103,29 +110,15 @@ pub(in crate::context_bootstrap) fn rtc_session_description_constructor_callback
     rv.set(args.this().into());
 }
 
-pub(super) fn native_description<'s>(
+pub fn native_description<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: SdpType,
     sdp: v8::Local<'s, v8::String>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = super::super::exposed_interfaces::build_intrinsic_interface_instance(
-        scope,
-        "RTCSessionDescription",
-    )
-    .ok()?;
-    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope,
-        "RTCSessionDescription",
-    )
-    .ok()?;
-    object
-        .set_prototype(scope, prototype.into())?
-        .then_some(())?;
     let kind = v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&kind));
     SessionDescriptionObjectDeclaration::new(kind.into(), sdp)
-        .initialize(scope, object)
-        .ok()?;
-    Some(object)
+        .bind(scope)
+        .ok()
 }
 
 fn description_attribute_getter<'s>(

@@ -1,45 +1,17 @@
+mod support;
+use support::{eval, publish};
+
 use std::{cell::Cell, pin::pin, rc::Rc};
 
 use moli_v8_test_util::ensure_v8;
-use moli_v8_util::{throw_type_error, v8_string, v8str};
+use moli_v8_util::{throw_type_error, v8str};
 use moli_webapi::{
     RealmCallbacks, dom_quad, dom_rect, dom_rect_list, encoded_video_chunk, geometry,
     geometry_clone, image_data, install_realm_callbacks, interfaces, time_ranges,
 };
 
 struct CallbackState {
-    marker: &'static str,
     point_mutations: Cell<usize>,
-    exceptions: Cell<usize>,
-}
-
-fn native_exception<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    message: &str,
-    name: &str,
-) -> v8::Local<'s, v8::Value> {
-    let state = scope
-        .get_current_context()
-        .get_slot::<CallbackState>()
-        .unwrap();
-    state.exceptions.set(state.exceptions.get() + 1);
-    let error = v8::Exception::error(scope, v8_string(scope, message).unwrap());
-    let object = error.to_object(scope).unwrap();
-    object
-        .set(
-            scope,
-            v8str(scope, "name").into(),
-            v8_string(scope, name).unwrap().into(),
-        )
-        .unwrap();
-    object
-        .set(
-            scope,
-            v8str(scope, "realmMarker").into(),
-            v8str(scope, state.marker).into(),
-        )
-        .unwrap();
-    error
 }
 
 fn reflect_point<'s>(scope: &mut v8::PinScope<'s, '_>, _: v8::Local<'s, v8::Object>) {
@@ -61,8 +33,8 @@ fn illegal_constructor<'s>(
 fn install_values(
     scope: &mut v8::PinScope<'_, '_>,
     realm: geometry::GeometryRealm,
-    marker: &'static str,
 ) -> Rc<CallbackState> {
+    support::install_errors(scope);
     let point_readonly =
         v8::FunctionTemplate::new(scope, geometry::dom_point_readonly_constructor_callback);
     let point = v8::FunctionTemplate::new(scope, geometry::dom_point_constructor_callback);
@@ -136,38 +108,16 @@ fn install_values(
             .unwrap();
     }
     let state = Rc::new(CallbackState {
-        marker,
         point_mutations: Cell::new(0),
-        exceptions: Cell::new(0),
     });
     scope.get_current_context().set_slot(state.clone());
     install_realm_callbacks(
         scope,
         RealmCallbacks {
-            dom_exception: native_exception,
             point_mutated: reflect_point,
         },
     );
     state
-}
-
-fn eval<'s>(scope: &mut v8::PinScope<'s, '_>, source: &str) -> v8::Local<'s, v8::Value> {
-    v8::tc_scope!(let scope, scope);
-    let result = v8::Script::compile(scope, v8_string(scope, source).unwrap(), None)
-        .and_then(|script| script.run(scope));
-    if let Some(result) = result {
-        result
-    } else {
-        let exception = scope.exception().unwrap().to_rust_string_lossy(scope);
-        panic!("value binding test failed: {exception}");
-    }
-}
-
-fn publish(scope: &mut v8::PinScope<'_, '_>, name: &str, value: v8::Local<'_, v8::Object>) {
-    let global = scope.get_current_context().global(scope);
-    global
-        .set(scope, v8_string(scope, name).unwrap().into(), value.into())
-        .unwrap();
 }
 
 #[test]
@@ -178,7 +128,7 @@ fn geometry_conversions_and_operations_work_without_a_renderer() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    install_values(scope, geometry::GeometryRealm::Window, "window");
+    install_values(scope, geometry::GeometryRealm::Window);
     assert!(eval(scope, r#"(() => {
         const check = (value, label) => { if (!value) throw new Error(label); };
         const reads = [];
@@ -219,7 +169,7 @@ fn worker_geometry_keeps_its_constructor_and_prototype_restrictions() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    install_values(scope, geometry::GeometryRealm::Worker, "worker");
+    install_values(scope, geometry::GeometryRealm::Worker);
     assert!(eval(scope, r#"(() => {
         if (Object.hasOwn(DOMMatrix.prototype, 'setMatrixValue') ||
             Object.hasOwn(DOMMatrixReadOnly.prototype, 'toString')) throw new Error('Window methods leaked');
@@ -245,7 +195,7 @@ fn geometry_clone_helpers_use_the_destination_realm() {
     let destination = v8::Context::new(scope, Default::default());
     let payloads = {
         let scope = &mut v8::ContextScope::new(scope, source);
-        install_values(scope, geometry::GeometryRealm::Window, "source");
+        install_values(scope, geometry::GeometryRealm::Window);
         [
             ("point", "new DOMPoint(1, 2, 3, 4)"),
             ("readonlyPoint", "new DOMPointReadOnly(5, 6)"),
@@ -269,7 +219,7 @@ fn geometry_clone_helpers_use_the_destination_realm() {
         })
     };
     let scope = &mut v8::ContextScope::new(scope, destination);
-    install_values(scope, geometry::GeometryRealm::Window, "destination");
+    install_values(scope, geometry::GeometryRealm::Window);
     for (name, foreign, payload) in payloads {
         let object = geometry_clone::build_geometry_object_from_clone_payload(scope, payload);
         assert!(!foreign.strict_equals(object.into()));
@@ -298,36 +248,36 @@ fn renderer_callbacks_keep_svg_writes_and_native_exceptions_in_the_callee_realm(
     let destination = v8::Context::new(scope, Default::default());
     let (foreign, source_state) = {
         let scope = &mut v8::ContextScope::new(scope, source);
-        let state = install_values(scope, geometry::GeometryRealm::Window, "source");
+        let state = install_values(scope, geometry::GeometryRealm::Window);
         (
             geometry::build_svg_point_object_with_values(scope, 1.0, 2.0),
             state,
         )
     };
     let scope = &mut v8::ContextScope::new(scope, destination);
-    let destination_state = install_values(scope, geometry::GeometryRealm::Window, "destination");
+    let destination_state = install_values(scope, geometry::GeometryRealm::Window);
     publish(scope, "foreignPoint", foreign);
     assert!(eval(scope, r#"(() => {
+        globalThis.nativeDOMException = DOMException;
         globalThis.DOMException = function() { throw new Error('public constructor called'); };
         const setter = Object.getOwnPropertyDescriptor(DOMPoint.prototype, 'x').set;
         setter.call(foreignPoint, 12);
         if (foreignPoint.x !== 12) throw new Error('borrowed setter did not update point');
         try { new DOMMatrix('invalid transform'); throw new Error('invalid transform accepted'); }
-        catch (error) { if (error.name !== 'SyntaxError' || error.realmMarker !== 'destination') throw error; }
+        catch (error) { if (error.name !== 'SyntaxError' || !(error instanceof nativeDOMException)) throw error; }
         try { new ImageData(0, 1); throw new Error('invalid image size accepted'); }
-        catch (error) { if (error.name !== 'IndexSizeError' || error.realmMarker !== 'destination') throw error; }
+        catch (error) { if (error.name !== 'IndexSizeError' || !(error instanceof nativeDOMException)) throw error; }
         return true;
     })()"#).is_true());
     assert_eq!(source_state.point_mutations.get(), 0);
     assert_eq!(destination_state.point_mutations.get(), 1);
-    assert_eq!(destination_state.exceptions.get(), 2);
     geometry::set_svg_point_read_only(scope, foreign, true);
     assert!(eval(scope, r#"(() => {
         try {
             Object.getOwnPropertyDescriptor(DOMPoint.prototype, 'x').set.call(foreignPoint, 99);
             throw new Error('read-only SVG point accepted');
         } catch (error) {
-            if (error.name !== 'NoModificationAllowedError' || error.realmMarker !== 'destination' || foreignPoint.x !== 12) throw error;
+            if (error.name !== 'NoModificationAllowedError' || !(error instanceof nativeDOMException) || foreignPoint.x !== 12) throw error;
         }
         return true;
     })()"#).is_true());
@@ -344,7 +294,7 @@ fn image_data_and_encoded_chunk_clones_keep_bytes_and_destination_brands() {
     let destination = v8::Context::new(scope, Default::default());
     let (image_payload, chunk_payload) = {
         let scope = &mut v8::ContextScope::new(scope, source);
-        install_values(scope, geometry::GeometryRealm::Window, "source");
+        install_values(scope, geometry::GeometryRealm::Window);
         let image = v8::Local::<v8::Object>::try_from(eval(scope,
             "new ImageData(new Uint8ClampedArray([1, 2, 3, 4, 5, 6, 7, 8]), 2, 1, {colorSpace: 'display-p3'})")).unwrap();
         let chunk = v8::Local::<v8::Object>::try_from(eval(scope, r#"(() => {
@@ -367,7 +317,7 @@ fn image_data_and_encoded_chunk_clones_keep_bytes_and_destination_brands() {
         )
         .is_none()
     );
-    install_values(scope, geometry::GeometryRealm::Worker, "destination");
+    install_values(scope, geometry::GeometryRealm::Worker);
     let image =
         image_data::build_image_data_object_from_clone_payload(scope, image_payload).unwrap();
     let chunk =
@@ -397,7 +347,7 @@ fn rect_lists_and_time_ranges_bind_native_snapshots_without_layout_or_media_host
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    install_values(scope, geometry::GeometryRealm::Window, "window");
+    install_values(scope, geometry::GeometryRealm::Window);
     let rect = dom_rect::build_dom_rect_object(scope, 1.0, 2.0, 3.0, 4.0);
     let list = dom_rect_list::build_dom_rect_list_object(scope, &[rect]);
     let ranges = time_ranges::new_time_ranges_value(scope, &[(1.25, 2.5), (5.0, 8.0)]);
@@ -411,7 +361,7 @@ fn rect_lists_and_time_ranges_bind_native_snapshots_without_layout_or_media_host
             ranges.end(1) !== 8) throw new Error('time range values');
         for (const index of [2, -1, 4294967295]) {
             try { ranges.start(index); throw new Error('out-of-range index accepted'); }
-            catch (error) { if (error.name !== 'IndexSizeError' || error.realmMarker !== 'window') throw error; }
+            catch (error) { if (error.name !== 'IndexSizeError' || !(error instanceof DOMException)) throw error; }
         }
         try { TimeRanges.prototype.start.call({}, 0); throw new Error('forged range accepted'); }
         catch (error) { if (!(error instanceof TypeError)) throw error; }

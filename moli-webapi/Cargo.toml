@@ -5,6 +5,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cssparser = "0.38"
+moli-web-errors = { path = "../moli-web-errors" }
 moli-canvas = { path = "../moli-canvas" }
 moli-geometry = { path = "../moli-geometry" }
 moli-v8-util = { path = "../moli-v8-util" }

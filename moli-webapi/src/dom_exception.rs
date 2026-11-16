@@ -1,14 +1,16 @@
-use super::*;
-use crate::web_api_interfaces;
-use crate::{util::get_private_value, webidl};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{
+    get_private_value, global_constructor_prototype, throw_type_error, v8_string, v8str,
+};
 use moli_web_errors::{DOM_EXCEPTION_CONSTANTS, dom_exception_legacy_code};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiTemplateValue};
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 mod rtc_error;
 mod web_transport_error;
-pub(crate) use rtc_error::rtc_error_constructor_callback;
-pub(crate) use web_transport_error::{
+pub use rtc_error::rtc_error_constructor_callback;
+pub use web_transport_error::{
     WebTransportErrorClonePayload, WebTransportErrorSource,
     build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
     web_transport_error_constructor_callback,
@@ -153,7 +155,7 @@ struct WebSocketErrorPrototypeAccessorsDeclaration {
     reason: (),
 }
 
-pub(crate) fn install_dom_exception_template_bindings<'s>(
+pub fn install_dom_exception_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -228,7 +230,7 @@ fn dom_error_receiver<'s>(
     }
 }
 
-pub(crate) fn dom_exception_clone_fields<'s>(
+pub fn dom_exception_clone_fields<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(String, String)> {
@@ -244,7 +246,7 @@ pub(crate) fn dom_exception_clone_fields<'s>(
     Some((message, name))
 }
 
-pub(crate) fn quota_exceeded_error_clone_fields<'s>(
+pub fn quota_exceeded_error_clone_fields<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(String, Option<f64>, Option<f64>)> {
@@ -524,27 +526,14 @@ fn websocket_error_declaration<'s>(
     WebSocketErrorObjectDeclaration::new(message, close_code, reason)
 }
 
-pub(crate) fn build_dom_exception_object<'s>(
+pub fn build_dom_exception_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Object> {
-    if let Some(prototype) =
-        crate::context_bootstrap::exposed_interfaces::materialized_intrinsic_interface_prototype(
-            scope,
-            "DOMException",
-        )
-        .or_else(|| {
-            // A native exception must materialize its own realm's intrinsic.
-            // Reading the public Window property can run author code or enter
-            // an access check again after navigation detaches its global.
-            crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
-                scope,
-                "DOMException",
-            )
-            .ok()
-        })
-    {
+    // The embedding resolver uses its canonical realm cache. It must not
+    // consult an author-controlled Window property, including after detach.
+    if let Some(prototype) = global_constructor_prototype(scope, "DOMException") {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
         let _ = exception.set_prototype(scope, prototype.into());
@@ -555,7 +544,7 @@ pub(crate) fn build_dom_exception_object<'s>(
         .expect("DOMException declaration should bind")
 }
 
-pub(crate) fn new_dom_exception_value<'s>(
+pub fn new_dom_exception_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     name: &str,
@@ -565,16 +554,12 @@ pub(crate) fn new_dom_exception_value<'s>(
     exception.into()
 }
 
-pub(crate) fn throw_dom_exception_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    message: &str,
-    name: &str,
-) {
+pub fn throw_dom_exception_value(scope: &mut v8::PinScope<'_, '_>, message: &str, name: &str) {
     let exception = new_dom_exception_value(scope, message, name);
     scope.throw_exception(exception);
 }
 
-pub(crate) fn new_most_derived_dom_exception_value<'s>(
+pub fn new_most_derived_dom_exception_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     name: &str,
@@ -586,7 +571,7 @@ pub(crate) fn new_most_derived_dom_exception_value<'s>(
     }
 }
 
-pub(crate) fn dom_exception_constructor_callback<'s>(
+pub fn dom_exception_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -619,7 +604,7 @@ pub(crate) fn dom_exception_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(crate) fn dom_error_constructor_callback<'s>(
+pub fn dom_error_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -645,22 +630,20 @@ pub(crate) fn dom_error_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(crate) fn new_dom_error_value<'s>(
+pub fn new_dom_error_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
     message: &str,
 ) -> v8::Local<'s, v8::Value> {
-    crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
-        scope, "DOMError",
-    )
-    .expect("DOMError prototype should materialize before callback delivery");
+    global_constructor_prototype(scope, "DOMError")
+        .expect("DOMError prototype should materialize before callback delivery");
     DomErrorObjectDeclaration::new(v8_string(scope, name), v8_string(scope, message))
         .bind(scope)
         .expect("DOMError declaration should bind")
         .into()
 }
 
-pub(crate) fn quota_exceeded_error_constructor_callback<'s>(
+pub fn quota_exceeded_error_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -693,7 +676,7 @@ pub(crate) fn quota_exceeded_error_constructor_callback<'s>(
     rv.set(exception.into());
 }
 
-pub(crate) fn build_quota_exceeded_error_object<'s>(
+pub fn build_quota_exceeded_error_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     quota: Option<f64>,
@@ -708,7 +691,7 @@ pub(crate) fn build_quota_exceeded_error_object<'s>(
     exception
 }
 
-pub(crate) fn new_quota_exceeded_error_value<'s>(
+pub fn new_quota_exceeded_error_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     quota: Option<f64>,
@@ -719,7 +702,7 @@ pub(crate) fn new_quota_exceeded_error_value<'s>(
     exception.into()
 }
 
-pub(crate) fn initialize_websocket_error<'s>(
+pub fn initialize_websocket_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: v8::Local<'s, v8::Object>,
     message: v8::Local<'s, v8::String>,
@@ -731,7 +714,7 @@ pub(crate) fn initialize_websocket_error<'s>(
         .expect("WebSocketError declaration should initialize");
 }
 
-pub(crate) fn new_websocket_error_value<'s>(
+pub fn new_websocket_error_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     close_code: Option<u16>,
@@ -745,7 +728,7 @@ pub(crate) fn new_websocket_error_value<'s>(
     exception.into()
 }
 
-pub(crate) fn websocket_error_close_info<'s>(
+pub fn websocket_error_close_info<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<(Option<u16>, String)> {

@@ -5,9 +5,6 @@ use std::rc::Rc;
 /// Bridges value bindings to the embedder without retaining its host or V8 handles.
 /// Callbacks execute in the current (callee) realm, including for borrowed methods.
 pub struct RealmCallbacks {
-    /// Creates a canonical native exception without reading an author-owned global.
-    pub dom_exception:
-        for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, &str, &str) -> v8::Local<'s, v8::Value>,
     /// Writes a live SVG point back to its owner; ordinary points need no action.
     pub point_mutated: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>),
 }
@@ -22,11 +19,8 @@ pub(crate) fn throw_dom_exception_value(
     message: &str,
     name: &'static str,
 ) {
-    let callbacks = scope.get_current_context().get_slot::<RealmCallbacks>();
-    let exception = match callbacks {
-        Some(callbacks) => (callbacks.dom_exception)(scope, message, name),
-        None => moli_v8_util::dom_exception_value(scope, name, message),
-    };
+    let exception =
+        crate::dom_exception::new_most_derived_dom_exception_value(scope, message, name);
     scope.throw_exception(exception);
 }
 

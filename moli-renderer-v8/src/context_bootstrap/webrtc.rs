@@ -5,17 +5,15 @@ use crate::util::{
 use crate::web_api_interfaces;
 use crate::webidl::{self, WebIdlDictionarySerialize};
 use moli_v8_util::set_resolved_promise;
+use moli_webapi::rtc::{ice_candidate, session_description};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use session_description::RtcSessionDescriptionInitDeclaration;
 
 mod configuration;
-mod dictionary_string;
 pub(crate) mod encoded_frames;
 mod events;
-mod ice_candidate;
-mod ice_candidate_parser;
 mod ice_error_event;
 mod peer_options;
-mod session_description;
 pub(in crate::context_bootstrap) use events::{
     rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
     rtc_peer_connection_ice_event_constructor_callback,
@@ -113,15 +111,6 @@ struct RtcDataChannelObjectDeclaration<'scope> {
     binary_type: (),
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct RtcSessionDescriptionInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    r#type: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    sdp: v8::Local<'scope, v8::String>,
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
