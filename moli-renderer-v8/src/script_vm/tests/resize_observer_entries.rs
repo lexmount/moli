@@ -138,3 +138,31 @@ fn real_ro_css_box_projection_excludes_non_replaced_inline_fragments() {
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
 }
+
+#[test]
+fn ondemand_ro_measures_child_frame_targets_from_the_page_snapshot() {
+    let mut vm = new_parsed_test_vm(
+        "https://resize-child-frame.test/",
+        "<!doctype html><div id=box style='width:120px;height:20px'></div><iframe id=frame></iframe>",
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.eval(
+        "globalThis.child=frame.contentWindow;child.document.open();\
+         child.document.write(\"<div id=target style='width:80px;height:20px'></div>\");\
+         child.document.close();'written'",
+    )
+    .unwrap();
+    refresh_layout_for_test(&mut vm);
+    let builds = vm.layout_pass_observability_for_test().1;
+    vm.eval(
+        "globalThis.widths=[];new child.ResizeObserver(es=>widths.push(es[0].contentRect.width))\
+         .observe(child.document.getElementById('target'));'observed'",
+    )
+    .unwrap();
+    assert_eq!(vm.eval("widths.join()").unwrap(), "80");
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        builds,
+        "a child-frame target must be answered from the published page tree"
+    );
+}

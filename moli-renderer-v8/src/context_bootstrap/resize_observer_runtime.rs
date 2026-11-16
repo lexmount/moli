@@ -390,13 +390,17 @@ fn build_resize_observer_entries<'s>(
                 .copied()
                 .map(|source| moli_layout::LayoutQuery::ResizeObserverMetrics { source }),
         );
-        let answers = match crate::native_bridge::element::published_geometry_batch(
+        // Measure the current layout, publishing the page's first layout when
+        // none exists yet. Pages without observers never reach this.
+        let answers = match crate::native_bridge::element::observable_geometry_batch(
             runtime,
             document,
             &moli_layout::LayoutQueryBatch::new(queries),
         ) {
             Ok(answers) => answers,
-            Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+            Err(
+                moli_layout::LayoutError::NoLayoutSnapshot | moli_layout::LayoutError::NoLayoutRoot,
+            ) => continue,
             Err(error) => return Err(error),
         };
         let mut answers = answers.answers.into_iter();
