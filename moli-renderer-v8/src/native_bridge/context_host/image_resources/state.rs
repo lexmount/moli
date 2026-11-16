@@ -183,7 +183,7 @@ impl ImageResourceStore {
                 identity: current,
                 state: ImageResourceState::DecodeQueued(descriptor),
                 ..
-            }) if current == identity => *descriptor,
+            }) if current == identity => descriptor.clone(),
             _ => return false,
         };
         let (pixels, svg) = match ready.content {
@@ -202,10 +202,14 @@ impl ImageResourceStore {
     pub(super) fn complete_shared_ready(
         &mut self,
         identity: &ImageResourceRequestIdentity,
+        response_url: Option<&url::Url>,
     ) -> bool {
         let Some(resource) = self.ready_by_request.get(&identity.request_key) else {
             return false;
         };
+        if resource.descriptor.response_url.as_deref() != response_url {
+            return false;
+        }
         let Some(slot) = self.slots.get_mut(&identity.element) else {
             return false;
         };
@@ -291,6 +295,13 @@ impl ImageResourceStore {
 
     pub(super) fn has_ready_request(&self, request_key: &ImageRequestKey) -> bool {
         self.ready_by_request.contains_live(request_key)
+    }
+
+    pub(super) fn ready_resource(
+        &self,
+        request_key: &ImageRequestKey,
+    ) -> Option<Arc<ReadyImageResource>> {
+        self.ready_by_request.get(request_key)
     }
 
     pub(super) fn intrinsic_dimensions(&self, element: DomHandle) -> Option<(f32, f32)> {

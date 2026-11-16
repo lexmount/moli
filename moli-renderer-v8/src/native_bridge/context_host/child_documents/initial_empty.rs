@@ -43,6 +43,9 @@ impl PageScriptHost {
         // Preserve the initial-policy fallback only at this setup boundary.
         let mut policy_container =
             inherited_policy.unwrap_or_else(|| self.document_policy_container().clone());
+        policy_container
+            .content_security_policy_self_url
+            .get_or_insert_with(|| self.document_url_for_child_context(handle));
         if let Some(parent_document) = self
             .dom_host()
             .node(handle)
