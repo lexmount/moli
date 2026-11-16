@@ -462,6 +462,32 @@ fn restore_children(
     true
 }
 
+fn current_history_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    ptr: *mut PageScriptHost,
+    source: &'static str,
+    document: Option<DomHandle>,
+    redo: bool,
+) -> Option<(v8::Local<'s, v8::Value>, Entry)> {
+    let mut from = stack(scope, source);
+    loop {
+        let value = from.last().copied()?;
+        if let Some(entry) = read_entry(scope, value)
+            && unsafe { &*ptr }
+                .dom_host()
+                .owner_document_handle(DomHandle::new(entry.target))
+                == document
+            && matches_entry(unsafe { &*ptr }, &entry, redo)
+        {
+            return Some((value, entry));
+        }
+        // History is per Document, not per focused control. An unavailable
+        // target must not permanently block earlier, still-valid edits.
+        from.pop();
+        store_stack(scope, source, &from);
+    }
+}
+
 pub(crate) fn undo_redo(
     scope: &mut v8::PinScope<'_, '_>,
     ptr: *mut PageScriptHost,
@@ -476,40 +502,28 @@ pub(crate) fn undo_redo(
     let scope = &mut v8::ContextScope::new(scope, context);
     let (source, destination) = if redo { (REDO, UNDO) } else { (UNDO, REDO) };
     let document = unsafe { &*ptr }.dom_host().owner_document_handle(target);
-    let mut from = stack(scope, source);
-    let (value, entry) = loop {
-        let Some(value) = from.last().copied() else {
-            return false;
-        };
-        if let Some(entry) = read_entry(scope, value)
-            && unsafe { &*ptr }
-                .dom_host()
-                .owner_document_handle(DomHandle::new(entry.target))
-                == document
-            && matches_entry(unsafe { &*ptr }, &entry, redo)
-        {
-            break (value, entry);
-        }
-        // History is per Document, not per focused control. An unavailable
-        // target must not permanently block earlier, still-valid edits.
-        from.pop();
-        store_stack(scope, source, &from);
+    let Some((_, initial)) = current_history_entry(scope, ptr, source, document, redo) else {
+        return false;
     };
-    let target = DomHandle::new(entry.target);
     let input_type = if redo {
         TextEditInputType::HistoryRedo
     } else {
         TextEditInputType::HistoryUndo
     };
-    if !dispatch_beforeinput(scope, ptr, target, input_type, None)
-        || unsafe { &*ptr }.dom_host().owner_document_handle(target) != document
-        || !matches_entry(unsafe { &*ptr }, &entry, redo)
-    {
+    if !dispatch_beforeinput(scope, ptr, DomHandle::new(initial.target), input_type, None) {
         return false;
     }
-    super::super::update_focus_preserving_selection(scope, ptr, Some(target));
+    // beforeinput may perform a new native edit, including in another control.
+    // Execute against the current stack, rather than the pre-callback snapshot.
+    let Some((value, entry)) = current_history_entry(scope, ptr, source, document, redo) else {
+        return false;
+    };
+    let target = DomHandle::new(entry.target);
     if unsafe { &*ptr }.dom_host().owner_document_handle(target) != document
         || !matches_entry(unsafe { &*ptr }, &entry, redo)
+        || !stack(scope, source)
+            .iter()
+            .any(|current| current.strict_equals(value))
     {
         return false;
     }
@@ -547,13 +561,24 @@ pub(crate) fn undo_redo(
     if !restored {
         return false;
     }
-    restore_selection(
-        scope,
-        ptr,
-        entry.target,
-        if redo { &entry.after } else { &entry.before },
-    );
-    from.pop();
+    if unsafe { &*ptr }.dom_host().owner_document_handle(target) == document
+        && unsafe { &*ptr }.dom_host().is_connected(target)
+    {
+        restore_selection(
+            scope,
+            ptr,
+            entry.target,
+            if redo { &entry.after } else { &entry.before },
+        );
+        super::super::update_focus_preserving_selection(scope, ptr, Some(target));
+    }
+    // Focus and custom-element reactions can also append history entries.
+    // Remove only this operation's entry from the latest stack.
+    let mut from = stack(scope, source);
+    let Some(index) = from.iter().position(|current| current.strict_equals(value)) else {
+        return true;
+    };
+    from.remove(index);
     store_stack(scope, source, &from);
     let mut to = stack(scope, destination);
     to.push(value);

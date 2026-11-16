@@ -12,6 +12,22 @@ fn editing_shortcuts_continuous_control_typing_includes_the_first_character() {
 }
 
 #[test]
+fn editing_shortcuts_reentrant_same_control_typing_remains_a_single_group() {
+    let mut vm = new_parsed_test_vm(
+        "https://editing-same-control-reentrant.test/",
+        "<textarea id=a></textarea>",
+    );
+    vm.eval("globalThis.a=document.getElementById('a');a.focus()")
+        .unwrap();
+    text(&mut vm, "first");
+    vm.eval("a.addEventListener('beforeinput',function once(e){if(e.inputType!=='historyUndo')return;a.removeEventListener('beforeinput',once);document.execCommand('insertText',false,'second')})").unwrap();
+    key(&mut vm, "z", "KeyZ", 2);
+    assert_eq!(vm.eval("a.value").unwrap(), "");
+    key(&mut vm, "z", "KeyZ", 10);
+    assert_eq!(vm.eval("a.value").unwrap(), "firstsecond");
+}
+
+#[test]
 fn editing_shortcuts_typing_groups_end_on_focus_and_selection_round_trips() {
     for markup in [
         "<input id=a>",
@@ -46,6 +62,33 @@ fn editing_shortcuts_typing_groups_end_on_focus_and_selection_round_trips() {
             );
         }
     }
+}
+
+#[test]
+fn editing_shortcuts_undo_reads_history_created_inside_beforeinput() {
+    let mut vm = new_parsed_test_vm(
+        "https://editing-history-reentrant.test/",
+        "<textarea id=a></textarea><textarea id=b></textarea>",
+    );
+    vm.eval("globalThis.a=document.getElementById('a');globalThis.b=document.getElementById('b');a.focus()").unwrap();
+    text(&mut vm, "first");
+    vm.eval("a.addEventListener('beforeinput',function once(e){if(e.inputType!=='historyUndo')return;a.removeEventListener('beforeinput',once);b.focus();document.execCommand('insertText',false,'second');a.focus()});globalThis.targets=[];document.addEventListener('input',e=>{if(e.inputType==='historyUndo')targets.push(e.target.id)})").unwrap();
+    key(&mut vm, "z", "KeyZ", 2);
+    assert_eq!(
+        vm.eval("a.value+':'+b.value+':'+document.activeElement.id")
+            .unwrap(),
+        "first::b"
+    );
+    key(&mut vm, "z", "KeyZ", 2);
+    assert_eq!(
+        vm.eval("a.value+':'+b.value+':'+targets.join(',')")
+            .unwrap(),
+        "::b,a"
+    );
+    key(&mut vm, "z", "KeyZ", 10);
+    assert_eq!(vm.eval("a.value+':'+b.value").unwrap(), "first:");
+    key(&mut vm, "z", "KeyZ", 10);
+    assert_eq!(vm.eval("a.value+':'+b.value").unwrap(), "first:second");
 }
 
 #[test]
@@ -112,7 +155,7 @@ fn editing_shortcuts_history_uses_document_stack_and_skips_removed_targets() {
 }
 
 #[test]
-fn editing_shortcuts_history_revalidates_target_after_beforeinput_and_focus() {
+fn editing_shortcuts_history_callbacks_use_current_stack_and_document_ownership() {
     for (kind, action) in [
         ("beforeinput", "b.remove()"),
         ("focus", "b.remove()"),
@@ -134,7 +177,11 @@ fn editing_shortcuts_history_revalidates_target_after_beforeinput_and_focus() {
         ))
         .unwrap();
         key(&mut vm, "z", "KeyZ", 2);
-        assert_eq!(vm.eval("a.value+':'+b.value").unwrap(), "A:B", "{kind}");
+        assert_eq!(
+            vm.eval("a.value+':'+b.value").unwrap(),
+            if kind == "focus" { "A:" } else { ":B" },
+            "{kind}"
+        );
         vm.eval("a.focus()").unwrap();
         key(&mut vm, "z", "KeyZ", 2);
         assert_eq!(vm.eval("a.value").unwrap(), "");
