@@ -1,19 +1,31 @@
 use super::ScriptVm;
+#[cfg(feature = "devtools")]
 use super::input_helpers::clear_input_dispatch_state;
+#[cfg(feature = "devtools")]
 use crate::document_runtime::DomHandle;
+#[cfg(feature = "devtools")]
 use crate::dom::{forms::InputType, native::Node};
-use crate::native_bridge::element::{read_client_rects, scroll_node_into_view_at_center};
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::read_client_rects;
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::scroll_node_into_view_at_center;
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererElementClickTarget as ClickTarget;
+#[cfg(feature = "devtools")]
 use crate::runtime::{
-    RendererElementClickError as ClickError, RendererElementClickTarget as ClickTarget,
-    RendererInputDispatchOutcome, RendererPointerEventProperties, RendererPreparedPointerClick,
+    RendererElementClickError as ClickError, RendererInputDispatchOutcome,
+    RendererPointerEventProperties, RendererPreparedPointerClick,
 };
+#[cfg(feature = "devtools")]
 use moli_layout::{LayoutPoint, LayoutQuad};
 
+#[cfg(feature = "devtools")]
 fn layout_error(error: impl std::fmt::Display) -> ClickError {
     ClickError::LayoutUnavailable(error.to_string())
 }
 
 impl ScriptVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn prepare_element_click(
         &mut self,
         handle: DomHandle,
@@ -51,6 +63,7 @@ impl ScriptVm {
             .map(ClickTarget::Pointer)
     }
 
+    #[cfg(feature = "devtools")]
     fn prepare_pointer_click_geometry(
         &mut self,
         handle: DomHandle,
@@ -146,6 +159,7 @@ impl ScriptVm {
         Err(ClickError::Obscured)
     }
 
+    #[cfg(feature = "devtools")]
     fn click_documents_are_current(&self, click: &RendererPreparedPointerClick) -> bool {
         self._context_host
             .borrow()
@@ -157,6 +171,7 @@ impl ScriptVm {
                 .all(|(handle, id)| self.document_id_for_live_node_handle(*handle) == Some(*id))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_prepared_element_click(
         &mut self,
         click: RendererPreparedPointerClick,

@@ -352,10 +352,12 @@ impl<'a> ComputedStyleRead<'a> {
             .unwrap_or_default()
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::native_bridge::element::styles) fn property_names(&self) -> Vec<String> {
         super::super::computed_names::computed_property_names_for_read(self)
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::native_bridge::element::styles) fn properties(&self) -> Vec<(String, String)> {
         self.property_names()
             .into_iter()

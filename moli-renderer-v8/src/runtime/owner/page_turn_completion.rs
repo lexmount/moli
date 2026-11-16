@@ -114,13 +114,14 @@ impl RendererOwnerHandle {
                     self.restore_live_page_entry(token, entry);
                 }
             }
+            #[cfg(feature = "devtools")]
+            RenderRuntimeTurn::RunInspectorMainReceiver { .. }
+            | RenderRuntimeTurn::RunDevToolsMainCommand { .. } => {}
             RenderRuntimeTurn::FinishHtmlCreatePage { .. }
             | RenderRuntimeTurn::DrainSharedWorkerServiceLane
             | RenderRuntimeTurn::DrainServiceWorkerServiceLane
             | RenderRuntimeTurn::RunPageTurn { .. }
             | RenderRuntimeTurn::RunOwnerMaintenance { .. }
-            | RenderRuntimeTurn::RunInspectorMainReceiver { .. }
-            | RenderRuntimeTurn::RunDevToolsMainCommand { .. }
             | RenderRuntimeTurn::RunLivePageCommand { .. }
             | RenderRuntimeTurn::ResumeLivePageDocumentLifecycleAfterReply { .. }
             | RenderRuntimeTurn::WaitLivePageIdle { .. }

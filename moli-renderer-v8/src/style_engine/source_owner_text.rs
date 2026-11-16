@@ -173,12 +173,14 @@ impl OwnerStyleSheetSources {
         self.csp_suppressed_owners.contains(&owner)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn text(&self, owner: DomHandle) -> Option<&str> {
         self.sources_by_owner
             .get(&owner)
             .map(|installed| installed.processing_source.css_text())
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn text_owned(&self, owner: DomHandle) -> Option<String> {
         self.text(owner).map(str::to_owned)
     }

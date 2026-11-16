@@ -126,7 +126,11 @@ impl PageVm {
         self.permission_overrides = env.permission_overrides.clone();
         self.document_start_scripts = env.document_start_scripts.clone();
         self.runtime_bindings = env.runtime_bindings.clone();
-        self.runtime_inspector_protocol_configurations = env.inspector_protocol_configurations();
+        #[cfg(feature = "devtools")]
+        {
+            self.runtime_inspector_protocol_configurations =
+                env.inspector_protocol_configurations();
+        }
         self.extra_http_headers = env.extra_http_headers.clone();
         self.document_settings = env.document_settings.clone();
         self.network_offline = env.network_offline;

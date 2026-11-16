@@ -360,6 +360,7 @@ pub(crate) fn form_data_control_elements(
     collect_form_control_elements_from(runtime, document_handle, false, Some(form_handle), true)
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn autofill_related_form_control_elements(
     runtime: &PageScriptHost,
     anchor: DomHandle,

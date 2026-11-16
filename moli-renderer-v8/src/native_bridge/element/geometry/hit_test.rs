@@ -67,6 +67,7 @@ impl FrameHitTest {
     }
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn observable_input_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,
@@ -119,6 +120,7 @@ pub(crate) fn input_surface_hit_test(
         .ok_or(LayoutError::NoLayoutSnapshot)?
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn observable_deep_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,

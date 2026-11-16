@@ -1,12 +1,16 @@
+#[cfg(feature = "devtools")]
 use anyhow::Result;
 
+use super::Page;
+#[cfg(feature = "devtools")]
 use super::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererPageCommand, RendererPageReply,
+    CompletedPageCommand, PendingPageCommand, RendererPageCommand, RendererPageReply,
     RendererResourceSearchRequest, RendererResourceTextSearchOutcome,
 };
 
 impl Page {
     /// Resolve and search immutable resource content on its renderer owner.
+    #[cfg(feature = "devtools")]
     pub fn start_resource_search_by_lines(
         &self,
         request: RendererResourceSearchRequest,
@@ -16,6 +20,7 @@ impl Page {
         )))
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_resource_search_by_lines(
         &mut self,
         completion: CompletedPageCommand,

@@ -44,6 +44,7 @@ pub(crate) struct DevToolsDomPrepublishedRemoval {
 }
 
 impl DevToolsDomPrepublishedRemoval {
+    #[cfg(feature = "devtools")]
     pub(crate) fn new(
         inspector_session_id: Option<String>,
         parent: DomHandle,

@@ -1,9 +1,16 @@
 use anyhow::Result;
+#[cfg(feature = "devtools")]
 use url::Url;
 
+#[cfg(feature = "devtools")]
+use super::CompletedPageCommand;
+use super::RendererPendingJavaScriptDialog;
+#[cfg(feature = "devtools")]
+use super::RendererSyntheticResponseBody;
+#[cfg(feature = "devtools")]
 use super::protocol_support::{PendingSubresourceContinueOutcome, SubresourceAuthCredentials};
-use super::{CompletedPageCommand, Page, PendingPageCommand};
-use super::{RendererPendingJavaScriptDialog, RendererSyntheticResponseBody};
+use super::{Page, PendingPageCommand};
+#[cfg(feature = "devtools")]
 use crate::RendererOutputFence;
 use crate::renderer::{RendererPageCommand, RendererPageReply};
 
@@ -28,6 +35,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn continue_pending_subresource_fetch_async(
         &mut self,
         internal_id: u64,
@@ -50,6 +58,7 @@ impl Page {
         self.finish_continue_pending_subresource_fetch(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_continue_pending_subresource_fetch(
         &self,
         internal_id: u64,
@@ -71,6 +80,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_continue_pending_subresource_fetch(
         &mut self,
         completion: CompletedPageCommand,
@@ -84,6 +94,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn continue_pending_subresource_auth_async(
         &mut self,
         internal_id: u64,
@@ -93,6 +104,7 @@ impl Page {
         self.finish_continue_pending_subresource_auth(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_continue_pending_subresource_auth(
         &self,
         internal_id: u64,
@@ -104,6 +116,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_continue_pending_subresource_auth(
         &mut self,
         completion: CompletedPageCommand,
@@ -117,6 +130,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn fail_pending_subresource_auth_async(
         &mut self,
         internal_id: u64,
@@ -126,6 +140,7 @@ impl Page {
         self.finish_fail_pending_subresource_auth(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_cancel_pending_subresource_auth(
         &self,
         internal_id: u64,
@@ -133,6 +148,7 @@ impl Page {
         self.start_page_command(RendererPageCommand::CancelPendingSubresourceAuth { internal_id })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_cancel_pending_subresource_auth(
         &mut self,
         completion: CompletedPageCommand,
@@ -149,6 +165,7 @@ impl Page {
         Ok(predecessor)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_fail_pending_subresource_auth(
         &self,
         internal_id: u64,
@@ -160,6 +177,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_fail_pending_subresource_auth(
         &mut self,
         completion: CompletedPageCommand,
@@ -176,6 +194,7 @@ impl Page {
         Ok(predecessor)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn fail_pending_subresource_fetch_async(
         &mut self,
         internal_id: u64,
@@ -185,6 +204,7 @@ impl Page {
         self.finish_fail_pending_subresource_fetch(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_fail_pending_subresource_fetch(
         &self,
         internal_id: u64,
@@ -196,6 +216,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_fail_pending_subresource_fetch(
         &mut self,
         completion: CompletedPageCommand,
@@ -212,6 +233,7 @@ impl Page {
         Ok(predecessor)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn fulfill_pending_subresource_fetch_async(
         &mut self,
         internal_id: u64,
@@ -228,6 +250,7 @@ impl Page {
         self.finish_fulfill_pending_subresource_fetch(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_fulfill_pending_subresource_fetch(
         &self,
         internal_id: u64,
@@ -244,6 +267,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_fulfill_pending_subresource_fetch(
         &mut self,
         completion: CompletedPageCommand,
@@ -257,6 +281,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn continue_pending_subresource_response_async(
         &mut self,
         internal_id: u64,
@@ -271,6 +296,7 @@ impl Page {
         self.finish_continue_pending_subresource_response(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_continue_pending_subresource_response(
         &self,
         internal_id: u64,
@@ -284,6 +310,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_continue_pending_subresource_response(
         &mut self,
         completion: CompletedPageCommand,
@@ -297,6 +324,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn fail_pending_subresource_response_async(
         &mut self,
         internal_id: u64,
@@ -306,6 +334,7 @@ impl Page {
         self.finish_fail_pending_subresource_response(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_fail_pending_subresource_response(
         &self,
         internal_id: u64,
@@ -317,6 +346,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_fail_pending_subresource_response(
         &mut self,
         completion: CompletedPageCommand,
@@ -333,6 +363,7 @@ impl Page {
         Ok(predecessor)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn fulfill_pending_subresource_response_async(
         &mut self,
         internal_id: u64,
@@ -349,6 +380,7 @@ impl Page {
         self.finish_fulfill_pending_subresource_response(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_fulfill_pending_subresource_response(
         &self,
         internal_id: u64,
@@ -364,6 +396,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_fulfill_pending_subresource_response(
         &mut self,
         completion: CompletedPageCommand,
@@ -377,6 +410,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn receive_synthetic_websocket_text_async(
         &mut self,
         socket_id: u64,
@@ -386,6 +420,7 @@ impl Page {
         self.finish_receive_synthetic_websocket_text(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_receive_synthetic_websocket_text(
         &self,
         socket_id: u64,
@@ -397,6 +432,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_receive_synthetic_websocket_text(
         &mut self,
         completion: CompletedPageCommand,
@@ -410,6 +446,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn receive_synthetic_websocket_binary_async(
         &mut self,
         socket_id: u64,
@@ -419,6 +456,7 @@ impl Page {
         self.finish_receive_synthetic_websocket_binary(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_receive_synthetic_websocket_binary(
         &self,
         socket_id: u64,
@@ -430,6 +468,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_receive_synthetic_websocket_binary(
         &mut self,
         completion: CompletedPageCommand,
@@ -443,6 +482,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn close_synthetic_websocket_from_server_async(
         &mut self,
         socket_id: u64,
@@ -453,6 +493,7 @@ impl Page {
         self.finish_close_synthetic_websocket_from_server(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_close_synthetic_websocket_from_server(
         &self,
         socket_id: u64,
@@ -466,6 +507,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_close_synthetic_websocket_from_server(
         &mut self,
         completion: CompletedPageCommand,

@@ -1,15 +1,18 @@
 use super::*;
 use crate::context_bootstrap::sandbox_blocks_ancestor_or_top_navigation_from_source;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
+use crate::native_bridge::element::NodePublicEventDispatchOutcome;
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::activate_handle_via_keyboard;
 use crate::native_bridge::element::activation::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
     form_navigation_target_document, named_iframe_target_handle_for_navigation,
 };
-use crate::native_bridge::element::{
-    NodePublicEventDispatchOutcome, TextEditInputType, activate_handle_via_keyboard,
-    dispatch_beforeinput,
-};
-use crate::runtime::{RendererInputDispatchOutcome, RendererNavigationInitiator};
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::{TextEditInputType, dispatch_beforeinput};
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererInputDispatchOutcome;
+use crate::runtime::RendererNavigationInitiator;
 use crate::util::v8_string;
 use moli_dom::forms::normalize_form_submission_newlines;
 use moli_encoding::{
@@ -21,6 +24,7 @@ use url::Url;
 /// Runs the control's Enter default action, including its beforeinput gate.
 /// None means this target is not eligible; cancellation is a handled branch
 /// and must never fall through to ordinary character insertion.
+#[cfg(feature = "devtools")]
 pub(crate) fn perform_implicit_submission_from_control(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -54,6 +58,7 @@ pub(crate) fn perform_implicit_submission_from_control(
     ))
 }
 
+#[cfg(feature = "devtools")]
 fn input_blocks_implicit_submission(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
@@ -79,6 +84,7 @@ fn input_blocks_implicit_submission(runtime: &PageScriptHost, handle: DomHandle)
         })
 }
 
+#[cfg(feature = "devtools")]
 fn perform_implicit_form_submission(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,

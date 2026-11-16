@@ -36,8 +36,10 @@ pub(in crate::native_bridge) use live::{
 pub(in crate::native_bridge) use traversal_factories::{
     node_create_node_iterator_callback, node_create_tree_walker_callback,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use xpath::evaluate_live_xpath_search_node_handles;
+pub(crate) use xpath::install_xpath_template_bindings;
 pub(in crate::native_bridge) use xpath::{
     bridge_detached_document_evaluate_callback, node_document_create_expression_callback,
     node_document_create_ns_resolver_callback, node_document_evaluate_callback,
 };
-pub(crate) use xpath::{evaluate_live_xpath_search_node_handles, install_xpath_template_bindings};

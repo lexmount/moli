@@ -6,7 +6,9 @@ mod constructor;
 mod data;
 mod input;
 mod security_policy;
+#[cfg(any(feature = "devtools", test))]
 mod touch;
+#[cfg(any(feature = "devtools", test))]
 pub(crate) use touch::construct_native_touch_event;
 
 pub(in crate::context_bootstrap) use constructor::build_event_subclass_template;

@@ -389,6 +389,7 @@ pub(super) fn blob_data_from_object<'s>(
     blob_store().blob_data(blob_id_from_object(scope, object)?)
 }
 
+#[cfg(feature = "devtools")]
 pub(super) fn blob_uuid_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -494,6 +495,7 @@ pub(super) fn object_url_bytes_and_type(url: &str) -> Option<(Vec<u8>, String)> 
     blob_store().object_url_bytes_and_type(url)
 }
 
+#[cfg(feature = "devtools")]
 fn blob_uuid(blob_id: BlobId) -> Option<String> {
     blob_store().blob_uuid(blob_id)
 }

@@ -7,6 +7,7 @@ mod result;
 mod snapshot;
 mod types;
 
+#[cfg(feature = "devtools")]
 pub(crate) use live_dom::evaluate_live_xpath_search_node_handles;
 
 pub(in crate::native_bridge) use callbacks::{

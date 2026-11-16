@@ -1,3 +1,4 @@
+#[cfg(feature = "devtools")]
 use crate::runtime::WorkerInspectorError;
 use crate::{
     shared_worker_runtime::{
@@ -5,6 +6,7 @@ use crate::{
     },
     worker_owner_wake::WorkerOwnerWakeRoutes,
 };
+#[cfg(feature = "devtools")]
 use anyhow::Result;
 use moli_shared_worker::{
     SharedWorkerClientId, SharedWorkerClientOwnerId, SharedWorkerDescriptor, SharedWorkerInstanceId,
@@ -12,10 +14,9 @@ use moli_shared_worker::{
 use parking_lot::Mutex;
 
 use super::RendererBrowserContextRuntime;
-use crate::runtime::{
-    RendererOwnerLocalHostId, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorResponseSender,
-};
+use crate::runtime::RendererOwnerLocalHostId;
+#[cfg(feature = "devtools")]
+use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 
 /// Defers the browser-context SharedWorker registry until the first actual
 /// `connect_shared_worker` call. ID allocation and owner routing do not require
@@ -207,6 +208,7 @@ impl RendererBrowserContextRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn attach_shared_worker_runtime_inspector_session(
         &self,
         instance_id: SharedWorkerInstanceId,
@@ -218,6 +220,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_shared_worker_runtime_protocol_message(
         &self,
         instance_id: SharedWorkerInstanceId,
@@ -232,6 +235,7 @@ impl RendererBrowserContextRuntime {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_shared_worker_runtime_protocol_message_with_deferred_response(
         &self,
         instance_id: SharedWorkerInstanceId,
@@ -252,6 +256,7 @@ impl RendererBrowserContextRuntime {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
         &self,
         instance_id: SharedWorkerInstanceId,
@@ -272,6 +277,7 @@ impl RendererBrowserContextRuntime {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub fn detach_shared_worker_runtime_inspector_session(
         &self,
         instance_id: SharedWorkerInstanceId,

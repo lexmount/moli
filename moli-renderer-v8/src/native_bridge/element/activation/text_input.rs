@@ -1,13 +1,18 @@
+#[cfg(feature = "devtools")]
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
+#[cfg(feature = "devtools")]
 use super::super::events::construct_text_input_event_for_target;
-use super::super::forms::{
-    is_text_control_user_editable, replace_text_control_selection_after_beforeinput,
-};
+#[cfg(feature = "devtools")]
+use super::super::forms::is_text_control_user_editable;
+#[cfg(feature = "devtools")]
+use super::super::forms::replace_text_control_selection_after_beforeinput;
+#[cfg(feature = "devtools")]
 use super::super::{
     TextEditInputType, contenteditable_editing_host, dispatch_beforeinput, dispatch_public_event,
     is_text_control, update_focus,
 };
+#[cfg(feature = "devtools")]
 use super::default_action::replace_contenteditable_selection_after_beforeinput;
 
 #[derive(Clone, Copy)]
@@ -18,6 +23,7 @@ pub(crate) enum TextInputSource {
 
 /// Native text entry has two cancelable boundaries before its editing default.
 /// Script commands, drops and deletion keep their own existing event sequences.
+#[cfg(feature = "devtools")]
 pub(crate) fn perform_text_input(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,

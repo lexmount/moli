@@ -1,3 +1,4 @@
+#[cfg(feature = "devtools")]
 use super::page_surface::RendererInspectorPageCommand;
 use super::*;
 
@@ -37,9 +38,11 @@ impl PageVm {
         }
         match command {
             command @ RendererPageCommand::ForDocument { .. } => self.dispatch_renderer_page_command(command),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::Native(command) => {
                 Ok(RendererPageReply::NativeCommandReady(Box::new(command.dispatch(self))))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::Inspector(command) => {
                 self.dispatch_renderer_inspector_command(command)
             }
@@ -104,6 +107,7 @@ impl PageVm {
                 .vm_mut()
                 .navigate_top_level_same_document_from_browser(&url, replace_current)
                 .map(RendererPageReply::Bool),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DispatchPreparedElementClick(click) => {
                 let mut outcome = self.vm_mut().dispatch_prepared_element_click(click);
                 if let Ok(outcome) = &mut outcome {
@@ -111,6 +115,7 @@ impl PageVm {
                 }
                 Ok(RendererPageReply::ElementClickDispatch(outcome))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DispatchMouseEventAtPoint {
                 x,
                 y,
@@ -136,6 +141,7 @@ impl PageVm {
                     modifiers,
                 )
                 .map(RendererPageReply::InputDispatchOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DispatchMouseEventAtPoint {
                 x,
                 y,
@@ -164,6 +170,7 @@ impl PageVm {
                 )
                 .map(RendererPageReply::InputDispatchOutcome)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DispatchTouchEvent {
                 points,
                 event_name,
@@ -171,6 +178,7 @@ impl PageVm {
             } => self
                 .dispatch_touch_event_at_points(&points, &event_name, activate)
                 .map(RendererPageReply::InputDispatchOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DispatchDragEventAtPoint {
                 x,
                 y,
@@ -180,31 +188,38 @@ impl PageVm {
             } => self
                 .dispatch_drag_event_at_point(x, y, &event_name, data, modifiers)
                 .map(RendererPageReply::InputDispatchOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ClearActiveDragDataTransfer => {
                 self.clear_active_drag_data_transfer()?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::CancelDragging => self
                 .cancel_dragging()
                 .map(RendererPageReply::InputDispatchOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::MutateDocumentNodeAttribute {
                 reference,
                 mutation,
             } => self
                 .mutate_document_node_attribute(reference, mutation)
                 .map(RendererPageReply::DomAttributeMutationOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::EditDocumentNode {
                 inspector_session_id,
                 edit,
             } => self
                 .edit_document_node(inspector_session_id.as_deref(), edit)
                 .map(RendererPageReply::DomEditOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::FocusDocumentNode { reference } => self
                 .focus_document_node(reference)
                 .map(RendererPageReply::DomFocusOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::TriggerAutofill(request) => self
                 .trigger_autofill(request)
                 .map(RendererPageReply::AutofillTriggerOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::WebMcp { session, command } => {
                 let enabled = match command {
                     moli_page_types::RendererWebMcpCommand::Enable => Some(true),
@@ -221,6 +236,7 @@ impl PageVm {
                 .vm_mut()
                 .reset_navigation_history()
                 .map(RendererPageReply::Bool),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::SetFileInputFilesForBackendNodeId {
                 backend_node_id,
                 files,
@@ -228,9 +244,11 @@ impl PageVm {
             } => Ok(RendererPageReply::OptionalBool(
                 self.set_file_input_files_for_backend_node_id(backend_node_id, files, append)?,
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::InsertTextIntoActiveControl(text) => self
                 .insert_text_into_active_control(&text)
                 .map(RendererPageReply::Bool),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DispatchKeyEvent {
                 event_name,
                 key,
@@ -252,6 +270,7 @@ impl PageVm {
                     location,
                 )
                 .map(RendererPageReply::InputDispatchOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::CreateIsolatedWorld {
                 name,
                 grant_universal_access,
@@ -265,6 +284,7 @@ impl PageVm {
                     .create_isolated_world(&name, grant_universal_access)
                     .map(RendererPageReply::ExecutionContextId),
             },
+            #[cfg(feature = "devtools")]
             RendererPageCommand::CreateIsolatedWorldRuntimeActivity {
                 inspector_session_id,
                 frame_id,
@@ -278,6 +298,7 @@ impl PageVm {
                     grant_universal_access,
                 )
                 .map(RendererPageReply::ExecutionContextId),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::InstallRuntimeBinding {
                 name,
                 execution_context_name,
@@ -290,10 +311,12 @@ impl PageVm {
                 )?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::RemoveRuntimeBinding(name) => {
                 self.remove_runtime_binding(&name)?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::RemoveDefaultRuntimeBinding(name) => {
                 self.remove_default_runtime_binding(&name)?;
                 Ok(RendererPageReply::Unit)
@@ -306,6 +329,7 @@ impl PageVm {
                 self.run_page_surface_override_script(&source)?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AddDocumentStartScriptRuntimeActivity {
                 inspector_session_id,
                 script,
@@ -317,6 +341,7 @@ impl PageVm {
                     run_immediately,
                 )?,
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::RemoveDocumentStartScriptByRegistryKey(registry_key) => {
                 self.remove_document_start_script_by_registry_key(&registry_key);
                 Ok(RendererPageReply::Unit)
@@ -326,6 +351,7 @@ impl PageVm {
                 self.set_stored_document_start_scripts(&scripts);
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::SetRuntimeBindingState {
                 inspector_session_id,
                 stored_runtime_bindings,
@@ -357,15 +383,18 @@ impl PageVm {
                     self.has_isolated_execution_context_id(execution_context_id),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::EnsureIsolatedWorldsAttachedToInspector => {
                 self.ensure_isolated_worlds_attached_to_inspector()?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::InspectorExecutionContextIdForIsolatedContext(
                 execution_context_id,
             ) => Ok(RendererPageReply::OptionalExecutionContextId(
                 self.inspector_execution_context_id_for_isolated_context(execution_context_id),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::IsolatedExecutionContextIdForInspectorContext(
                 execution_context_id,
             ) => Ok(RendererPageReply::OptionalExecutionContextId(
@@ -396,6 +425,7 @@ impl PageVm {
                     self.vm_mut().snapshot_console_messages_with_context()?,
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::RuntimeHeapUsage => {
                 Ok(RendererPageReply::RuntimeHeapUsage(Box::new(
                     self.vm_mut()
@@ -403,11 +433,13 @@ impl PageVm {
                         .renderer_document_isolate_heap_usage()?,
                 )))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::PerformanceMetricSnapshot => Ok(
                 RendererPageReply::PerformanceMetricSnapshot(Box::new(
                     self.vm_mut().performance_metric_snapshot()?,
                 )),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint {
                 inspector_session_id,
                 breakpoint,
@@ -420,6 +452,7 @@ impl PageVm {
                 );
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DomDebuggerConfigureXhrBreakpoint {
                 inspector_session_id,
                 breakpoint,
@@ -432,6 +465,7 @@ impl PageVm {
                 );
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DomDebuggerConfigureDomBreakpoint {
                 inspector_session_id,
                 frontend_node_id,
@@ -445,6 +479,7 @@ impl PageVm {
                     enabled,
                 ),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::RuntimeCollectGarbage => {
                 self.vm_mut()
                     .renderer_document_isolate_ops()
@@ -461,14 +496,17 @@ impl PageVm {
                 self.stop_document_lifecycle()?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::SearchResourceByLines(request) => Ok(
                 RendererPageReply::ResourceTextSearchOutcome(self.search_resource_by_lines(*request)?),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ComputedStyleProperties { reference } => {
                 Ok(RendererPageReply::ComputedStyleProperties(
                     self.computed_style_properties_for_node(reference)?,
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::SetInlineStyleSheetTextForStyleSheetId {
                 inspector_session_id,
                 style_sheet_id,
@@ -480,22 +518,26 @@ impl PageVm {
                     &text,
                 )
                 .map(RendererPageReply::Bool),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ScrollNodeIntoViewIfNeeded {
                 reference,
                 rect,
             } => self
                 .scroll_node_into_view_if_needed(reference, rect)
                 .map(RendererPageReply::ScrollIntoViewResult),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ClientRectForBackendNodeId { backend_node_id } => Ok(
                 RendererPageReply::OptionalDocumentNodeClientRect(
                     self.client_rect_for_backend_node_id(backend_node_id)?,
                 ),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentGeometryForNode { reference } => Ok(
                 RendererPageReply::OptionalDocumentNodeGeometry(
                     self.document_geometry_for_node(reference)?,
                 ),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentHitTest {
                 inspector_session_id,
                 x,
@@ -511,15 +553,19 @@ impl PageVm {
                     ignore_pointer_events_none,
                 )?,
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::NodeHasGeometryForBackendNodeId { backend_node_id } => {
                 Ok(RendererPageReply::OptionalBool(
                     self.node_has_geometry_for_backend_node_id(backend_node_id)?,
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::RemoveDocumentNode { reference } => self
                 .remove_document_node(reference)
                 .map(RendererPageReply::OptionalBool),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeExistsForBackendNodeId { backend_node_id } => self.document_node_exists_for_backend_node_id(backend_node_id).map(RendererPageReply::Bool),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeSnapshotForBackendNodeId {
                 backend_node_id,
                 depth,
@@ -527,6 +573,7 @@ impl PageVm {
             } => Ok(RendererPageReply::OptionalDocumentNodeObjectSnapshot(Box::new(
                 self.document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)?,
             ))),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeSnapshotForNodeInInspectorSession {
                 inspector_session_id,
                 include_whitespace,
@@ -538,6 +585,7 @@ impl PageVm {
                     inspector_session_id.as_deref(), include_whitespace, reference, depth, pierce,
                 )?),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeSnapshotForDocument {
                 inspector_session_id,
                 include_whitespace,
@@ -557,6 +605,7 @@ impl PageVm {
                     ),
                 )))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DiscardDomAgentFrontendBindings {
                 inspector_session_id,
             } => {
@@ -567,12 +616,14 @@ impl PageVm {
                 self.discard_document_frontend_bindings(inspector_session_id.as_deref());
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DomSnapshotCapture {
                 top_frame_id,
                 options,
             } => Ok(RendererPageReply::OptionalDomSnapshotCapturePayload(
                 self.dom_snapshot_capture_payload(&top_frame_id, options),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentChildNodeSnapshotEventsForNode {
                 inspector_session_id,
                 include_whitespace,
@@ -590,6 +641,7 @@ impl PageVm {
                     ),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentQuerySelectorForDocument {
                 inspector_session_id,
                 include_whitespace,
@@ -608,6 +660,7 @@ impl PageVm {
                     ),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentQuerySelectorForChildFrameNode {
                 inspector_session_id,
                 include_whitespace,
@@ -627,6 +680,7 @@ impl PageVm {
                     ),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentQuerySelectorForNode {
                 inspector_session_id,
                 include_whitespace,
@@ -644,6 +698,7 @@ impl PageVm {
                     ),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
                 inspector_session_id,
                 include_whitespace,
@@ -661,6 +716,7 @@ impl PageVm {
                     ),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentPerformSearch {
                 inspector_session_id,
                 query,
@@ -679,6 +735,7 @@ impl PageVm {
                     ),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentGetSearchResults {
                 inspector_session_id,
                 search_id,
@@ -697,6 +754,7 @@ impl PageVm {
                     child_node_snapshot_events,
                 })
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentDiscardSearchResults {
                 inspector_session_id,
                 search_id,
@@ -704,6 +762,7 @@ impl PageVm {
                 self.discard_document_search_results(inspector_session_id.as_deref(), &search_id);
                 Ok(RendererPageReply::DocumentSearchResultsDiscarded)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentSetNodeStackTracesEnabled {
                 inspector_session_id,
                 enabled,
@@ -714,6 +773,7 @@ impl PageVm {
                 );
                 Ok(RendererPageReply::DocumentNodeStackTracesEnabled)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeStackTrace {
                 inspector_session_id,
                 frontend_node_id,
@@ -723,6 +783,7 @@ impl PageVm {
                     frontend_node_id,
                 ),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentFrontendNodeBinding { reference } => {
                 let binding = self.backend_node_id_for_document_node_reference(reference);
                 Ok(RendererPageReply::DocumentFrontendNodeBinding(
@@ -732,6 +793,7 @@ impl PageVm {
                     ),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::RegisterDocumentBidiNodeBinding {
                 inspector_session_id,
                 shared_id,
@@ -744,12 +806,14 @@ impl PageVm {
                 );
                 Ok(RendererPageReply::DocumentBidiNodeBindingRegistered)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentBidiNodeBinding {
                 inspector_session_id,
                 shared_id,
             } => Ok(RendererPageReply::DocumentBidiNodeBinding(
                 self.document_bidi_node_binding(inspector_session_id.as_deref(), &shared_id),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentBidiNodeSharedIdForBackendNodeId {
                 inspector_session_id,
                 backend_node_id,
@@ -759,16 +823,19 @@ impl PageVm {
                     backend_node_id,
                 ),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeAttributes { reference } => {
                 Ok(RendererPageReply::DocumentNodeAttributesResolution(
                     self.document_node_attributes(reference),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeText { reference } => {
                 Ok(RendererPageReply::DocumentNodeTextResolution(
                     self.document_node_text(reference),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentNodeProperty {
                 reference,
                 name,
@@ -780,37 +847,44 @@ impl PageVm {
                     self.accessibility_tree_nodes(frame_id.as_deref()),
                 ),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityTreePayloadsForDocument { max_depth } => Ok(
                 RendererPageReply::OptionalAccessibilityPayloads(
                     self.accessibility_tree_payloads_for_document(max_depth),
                 ),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityNodePayloadForDocument => Ok(
                 RendererPageReply::OptionalAccessibilityPayload(
                     self.accessibility_node_payload_for_document(),
                 ),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityTreePayloadsForNode {
                 reference,
                 max_depth,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
                 self.accessibility_tree_payloads_for_node(reference, max_depth),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityNodePayloadForNode { reference } => {
                 Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
                     self.accessibility_node_payload_for_node(reference),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForNode {
                 reference,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
                 self.accessibility_node_and_ancestor_payloads_for_node(reference),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityChildNodePayloadsForNode {
                 reference,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
                 self.accessibility_child_node_payloads_for_node(reference),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityPartialTreePayloadsForNode {
                 reference,
                 fetch_relatives,
@@ -820,17 +894,20 @@ impl PageVm {
                     fetch_relatives,
                 ),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityTreePayloadsForChildFrame {
                 frame_id,
                 max_depth,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
                 self.accessibility_tree_payloads_for_child_frame(&frame_id, max_depth),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::AccessibilityNodePayloadForChildFrame { frame_id } => {
                 Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
                     self.accessibility_node_payload_for_child_frame(&frame_id),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::StyleSheetPayloadForStyleSheetId {
                 inspector_session_id,
                 style_sheet_id,
@@ -840,11 +917,13 @@ impl PageVm {
                     &style_sheet_id,
                 ),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::StyleSheetInventoryForDocument {
                 inspector_session_id,
             } => Ok(RendererPageReply::StyleSheetInventory(
                 self.style_sheet_inventory_for_document(inspector_session_id.as_deref()),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ResetCssAgentSession {
                 inspector_session_id,
             } => {
@@ -886,12 +965,14 @@ impl PageVm {
             RendererPageCommand::CaptureScreenshot(request) => self
                 .capture_screenshot(request)
                 .map(RendererPageReply::CaptureScreenshot),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::CaptureScreencastFrame(request) => self
                 .capture_screencast_frame(request)
                 .map(RendererPageReply::CaptureScreencastFrame),
             RendererPageCommand::BlobBytesForUuid { uuid } => Ok(
                 RendererPageReply::OptionalBlobBytes(self.vm().blob_bytes_for_uuid(&uuid)),
             ),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::DocumentFrontendNodeIdsForBackendNodeIds {
                 inspector_session_id,
                 backend_node_ids,
@@ -910,6 +991,7 @@ impl PageVm {
                         .child_browsing_context_frame_tree_snapshot_for_protocol(),
                 ))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ChildFrameOwnerNodeReference {
                 inspector_session_id,
                 frame_id,
@@ -919,6 +1001,7 @@ impl PageVm {
                     &frame_id,
                 ),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ChildFrameDocumentRootNodeReference {
                 inspector_session_id,
                 frame_id,
@@ -928,6 +1011,7 @@ impl PageVm {
                     &frame_id,
                 ),
             )),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ContinuePendingSubresourceFetch {
                 internal_id,
                 url,
@@ -947,13 +1031,16 @@ impl PageVm {
                     handle_auth_requests,
                 )
                 .map(RendererPageReply::PendingSubresourceContinueOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ContinuePendingSubresourceAuth { internal_id, auth } => self
                 .continue_pending_subresource_auth(internal_id, auth)
                 .map(RendererPageReply::PendingSubresourceContinueOutcome),
+            #[cfg(feature = "devtools")]
             RendererPageCommand::CancelPendingSubresourceAuth { internal_id } => {
                 self.cancel_pending_subresource_auth(internal_id)?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::FailPendingSubresourceAuth {
                 internal_id,
                 error_text,
@@ -961,6 +1048,7 @@ impl PageVm {
                 self.fail_pending_subresource_auth(internal_id, error_text)?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::FailPendingSubresourceFetch {
                 internal_id,
                 error_text,
@@ -968,6 +1056,7 @@ impl PageVm {
                 self.fail_pending_subresource_fetch(internal_id, error_text)?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::FulfillPendingSubresourceFetch {
                 internal_id,
                 request_overrides,
@@ -984,6 +1073,7 @@ impl PageVm {
                 )?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ContinuePendingSubresourceResponse {
                 internal_id,
                 response_code,
@@ -996,6 +1086,7 @@ impl PageVm {
                 )?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::FailPendingSubresourceResponse {
                 internal_id,
                 error_text,
@@ -1003,6 +1094,7 @@ impl PageVm {
                 self.fail_pending_subresource_response(internal_id, error_text)?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::FulfillPendingSubresourceResponse {
                 internal_id,
                 response_code,
@@ -1017,6 +1109,7 @@ impl PageVm {
                 )?;
                 Ok(RendererPageReply::Unit)
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ReceiveSyntheticWebSocketText { socket_id, data } => {
                 if self.receive_synthetic_websocket_text(socket_id, data) {
                     Ok(RendererPageReply::Unit)
@@ -1024,6 +1117,7 @@ impl PageVm {
                     anyhow::bail!("unknown synthetic WebSocket `{socket_id}`")
                 }
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::ReceiveSyntheticWebSocketBinary { socket_id, data } => {
                 if self.receive_synthetic_websocket_binary(socket_id, data) {
                     Ok(RendererPageReply::Unit)
@@ -1031,6 +1125,7 @@ impl PageVm {
                     anyhow::bail!("unknown synthetic WebSocket `{socket_id}`")
                 }
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::CloseSyntheticWebSocketFromServer {
                 socket_id,
                 code,
@@ -1045,6 +1140,7 @@ impl PageVm {
             RendererPageCommand::PendingSubresourceRequestCount => {
                 Ok(RendererPageReply::Usize(self.pending_subresource_request_count()))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::SetFetchSubresourceInterception { classes } => {
                 self.set_fetch_subresource_interception(classes);
                 Ok(RendererPageReply::Unit)
@@ -1082,6 +1178,7 @@ impl PageVm {
                     )),
                 )))
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommand::PrepareNetworkResourceLoad {
                 frame_id,
                 url,
@@ -1199,6 +1296,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_renderer_inspector_command(
         &mut self,
         envelope: RendererInspectorCommandEnvelope,
@@ -1456,15 +1554,18 @@ fn renderer_page_command_action_barrier(
     match command {
         // The underlying operation flushes its own barrier. Wrapping it must
         // not turn a wheel event into an explicit action-window flush.
+        #[cfg(feature = "devtools")]
         RendererPageCommand::Native(_) => None,
         // V8 already removed this binding at the Inspector-session boundary.
         // Finishing its metadata must not flush script-bearing Page actions
         // through the suspended owner stack.
+        #[cfg(feature = "devtools")]
         RendererPageCommand::Inspector(envelope)
             if envelope.is_runtime_binding_removal_commit() =>
         {
             None
         }
+        #[cfg(feature = "devtools")]
         RendererPageCommand::DispatchMouseEventAtPoint { event_name, .. }
             if event_name == "wheel" =>
         {
@@ -1473,6 +1574,7 @@ fn renderer_page_command_action_barrier(
         RendererPageCommand::CaptureScreenshot(_) => {
             Some(moli_action_window::ActionBarrier::Screenshot)
         }
+        #[cfg(feature = "devtools")]
         RendererPageCommand::CaptureScreencastFrame(_) => {
             Some(moli_action_window::ActionBarrier::Screencast)
         }

@@ -1,5 +1,7 @@
+#[cfg(feature = "devtools")]
 use v8::RegExpCreationFlags;
 
+#[cfg(feature = "devtools")]
 use crate::{
     runtime::{RendererResourceTextSearchOutcome, RendererTextSearchMatch},
     util::v8_string,
@@ -8,6 +10,7 @@ use crate::{
 use super::ScriptVm;
 
 impl ScriptVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn search_text_by_lines(
         &mut self,
         text: &str,
@@ -26,6 +29,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn search_child_frame_resource_by_lines(
         &mut self,
         frame_id: &str,
@@ -69,6 +73,7 @@ impl ScriptVm {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn search_text_by_lines_in_scope(
     scope: &mut v8::PinScope<'_, '_>,
     text: &str,
@@ -127,6 +132,7 @@ fn search_text_by_lines_in_scope(
     matches
 }
 
+#[cfg(feature = "devtools")]
 fn escaped_search_pattern(query: &str) -> String {
     let mut pattern = String::with_capacity(query.len());
     for ch in query.chars() {
@@ -155,6 +161,7 @@ fn escaped_search_pattern(query: &str) -> String {
     pattern
 }
 
+#[cfg(feature = "devtools")]
 fn resource_urls_match(left: &str, right: &str) -> bool {
     let normalize = |value: &str| {
         url::Url::parse(value).ok().map(|mut url| {

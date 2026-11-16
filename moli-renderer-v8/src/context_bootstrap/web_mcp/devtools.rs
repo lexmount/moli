@@ -1,15 +1,18 @@
+#[cfg(feature = "devtools")]
 use super::bindings::document_owner;
+#[cfg(feature = "devtools")]
 use super::execution;
 use super::state::{DocumentTools, RegisteredTool, ToolExecutor};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::PageScriptHost;
-use moli_page_types::{
-    DevToolsSessionKey, RendererWebMcpAnnotations, RendererWebMcpEvent, RendererWebMcpObservation,
-    RendererWebMcpTool,
-};
+#[cfg(feature = "devtools")]
+use moli_page_types::{DevToolsSessionKey, RendererWebMcpObservation};
+use moli_page_types::{RendererWebMcpAnnotations, RendererWebMcpEvent, RendererWebMcpTool};
 
+#[cfg(feature = "devtools")]
 use moli_page_types::{RendererWebMcpCommand, RendererWebMcpError};
 
+#[cfg(feature = "devtools")]
 pub(crate) fn configure_session(
     host: &mut PageScriptHost,
     session: DevToolsSessionKey,
@@ -51,6 +54,7 @@ pub(crate) fn configure_session(
     }
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn dispatch_command<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
@@ -165,6 +169,7 @@ pub(super) fn protocol_tool(
     }
 }
 
+#[cfg(feature = "devtools")]
 pub(super) fn capture_registration_stack(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<serde_json::Value> {
@@ -191,6 +196,7 @@ pub(super) fn capture_registration_stack(
     (!frames.is_empty()).then(|| serde_json::json!({"callFrames":frames}))
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn emit(host: &PageScriptHost, event: RendererWebMcpEvent) {
     let mut sessions = host.native_bridge().web_mcp.enabled_sessions.iter();
     let Some(last) = sessions.next_back() else {
@@ -212,10 +218,12 @@ pub(crate) fn emit(host: &PageScriptHost, event: RendererWebMcpEvent) {
     ));
 }
 
+#[cfg(feature = "devtools")]
 pub(super) fn observes_tree(host: &PageScriptHost, tree: Option<u64>) -> bool {
     tree.is_none() && !host.native_bridge().web_mcp.enabled_sessions.is_empty()
 }
 
+#[cfg(feature = "devtools")]
 pub(super) fn emit_in_tree(
     host: &PageScriptHost,
     tree: Option<u64>,
@@ -224,4 +232,25 @@ pub(super) fn emit_in_tree(
     if observes_tree(host, tree) {
         emit(host, event());
     }
+}
+
+// Guest modelContext promises are independent of protocol observation.
+#[cfg(not(feature = "devtools"))]
+pub(super) fn capture_registration_stack(
+    _scope: &mut v8::PinScope<'_, '_>,
+) -> Option<serde_json::Value> {
+    None
+}
+#[cfg(not(feature = "devtools"))]
+pub(crate) fn emit(_host: &PageScriptHost, _event: RendererWebMcpEvent) {}
+#[cfg(not(feature = "devtools"))]
+pub(super) fn observes_tree(_host: &PageScriptHost, _tree: Option<u64>) -> bool {
+    false
+}
+#[cfg(not(feature = "devtools"))]
+pub(super) fn emit_in_tree(
+    _host: &PageScriptHost,
+    _tree: Option<u64>,
+    _event: impl FnOnce() -> RendererWebMcpEvent,
+) {
 }

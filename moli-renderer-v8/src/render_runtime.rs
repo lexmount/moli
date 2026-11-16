@@ -6,11 +6,12 @@ use tokio::runtime::LocalOptions;
 use tokio::sync::{mpsc, oneshot};
 
 use super::devtools::ingress::io::RendererInspectorIoOwnerWake;
+#[cfg(feature = "devtools")]
 use super::devtools::ingress::main::RendererInspectorMainOwnerWake;
 use super::page_task_queue::RendererOwnerWake;
-use super::runtime::{
-    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCommand,
-};
+#[cfg(feature = "devtools")]
+use super::runtime::RendererPageCommand;
+use super::runtime::{RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply};
 use super::service_worker_runtime::ServiceWorkerRuntimeOwnerWake;
 use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 
@@ -26,6 +27,7 @@ pub(crate) enum RenderRuntimeEnvelope {
         command: Box<RendererOwnerCommand>,
         reply_tx: oneshot::Sender<Result<RendererOwnerReply>>,
     },
+    #[cfg(feature = "devtools")]
     InspectorMainReceiverWake(RendererInspectorMainOwnerWake),
 }
 
@@ -155,6 +157,7 @@ impl RenderRuntimeHandle {
         command: RendererOwnerCommand,
     ) -> std::result::Result<oneshot::Receiver<Result<RendererOwnerReply>>, RenderRuntimeEnqueueError>
     {
+        #[cfg(feature = "devtools")]
         if matches!(
             &command,
             RendererOwnerCommand::RunAsyncPageCommand {
@@ -206,8 +209,12 @@ impl RenderRuntimeHandle {
             command: Box::new(command),
             reply_tx,
         }) {
-            let RenderRuntimeEnvelope::Command { command, .. } = error.0 else {
-                unreachable!("command admission must recover the command envelope it sent")
+            let command = match error.0 {
+                RenderRuntimeEnvelope::Command { command, .. } => command,
+                #[cfg(feature = "devtools")]
+                RenderRuntimeEnvelope::InspectorMainReceiverWake(_) => {
+                    unreachable!("command admission must recover the command envelope it sent")
+                }
             };
             return Err(RenderRuntimeEnqueueError {
                 command,
@@ -217,6 +224,7 @@ impl RenderRuntimeHandle {
         Ok(reply_rx)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn enqueue_inspector_main_receiver_wake(
         &self,
         wake: RendererInspectorMainOwnerWake,

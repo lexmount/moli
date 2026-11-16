@@ -175,11 +175,15 @@ pub(crate) use self::css_runtime::css_lazy_state_diagnostics;
 pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
+#[cfg(any(feature = "devtools", test))]
+pub(crate) use self::events::construct_native_touch_event;
+#[cfg(feature = "devtools")]
 pub(crate) use self::events::construct_original_text_input_event;
 pub(crate) use self::events::{
-    clear_input_event_target_ranges, construct_native_touch_event, construct_original_event,
+    clear_input_event_target_ranges, construct_original_event,
     construct_original_page_transition_event, construct_original_storage_event_utf16,
 };
+#[cfg(any(feature = "devtools", test))]
 pub(crate) use self::touch_runtime::construct_native_touch;
 pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
@@ -219,9 +223,11 @@ pub(crate) use navigation_traversal_coordinator::abort_history_traversal_admissi
 pub(crate) use navigation_traversal_execution::apply_authorized_history_traversal_task;
 pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
 pub(crate) use performance_runtime::performance_slot_number;
+#[cfg(feature = "devtools")]
+pub(crate) use selection_surface::window_selection_is_collapsed;
 pub(crate) use selection_surface::{
     bind_isolated_window_selection_owner, focus_editing_host_selection, selection_value_for_window,
-    sync_selection_owner_document_for_window, window_selection_is_collapsed,
+    sync_selection_owner_document_for_window,
 };
 pub(crate) use shared::{dom_time_since_origin_millis, unix_epoch_millis};
 pub(crate) mod encoded_frames;
@@ -345,20 +351,28 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
+#[cfg(feature = "devtools")]
 pub(crate) use self::file_api::{
-    DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
-    create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
-    native_data_transfer_drop_effect, native_data_transfer_effect_allowed,
-    native_data_transfer_file_count, native_data_transfer_files, native_data_transfer_get_data,
-    native_data_transfer_has_type, native_set_drag_drop_effect, populate_native_drag_data_store,
-    protect_native_drag_source_view, read_string_drag_data, readonly_data_transfer_for_input,
-    replace_drag_data_store_contents, update_drag_data_store_operations_mask,
+    DragDataStoreMode, create_drag_data_transfer_view, create_native_drag_data_store,
+    native_set_drag_drop_effect, populate_native_drag_data_store, protect_native_drag_source_view,
+    read_string_drag_data,
 };
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,
     build_file_object_unpublished, file_clone_metadata, file_list_files_from_object,
     finish_file_reader_read, flush_one_pending_file_reading_task, is_file_list_object,
     queue_file_reading_task, selected_file_from_object, set_file_relative_path,
+};
+pub(crate) use self::file_api::{
+    NativeDragDataStore, finish_drag_data_transfer_view, native_data_transfer_drop_effect,
+    native_data_transfer_effect_allowed, native_data_transfer_file_count,
+    native_data_transfer_files, native_data_transfer_get_data, native_data_transfer_has_type,
+    readonly_data_transfer_for_input,
+};
+#[cfg(feature = "devtools")]
+pub(crate) use self::file_api::{
+    create_external_drag_data_store, replace_drag_data_store_contents,
+    update_drag_data_store_operations_mask,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{
@@ -411,16 +425,18 @@ pub(crate) use self::location_runtime::{
 pub(crate) use self::media_cues::{
     set_text_track_cue_track, text_track_cue_id, text_track_cue_times, text_track_cue_track,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use self::media_queries::SimpleObjectEventListenerInspectorSnapshot;
+#[cfg(feature = "devtools")]
+pub(crate) use self::media_queries::simple_event_target_inspector_listener_snapshots;
 pub(crate) use self::media_queries::{
-    ResolvedSimpleEventTarget, SimpleObjectEventListenerInspectorSnapshot,
-    dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
-    dispatch_simple_event_target_event_collecting_errors,
+    ResolvedSimpleEventTarget, dispatch_media_query_list_change_events,
+    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback, simple_event_target_inspector_listener_snapshots,
-    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
-    simple_object_has_event_listeners,
+    simple_event_target_handler_setter_callback, simple_object_event_listeners_snapshot,
+    simple_object_event_set_handler, simple_object_has_event_listeners,
 };
 use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{

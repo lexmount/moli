@@ -1,25 +1,35 @@
+#[cfg(feature = "devtools")]
 use crate::runtime::WorkerInspectorError;
+#[cfg(feature = "devtools")]
 use anyhow::Result;
+#[cfg(feature = "devtools")]
 use moli_inspector_json::InspectorJson;
+#[cfg(feature = "devtools")]
 use moli_protocol_cdp_defs::LocalCdpEvent;
-use std::{
-    cell::{Cell, OnceCell, RefCell, UnsafeCell},
-    collections::{HashMap, VecDeque},
-    rc::{Rc, Weak},
-};
+use std::cell::{Cell, OnceCell, RefCell, UnsafeCell};
+#[cfg(feature = "devtools")]
+use std::collections::{HashMap, VecDeque};
+use std::rc::{Rc, Weak};
 
-use serde_json::{Value, json};
+#[cfg(feature = "devtools")]
+use serde_json::Value;
+#[cfg(feature = "devtools")]
+use serde_json::json;
 
+#[cfg(feature = "devtools")]
 use crate::inspector_microtasks::with_scoped_inspector_microtasks;
-use crate::inspector_session::{InspectorSessionOutput, dispatch_with_runtime_defaults};
+#[cfg(feature = "devtools")]
+use crate::inspector_session::InspectorSessionOutput;
+#[cfg(feature = "devtools")]
+use crate::inspector_session::dispatch_with_runtime_defaults;
+#[cfg(feature = "devtools")]
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
-use crate::worker::{
-    handle::{WorkerRuntimeInspectorMessageBatch, WorkerToParentMessage},
-    inspector_task_runner::{
-        WorkerInspectorInterruptExecutor, WorkerInspectorSessionLifetime, WorkerInspectorTask,
-        WorkerInspectorTaskRunner, register_worker_inspector_executor,
-        unregister_worker_inspector_executor,
-    },
+use crate::worker::handle::{WorkerRuntimeInspectorMessageBatch, WorkerToParentMessage};
+#[cfg(feature = "devtools")]
+use crate::worker::inspector_task_runner::WorkerInspectorSessionLifetime;
+use crate::worker::inspector_task_runner::{
+    WorkerInspectorInterruptExecutor, WorkerInspectorTask, WorkerInspectorTaskRunner,
+    register_worker_inspector_executor, unregister_worker_inspector_executor,
 };
 use tokio::sync::mpsc;
 
@@ -33,6 +43,7 @@ const DEFAULT_WORKER_INSPECTOR_SESSION_KEY: &str = "";
 mod pause_detach_tests;
 
 #[derive(Default)]
+#[cfg(feature = "devtools")]
 struct WorkerInspectorOutboundState {
     pending_notifications: VecDeque<WorkerInspectorPendingMessage>,
     pending_response_callbacks: HashMap<(String, i32), RendererRuntimeInspectorResponseSender>,
@@ -40,13 +51,16 @@ struct WorkerInspectorOutboundState {
 }
 
 #[derive(Clone, Default)]
+#[cfg(feature = "devtools")]
 struct WorkerInspectorOutbound(Rc<RefCell<WorkerInspectorOutboundState>>);
 
+#[cfg(feature = "devtools")]
 struct WorkerInspectorSessionOutput<'a> {
     outbound: &'a WorkerInspectorOutbound,
     session_key: &'a str,
 }
 
+#[cfg(feature = "devtools")]
 impl InspectorSessionOutput for WorkerInspectorSessionOutput<'_> {
     fn capture_internal_response(&self, call_id: i32, dispatch: impl FnOnce()) -> Option<Value> {
         let scope = self
@@ -67,29 +81,36 @@ impl InspectorSessionOutput for WorkerInspectorSessionOutput<'_> {
 }
 
 #[derive(Default)]
+#[cfg(feature = "devtools")]
 struct WorkerInspectorDispatchScope {
     session_key: String,
     internal_call_id: Option<i32>,
     messages: Vec<RendererRuntimeInspectorMessage>,
 }
 
+#[cfg(feature = "devtools")]
 struct WorkerInspectorPendingMessage {
     session_key: String,
     message: RendererRuntimeInspectorMessage,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(feature = "devtools")]
 struct WorkerInspectorPendingMessageBatch {
     inspector_session_id: Option<String>,
     messages: Vec<RendererRuntimeInspectorMessage>,
 }
 
+#[cfg(feature = "devtools")]
 struct WorkerInspectorDispatchScopeGuard {
+    #[cfg(feature = "devtools")]
     outbound: WorkerInspectorOutbound,
     completed: bool,
 }
 
+#[cfg(feature = "devtools")]
 impl WorkerInspectorDispatchScopeGuard {
+    #[cfg(feature = "devtools")]
     fn finish(mut self) -> Vec<RendererRuntimeInspectorMessage> {
         self.completed = true;
         self.outbound
@@ -102,6 +123,7 @@ impl WorkerInspectorDispatchScopeGuard {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for WorkerInspectorDispatchScopeGuard {
     fn drop(&mut self) {
         if self.completed {
@@ -115,7 +137,9 @@ impl Drop for WorkerInspectorDispatchScopeGuard {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl WorkerInspectorOutbound {
+    #[cfg(feature = "devtools")]
     fn push_message(
         &self,
         session_key: &str,
@@ -143,6 +167,7 @@ impl WorkerInspectorOutbound {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn push_value(&self, session_key: &str, value: impl Into<InspectorJson>) {
         let message = RendererRuntimeInspectorMessage::from_v8_inspector_message(value);
         let mut guard = self.0.borrow_mut();
@@ -162,6 +187,7 @@ impl WorkerInspectorOutbound {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn push_response_message(
         &self,
         session_key: &str,
@@ -199,6 +225,7 @@ impl WorkerInspectorOutbound {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn push_response_value(
         &self,
         session_key: &str,
@@ -250,6 +277,7 @@ impl WorkerInspectorOutbound {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn register_response_callback(
         &self,
         session_key: &str,
@@ -281,6 +309,7 @@ impl WorkerInspectorOutbound {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn take_active_dispatch_notifications(&self) -> Vec<WorkerInspectorPendingMessageBatch> {
         let mut state = self.0.borrow_mut();
         let mut messages = Vec::new();
@@ -301,6 +330,7 @@ impl WorkerInspectorOutbound {
         coalesce_worker_inspector_messages(messages)
     }
 
+    #[cfg(feature = "devtools")]
     fn push_dispatch_scope(
         &self,
         session_key: &str,
@@ -321,12 +351,15 @@ impl WorkerInspectorOutbound {
     }
 }
 
+#[cfg(feature = "devtools")]
 struct WorkerInspectorChannel {
     lifetime: WorkerInspectorSessionLifetime,
+    #[cfg(feature = "devtools")]
     outbound: WorkerInspectorOutbound,
     session_key: String,
 }
 
+#[cfg(feature = "devtools")]
 impl v8::inspector::ChannelImpl for WorkerInspectorChannel {
     fn send_response(&self, call_id: i32, message: v8::UniquePtr<v8::inspector::StringBuffer>) {
         if !self.lifetime.is_active() {
@@ -349,7 +382,7 @@ impl v8::inspector::ChannelImpl for WorkerInspectorChannel {
 struct WorkerInspectorClient {
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
     default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
-    executor: Rc<WorkerInspectorExecutor>,
+    _executor: Rc<WorkerInspectorExecutor>,
 }
 
 impl WorkerInspectorClient {
@@ -361,18 +394,20 @@ impl WorkerInspectorClient {
         Self {
             isolate: UnsafeCell::new(isolate),
             default_context,
-            executor,
+            _executor: executor,
         }
     }
 }
 
 impl v8::inspector::V8InspectorClientImpl for WorkerInspectorClient {
+    #[cfg(feature = "devtools")]
     fn run_message_loop_on_pause(&self, _context_group_id: i32) {
-        self.executor.run_pause_loop();
+        self._executor.run_pause_loop();
     }
 
+    #[cfg(feature = "devtools")]
     fn quit_message_loop_on_pause(&self) {
-        self.executor.task_runner.request_quit_pause_loop();
+        self._executor.task_runner.request_quit_pause_loop();
     }
 
     fn ensure_default_context_in_group(
@@ -391,6 +426,7 @@ impl v8::inspector::V8InspectorClientImpl for WorkerInspectorClient {
     }
 }
 
+#[cfg(feature = "devtools")]
 struct WorkerInspectorSession {
     // Field order is deliberate: complete native retirement (separate from
     // frontend stop acknowledgement) after releasing all Inspector roots.
@@ -398,12 +434,14 @@ struct WorkerInspectorSession {
     retirement: WorkerInspectorSessionRetirement,
 }
 
+#[cfg(feature = "devtools")]
 struct WorkerInspectorSessionRetirement {
     lifetime: WorkerInspectorSessionLifetime,
     task_runner: WorkerInspectorTaskRunner,
     session_key: String,
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for WorkerInspectorSessionRetirement {
     fn drop(&mut self) {
         self.task_runner
@@ -411,6 +449,7 @@ impl Drop for WorkerInspectorSessionRetirement {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl std::ops::Deref for WorkerInspectorSession {
     type Target = v8::inspector::V8InspectorSession;
     fn deref(&self) -> &Self::Target {
@@ -419,11 +458,14 @@ impl std::ops::Deref for WorkerInspectorSession {
 }
 
 pub(super) struct WorkerRuntimeInspector {
+    #[cfg(feature = "devtools")]
     debugger_enabled: bool,
+    #[cfg(feature = "devtools")]
     sessions: RefCell<HashMap<String, Rc<WorkerInspectorSession>>>,
     navigator_emulation: Rc<RefCell<moli_page_types::NavigatorEmulationSessions>>,
     identity: OnceCell<WorkerIdentity>,
     inspector: v8::inspector::V8Inspector,
+    #[cfg(feature = "devtools")]
     outbound: WorkerInspectorOutbound,
     default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
     default_execution_context_id: Cell<Option<i64>>,
@@ -450,6 +492,7 @@ impl Drop for WorkerInspectorExecutor {
 }
 
 impl WorkerInspectorExecutor {
+    #[cfg(feature = "devtools")]
     fn run_pause_loop(&self) {
         let Some(inspector) = self.inspector.upgrade() else {
             return;
@@ -489,7 +532,7 @@ impl WorkerRuntimeInspector {
         task_runner: WorkerInspectorTaskRunner,
         parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
         shared_worker: bool,
-        debugger_enabled: bool,
+        _debugger_enabled: bool,
     ) -> Rc<Self> {
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let default_context = Rc::new(RefCell::new(None));
@@ -512,11 +555,14 @@ impl WorkerRuntimeInspector {
                     executor.clone(),
                 )));
             Self {
-                debugger_enabled,
+                #[cfg(feature = "devtools")]
+                debugger_enabled: _debugger_enabled,
                 inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
+                #[cfg(feature = "devtools")]
                 sessions: RefCell::new(HashMap::new()),
                 navigator_emulation,
                 identity: OnceCell::new(),
+                #[cfg(feature = "devtools")]
                 outbound: WorkerInspectorOutbound::default(),
                 default_context,
                 default_execution_context_id: Cell::new(None),
@@ -575,6 +621,7 @@ impl WorkerRuntimeInspector {
         );
     }
 
+    #[cfg(feature = "devtools")]
     fn update_user_agent_override(&self) {
         let Some(worker) = self.identity.get() else {
             return;
@@ -605,12 +652,14 @@ impl WorkerRuntimeInspector {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "devtools")]
     pub(super) fn detach_session(&self, inspector_session_id: Option<&str>) {
         if let Ok(lifetime) = self.task_runner.retire_lifetime(inspector_session_id) {
             self.detach_session_incarnation(inspector_session_id, &lifetime);
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn detach_session_incarnation(
         &self,
         id: Option<&str>,
@@ -649,6 +698,7 @@ impl WorkerRuntimeInspector {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "devtools")]
     pub(super) fn attach_session(&self, inspector_session_id: Option<&str>) {
         let lifetime = self
             .task_runner
@@ -661,6 +711,7 @@ impl WorkerRuntimeInspector {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "devtools")]
     pub(super) fn dispatch_protocol_message(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -676,6 +727,7 @@ impl WorkerRuntimeInspector {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "devtools")]
     fn dispatch_protocol_message_with_optional_deferred_response(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -691,6 +743,7 @@ impl WorkerRuntimeInspector {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "devtools")]
     fn dispatch_protocol_message_scoped(
         &self,
         inspector_session_id: Option<&str>,
@@ -706,6 +759,7 @@ impl WorkerRuntimeInspector {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_protocol_message_for_incarnation(
         &self,
         inspector_session_id: Option<&str>,
@@ -744,6 +798,7 @@ impl WorkerRuntimeInspector {
         Ok(messages)
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_emulation(&self, session_id: Option<&str>, raw_json: &str) -> Option<Value> {
         let command: Value = serde_json::from_str(raw_json).ok()?;
         let key = session_id
@@ -806,6 +861,7 @@ impl WorkerRuntimeInspector {
         // Owner messages for the two Inspector modes use separate queues. An
         // already-published notification must also precede DontInterrupt work
         // if that wake is selected before the environment fallback message.
+        #[cfg(feature = "devtools")]
         if !matches!(task, WorkerInspectorTask::EnvironmentInvalidation(_))
             && let Some(invalidation) = self.task_runner.claim_environment_invalidation()
         {
@@ -815,13 +871,14 @@ impl WorkerRuntimeInspector {
             WorkerInspectorTask::EnvironmentInvalidation(invalidation) => {
                 invalidation.notify_isolate(isolate)
             }
-            WorkerInspectorTask::DispatchProtocolMessage {
+            #[cfg(feature = "devtools")]
+            WorkerInspectorTask::Devtools(crate::worker::inspector_task_runner::WorkerInspectorProtocolTask::DispatchProtocolMessage {
                 lifetime,
                 inspector_session_id,
                 raw_json,
                 deferred_response,
                 response_tx,
-            } => {
+            }) => {
                 let deferred_response = deferred_response.map(|response| {
                     if self.shared_worker
                         || response.response_delivery()
@@ -847,10 +904,11 @@ impl WorkerRuntimeInspector {
                 }
                 let _ = response_tx.send(result);
             }
-            WorkerInspectorTask::AttachSession {
+            #[cfg(feature = "devtools")]
+            WorkerInspectorTask::Devtools(crate::worker::inspector_task_runner::WorkerInspectorProtocolTask::AttachSession {
                 inspector_session_id,
                 lifetime,
-            } => {
+            }) => {
                 if lifetime.is_active() {
                     self.ensure_session(
                         &worker_inspector_session_key(inspector_session_id.as_deref()),
@@ -858,19 +916,22 @@ impl WorkerRuntimeInspector {
                     );
                 }
             }
-            WorkerInspectorTask::DetachSession {
+            #[cfg(feature = "devtools")]
+            WorkerInspectorTask::Devtools(crate::worker::inspector_task_runner::WorkerInspectorProtocolTask::DetachSession {
                 inspector_session_id,
                 lifetime,
-            } => {
+            }) => {
                 self.detach_session_incarnation(inspector_session_id.as_deref(), &lifetime);
             }
-            WorkerInspectorTask::RunIfWaitingForDebugger => {
+            #[cfg(feature = "devtools")]
+            WorkerInspectorTask::Devtools(crate::worker::inspector_task_runner::WorkerInspectorProtocolTask::RunIfWaitingForDebugger) => {
                 self.task_runner.request_resume();
             }
         }
         self.forward_pending_messages();
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn take_pending_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
         let batches = self.outbound.take_all();
         for batch in &batches {
@@ -882,6 +943,7 @@ impl WorkerRuntimeInspector {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn worker_script_loaded_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
         let sessions = self.sessions.borrow();
         let mut session_keys = sessions.keys().collect::<Vec<_>>();
@@ -900,6 +962,7 @@ impl WorkerRuntimeInspector {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     fn ensure_session(
         &self,
         session_key: &str,
@@ -944,6 +1007,7 @@ impl WorkerRuntimeInspector {
         session
     }
 
+    #[cfg(feature = "devtools")]
     fn record_execution_context_state(&self, messages: &[RendererRuntimeInspectorMessage]) {
         for message in messages {
             match message {
@@ -973,6 +1037,7 @@ impl WorkerRuntimeInspector {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn forward_pending_messages(&self) {
         let messages = self.take_pending_messages();
         if !messages.is_empty() {
@@ -982,6 +1047,7 @@ impl WorkerRuntimeInspector {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn forward_active_dispatch_messages(&self) {
         let batches = self.outbound.take_active_dispatch_notifications();
         for batch in &batches {
@@ -999,6 +1065,7 @@ impl WorkerRuntimeInspector {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn worker_runtime_protocol_message_is_run_if_waiting_for_debugger(raw_json: &str) -> bool {
     serde_json::from_str::<Value>(raw_json).is_ok_and(|value| {
         value
@@ -1008,6 +1075,7 @@ fn worker_runtime_protocol_message_is_run_if_waiting_for_debugger(raw_json: &str
     })
 }
 
+#[cfg(feature = "devtools")]
 fn worker_inspector_session_key(inspector_session_id: Option<&str>) -> String {
     inspector_session_id
         .filter(|session_id| !session_id.is_empty())
@@ -1015,6 +1083,7 @@ fn worker_inspector_session_key(inspector_session_id: Option<&str>) -> String {
         .to_owned()
 }
 
+#[cfg(feature = "devtools")]
 fn worker_inspector_session_id_from_key(session_key: &str) -> Option<String> {
     if session_key == DEFAULT_WORKER_INSPECTOR_SESSION_KEY {
         None
@@ -1023,6 +1092,7 @@ fn worker_inspector_session_id_from_key(session_key: &str) -> Option<String> {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn coalesce_worker_inspector_messages(
     messages: Vec<WorkerInspectorPendingMessage>,
 ) -> Vec<WorkerInspectorPendingMessageBatch> {
@@ -1044,6 +1114,7 @@ fn coalesce_worker_inspector_messages(
     batches
 }
 
+#[cfg(feature = "devtools")]
 fn worker_runtime_inspector_message_batch(
     batch: WorkerInspectorPendingMessageBatch,
 ) -> WorkerRuntimeInspectorMessageBatch {
@@ -1057,7 +1128,10 @@ fn worker_runtime_inspector_message_batch(
 mod tests {
     use super::*;
     use crate::worker::inspector_task_runner::WorkerInspectorTaskMode;
-    use serde_json::{Value, json};
+    #[cfg(feature = "devtools")]
+    use serde_json::Value;
+    #[cfg(feature = "devtools")]
+    use serde_json::json;
     use std::pin::pin;
 
     fn inspector_message(value: Value) -> RendererRuntimeInspectorMessage {
@@ -1915,4 +1989,15 @@ mod tests {
         );
         drop(old_session);
     }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl WorkerRuntimeInspector {
+    pub(super) fn take_pending_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
+        Vec::new()
+    }
+    pub(super) fn worker_script_loaded_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
+        Vec::new()
+    }
+    fn forward_pending_messages(&self) {}
 }

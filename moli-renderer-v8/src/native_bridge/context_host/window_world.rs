@@ -110,6 +110,7 @@ impl IsolatedWindowWorld {
         Ok(world)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn forget_session(
         isolate: &mut v8::OwnedIsolate,
         session: &moli_page_types::DevToolsSessionKey,
@@ -234,6 +235,7 @@ impl PrebootstrappedWindowContexts {
         self.release_empty_isolated_state();
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn forget_isolated_proxies_for_session(
         &mut self,
         session: &moli_page_types::DevToolsSessionKey,

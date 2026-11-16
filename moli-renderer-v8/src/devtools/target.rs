@@ -1,3 +1,4 @@
+#[cfg(feature = "devtools")]
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use parking_lot::Mutex;
 use std::{
@@ -5,10 +6,12 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use super::{
-    ingress::{io::RendererInspectorIoIngress, main::RendererInspectorMainIngress},
-    pause::{RendererInspectorPauseBridge, RendererInspectorSessionOutboundRoute},
-};
+use super::ingress::io::RendererInspectorIoIngress;
+#[cfg(feature = "devtools")]
+use super::ingress::main::RendererInspectorMainIngress;
+use super::pause::RendererInspectorPauseBridge;
+#[cfg(feature = "devtools")]
+use super::pause::RendererInspectorSessionOutboundRoute;
 use crate::runtime::PageId;
 
 #[derive(Clone, Default)]
@@ -96,6 +99,7 @@ impl Drop for RendererDevToolsTargetShutdownRegistration {
 #[doc(hidden)]
 pub struct RendererDevToolsTargetHandle {
     pause: RendererInspectorPauseBridge,
+    #[cfg(feature = "devtools")]
     main: RendererInspectorMainIngress,
     io: RendererInspectorIoIngress,
 }
@@ -103,10 +107,15 @@ pub struct RendererDevToolsTargetHandle {
 impl RendererDevToolsTargetHandle {
     pub(crate) fn new(
         pause: RendererInspectorPauseBridge,
-        main: RendererInspectorMainIngress,
+        #[cfg(feature = "devtools")] main: RendererInspectorMainIngress,
         io: RendererInspectorIoIngress,
     ) -> Self {
-        Self { pause, main, io }
+        Self {
+            pause,
+            #[cfg(feature = "devtools")]
+            main,
+            io,
+        }
     }
 
     pub(crate) fn pause(&self) -> RendererInspectorPauseBridge {
@@ -117,6 +126,7 @@ impl RendererDevToolsTargetHandle {
         &self.pause
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn main_ref(&self) -> &RendererInspectorMainIngress {
         &self.main
     }
@@ -125,6 +135,7 @@ impl RendererDevToolsTargetHandle {
         &self.io
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn outbound_route(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -134,6 +145,7 @@ impl RendererDevToolsTargetHandle {
             .outbound_route(self.clone(), agent_token, session)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn begin_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -143,6 +155,7 @@ impl RendererDevToolsTargetHandle {
         self.io.begin_session_detach(agent_token, session);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -154,6 +167,7 @@ impl RendererDevToolsTargetHandle {
 
     pub(crate) fn close(&self, message: &str) -> bool {
         self.pause.close_target();
+        #[cfg(feature = "devtools")]
         self.main.close(message);
         self.io.close(message);
         self.io.terminate_execution_for_target_close()
@@ -164,24 +178,28 @@ impl RendererDevToolsTargetHandle {
     /// Unlike ordinary IO-agent commands, a crash must not wait for or occupy
     /// the target Inspector task runner. Seal both command receivers first,
     /// then interrupt any active JavaScript so the owner can retire the Page.
+    #[cfg(feature = "devtools")]
     pub(crate) fn crash_from_io(&self) {
         let _ = self.close("Inspector target crashed through Page.crash");
     }
 
-    pub(crate) fn detach_page(&self, page_id: PageId, message: &str) {
+    pub(crate) fn detach_page(&self, page_id: PageId, _message: &str) {
         if self.pause.detach_page(page_id) {
-            self.main.cancel_all_queued(message);
-            self.io.cancel_all_queued(message);
+            #[cfg(feature = "devtools")]
+            self.main.cancel_all_queued(_message);
+            #[cfg(feature = "devtools")]
+            self.io.cancel_all_queued(_message);
         }
     }
 }
 
 impl std::fmt::Debug for RendererDevToolsTargetHandle {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("RendererDevToolsTargetHandle")
+        let mut debug = formatter.debug_struct("RendererDevToolsTargetHandle");
+        #[cfg(feature = "devtools")]
+        debug.field("main", &self.main);
+        debug
             .field("pause", &self.pause)
-            .field("main", &self.main)
             .field("io", &self.io)
             .finish()
     }
@@ -190,24 +208,22 @@ impl std::fmt::Debug for RendererDevToolsTargetHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        devtools::{
-            command::{
-                RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
-                RendererInspectorCommandRoute, RendererInspectorIngressTicket,
-            },
-            ingress::{
-                io::{RendererInspectorIoIngress, RendererRuntimeInspectorIoCommandClaim},
-                main::{
-                    RendererInspectorMainIngress, RendererRuntimeInspectorMainCommandCompletion,
-                },
-            },
-            route::RendererInspectorSessionExecutorRouteId,
-        },
-        runtime::{
-            PageId, RendererPageToken, RendererRuntimeInspectorAsyncCompletion,
-            RendererRuntimeInspectorResponseSender,
-        },
+    #[cfg(feature = "devtools")]
+    use crate::devtools::command::{
+        RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
+        RendererInspectorCommandRoute, RendererInspectorIngressTicket,
+    };
+    use crate::devtools::ingress::io::RendererInspectorIoIngress;
+    #[cfg(feature = "devtools")]
+    use crate::devtools::ingress::io::RendererRuntimeInspectorIoCommandClaim;
+    #[cfg(feature = "devtools")]
+    use crate::devtools::ingress::main::{
+        RendererInspectorMainIngress, RendererRuntimeInspectorMainCommandCompletion,
+    };
+    use crate::devtools::route::RendererInspectorSessionExecutorRouteId;
+    use crate::runtime::{
+        PageId, RendererPageToken, RendererRuntimeInspectorAsyncCompletion,
+        RendererRuntimeInspectorResponseSender,
     };
 
     #[tokio::test]

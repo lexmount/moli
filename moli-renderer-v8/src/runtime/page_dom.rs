@@ -9,37 +9,51 @@ use crate::dom::native::{DomHost, Node, NodeData, NodeType};
 use crate::runtime::page_generated_dom::{
     user_agent_shadow_node_snapshot, user_agent_shadow_root_snapshot,
 };
+#[cfg(feature = "devtools")]
 use crate::runtime::page_surface::{
-    RendererAccessibilityPayloadsForObjectId, RendererDocumentBoxModel,
-    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
-    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
-    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomEdit,
-    RendererDomEditOutcome, RendererGeometryQuad, RendererRuntimeCommandOutput,
-    RendererRuntimeEvaluationResult, RendererRuntimeInspectorMessage, RendererRuntimeRemoteObject,
+    RendererAccessibilityPayloadsForObjectId, RendererDocumentFrontendNodeIdsResolution,
+    RendererDocumentHitTestResult, RendererDocumentNodeReference,
+    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererRuntimeCommandOutput,
+    RendererRuntimeInspectorMessage, RendererRuntimeRemoteObject,
     RendererRuntimeRemoteObjectResolution,
 };
-use crate::runtime::page_vm::{
-    PageVmRuntimeCommandLifecycleTarget, PageVmRuntimeCommandOutputScope,
-    PageVmRuntimeCommandOutputScopeId,
+#[cfg(feature = "devtools")]
+use crate::runtime::page_surface::{
+    RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeTextResolution, RendererDomEdit,
+    RendererDomEditOutcome, RendererGeometryQuad,
 };
+use crate::runtime::page_surface::{
+    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
+    RendererRuntimeEvaluationResult,
+};
+#[cfg(feature = "devtools")]
+use crate::runtime::page_vm::PageVmRuntimeCommandOutputScope;
+use crate::runtime::page_vm::{
+    PageVmRuntimeCommandLifecycleTarget, PageVmRuntimeCommandOutputScopeId,
+};
+#[cfg(feature = "devtools")]
+use crate::script_vm::{DomInspectorEdit, DomInspectorEditOutcome};
 use crate::script_vm::{
-    DomInspectorEdit, DomInspectorEditOutcome, PendingRuntimeEvaluateCall,
-    RuntimeEvaluateCodeGenerationPolicy, RuntimeEvaluateOutcome, RuntimeEvaluateResultMode,
+    PendingRuntimeEvaluateCall, RuntimeEvaluateCodeGenerationPolicy, RuntimeEvaluateOutcome,
+    RuntimeEvaluateResultMode,
 };
 use moli_dom::accessibility::AccessibilityRequest;
 use moli_page_types::{
     DocumentNodeAssociatedSnapshot, DocumentNodeAttributeSnapshot, DocumentNodeInspectorIdentity,
     DocumentNodeObjectSnapshot, DocumentNodeSnapshot, MAX_DOM_OUTPUT_TREE_DEPTH,
+};
+#[cfg(feature = "devtools")]
+use moli_page_types::{
     RendererDomDebuggerDomBreakpointType, RendererDomDebuggerEventListenerBreakpoint,
     renderer_inspector_protocol_configuration_command_from_message,
 };
 use moli_selector::QueryEngine;
 
 mod child_frame_nodes;
+#[cfg(feature = "devtools")]
 use child_frame_nodes::child_frame_document_contains_live_handle;
 
 fn script_truthy_sleep_for(
@@ -95,6 +109,7 @@ fn child_content_document_belongs_to_top_target(
     top_site != "null" && top_site == moli_storage_key::site_for_url(child_document_url)
 }
 
+#[cfg(feature = "devtools")]
 fn renderer_inspector_response_succeeded(
     messages: &[RendererRuntimeInspectorMessage],
     call_id: u64,
@@ -111,6 +126,7 @@ const DOM_STABLE_COMPLETE_RUNTIME_WINDOW: std::time::Duration =
     std::time::Duration::from_millis(1200);
 const DOM_STABLE_INTERACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_millis(1200);
 
+#[cfg(feature = "devtools")]
 fn runtime_inspector_response_message(
     messages: &[RendererRuntimeInspectorMessage],
     response_id: u64,
@@ -548,6 +564,7 @@ impl PageVm {
             .evaluate_expression_payload_with_await(expression, await_promise, false)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn evaluate_expression_for_internal_node_reference(
         &mut self,
         handle: DomHandle,
@@ -585,6 +602,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_mouse_event_at_point_with_pointer(
         &mut self,
         x: f64,
@@ -618,6 +636,7 @@ impl PageVm {
         Ok(outcome)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_touch_event_at_points(
         &mut self,
         points: &[RendererTouchPoint],
@@ -631,12 +650,14 @@ impl PageVm {
         Ok(outcome)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn cancel_dragging(&mut self) -> Result<RendererInputDispatchOutcome> {
         let mut outcome = self.vm_mut().cancel_dragging()?;
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_drag_event_at_point(
         &mut self,
         x: f64,
@@ -652,6 +673,7 @@ impl PageVm {
         Ok(outcome)
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn bind_input_dispatch_file_chooser_backend_node_id(
         &mut self,
         outcome: &mut RendererInputDispatchOutcome,
@@ -664,10 +686,12 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn clear_active_drag_data_transfer(&mut self) -> Result<()> {
         self.vm_mut().clear_active_drag_data_transfer()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_file_input_files_for_backend_node_id(
         &mut self,
         backend_node_id: u32,
@@ -682,6 +706,7 @@ impl PageVm {
             .map(Some)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_file_input_files_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -700,10 +725,12 @@ impl PageVm {
             .map(Some)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn insert_text_into_active_control(&mut self, text: &str) -> Result<bool> {
         self.vm_mut().insert_text_into_active_control(text)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_key_event(
         &mut self,
         event_name: &str,
@@ -727,6 +754,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_runtime_protocol_message_for_inspector_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -744,6 +772,7 @@ impl PageVm {
         Ok(messages)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_frontend_runtime_protocol_message_for_inspector_session_with_deferred_response(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -757,6 +786,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -780,6 +810,7 @@ impl PageVm {
         Ok(messages)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn dispatch_frontend_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -796,6 +827,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn dispatch_runtime_protocol_message_with_command_output(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -871,6 +903,7 @@ impl PageVm {
         Ok(Vec::new())
     }
 
+    #[cfg(feature = "devtools")]
     fn capture_runtime_inspector_v8_state(&mut self, inspector_session_id: Option<&str>) {
         if let Some(state) = self.vm().inspector_v8_session_state(inspector_session_id) {
             self.runtime_command_settlement.set_v8_state_update(state);
@@ -912,6 +945,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn abandon_pending_runtime_command_lifecycle(
         &mut self,
         expected_scope_id: PageVmRuntimeCommandOutputScopeId,
@@ -935,6 +969,7 @@ impl PageVm {
         true
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn finish_pending_runtime_command_output(
         &mut self,
         error_message: Option<String>,
@@ -977,6 +1012,7 @@ impl PageVm {
         had_response
     }
 
+    #[cfg(feature = "devtools")]
     fn append_runtime_command_output_settlement(
         &mut self,
         settlement: super::RendererRuntimeCommandOutputSettlement,
@@ -984,6 +1020,7 @@ impl PageVm {
         self.runtime_command_settlement.append(settlement);
     }
 
+    #[cfg(feature = "devtools")]
     fn record_runtime_inspector_protocol_configuration_command(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1007,6 +1044,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn apply_successful_runtime_inspector_protocol_configuration_command(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1029,6 +1067,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn runtime_inspector_frontend_restore_enabled(
         &self,
         inspector_session_id: Option<&str>,
@@ -1041,6 +1080,7 @@ impl PageVm {
             .is_some_and(|configuration| configuration.runtime_frontend_enabled)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn configure_dom_debugger_event_listener_breakpoint(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1074,6 +1114,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn configure_dom_debugger_xhr_breakpoint(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1106,6 +1147,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn prepare_runtime_protocol_message_with_context_resolution(
         &mut self,
         action: &str,
@@ -1144,6 +1186,7 @@ impl PageVm {
         Ok(serde_json::to_string(&message)?)
     }
 
+    #[cfg(feature = "devtools")]
     fn rewrite_isolated_runtime_context_param(
         &mut self,
         params: &mut serde_json::Map<String, Value>,
@@ -1184,6 +1227,7 @@ impl PageVm {
         self.vm().has_isolated_world_named_for_frame(frame_id, name)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_execution_context_id_for_isolated_context(
         &self,
         execution_context_id: i64,
@@ -1192,6 +1236,7 @@ impl PageVm {
             .inspector_execution_context_id_for_isolated_context(execution_context_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn isolated_execution_context_id_for_inspector_context(
         &self,
         execution_context_id: i64,
@@ -1210,6 +1255,7 @@ impl PageVm {
         self.vm_mut().live_child_default_runtime_realm_inventory()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn ensure_isolated_worlds_attached_to_inspector(&mut self) -> Result<()> {
         self.vm_mut().ensure_isolated_worlds_attached_to_inspector()
     }
@@ -1223,6 +1269,7 @@ impl PageVm {
             .create_isolated_world(name, grant_universal_access)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn apply_runtime_protocol_state(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1260,6 +1307,7 @@ impl PageVm {
         Ok(())
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn create_isolated_world_for_frame(
         &mut self,
         frame_id: &str,
@@ -1270,6 +1318,7 @@ impl PageVm {
             .create_isolated_world_for_frame(frame_id, name, grant_universal_access)
     }
 
+    #[cfg(feature = "devtools")]
     fn set_runtime_isolated_world_definitions(
         &mut self,
         isolated_worlds: &[crate::protocol_types::RuntimeIsolatedWorldDefinition],
@@ -1283,6 +1332,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn remember_runtime_isolated_world_definition(
         &mut self,
         name: &str,
@@ -1303,6 +1353,7 @@ impl PageVm {
             });
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn create_isolated_world_runtime_activity(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1396,6 +1447,7 @@ impl PageVm {
             )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn computed_style_properties_for_live_handle(
         &mut self,
         handle: DomHandle,
@@ -1405,6 +1457,7 @@ impl PageVm {
             .computed_style_properties_for_inspector_handle(handle))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn computed_style_properties_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -1415,6 +1468,7 @@ impl PageVm {
         self.computed_style_properties_for_live_handle(node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn computed_style_properties_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1668,6 +1722,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn runtime_enable_events(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1720,6 +1775,7 @@ impl PageVm {
         Ok(output)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn runtime_disable_events(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1778,6 +1834,7 @@ impl PageVm {
         Ok(output)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn runtime_binding_events(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1866,6 +1923,7 @@ impl PageVm {
         Ok(output)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn commit_runtime_binding_removal(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1895,6 +1953,7 @@ impl PageVm {
         Ok(output)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn add_runtime_binding(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1953,6 +2012,7 @@ impl PageVm {
         Ok(())
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_snapshot_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1985,6 +2045,7 @@ impl PageVm {
         Ok(snapshot)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn request_document_node_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2008,6 +2069,7 @@ impl PageVm {
         Ok((Some(node_id), events))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_exists_for_backend_node_id(
         &mut self,
         backend_node_id: u32,
@@ -2025,6 +2087,7 @@ impl PageVm {
             .is_some())
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_snapshot_for_backend_node_id(
         &mut self,
         backend_node_id: u32,
@@ -2050,6 +2113,7 @@ impl PageVm {
         Ok(snapshot)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_snapshot_for_node_in_inspector_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2110,6 +2174,7 @@ impl PageVm {
         Ok(snapshot)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_snapshot_for_document(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2139,6 +2204,7 @@ impl PageVm {
         Some(snapshot)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_snapshots_for_dom_snapshot(
         &mut self,
         depth: i32,
@@ -2180,6 +2246,7 @@ impl PageVm {
         snapshots
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_child_node_snapshot_events_for_live_handles(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2228,6 +2295,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_child_node_snapshot_events_for_node(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2283,6 +2351,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     fn inspector_parent_backend_node_id(
         &mut self,
         backend_node_id: u32,
@@ -2329,6 +2398,7 @@ impl PageVm {
             .map(|id| (id, associated))
     }
 
+    #[cfg(feature = "devtools")]
     fn document_node_path_snapshot_events(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2542,17 +2612,20 @@ impl PageVm {
 
     fn query_selector_nodes_for_handles(
         &mut self,
-        inspector_session_id: Option<&str>,
+        _inspector_session_id: Option<&str>,
         handles: Vec<DomHandle>,
     ) -> Vec<RendererDocumentQuerySelectorNode> {
         handles
             .into_iter()
             .filter_map(|handle| {
                 let backend_node_id = self.renderer_backend_node_id_for_live_handle(handle)?;
+                #[cfg(feature = "devtools")]
                 let frontend_node_id = self.document_frontend_node_id_for_backend_node_id(
-                    inspector_session_id,
+                    _inspector_session_id,
                     backend_node_id,
                 );
+                #[cfg(not(feature = "devtools"))]
+                let frontend_node_id = 0; // No frontend binding; the backend ID remains native.
                 Some(RendererDocumentQuerySelectorNode {
                     frontend_node_id,
                     backend_node_id,
@@ -2561,6 +2634,7 @@ impl PageVm {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_query_selector_for_node(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2586,6 +2660,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_query_selector_for_child_frame_node(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2626,6 +2701,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_query_selector_with_child_node_snapshot_events_for_live_root_handle(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2655,6 +2731,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_search_results_with_child_node_snapshot_events(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2684,6 +2761,7 @@ impl PageVm {
         (resolution, events)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_query_selector_with_child_node_snapshot_events_for_node(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2767,6 +2845,7 @@ impl PageVm {
         Some(snapshots)
     }
 
+    #[cfg(feature = "devtools")]
     fn document_node_snapshot_for_live_handle(
         &mut self,
         handle: DomHandle,
@@ -3042,6 +3121,7 @@ impl PageVm {
         );
     }
 
+    #[cfg(feature = "devtools")]
     fn project_renderer_dom_agent_ids_to_snapshot(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3132,6 +3212,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn backend_node_id_for_document_node_reference(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3171,6 +3252,7 @@ impl PageVm {
         self.live_handle_for_backend_node_id(backend_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_attributes(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3193,6 +3275,7 @@ impl PageVm {
         RendererDocumentNodeAttributesResolution::Found(attributes)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_text_for_live_handle(
         &self,
         handle: DomHandle,
@@ -3204,6 +3287,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_text(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3214,6 +3298,7 @@ impl PageVm {
         self.document_node_text_for_live_handle(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_property_for_live_handle(
         &self,
         handle: DomHandle,
@@ -3272,6 +3357,7 @@ impl PageVm {
         RendererDocumentNodePropertyResolution::Found(value)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_node_property(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3300,6 +3386,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn build_accessibility_payloads(
         &self,
         handle: DomHandle,
@@ -3311,6 +3398,7 @@ impl PageVm {
             .accessibility_payloads(handle, request, &mut backend_node_id_for_node)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_tree_payloads_for_live_handle(
         &mut self,
         root_handle: DomHandle,
@@ -3319,6 +3407,7 @@ impl PageVm {
         self.build_accessibility_payloads(root_handle, AccessibilityRequest::Tree { max_depth })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_tree_payloads_for_document(
         &mut self,
         max_depth: Option<i32>,
@@ -3327,6 +3416,7 @@ impl PageVm {
         self.accessibility_tree_payloads_for_live_handle(root, max_depth)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_node_payload_for_live_handle(
         &mut self,
         handle: DomHandle,
@@ -3335,11 +3425,13 @@ impl PageVm {
             .pop()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_node_payload_for_document(&mut self) -> Option<Value> {
         let root = self.vm().document_runtime.dom_host().document_node_id();
         self.accessibility_node_payload_for_live_handle(root)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_tree_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3348,6 +3440,7 @@ impl PageVm {
         self.accessibility_payloads_for_node(reference, AccessibilityRequest::Tree { max_depth })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_node_payload_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3355,6 +3448,7 @@ impl PageVm {
         self.accessibility_payloads_for_node(reference, AccessibilityRequest::Node)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_node_and_ancestor_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3362,6 +3456,7 @@ impl PageVm {
         self.accessibility_payloads_for_node(reference, AccessibilityRequest::Ancestors)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_child_node_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3369,6 +3464,7 @@ impl PageVm {
         self.accessibility_payloads_for_node(reference, AccessibilityRequest::Children)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_partial_tree_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3380,6 +3476,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn accessibility_payloads_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3389,6 +3486,7 @@ impl PageVm {
         self.accessibility_payloads_for_live_handle(handle, request)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_tree_payloads_for_child_frame(
         &mut self,
         frame_id: &str,
@@ -3400,6 +3498,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_node_payload_for_child_frame(
         &mut self,
         frame_id: &str,
@@ -3407,6 +3506,7 @@ impl PageVm {
         self.accessibility_payloads_for_child_frame(frame_id, AccessibilityRequest::Node)
     }
 
+    #[cfg(feature = "devtools")]
     fn accessibility_payloads_for_child_frame(
         &self,
         frame_id: &str,
@@ -3421,6 +3521,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     fn accessibility_payloads_for_live_handle(
         &mut self,
         handle: DomHandle,
@@ -3434,6 +3535,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_tree_payloads_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3446,6 +3548,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_node_and_ancestor_payloads_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3458,6 +3561,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_partial_tree_payloads_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3471,6 +3575,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn accessibility_payloads_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3486,6 +3591,7 @@ impl PageVm {
         Ok(self.accessibility_payloads_for_live_handle(handle, request))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn outer_html_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3526,6 +3632,7 @@ impl PageVm {
             .outer_html_for_live_node_handle(handle, include_shadow_dom)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn client_rect_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3540,6 +3647,7 @@ impl PageVm {
         self.client_rect_for_live_node_handle(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn client_rect_for_backend_node_id(
         &mut self,
         backend_node_id: u32,
@@ -3550,6 +3658,7 @@ impl PageVm {
         self.client_rect_for_live_node_handle(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_geometry_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3565,6 +3674,7 @@ impl PageVm {
             .map(Some)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_geometry_for_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3576,6 +3686,7 @@ impl PageVm {
             .map(Some)
     }
 
+    #[cfg(feature = "devtools")]
     fn document_geometry_for_live_node_handle(
         &mut self,
         handle: DomHandle,
@@ -3662,6 +3773,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_hit_test(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3704,6 +3816,7 @@ impl PageVm {
         Ok(Some(RendererDocumentHitTestResult { node, frame_id }))
     }
 
+    #[cfg(feature = "devtools")]
     fn client_rect_for_live_node_handle(
         &mut self,
         handle: DomHandle,
@@ -3730,6 +3843,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn node_has_geometry_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3744,6 +3858,7 @@ impl PageVm {
         self.node_has_geometry_for_live_node_handle(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn node_has_geometry_for_backend_node_id(
         &mut self,
         backend_node_id: u32,
@@ -3754,6 +3869,7 @@ impl PageVm {
         self.node_has_geometry_for_live_node_handle(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn scroll_node_into_view_if_needed_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3770,6 +3886,7 @@ impl PageVm {
             .scroll_live_node_handle_into_view_if_needed(handle, rect)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn scroll_node_into_view_if_needed(
         &mut self,
         reference: RendererDomNodeReference,
@@ -3782,6 +3899,7 @@ impl PageVm {
             .scroll_live_node_handle_into_view_if_needed(handle, rect)
     }
 
+    #[cfg(feature = "devtools")]
     fn node_has_geometry_for_live_node_handle(
         &mut self,
         handle: DomHandle,
@@ -3825,6 +3943,7 @@ impl PageVm {
         Ok(Some(!rects.is_empty()))
     }
 
+    #[cfg(feature = "devtools")]
     fn document_node_ids_with_publication(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3918,6 +4037,7 @@ impl PageVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn document_frontend_node_ids_for_backend_node_ids(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3931,6 +4051,7 @@ impl PageVm {
         resolution
     }
 
+    #[cfg(feature = "devtools")]
     fn published_document_node_reference_for_live_handle(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3950,6 +4071,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn child_frame_owner_node_reference_by_frame_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3961,6 +4083,7 @@ impl PageVm {
         self.published_document_node_reference_for_live_handle(inspector_session_id, handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn child_frame_document_root_node_reference_by_frame_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3972,6 +4095,7 @@ impl PageVm {
         self.document_node_reference_for_live_handle(inspector_session_id, handle)
     }
 
+    #[cfg(feature = "devtools")]
     fn document_node_reference_for_live_handle(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -3993,6 +4117,7 @@ impl PageVm {
         self.live_handle_for_renderer_backend_node_id(backend_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn resolve_runtime_object_for_live_handle(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4045,6 +4170,7 @@ impl PageVm {
         result
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn resolve_runtime_object_for_backend_node_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4070,6 +4196,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn runtime_evaluate_context_id_for_resolution(
         &self,
         execution_context_id: Option<i64>,
@@ -4090,6 +4217,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn runtime_remote_object_from_inspector_messages(
         messages: &[RendererRuntimeInspectorMessage],
         response_id: u64,
@@ -4108,6 +4236,7 @@ impl PageVm {
         self.vm_mut().exec_runtime_turn(source, None)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn run_document_start_script_now_with_runtime_state(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4163,6 +4292,7 @@ impl PageVm {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn add_document_start_script_runtime_activity(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4178,6 +4308,7 @@ impl PageVm {
         self.run_document_start_script_now_with_runtime_state(inspector_session_id, script)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn run_document_start_script_in_execution_context(
         &mut self,
         execution_context_id: i64,
@@ -4196,6 +4327,7 @@ impl PageVm {
         self.vm_mut().set_stored_document_start_scripts(scripts);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_document_start_script_by_registry_key(&mut self, registry_key: &str) {
         self.document_start_scripts
             .retain(|script| script.registry_key.as_deref() != Some(registry_key));
@@ -4203,6 +4335,7 @@ impl PageVm {
         self.vm_mut().set_stored_document_start_scripts(&scripts);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_stored_runtime_bindings(
         &mut self,
         bindings: &[crate::protocol_types::RuntimeBindingRegistration],
@@ -4211,6 +4344,7 @@ impl PageVm {
         self.vm_mut().set_stored_runtime_bindings(bindings);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_inspector_session_runtime_bindings(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4235,6 +4369,7 @@ impl PageVm {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_session_runtime_bindings_for_world(
         &self,
         inspector_session_id: Option<&str>,
@@ -4247,6 +4382,7 @@ impl PageVm {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_runtime_binding_state(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4264,6 +4400,7 @@ impl PageVm {
         self.set_inspector_session_runtime_bindings(inspector_session_id, session_runtime_bindings);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn detach_runtime_inspector_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4283,6 +4420,7 @@ impl PageVm {
         detached
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn install_runtime_binding(
         &mut self,
         name: &str,
@@ -4293,14 +4431,17 @@ impl PageVm {
             .install_runtime_binding(name, execution_context_name, execution_context_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_runtime_binding(&mut self, name: &str) -> Result<()> {
         self.vm_mut().remove_runtime_binding(name)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_default_runtime_binding(&mut self, name: &str) -> Result<()> {
         self.vm_mut().remove_default_runtime_binding(name)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_document_node_id(&mut self, node_id: crate::dom::NodeId) -> Result<bool> {
         let payload = self.evaluate_expression_for_internal_node_reference(
             node_id,
@@ -4324,6 +4465,7 @@ impl PageVm {
             .unwrap_or(false))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn remove_document_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -4338,6 +4480,7 @@ impl PageVm {
         self.remove_document_node_id(handle).map(Some)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn mutate_document_node_attribute(
         &mut self,
         reference: RendererDomNodeReference,
@@ -4350,6 +4493,7 @@ impl PageVm {
             .mutate_document_node_attribute(handle, mutation)
     }
 
+    #[cfg(feature = "devtools")]
     fn live_handle_for_dom_frontend_node_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4363,6 +4507,7 @@ impl PageVm {
         self.live_handle_for_backend_node_id(backend_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn configure_dom_debugger_dom_breakpoint(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4395,6 +4540,7 @@ impl PageVm {
         RendererDomDebuggerDomBreakpointResolution::Configured
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn edit_document_node(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4521,6 +4667,7 @@ impl PageVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn focus_document_node(
         &mut self,
         reference: RendererDomNodeReference,
@@ -4531,6 +4678,7 @@ impl PageVm {
         self.vm_mut().focus_document_node(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn focus_document_node_for_object_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -4545,6 +4693,7 @@ impl PageVm {
         self.vm_mut().focus_document_node(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn trigger_autofill(
         &mut self,
         request: RendererAutofillTriggerRequest,
@@ -4584,6 +4733,7 @@ impl PageVm {
         self.vm_mut().trigger_autofill(handle, request)
     }
 }
+#[cfg(feature = "devtools")]
 fn renderer_geometry_quad(quad: moli_layout::LayoutQuad) -> RendererGeometryQuad {
     let [top_left, top_right, bottom_right, bottom_left] = quad.points;
     RendererGeometryQuad {
@@ -4600,6 +4750,7 @@ fn renderer_geometry_quad(quad: moli_layout::LayoutQuad) -> RendererGeometryQuad
     }
 }
 
+#[cfg(feature = "devtools")]
 fn rounded_css_integer(value: f32) -> i32 {
     value.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
 }
@@ -4832,5 +4983,70 @@ mod tests {
         let window =
             dom_stable_window_for_snapshot("complete|https://example.test/", false, true).unwrap();
         assert_eq!(window, DOM_STABLE_COMPLETE_RUNTIME_WINDOW);
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl PageVm {
+    pub(super) fn abandon_pending_runtime_command_lifecycle(
+        &mut self,
+        _scope: PageVmRuntimeCommandOutputScopeId,
+    ) -> bool {
+        false
+    }
+    pub(super) fn finish_pending_runtime_command_output(
+        &mut self,
+        _error: Option<String>,
+        _cancel: bool,
+    ) -> bool {
+        false
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl PageVm {
+    fn project_renderer_dom_agent_ids_to_snapshot(
+        &mut self,
+        _session: Option<&str>,
+        root: &mut DocumentNodeSnapshot,
+        _whitespace: bool,
+        _bind: bool,
+    ) {
+        let mut stack = vec![root];
+        while let Some(snapshot) = stack.pop() {
+            snapshot.backend_node_id = if let Some(identity) = snapshot.inspector_identity {
+                self.renderer_backend_node_id_for_inspector_node(snapshot.node_id, identity)
+            } else {
+                self.renderer_backend_node_id_for_live_handle(snapshot.node_id)
+            };
+            snapshot.frame_id = self
+                .vm()
+                .child_browsing_context_frame_id_by_owner_node_id(snapshot.node_id);
+            for node in snapshot.pseudo_elements.iter_mut().rev() {
+                stack.push(node);
+            }
+            for node in snapshot.shadow_roots.iter_mut().rev() {
+                stack.push(node);
+            }
+            if let Some(node) = snapshot.associated.as_deref_mut() {
+                stack.push(node.node_mut());
+            }
+            for node in snapshot.children.iter_mut().rev() {
+                stack.push(node);
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl PageVm {
+    pub(crate) fn backend_node_id_for_document_node_reference(
+        &mut self,
+        reference: RendererDomNodeReference,
+    ) -> Option<u32> {
+        match reference {
+            RendererDomNodeReference::BackendNodeId(id) => Some(id),
+            _ => None,
+        }
     }
 }

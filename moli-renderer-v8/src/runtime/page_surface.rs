@@ -3,6 +3,7 @@ use super::*;
 use crate::native_bridge::{
     PendingRuntimeObservableConsoleSourceEvent, RuntimeObservableContextToken,
 };
+#[cfg(feature = "devtools")]
 use crate::page_task_queue::RendererOwnerWakeSender;
 use crate::protocol_types::{
     ChildFrameDocumentOpenedSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
@@ -1665,6 +1666,7 @@ pub struct RendererCommandTurnCompletion {
 }
 
 impl RendererCommandTurnCompletion {
+    #[cfg(feature = "devtools")]
     pub fn native_response_was_published(&self) -> bool {
         matches!(self.reply, RendererPageReply::NativeCommandPublished)
     }
@@ -1735,8 +1737,10 @@ impl RendererCommandTurnOutput {
         page_state: Arc<RendererPageState>,
         runtime_command_output: RendererRuntimeCommandOutput,
         post_response_continuation: Option<RendererPageCommandPostResponseContinuation>,
-        mut renderer_output_predecessor: Option<RendererOutputFence>,
+        renderer_output_predecessor: Option<RendererOutputFence>,
     ) -> Result<Self> {
+        #[cfg(feature = "devtools")]
+        let mut renderer_output_predecessor = renderer_output_predecessor;
         let reply = match reply {
             RendererPageReply::RuntimeInspectorProtocolMessages(reply_messages) => {
                 let mut messages = runtime_command_output;
@@ -1752,6 +1756,7 @@ impl RendererCommandTurnOutput {
             }
         };
         let reply = match reply {
+            #[cfg(feature = "devtools")]
             RendererPageReply::NativeCommandReady(ready) => {
                 // Settlement has already published this turn's earlier facts.
                 // Publish the ready reply here, before a later Main command
@@ -2960,6 +2965,7 @@ impl CompletedWorkerRuntimeInspectorCommandDispatch {
         (self.messages, self.pending_session_response)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish(
         dispatch: Result<Vec<RendererRuntimeInspectorMessage>>,
         settlement: oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>,
@@ -3057,6 +3063,7 @@ impl RendererRuntimeCommandOutputSettlement {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn session_response(publication: RendererRuntimeInspectorResponsePublication) -> Self {
         Self {
             output: RendererRuntimeCommandOutput::default(),
@@ -3074,10 +3081,12 @@ impl RendererRuntimeCommandOutputSettlement {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn has_session_response(&self) -> bool {
         self.session_response.is_some()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_v8_state_update(&mut self, state: V8InspectorSessionState) {
         self.output.set_v8_state_update(state);
     }
@@ -3122,6 +3131,7 @@ impl std::fmt::Debug for RendererRuntimeCommandOutputRecorder {
 }
 
 impl RendererRuntimeCommandOutputRecorder {
+    #[cfg(feature = "devtools")]
     pub(crate) fn new(inspector_session_id: Option<String>, expected_call_id: i32) -> Self {
         Self(Rc::new(RefCell::new(
             RendererRuntimeCommandOutputRecorderState {
@@ -3147,10 +3157,12 @@ impl RendererRuntimeCommandOutputRecorder {
         self.0.borrow().causal_identity.clone()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn has_response(&self) -> bool {
         self.0.borrow().response.is_some()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn response_succeeded(&self) -> bool {
         self.0
             .borrow()
@@ -3163,6 +3175,7 @@ impl RendererRuntimeCommandOutputRecorder {
         self.0.borrow_mut().output.push_inspector_message(message);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_v8_state_update(&self, state: V8InspectorSessionState) {
         self.0.borrow_mut().output.set_v8_state_update(state);
     }
@@ -3187,10 +3200,12 @@ impl RendererRuntimeCommandOutputRecorder {
             .into_adapter_reply_output()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish_for_page(self) -> RendererRuntimeCommandOutputSettlement {
         self.finish_settlement_with_response_override(None)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish_with_error_for_page(
         self,
         message: String,
@@ -3226,6 +3241,7 @@ impl RendererRuntimeCommandOutputRecorder {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererRuntimeInspectorResponseChannel {
+    #[cfg(feature = "devtools")]
     delivery: moli_page_types::RendererInspectorResponseDelivery,
     authority: RendererCommandResponseAuthority<
         RendererRuntimeInspectorAsyncCompletion,
@@ -3246,6 +3262,7 @@ impl RendererRuntimeInspectorResponseChannel {
         let (tx, rx) = oneshot::channel();
         (
             Self {
+                #[cfg(feature = "devtools")]
                 delivery: moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
                 authority: RendererCommandResponseAuthority::adapter(tx),
             },
@@ -3253,6 +3270,7 @@ impl RendererRuntimeInspectorResponseChannel {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn new_for_delivery(
         delivery: moli_page_types::RendererInspectorResponseDelivery,
     ) -> (
@@ -3289,6 +3307,7 @@ impl RendererRuntimeInspectorResponseChannel {
         attachment_id: Option<RendererAgentAttachmentId>,
     ) -> Option<RendererRuntimeInspectorResponseSender> {
         let lease = self.authority.activate()?;
+        #[cfg(feature = "devtools")]
         let destination = match self.delivery {
             moli_page_types::RendererInspectorResponseDelivery::AdapterReply => {
                 RendererRuntimeInspectorResponseDestination::AdapterReply(lease)
@@ -3297,6 +3316,8 @@ impl RendererRuntimeInspectorResponseChannel {
                 RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(lease)
             }
         };
+        #[cfg(not(feature = "devtools"))]
+        let destination = RendererRuntimeInspectorResponseDestination::AdapterReply(lease);
         Some(RendererRuntimeInspectorResponseSender {
             abandoned_object_group: None,
             call_id,
@@ -3327,6 +3348,7 @@ impl RendererRuntimeInspectorResponseChannel {
 /// the old journal structurally prevents an old session response from entering
 /// the replacement stream.
 #[derive(Clone, Debug)]
+#[cfg(feature = "devtools")]
 pub(crate) struct RendererDevToolsSessionOutputHost {
     agent_token: RendererDevToolsAgentToken,
     session: DevToolsSessionKey,
@@ -3334,6 +3356,7 @@ pub(crate) struct RendererDevToolsSessionOutputHost {
     output_journal: RendererTurnOutputJournal,
 }
 
+#[cfg(feature = "devtools")]
 impl RendererDevToolsSessionOutputHost {
     pub(crate) fn new(
         agent_token: RendererDevToolsAgentToken,
@@ -3349,6 +3372,7 @@ impl RendererDevToolsSessionOutputHost {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn for_worker(session_id: String, output_journal: RendererTurnOutputJournal) -> Self {
         Self {
             agent_token: output_journal.stream().renderer_agent(),
@@ -3403,7 +3427,9 @@ impl RendererDevToolsSessionOutputHost {
 #[derive(Clone, Debug)]
 enum RendererRuntimeInspectorResponseDestination {
     AdapterReply(RendererRuntimeInspectorResponseLease),
+    #[cfg(feature = "devtools")]
     DevToolsSessionPending(RendererRuntimeInspectorResponseLease),
+    #[cfg(feature = "devtools")]
     DevToolsSession {
         lease: RendererRuntimeInspectorResponseLease,
         host: RendererDevToolsSessionOutputHost,
@@ -3420,7 +3446,9 @@ impl RendererRuntimeInspectorResponseDestination {
     > {
         match self {
             Self::AdapterReply(lease) => lease.send_adapter_reply(completion).map(|()| None),
+            #[cfg(feature = "devtools")]
             Self::DevToolsSessionPending(_) => Err(completion),
+            #[cfg(feature = "devtools")]
             Self::DevToolsSession { lease, host } => {
                 let settlement_tx = match lease.claim_session() {
                     Ok(settlement_tx) => settlement_tx,
@@ -3462,11 +3490,13 @@ impl RendererRuntimeInspectorResponseDestination {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn take_session_response_settlement_receiver(
         &self,
     ) -> Option<oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>> {
         match self {
             Self::AdapterReply(_) => None,
+            #[cfg(feature = "devtools")]
             Self::DevToolsSessionPending(lease) | Self::DevToolsSession { lease, .. } => {
                 lease.take_session_response_settlement_receiver()
             }
@@ -3477,7 +3507,9 @@ impl RendererRuntimeInspectorResponseDestination {
 #[derive(Clone)]
 enum RendererRuntimeInspectorResponsePublicationBoundary {
     Immediate,
+    #[cfg(feature = "devtools")]
     PageOwner(RendererOwnerWakeSender),
+    #[cfg(feature = "devtools")]
     WorkerParent(tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>),
 }
 
@@ -3512,16 +3544,18 @@ impl RendererRuntimeInspectorResponseSender {
 
     pub(crate) fn is_open(&self) -> bool {
         match &self.destination {
-            RendererRuntimeInspectorResponseDestination::AdapterReply(lease)
-            | RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(lease)
+            #[cfg(feature = "devtools")]
+            RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(lease)
             | RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, .. } => {
                 lease.is_open()
             }
+            RendererRuntimeInspectorResponseDestination::AdapterReply(lease) => lease.is_open(),
         }
     }
 
     pub fn new(call_id: i32, tx: oneshot::Sender<RendererRuntimeInspectorAsyncCompletion>) -> Self {
         RendererRuntimeInspectorResponseChannel {
+            #[cfg(feature = "devtools")]
             delivery: moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
             authority: RendererCommandResponseAuthority::adapter(tx),
         }
@@ -3537,6 +3571,7 @@ impl RendererRuntimeInspectorResponseSender {
             RendererRuntimeInspectorResponseDestination::AdapterReply(_) => {
                 moli_page_types::RendererInspectorResponseDelivery::AdapterReply
             }
+            #[cfg(feature = "devtools")]
             RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(_)
             | RendererRuntimeInspectorResponseDestination::DevToolsSession { .. } => {
                 moli_page_types::RendererInspectorResponseDelivery::SessionSink
@@ -3544,6 +3579,7 @@ impl RendererRuntimeInspectorResponseSender {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn take_session_response_settlement_receiver(
         &self,
     ) -> Option<oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>> {
@@ -3562,6 +3598,7 @@ impl RendererRuntimeInspectorResponseSender {
         self
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn defer_publication_to_page_owner(
         mut self,
         owner_wake: RendererOwnerWakeSender,
@@ -3571,6 +3608,7 @@ impl RendererRuntimeInspectorResponseSender {
         self
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn defer_publication_to_worker_parent(
         mut self,
         parent_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>,
@@ -3582,6 +3620,7 @@ impl RendererRuntimeInspectorResponseSender {
 
     /// Selects the frontend session output capability without changing when
     /// the response is allowed to publish.
+    #[cfg(feature = "devtools")]
     pub(crate) fn route_to_devtools_session_output(
         mut self,
         host: RendererDevToolsSessionOutputHost,
@@ -3591,9 +3630,11 @@ impl RendererRuntimeInspectorResponseSender {
             "a DevTools session response host must belong to the command attachment"
         );
         self.destination = match self.destination {
+            #[cfg(feature = "devtools")]
             RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(lease) => {
                 RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, host }
             }
+            #[cfg(feature = "devtools")]
             RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, host: _ } => {
                 RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, host }
             }
@@ -3604,6 +3645,7 @@ impl RendererRuntimeInspectorResponseSender {
         self
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn route_to_worker_devtools_session_output(
         self,
         session_id: String,
@@ -3647,9 +3689,11 @@ impl RendererRuntimeInspectorResponseSender {
             RendererRuntimeInspectorResponsePublicationBoundary::Immediate => {
                 publication.commit(None).map(|_| ())
             }
+            #[cfg(feature = "devtools")]
             RendererRuntimeInspectorResponsePublicationBoundary::PageOwner(owner_wake) => {
                 owner_wake.defer_runtime_inspector_response_publication(publication)
             }
+            #[cfg(feature = "devtools")]
             RendererRuntimeInspectorResponsePublicationBoundary::WorkerParent(parent_tx) => {
                 match parent_tx.send(
                     crate::worker::WorkerToParentMessage::RuntimeInspectorResponse(publication),
@@ -3677,7 +3721,7 @@ impl RendererRuntimeInspectorResponseSender {
             output.bind_renderer_agent_attachment(attachment_id);
         }
         let Self {
-            call_id,
+            call_id: _call_id,
             attachment_id: _,
             destination,
             publication_boundary: _,
@@ -3687,13 +3731,15 @@ impl RendererRuntimeInspectorResponseSender {
             RendererRuntimeInspectorResponseDestination::AdapterReply(_) => {
                 RendererRuntimeCommandOutputSettlement::adapter_reply(output)
             }
+            #[cfg(feature = "devtools")]
             RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(_) => panic!(
                 "a DevTools session response must bind its concrete output host before settlement"
             ),
+            #[cfg(feature = "devtools")]
             RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, host } => {
                 RendererRuntimeCommandOutputSettlement::session_response(
                     RendererRuntimeInspectorResponsePublication {
-                        call_id,
+                        call_id: _call_id,
                         output,
                         destination: RendererRuntimeInspectorResponseDestination::DevToolsSession {
                             lease,
@@ -3709,7 +3755,9 @@ impl RendererRuntimeInspectorResponseSender {
 #[cfg(test)]
 mod renderer_runtime_inspector_response_channel_tests {
     use super::*;
-    use crate::page_task_queue::{RendererOwnerWake, RendererOwnerWakeSender};
+    use crate::page_task_queue::RendererOwnerWake;
+    #[cfg(feature = "devtools")]
+    use crate::page_task_queue::RendererOwnerWakeSender;
     use crate::runtime::protocol_output::{
         RendererOutputTransportTestLimits, renderer_output_transport_channel_with_test_limits,
     };
@@ -4867,12 +4915,15 @@ pub enum RendererDomDebuggerDomBreakpointResolution {
     UnknownType(String),
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) type RendererInspectorPageCommand =
     moli_command_types::devtools::InspectorCommand<RendererInspectorCommandHandles>;
 
 /// Execution capabilities stay in the renderer rather than the command DTO crate.
+#[cfg(feature = "devtools")]
 pub(crate) struct RendererInspectorCommandHandles;
 
+#[cfg(feature = "devtools")]
 impl moli_command_types::devtools::InspectorCommandHandles for RendererInspectorCommandHandles {
     type ResponseSender = RendererRuntimeInspectorResponseSender;
     type RuntimeOutput = RendererRuntimeCommandOutput;
@@ -4881,11 +4932,13 @@ impl moli_command_types::devtools::InspectorCommandHandles for RendererInspector
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
+    #[cfg(feature = "devtools")]
     WebMcp {
         session: DevToolsSessionKey,
         command: moli_page_types::RendererWebMcpCommand,
     },
     // The call fits inline; its operation boxes the recursively contained page command.
+    #[cfg(feature = "devtools")]
     Native(RendererCdpCall),
     /// Checks the original root Document on the renderer before executing an
     /// operation admitted while its browser-side Page is still being adopted.
@@ -4893,6 +4946,7 @@ pub enum RendererPageCommand {
         source_document: RendererDocumentLifecycleIdentity,
         command: Box<RendererPageCommand>,
     },
+    #[cfg(feature = "devtools")]
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,
@@ -4949,9 +5003,11 @@ pub enum RendererPageCommand {
     RefreshFullPageState,
     PageDiagnosticsSnapshot,
     HasPendingLocationNavigation,
+    #[cfg(feature = "devtools")]
     DispatchPreparedElementClick(RendererPreparedPointerClick),
     #[cfg(feature = "ace-protocol")]
     AcePageTask(Box<dyn crate::ace_page_task::AcePageTask>),
+    #[cfg(feature = "devtools")]
     DispatchMouseEventAtPoint {
         x: f64,
         y: f64,
@@ -4966,11 +5022,13 @@ pub enum RendererPageCommand {
         /// `Input.setInterceptDrags` state of the issuing DevTools session.
         intercept_drags: bool,
     },
+    #[cfg(feature = "devtools")]
     DispatchTouchEvent {
         points: Vec<RendererTouchPoint>,
         event_name: String,
         activate: bool,
     },
+    #[cfg(feature = "devtools")]
     DispatchDragEventAtPoint {
         x: f64,
         y: f64,
@@ -4978,9 +5036,13 @@ pub enum RendererPageCommand {
         data: RendererDragData,
         modifiers: u8,
     },
+    #[cfg(feature = "devtools")]
     ClearActiveDragDataTransfer,
+    #[cfg(feature = "devtools")]
     CancelDragging,
+    #[cfg(feature = "devtools")]
     InsertTextIntoActiveControl(String),
+    #[cfg(feature = "devtools")]
     DispatchKeyEvent {
         event_name: String,
         key: String,
@@ -4991,52 +5053,63 @@ pub enum RendererPageCommand {
         auto_repeat: bool,
         should_insert_text: bool,
     },
+    #[cfg(feature = "devtools")]
     DomDebuggerConfigureEventListenerBreakpoint {
         inspector_session_id: Option<String>,
         breakpoint: RendererDomDebuggerEventListenerBreakpoint,
         enabled: bool,
     },
+    #[cfg(feature = "devtools")]
     DomDebuggerConfigureXhrBreakpoint {
         inspector_session_id: Option<String>,
         breakpoint: RendererDomDebuggerXhrBreakpoint,
         enabled: bool,
     },
+    #[cfg(feature = "devtools")]
     DomDebuggerConfigureDomBreakpoint {
         inspector_session_id: Option<String>,
         frontend_node_id: u32,
         breakpoint_type: String,
         enabled: bool,
     },
+    #[cfg(feature = "devtools")]
     CreateIsolatedWorld {
         name: String,
         grant_universal_access: bool,
         frame_id: Option<String>,
     },
+    #[cfg(feature = "devtools")]
     CreateIsolatedWorldRuntimeActivity {
         inspector_session_id: Option<String>,
         frame_id: Option<String>,
         name: String,
         grant_universal_access: bool,
     },
+    #[cfg(feature = "devtools")]
     InstallRuntimeBinding {
         name: String,
         execution_context_name: Option<String>,
         execution_context_id: Option<i64>,
     },
+    #[cfg(feature = "devtools")]
     RemoveRuntimeBinding(String),
+    #[cfg(feature = "devtools")]
     RemoveDefaultRuntimeBinding(String),
     QueueTopLevelHistoryTraversalByDelta(i64),
     RunPageSurfaceOverrideScript {
         source: String,
     },
+    #[cfg(feature = "devtools")]
     AddDocumentStartScriptRuntimeActivity {
         inspector_session_id: Option<String>,
         script: DocumentStartScript,
         run_immediately: bool,
     },
+    #[cfg(feature = "devtools")]
     RemoveDocumentStartScriptByRegistryKey(String),
     #[cfg(test)]
     SetStoredDocumentStartScripts(Vec<DocumentStartScript>),
+    #[cfg(feature = "devtools")]
     SetRuntimeBindingState {
         inspector_session_id: Option<String>,
         stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
@@ -5049,38 +5122,50 @@ pub enum RendererPageCommand {
         frame_id: Option<String>,
     },
     HasIsolatedExecutionContextId(i64),
+    #[cfg(feature = "devtools")]
     EnsureIsolatedWorldsAttachedToInspector,
+    #[cfg(feature = "devtools")]
     InspectorExecutionContextIdForIsolatedContext(i64),
+    #[cfg(feature = "devtools")]
     IsolatedExecutionContextIdForInspectorContext(i64),
     RuntimeRealmInventory,
     LiveChildDefaultRuntimeRealmInventory,
     ChildFrameIdForDefaultExecutionContextId(i64),
     ChildDefaultExecutionContextIdForFrameId(String),
     RuntimeConsoleMessagesWithContext,
+    #[cfg(feature = "devtools")]
     RuntimeHeapUsage,
+    #[cfg(feature = "devtools")]
     PerformanceMetricSnapshot,
+    #[cfg(feature = "devtools")]
     RuntimeCollectGarbage,
     #[cfg(test)]
     TakeDocumentLifecycleEvents,
     StopDocumentLifecycle,
+    #[cfg(feature = "devtools")]
     ComputedStyleProperties {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     SetInlineStyleSheetTextForStyleSheetId {
         inspector_session_id: Option<String>,
         style_sheet_id: String,
         text: String,
     },
+    #[cfg(feature = "devtools")]
     ScrollNodeIntoViewIfNeeded {
         reference: RendererDomNodeReference,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     },
+    #[cfg(feature = "devtools")]
     ClientRectForBackendNodeId {
         backend_node_id: u32,
     },
+    #[cfg(feature = "devtools")]
     DocumentGeometryForNode {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     DocumentHitTest {
         inspector_session_id: Option<String>,
         x: f64,
@@ -5088,38 +5173,48 @@ pub enum RendererPageCommand {
         include_user_agent_shadow_dom: bool,
         ignore_pointer_events_none: bool,
     },
+    #[cfg(feature = "devtools")]
     NodeHasGeometryForBackendNodeId {
         backend_node_id: u32,
     },
+    #[cfg(feature = "devtools")]
     RemoveDocumentNode {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     MutateDocumentNodeAttribute {
         reference: RendererDomNodeReference,
         mutation: RendererDomAttributeMutation,
     },
+    #[cfg(feature = "devtools")]
     EditDocumentNode {
         inspector_session_id: Option<String>,
         edit: RendererDomEdit,
     },
+    #[cfg(feature = "devtools")]
     FocusDocumentNode {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     TriggerAutofill(RendererAutofillTriggerRequest),
     ResetNavigationHistory,
+    #[cfg(feature = "devtools")]
     SetFileInputFilesForBackendNodeId {
         backend_node_id: u32,
         files: Vec<crate::dom::native::SelectedFile>,
         append: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeExistsForBackendNodeId {
         backend_node_id: u32,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeSnapshotForBackendNodeId {
         backend_node_id: u32,
         depth: i32,
         pierce: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeSnapshotForNodeInInspectorSession {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
@@ -5127,19 +5222,23 @@ pub enum RendererPageCommand {
         depth: i32,
         pierce: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeSnapshotForDocument {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
         depth: i32,
         pierce: bool,
     },
+    #[cfg(feature = "devtools")]
     DiscardDomAgentFrontendBindings {
         inspector_session_id: Option<String>,
     },
+    #[cfg(feature = "devtools")]
     DomSnapshotCapture {
         top_frame_id: String,
         options: RendererDomSnapshotCaptureOptions,
     },
+    #[cfg(feature = "devtools")]
     DocumentChildNodeSnapshotEventsForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
@@ -5147,12 +5246,14 @@ pub enum RendererPageCommand {
         depth: i32,
         pierce: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentQuerySelectorForDocument {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
         selector: String,
         multiple: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentQuerySelectorForChildFrameNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
@@ -5161,6 +5262,7 @@ pub enum RendererPageCommand {
         selector: String,
         multiple: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentQuerySelectorForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
@@ -5168,6 +5270,7 @@ pub enum RendererPageCommand {
         selector: String,
         multiple: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
@@ -5175,52 +5278,64 @@ pub enum RendererPageCommand {
         selector: String,
         multiple: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentPerformSearch {
         inspector_session_id: Option<String>,
         query: String,
         include_user_agent_shadow_dom: bool,
         include_whitespace: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentGetSearchResults {
         inspector_session_id: Option<String>,
         search_id: String,
         from_index: usize,
         to_index: usize,
     },
+    #[cfg(feature = "devtools")]
     DocumentDiscardSearchResults {
         inspector_session_id: Option<String>,
         search_id: String,
     },
+    #[cfg(feature = "devtools")]
     DocumentSetNodeStackTracesEnabled {
         inspector_session_id: Option<String>,
         enabled: bool,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeStackTrace {
         inspector_session_id: Option<String>,
         frontend_node_id: u32,
     },
+    #[cfg(feature = "devtools")]
     DocumentFrontendNodeBinding {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     RegisterDocumentBidiNodeBinding {
         inspector_session_id: Option<String>,
         shared_id: String,
         backend_node_id: u32,
     },
+    #[cfg(feature = "devtools")]
     DocumentBidiNodeBinding {
         inspector_session_id: Option<String>,
         shared_id: String,
     },
+    #[cfg(feature = "devtools")]
     DocumentBidiNodeSharedIdForBackendNodeId {
         inspector_session_id: Option<String>,
         backend_node_id: u32,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeAttributes {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeText {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     DocumentNodeProperty {
         reference: RendererDomNodeReference,
         name: String,
@@ -5228,41 +5343,53 @@ pub enum RendererPageCommand {
     AccessibilityTreeNodes {
         frame_id: Option<String>,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityTreePayloadsForDocument {
         max_depth: Option<i32>,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityNodePayloadForDocument,
+    #[cfg(feature = "devtools")]
     AccessibilityTreePayloadsForNode {
         reference: RendererDomNodeReference,
         max_depth: Option<i32>,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityNodePayloadForNode {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityNodeAndAncestorPayloadsForNode {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityChildNodePayloadsForNode {
         reference: RendererDomNodeReference,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityPartialTreePayloadsForNode {
         reference: RendererDomNodeReference,
         fetch_relatives: bool,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityTreePayloadsForChildFrame {
         frame_id: String,
         max_depth: Option<i32>,
     },
+    #[cfg(feature = "devtools")]
     AccessibilityNodePayloadForChildFrame {
         frame_id: String,
     },
+    #[cfg(feature = "devtools")]
     StyleSheetPayloadForStyleSheetId {
         inspector_session_id: Option<String>,
         style_sheet_id: String,
     },
+    #[cfg(feature = "devtools")]
     StyleSheetInventoryForDocument {
         inspector_session_id: Option<String>,
     },
+    #[cfg(feature = "devtools")]
     ResetCssAgentSession {
         inspector_session_id: Option<String>,
     },
@@ -5283,25 +5410,31 @@ pub enum RendererPageCommand {
     PublishLayout,
     PrintToPdf(RendererPrintToPdfRequest),
     CaptureScreenshot(RendererCaptureScreenshotRequest),
+    #[cfg(feature = "devtools")]
     CaptureScreencastFrame(RendererCaptureScreencastFrameRequest),
     BlobBytesForUuid {
         uuid: String,
     },
+    #[cfg(feature = "devtools")]
     DocumentFrontendNodeIdsForBackendNodeIds {
         inspector_session_id: Option<String>,
         backend_node_ids: Vec<u32>,
     },
     DocumentStorageKeySnapshot,
+    #[cfg(feature = "devtools")]
     SearchResourceByLines(Box<RendererResourceSearchRequest>),
     ChildFrameTreeSnapshot,
+    #[cfg(feature = "devtools")]
     ChildFrameOwnerNodeReference {
         inspector_session_id: Option<String>,
         frame_id: String,
     },
+    #[cfg(feature = "devtools")]
     ChildFrameDocumentRootNodeReference {
         inspector_session_id: Option<String>,
         frame_id: String,
     },
+    #[cfg(feature = "devtools")]
     ContinuePendingSubresourceFetch {
         internal_id: u64,
         url: Option<Url>,
@@ -5311,21 +5444,26 @@ pub enum RendererPageCommand {
         intercept_response: bool,
         handle_auth_requests: bool,
     },
+    #[cfg(feature = "devtools")]
     ContinuePendingSubresourceAuth {
         internal_id: u64,
         auth: crate::SubresourceAuthCredentials,
     },
+    #[cfg(feature = "devtools")]
     CancelPendingSubresourceAuth {
         internal_id: u64,
     },
+    #[cfg(feature = "devtools")]
     FailPendingSubresourceAuth {
         internal_id: u64,
         error_text: String,
     },
+    #[cfg(feature = "devtools")]
     FailPendingSubresourceFetch {
         internal_id: u64,
         error_text: String,
     },
+    #[cfg(feature = "devtools")]
     FulfillPendingSubresourceFetch {
         internal_id: u64,
         request_overrides: Option<Box<moli_fetch::RequestOverrides>>,
@@ -5333,35 +5471,42 @@ pub enum RendererPageCommand {
         response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
+    #[cfg(feature = "devtools")]
     ContinuePendingSubresourceResponse {
         internal_id: u64,
         response_code: Option<u16>,
         response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
+    #[cfg(feature = "devtools")]
     FailPendingSubresourceResponse {
         internal_id: u64,
         error_text: String,
     },
+    #[cfg(feature = "devtools")]
     FulfillPendingSubresourceResponse {
         internal_id: u64,
         response_code: u16,
         response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
+    #[cfg(feature = "devtools")]
     ReceiveSyntheticWebSocketText {
         socket_id: u64,
         data: String,
     },
+    #[cfg(feature = "devtools")]
     ReceiveSyntheticWebSocketBinary {
         socket_id: u64,
         data: Vec<u8>,
     },
+    #[cfg(feature = "devtools")]
     CloseSyntheticWebSocketFromServer {
         socket_id: u64,
         code: Option<u16>,
         reason: String,
     },
     PendingSubresourceRequestCount,
+    #[cfg(feature = "devtools")]
     SetFetchSubresourceInterception {
         classes: crate::SubresourceInterceptionClasses,
     },
@@ -5374,6 +5519,7 @@ pub enum RendererPageCommand {
     ClearDocumentCookieFacadeOverrides,
     DocumentCookieTelemetrySnapshot,
     DocumentCookieOwnerSnapshot,
+    #[cfg(feature = "devtools")]
     PrepareNetworkResourceLoad {
         frame_id: String,
         url: Url,
@@ -5438,6 +5584,7 @@ pub enum RendererRuntimeRemoteObjectResolution {
 }
 
 impl RendererPageCommand {
+    #[cfg(feature = "devtools")]
     fn inspector_command(
         inspector_session_id: Option<String>,
         command: RendererInspectorPageCommand,
@@ -5448,6 +5595,7 @@ impl RendererPageCommand {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     pub fn dispatch_runtime_protocol_message(
         inspector_session_id: Option<String>,
         raw_json: String,
@@ -5458,6 +5606,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn dispatch_runtime_protocol_message_with_deferred_response(
         inspector_session_id: Option<String>,
         raw_json: String,
@@ -5472,6 +5621,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn dispatch_runtime_protocol_message_with_context_resolution(
         inspector_session_id: Option<String>,
         action: String,
@@ -5486,6 +5636,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
         inspector_session_id: Option<String>,
         action: String,
@@ -5502,6 +5653,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn runtime_enable_events(inspector_session_id: Option<String>) -> Self {
         Self::inspector_command(
             inspector_session_id,
@@ -5509,6 +5661,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn runtime_disable_events(inspector_session_id: Option<String>) -> Self {
         Self::inspector_command(
             inspector_session_id,
@@ -5516,6 +5669,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn runtime_binding_events(
         inspector_session_id: Option<String>,
         binding: crate::protocol_types::RuntimeBindingRegistration,
@@ -5527,6 +5681,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn apply_runtime_protocol_state(
         inspector_session_id: Option<String>,
         session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
@@ -5545,6 +5700,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn detach_runtime_inspector_session(
         inspector_session_id: Option<String>,
         pause_guard: RendererRuntimeInspectorSessionDetachGuard,
@@ -5555,6 +5711,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn add_runtime_binding(
         inspector_session_id: Option<String>,
         name: String,
@@ -5571,6 +5728,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn dom_debugger_get_event_listeners(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5587,6 +5745,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn computed_style_properties_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5597,6 +5756,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn prepare_element_click(inspector_session_id: Option<String>, object_id: String) -> Self {
         Self::inspector_command(
             inspector_session_id,
@@ -5604,6 +5764,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn scroll_object_node_into_view_if_needed(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5615,6 +5776,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn client_rect_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5625,6 +5787,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn document_geometry_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5635,6 +5798,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn node_has_geometry_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5645,6 +5809,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn focus_document_node_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5655,6 +5820,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn set_file_input_files_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5671,6 +5837,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn document_node_snapshot_for_object_id(
         inspector_session_id: Option<String>,
         include_whitespace: bool,
@@ -5691,6 +5858,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn request_document_node_for_object_id(
         inspector_session_id: Option<String>,
         include_whitespace: bool,
@@ -5705,6 +5873,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn accessibility_tree_payloads_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5715,6 +5884,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn accessibility_node_and_ancestor_payloads_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5727,6 +5897,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn accessibility_partial_tree_payloads_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5741,6 +5912,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn outer_html_for_object_id(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -5755,6 +5927,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn resolve_runtime_object_for_backend_node_id(
         inspector_session_id: Option<String>,
         backend_node_id: u32,
@@ -5771,6 +5944,7 @@ impl RendererPageCommand {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn resolve_blob_object(inspector_session_id: Option<String>, object_id: String) -> Self {
         Self::inspector_command(
             inspector_session_id,
@@ -5781,14 +5955,18 @@ impl RendererPageCommand {
     /// Metadata is structurally present for every command that can access a
     /// frontend V8 Inspector session; no command-variant allowlist is involved.
     #[cfg(test)]
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_ticket(&self) -> Option<&RendererInspectorIngressTicket> {
         match self {
+            #[cfg(feature = "devtools")]
             Self::Inspector(envelope) => Some(envelope.ticket()),
             _ => None,
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn bind_inspector_attachment(&mut self, attachment: RendererAgentAttachmentId) {
+        #[cfg(feature = "devtools")]
         if let Self::Native(command) = self {
             command
                 .operation
@@ -5802,6 +5980,7 @@ impl RendererPageCommand {
     }
 
     pub(crate) fn interruptible_by_javascript_dialog(&self) -> bool {
+        #[cfg(feature = "devtools")]
         if let Self::Native(command) = self {
             return command
                 .operation
@@ -5825,89 +6004,130 @@ impl RendererPageCommand {
 
     pub(crate) fn cdp_nav_timing_label(&self) -> Option<&'static str> {
         match self {
+            #[cfg(feature = "devtools")]
             Self::Native(command) => command.operation.command.cdp_nav_timing_label(),
+            #[cfg(feature = "devtools")]
             Self::Inspector(envelope) => envelope.cdp_nav_timing_label(),
             Self::DocumentStorageKeySnapshot => Some("DocumentStorageKeySnapshot"),
+            #[cfg(feature = "devtools")]
             Self::SearchResourceByLines(..) => Some("SearchResourceByLines"),
+            #[cfg(feature = "devtools")]
             Self::CreateIsolatedWorldRuntimeActivity { .. } => {
                 Some("CreateIsolatedWorldRuntimeActivity")
             }
+            #[cfg(feature = "devtools")]
             Self::AddDocumentStartScriptRuntimeActivity { .. } => {
                 Some("AddDocumentStartScriptRuntimeActivity")
             }
+            #[cfg(feature = "devtools")]
             Self::RemoveDocumentStartScriptByRegistryKey(_) => {
                 Some("RemoveDocumentStartScriptByRegistryKey")
             }
+            #[cfg(feature = "devtools")]
             Self::SetRuntimeBindingState { .. } => Some("SetRuntimeBindingState"),
             Self::ChildFrameTreeSnapshot => Some("ChildFrameTreeSnapshot"),
+            #[cfg(feature = "devtools")]
             Self::ChildFrameOwnerNodeReference { .. } => Some("ChildFrameOwnerNodeReference"),
+            #[cfg(feature = "devtools")]
             Self::ChildFrameDocumentRootNodeReference { .. } => {
                 Some("ChildFrameDocumentRootNodeReference")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeExistsForBackendNodeId { .. } => {
                 Some("DocumentNodeExistsForBackendNodeId")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeSnapshotForBackendNodeId { .. } => {
                 Some("DocumentNodeSnapshotForBackendNodeId")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeSnapshotForNodeInInspectorSession { .. } => {
                 Some("DocumentNodeSnapshotForNodeInInspectorSession")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeSnapshotForDocument { .. } => Some("DocumentNodeSnapshotForDocument"),
+            #[cfg(feature = "devtools")]
             Self::DiscardDomAgentFrontendBindings { .. } => Some("DiscardDomAgentFrontendBindings"),
+            #[cfg(feature = "devtools")]
             Self::DomSnapshotCapture { .. } => Some("DomSnapshotCapture"),
+            #[cfg(feature = "devtools")]
             Self::DocumentChildNodeSnapshotEventsForNode { .. } => {
                 Some("DocumentChildNodeSnapshotEventsForNode")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentQuerySelectorForDocument { .. } => {
                 Some("DocumentQuerySelectorForDocument")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentQuerySelectorForChildFrameNode { .. } => {
                 Some("DocumentQuerySelectorForChildFrameNode")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentQuerySelectorForNode { .. } => Some("DocumentQuerySelectorForNode"),
+            #[cfg(feature = "devtools")]
             Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode { .. } => {
                 Some("DocumentQuerySelectorWithChildNodeSnapshotEventsForNode")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentPerformSearch { .. } => Some("DocumentPerformSearch"),
+            #[cfg(feature = "devtools")]
             Self::DocumentGetSearchResults { .. } => Some("DocumentGetSearchResults"),
+            #[cfg(feature = "devtools")]
             Self::DocumentSetNodeStackTracesEnabled { .. } => {
                 Some("DocumentSetNodeStackTracesEnabled")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeStackTrace { .. } => Some("DocumentNodeStackTrace"),
+            #[cfg(feature = "devtools")]
             Self::DocumentDiscardSearchResults { .. } => Some("DocumentDiscardSearchResults"),
+            #[cfg(feature = "devtools")]
             Self::DocumentFrontendNodeBinding { .. } => Some("DocumentFrontendNodeBinding"),
+            #[cfg(feature = "devtools")]
             Self::RegisterDocumentBidiNodeBinding { .. } => Some("RegisterDocumentBidiNodeBinding"),
+            #[cfg(feature = "devtools")]
             Self::DocumentBidiNodeBinding { .. } => Some("DocumentBidiNodeBinding"),
+            #[cfg(feature = "devtools")]
             Self::DocumentBidiNodeSharedIdForBackendNodeId { .. } => {
                 Some("DocumentBidiNodeSharedIdForBackendNodeId")
             }
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeAttributes { .. } => Some("DocumentNodeAttributes"),
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeText { .. } => Some("DocumentNodeText"),
+            #[cfg(feature = "devtools")]
             Self::DocumentNodeProperty { .. } => Some("DocumentNodeProperty"),
             Self::AccessibilityTreeNodes { .. } => Some("AccessibilityTreeNodes"),
+            #[cfg(feature = "devtools")]
             Self::AccessibilityTreePayloadsForDocument { .. } => {
                 Some("AccessibilityTreePayloadsForDocument")
             }
+            #[cfg(feature = "devtools")]
             Self::AccessibilityNodePayloadForDocument => {
                 Some("AccessibilityNodePayloadForDocument")
             }
+            #[cfg(feature = "devtools")]
             Self::AccessibilityTreePayloadsForNode { .. } => {
                 Some("AccessibilityTreePayloadsForNode")
             }
+            #[cfg(feature = "devtools")]
             Self::AccessibilityNodePayloadForNode { .. } => Some("AccessibilityNodePayloadForNode"),
+            #[cfg(feature = "devtools")]
             Self::AccessibilityNodeAndAncestorPayloadsForNode { .. } => {
                 Some("AccessibilityNodeAndAncestorPayloadsForNode")
             }
+            #[cfg(feature = "devtools")]
             Self::AccessibilityChildNodePayloadsForNode { .. } => {
                 Some("AccessibilityChildNodePayloadsForNode")
             }
+            #[cfg(feature = "devtools")]
             Self::AccessibilityPartialTreePayloadsForNode { .. } => {
                 Some("AccessibilityPartialTreePayloadsForNode")
             }
+            #[cfg(feature = "devtools")]
             Self::AccessibilityTreePayloadsForChildFrame { .. } => {
                 Some("AccessibilityTreePayloadsForChildFrame")
             }
+            #[cfg(feature = "devtools")]
             Self::AccessibilityNodePayloadForChildFrame { .. } => {
                 Some("AccessibilityNodePayloadForChildFrame")
             }
@@ -5919,24 +6139,38 @@ impl RendererPageCommand {
             Self::PublishLayout => Some("PublishLayout"),
             Self::PrintToPdf(_) => Some("PrintToPdf"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
+            #[cfg(feature = "devtools")]
             Self::CaptureScreencastFrame(_) => Some("CaptureScreencastFrame"),
+            #[cfg(feature = "devtools")]
             Self::ScrollNodeIntoViewIfNeeded { .. } => Some("ScrollNodeIntoViewIfNeeded"),
+            #[cfg(feature = "devtools")]
             Self::ClientRectForBackendNodeId { .. } => Some("ClientRectForBackendNodeId"),
+            #[cfg(feature = "devtools")]
             Self::DocumentGeometryForNode { .. } => Some("DocumentGeometryForNode"),
+            #[cfg(feature = "devtools")]
             Self::DocumentHitTest { .. } => Some("DocumentHitTest"),
+            #[cfg(feature = "devtools")]
             Self::NodeHasGeometryForBackendNodeId { .. } => Some("NodeHasGeometryForBackendNodeId"),
+            #[cfg(feature = "devtools")]
             Self::RemoveDocumentNode { .. } => Some("RemoveDocumentNode"),
+            #[cfg(feature = "devtools")]
             Self::EditDocumentNode { .. } => Some("EditDocumentNode"),
+            #[cfg(feature = "devtools")]
             Self::TriggerAutofill(_) => Some("TriggerAutofill"),
+            #[cfg(feature = "devtools")]
             Self::WebMcp { .. } => Some("WebMCP"),
+            #[cfg(feature = "devtools")]
             Self::ComputedStyleProperties { .. } => Some("ComputedStyleProperties"),
+            #[cfg(feature = "devtools")]
             Self::SetFileInputFilesForBackendNodeId { .. } => {
                 Some("SetFileInputFilesForBackendNodeId")
             }
             Self::BlobBytesForUuid { .. } => Some("BlobBytesForUuid"),
+            #[cfg(feature = "devtools")]
             Self::DocumentFrontendNodeIdsForBackendNodeIds { .. } => {
                 Some("DocumentFrontendNodeIdsForBackendNodeIds")
             }
+            #[cfg(feature = "devtools")]
             Self::EnsureIsolatedWorldsAttachedToInspector => {
                 Some("EnsureIsolatedWorldsAttachedToInspector")
             }
@@ -6056,6 +6290,7 @@ pub struct RendererRuntimeRemoteObject {
 }
 
 impl RendererRuntimeRemoteObject {
+    #[cfg(feature = "devtools")]
     pub(crate) fn from_protocol_value(protocol_value: Value) -> Option<Self> {
         let is_object = protocol_value.get("type").and_then(Value::as_str) == Some("object");
         let is_node = protocol_value.get("subtype").and_then(Value::as_str) == Some("node");
@@ -6176,6 +6411,7 @@ pub struct RendererDomSnapshotCapturePayload {
 }
 
 impl RendererDomSnapshotCapturePayload {
+    #[cfg(feature = "devtools")]
     pub(crate) fn from_protocol_payload(protocol_payload: Value) -> Self {
         Self { protocol_payload }
     }
@@ -6204,18 +6440,26 @@ impl RendererRuntimeEvaluationResult {
     }
 }
 
+#[non_exhaustive]
 pub enum RendererPageReply {
+    #[cfg(feature = "devtools")]
     WebMcp(std::result::Result<Option<u64>, moli_page_types::RendererWebMcpError>),
+    #[cfg(feature = "devtools")]
     NativeCommandReady(Box<RendererNativeCommandReadyResponse>),
+    #[cfg(feature = "devtools")]
     NativeCommandPublished,
     ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),
+    #[cfg(feature = "devtools")]
     ElementClickDispatch(Result<RendererInputDispatchOutcome, RendererElementClickError>),
     RuntimeEvaluationResult(RendererRuntimeEvaluationResult),
     RuntimeInspectorProtocolMessages(RendererRuntimeCommandOutput),
     RuntimeConsoleMessageSnapshots(Vec<RuntimeConsoleMessageSnapshot>),
+    #[cfg(feature = "devtools")]
     RuntimeHeapUsage(Box<RendererRuntimeHeapUsage>),
+    #[cfg(feature = "devtools")]
     PerformanceMetricSnapshot(Box<RendererPerformanceMetricSnapshot>),
     RuntimeRealmInventory(Vec<RendererRuntimeRealmInfo>),
+    #[cfg(feature = "devtools")]
     ExecutionContextId(i64),
     ExecutionContextIds(Vec<i64>),
     OptionalExecutionContextId(Option<i64>),
@@ -6224,53 +6468,86 @@ pub enum RendererPageReply {
         node_id: Option<u32>,
         child_node_snapshot_events: Option<RendererDocumentChildNodeSnapshotEvents>,
     },
+    #[cfg(feature = "devtools")]
     OptionalDomSnapshotCapturePayload(Option<RendererDomSnapshotCapturePayload>),
     OptionalDocumentChildNodeSnapshots(Option<RendererDocumentChildNodeSnapshots>),
     OptionalDocumentChildNodeSnapshotEvents(Option<RendererDocumentChildNodeSnapshotEvents>),
+    #[cfg(feature = "devtools")]
     DocumentQuerySelectorResolution(RendererDocumentQuerySelectorResolution),
     DocumentQuerySelectorNode(RendererDocumentQuerySelectorNode),
+    #[cfg(feature = "devtools")]
     DocumentQuerySelectorWithChildNodeSnapshotEvents(
         RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     ),
+    #[cfg(feature = "devtools")]
     DocumentPerformSearch(RendererDomSearchRegistration),
+    #[cfg(feature = "devtools")]
     DocumentSearchResults {
         resolution: RendererDomSearchResultsResolution,
         child_node_snapshot_events: Option<RendererDocumentChildNodeSnapshotEvents>,
     },
+    #[cfg(feature = "devtools")]
     DocumentSearchResultsDiscarded,
+    #[cfg(feature = "devtools")]
     DocumentNodeStackTracesEnabled,
+    #[cfg(feature = "devtools")]
     DocumentNodeStackTrace(RendererDomNodeStackTraceResolution),
+    #[cfg(feature = "devtools")]
     DocumentFrontendNodeBinding(RendererDomFrontendNodeBindingResolution),
+    #[cfg(feature = "devtools")]
     DocumentBidiNodeBinding(RendererDomBidiNodeBindingResolution),
+    #[cfg(feature = "devtools")]
     DocumentBidiNodeSharedId(RendererDomBidiNodeSharedIdResolution),
+    #[cfg(feature = "devtools")]
     DocumentBidiNodeBindingRegistered,
+    #[cfg(feature = "devtools")]
     DocumentNodeAttributesResolution(RendererDocumentNodeAttributesResolution),
+    #[cfg(feature = "devtools")]
     DocumentNodeTextResolution(RendererDocumentNodeTextResolution),
+    #[cfg(feature = "devtools")]
     DocumentNodePropertyResolution(RendererDocumentNodePropertyResolution),
     OptionalAccessibilityNodes(Option<Vec<moli_dom::accessibility::AccessibilityNode>>),
+    #[cfg(feature = "devtools")]
     OptionalAccessibilityPayloads(Option<Vec<Value>>),
+    #[cfg(feature = "devtools")]
     OptionalAccessibilityPayload(Option<Value>),
+    #[cfg(feature = "devtools")]
     OptionalAccessibilityPayloadsForObjectId(Option<RendererAccessibilityPayloadsForObjectId>),
+    #[cfg(feature = "devtools")]
     OptionalStyleSheetPayload(Option<RendererStyleSheetPayload>),
+    #[cfg(feature = "devtools")]
     StyleSheetInventory(RendererStyleSheetInventoryUpdate),
+    #[cfg(feature = "devtools")]
     DocumentFrontendNodeIds(RendererDocumentFrontendNodeIdsResolution),
     OptionalDocumentNodeReference(Option<RendererDocumentNodeReference>),
     OptionalClientRect(Option<ClientRect>),
+    #[cfg(feature = "devtools")]
     OptionalDocumentNodeClientRect(Option<RendererDocumentNodeClientRect>),
+    #[cfg(feature = "devtools")]
     OptionalDocumentNodeGeometry(Option<RendererDocumentNodeGeometry>),
+    #[cfg(feature = "devtools")]
     OptionalDocumentHitTest(Option<RendererDocumentHitTestResult>),
     RuntimeRemoteObjectResolution(RendererRuntimeRemoteObjectResolution),
+    #[cfg(feature = "devtools")]
     DomDebuggerEventListeners(RendererDomDebuggerEventListenersResolution),
+    #[cfg(feature = "devtools")]
     DomDebuggerDomBreakpoint(RendererDomDebuggerDomBreakpointResolution),
     BlobUuid(String),
     OptionalBlobBytes(Option<Arc<[u8]>>),
+    #[cfg(feature = "devtools")]
     ComputedStyleProperties(Option<Vec<(String, String)>>),
+    #[cfg(feature = "devtools")]
     DomAttributeMutationOutcome(RendererDomAttributeMutationOutcome),
+    #[cfg(feature = "devtools")]
     DomEditOutcome(RendererDomEditOutcome),
+    #[cfg(feature = "devtools")]
     DomFocusOutcome(RendererDomFocusOutcome),
+    #[cfg(feature = "devtools")]
     AutofillTriggerOutcome(RendererAutofillTriggerOutcome),
     DocumentStorageKey(String),
+    #[cfg(feature = "devtools")]
     ResourceTextSearchOutcome(RendererResourceTextSearchOutcome),
+    #[cfg(feature = "devtools")]
     NetworkResourceLoadPreparation(crate::network::RendererNetworkResourceLoadPreparation),
     AppManifestLoadPreparation(crate::RendererAppManifestLoadPreparation),
     ChildFrameTreeSnapshots(Vec<ChildFrameTreeSnapshot>),
@@ -6281,10 +6558,13 @@ pub enum RendererPageReply {
     PageDiagnosticsSnapshot(RendererPageDiagnosticsSnapshot),
     #[cfg(feature = "ace-protocol")]
     AcePageTask(Box<crate::ace_page_task::AcePageTaskExecution>),
+    #[cfg(feature = "devtools")]
     InputDispatchOutcome(RendererInputDispatchOutcome),
     SetDocumentContentResult(RendererSetDocumentContentResult),
+    #[cfg(feature = "devtools")]
     ScrollIntoViewResult(RendererScrollIntoViewResult),
     Bool(bool),
+    #[cfg(feature = "devtools")]
     OptionalBool(Option<bool>),
     OptionalString(Option<String>),
     SerializedDocument {
@@ -6297,6 +6577,7 @@ pub enum RendererPageReply {
     LayoutMetrics(RendererLayoutMetrics),
     PrintToPdf(RendererPrintToPdfReply),
     CaptureScreenshot(RendererCaptureScreenshotReply),
+    #[cfg(feature = "devtools")]
     CaptureScreencastFrame(RendererCaptureScreencastFrameReply),
     Unit,
 }
@@ -6473,11 +6754,13 @@ impl RendererPageTable {
 impl RendererPageReply {
     pub(crate) fn input_dispatch_outcomes(&self) -> &[RendererInputDispatchOutcome] {
         match self {
+            #[cfg(feature = "devtools")]
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
                 std::slice::from_ref(outcome)
             }
             #[cfg(feature = "ace-protocol")]
             Self::AcePageTask(result) => &result.input_outcomes,
+            #[cfg(feature = "devtools")]
             Self::NativeCommandReady(ready) => ready.input_dispatch_outcomes(),
             _ => &[],
         }
@@ -6485,11 +6768,13 @@ impl RendererPageReply {
 
     pub(crate) fn input_dispatch_outcomes_mut(&mut self) -> &mut [RendererInputDispatchOutcome] {
         match self {
+            #[cfg(feature = "devtools")]
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
                 std::slice::from_mut(outcome)
             }
             #[cfg(feature = "ace-protocol")]
             Self::AcePageTask(result) => &mut result.input_outcomes,
+            #[cfg(feature = "devtools")]
             Self::NativeCommandReady(ready) => ready.input_dispatch_outcomes_mut(),
             _ => &mut [],
         }

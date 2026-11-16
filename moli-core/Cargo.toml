@@ -5,8 +5,9 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
-ace-protocol = ["moli-renderer-v8/ace-protocol"]
+default = ["devtools"]
+devtools = ["moli-renderer-v8/devtools"]
+ace-protocol = ["devtools", "moli-renderer-v8/ace-protocol"]
 # Compile renderer-only testing and diagnostic projections. This is not part of
 # normal browser behavior and must stay disabled in production builds.
 test-support = ["moli-renderer-v8/test-support"]
@@ -21,7 +22,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-dom = { path = "../moli-dom" }
 moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-types/moli-page-types" }
-moli-renderer-v8 = { path = "../moli-renderer-v8" }
+moli-renderer-v8 = { path = "../moli-renderer-v8", default-features = false }
 moli-selector = { path = "../moli-selector" }
 moli-sqlite = { path = "../moli-sqlite" }
 moli-storage-key = { path = "../moli-storage-key" }

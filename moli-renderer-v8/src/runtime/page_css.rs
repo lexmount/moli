@@ -7,6 +7,7 @@ use crate::stylesheet_blocking::link_rel_includes_token;
 use std::collections::HashSet;
 
 impl PageVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_inline_style_sheet_text_for_style_sheet_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -20,6 +21,7 @@ impl PageVm {
         self.set_inline_style_sheet_text_for_live_handle(node_id, text)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn style_sheet_payload_for_style_sheet_id(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -30,6 +32,7 @@ impl PageVm {
         self.style_sheet_payload_for_live_handle(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn style_sheet_inventory_for_document(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -76,6 +79,7 @@ impl PageVm {
         RendererStyleSheetInventoryUpdate { added, removed }
     }
 
+    #[cfg(feature = "devtools")]
     fn style_sheet_candidate_handles_for_document(&self) -> Vec<DomHandle> {
         let dom_host = self.vm().document_runtime.dom_host();
         dom_host
@@ -84,6 +88,7 @@ impl PageVm {
             .clone()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_inline_style_sheet_text_for_live_handle(
         &mut self,
         handle: DomHandle,
@@ -112,6 +117,7 @@ impl PageVm {
             .unwrap_or(false))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn style_sheet_payload_for_live_handle(
         &self,
         handle: DomHandle,

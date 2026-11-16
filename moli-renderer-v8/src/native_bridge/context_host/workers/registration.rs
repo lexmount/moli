@@ -218,17 +218,16 @@ impl PageScriptHost {
     }
 
     pub(crate) fn start_registered_local_worker(&self, worker_id: DedicatedWorkerId) {
-        let instance_id = self
+        let worker = self
             .workers
             .get(&worker_id)
-            .expect("registered local Worker")
-            .renderer_instance_id;
-        let started = self
-            .browser_context_runtime()
-            .run_dedicated_worker_if_waiting_for_debugger_for_devtools(instance_id);
+            .expect("registered local Worker");
+        let WorkerExecutionState::Running { handle } = &worker.execution else {
+            unreachable!("a registered local Worker owns its running handle");
+        };
         assert!(
-            started,
-            "registered local Worker has its native DevTools handle"
+            handle.start_evaluation(),
+            "registered local Worker has its native startup channel"
         );
     }
 

@@ -2,26 +2,35 @@ use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
 use super::Page;
+#[cfg(feature = "devtools")]
+use super::RendererInspectorSessionRestoreSnapshot;
 use super::RuntimeConsoleMessageSnapshot;
-use super::protocol_support::{
-    DocumentStartScript, RuntimeBindingRegistration, RuntimeContextRestoreEvent,
-    RuntimeIsolatedWorldDefinition,
-};
+use super::protocol_support::RuntimeContextRestoreEvent;
+#[cfg(feature = "devtools")]
+use super::protocol_support::RuntimeIsolatedWorldDefinition;
+#[cfg(feature = "devtools")]
+use super::protocol_support::{DocumentStartScript, RuntimeBindingRegistration};
 use super::{
-    CompletedPageCommand, PendingDevToolsIoCommandDispatch, PendingPageCommand,
-    PendingRuntimeInspectorCommandDispatch, RendererCommandTurnOutput,
-    RendererInspectorSessionRestoreSnapshot, RendererRuntimeCommandOutput,
-    RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+    CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput,
+    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
 };
+#[cfg(feature = "devtools")]
+use super::{PendingDevToolsIoCommandDispatch, PendingRuntimeInspectorCommandDispatch};
+#[cfg(feature = "devtools")]
 use crate::RendererOutputFence;
+#[cfg(feature = "devtools")]
+use crate::renderer::RendererRuntimeHeapUsage;
+#[cfg(feature = "devtools")]
 use crate::renderer::{
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenerBreakpoint,
     RendererDomDebuggerEventListenersResolution, RendererDomDebuggerXhrBreakpoint,
-    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorIngressTicket, RendererPageCommand, RendererPageReply,
-    RendererPerformanceMetricSnapshot, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorResponseSender,
 };
+#[cfg(feature = "devtools")]
+use crate::renderer::{
+    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute, RendererInspectorIngressTicket,
+};
+use crate::renderer::{RendererPageCommand, RendererPageReply, RendererPerformanceMetricSnapshot};
 
 fn dedupe_runtime_context_created_events(events: &mut Vec<RuntimeContextRestoreEvent>) {
     let mut seen = Vec::new();
@@ -274,10 +283,12 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_ensure_isolated_worlds_attached_to_inspector(&self) -> Result<PendingPageCommand> {
         self.start_full_page_command(RendererPageCommand::EnsureIsolatedWorldsAttachedToInspector)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn ensure_isolated_worlds_attached_to_inspector_async(&mut self) -> Result<()> {
         let pending = self.start_ensure_isolated_worlds_attached_to_inspector()?;
         self.finish_unit_runtime_page_command(
@@ -286,6 +297,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_inspector_execution_context_id_for_isolated_context(
         &self,
         execution_context_id: i64,
@@ -306,6 +318,7 @@ impl Page {
             RendererPageReply::OptionalExecutionContextId(id) => Ok(id),)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn inspector_execution_context_id_for_isolated_context_async(
         &mut self,
         execution_context_id: i64,
@@ -315,6 +328,7 @@ impl Page {
         self.finish_inspector_execution_context_id_for_isolated_context(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn isolated_execution_context_id_for_inspector_context_async(
         &mut self,
         execution_context_id: i64,
@@ -436,6 +450,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn create_isolated_world_async(
         &mut self,
         name: &str,
@@ -455,6 +470,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn create_isolated_world_for_frame_async(
         &mut self,
         frame_id: &str,
@@ -475,6 +491,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_create_isolated_world(
         &self,
         name: &str,
@@ -488,6 +505,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_create_isolated_world_runtime_activity_capturing_runtime_inspector_messages(
         &self,
         inspector_session_id: Option<&str>,
@@ -503,6 +521,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_create_isolated_world(
         &mut self,
         completion: CompletedPageCommand,
@@ -512,6 +531,7 @@ impl Page {
         Ok(execution_context_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_create_isolated_world_command_turn(
         &mut self,
         completion: CompletedPageCommand,
@@ -527,6 +547,7 @@ impl Page {
         Ok((*execution_context_id, output))
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_runtime_protocol_message_async(
         &mut self,
         raw_json: &str,
@@ -536,6 +557,7 @@ impl Page {
         self.finish_runtime_protocol_message(completion)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_runtime_protocol_message_for_inspector_session_async(
         &mut self,
         inspector_session_id: Option<String>,
@@ -549,10 +571,12 @@ impl Page {
         self.finish_runtime_protocol_message(completion)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message(&self, raw_json: String) -> Result<PendingPageCommand> {
         self.start_runtime_protocol_message_for_inspector_session(None, raw_json)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message_for_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -564,6 +588,7 @@ impl Page {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message_with_deferred_response(
         &self,
         raw_json: String,
@@ -576,6 +601,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message_for_inspector_session_with_deferred_response(
         &self,
         inspector_session_id: Option<String>,
@@ -591,6 +617,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_routable_runtime_protocol_message_for_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -637,6 +664,7 @@ impl Page {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_inspector_io_message_without_response(
         &self,
         inspector_session_id: Option<String>,
@@ -660,6 +688,7 @@ impl Page {
         self.handle.runtime_inspector_pause_active()
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message_with_context_resolution(
         &self,
         action: String,
@@ -670,6 +699,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message_for_inspector_session_with_context_resolution(
         &self,
         inspector_session_id: Option<String>,
@@ -685,6 +715,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message_with_context_resolution_and_deferred_response(
         &self,
         action: String,
@@ -699,6 +730,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
         &self,
         inspector_session_id: Option<String>,
@@ -772,6 +804,7 @@ impl Page {
         Ok(serde_json::to_string(&message)?)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn runtime_enable_events_async(
         &mut self,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
@@ -779,6 +812,7 @@ impl Page {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn runtime_enable_events_for_inspector_session_async(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -789,6 +823,7 @@ impl Page {
         self.finish_runtime_enable_events(completion)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn runtime_enable_context_restore_events_for_inspector_session_async(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -799,10 +834,12 @@ impl Page {
         self.finish_runtime_enable_context_restore_events(completion)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_enable_events(&self) -> Result<PendingPageCommand> {
         self.start_runtime_enable_events_for_inspector_session(None)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_enable_events_for_inspector_session(
         &self,
         inspector_session_id: Option<&str>,
@@ -851,6 +888,7 @@ impl Page {
         Ok(events)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn detach_runtime_inspector_session_async(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -858,6 +896,7 @@ impl Page {
         self.detach_runtime_inspector_session(inspector_session_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn detach_runtime_inspector_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -900,16 +939,19 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn runtime_heap_usage_async(&mut self) -> Result<RendererRuntimeHeapUsage> {
         let pending = self.start_runtime_heap_usage()?;
         let completion = pending.wait().await?;
         self.finish_runtime_heap_usage(completion)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_heap_usage(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::RuntimeHeapUsage)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_runtime_heap_usage(
         &mut self,
         completion: CompletedPageCommand,
@@ -923,6 +965,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_performance_metric_snapshot(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::PerformanceMetricSnapshot)
     }
@@ -931,6 +974,7 @@ impl Page {
     /// by interruptible V8 Inspector commands. The snapshot remains the latest
     /// owner-published value because collecting a fresh JS-derived snapshot is
     /// not re-entrant while the isolate is executing JavaScript.
+    #[cfg(feature = "devtools")]
     pub fn start_performance_metric_snapshot_from_io(
         &self,
     ) -> (
@@ -949,6 +993,7 @@ impl Page {
 
     /// Publishes the terminal `Performance.getMetrics` response through the
     /// concrete renderer DevTools session that owns this Page attachment.
+    #[cfg(feature = "devtools")]
     pub fn start_performance_get_metrics_from_io_with_response(
         &self,
         inspector_session_id: Option<String>,
@@ -973,6 +1018,7 @@ impl Page {
         self.page_state.performance_metric_snapshot().clone()
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_performance_metric_snapshot(
         &mut self,
         completion: CompletedPageCommand,
@@ -986,6 +1032,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_dom_debugger_get_event_listeners(
         &self,
         inspector_session_id: Option<String>,
@@ -1001,6 +1048,7 @@ impl Page {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_dom_debugger_get_event_listeners(
         &mut self,
         completion: CompletedPageCommand,
@@ -1014,6 +1062,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_dom_debugger_configure_event_listener_breakpoint(
         &self,
         inspector_session_id: Option<String>,
@@ -1029,6 +1078,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_dom_debugger_configure_xhr_breakpoint(
         &self,
         inspector_session_id: Option<String>,
@@ -1042,6 +1092,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_dom_debugger_configure_dom_breakpoint(
         &self,
         inspector_session_id: Option<String>,
@@ -1057,6 +1108,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_dom_debugger_configure_dom_breakpoint(
         &mut self,
         completion: CompletedPageCommand,
@@ -1070,6 +1122,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_runtime_collect_garbage(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::RuntimeCollectGarbage)
     }
@@ -1087,6 +1140,7 @@ impl Page {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn add_runtime_binding_async(
         &mut self,
         name: &str,
@@ -1102,6 +1156,7 @@ impl Page {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn add_runtime_binding_for_inspector_session_async(
         &mut self,
         inspector_session_id: Option<String>,
@@ -1119,6 +1174,7 @@ impl Page {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn install_runtime_binding_async(
         &mut self,
         name: &str,
@@ -1134,6 +1190,7 @@ impl Page {
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_install_runtime_binding(
         &self,
         name: &str,
@@ -1147,22 +1204,26 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn remove_runtime_binding_async(&mut self, name: &str) -> Result<()> {
         let command = RendererPageCommand::RemoveRuntimeBinding(name.to_owned());
         self.dispatch_unit_page_command_async(command, "remove runtime binding")
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_remove_runtime_binding(&self, name: &str) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::RemoveRuntimeBinding(name.to_owned()))
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn remove_default_runtime_binding_async(&mut self, name: &str) -> Result<()> {
         let command = RendererPageCommand::RemoveDefaultRuntimeBinding(name.to_owned());
         self.dispatch_unit_page_command_async(command, "remove default runtime binding")
             .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn restore_runtime_protocol_state_async(
         &mut self,
         inspector_session_id: Option<String>,
@@ -1196,6 +1257,7 @@ impl Page {
         Ok(predecessor)
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn apply_runtime_protocol_state_async(
         &mut self,
         isolated_worlds: &[RuntimeIsolatedWorldDefinition],
@@ -1211,6 +1273,7 @@ impl Page {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn apply_runtime_protocol_state_for_inspector_session_async(
         &mut self,
         inspector_session_id: Option<String>,
@@ -1240,6 +1303,7 @@ impl Page {
         Ok(predecessor)
     }
 
+    #[cfg(feature = "devtools")]
     async fn runtime_enable_concrete_output_for_inspector_session_async(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1291,6 +1355,7 @@ impl Page {
         Ok((*result, output))
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn add_document_start_script_runtime_activity_async(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -1306,6 +1371,7 @@ impl Page {
         self.finish_document_start_script_result(pending.wait().await?)
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_add_document_start_script_runtime_activity(
         &self,
         inspector_session_id: Option<&str>,
@@ -1319,6 +1385,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn remove_document_start_script_by_registry_key_async(
         &mut self,
         registry_key: &str,
@@ -1330,6 +1397,7 @@ impl Page {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_remove_document_start_script_by_registry_key(
         &self,
         registry_key: &str,
@@ -1339,6 +1407,7 @@ impl Page {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn set_runtime_binding_state_async(
         &mut self,
         inspector_session_id: Option<String>,
@@ -1356,6 +1425,7 @@ impl Page {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_set_runtime_binding_state(
         &self,
         inspector_session_id: Option<String>,

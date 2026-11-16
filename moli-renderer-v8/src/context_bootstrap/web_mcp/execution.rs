@@ -9,9 +9,9 @@ use super::tasks::{invocation_context, queue_task, remove_abort_registration, si
 use super::{declarative, devtools};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::PageScriptHost;
-use moli_page_types::{
-    RendererWebMcpEvent, RendererWebMcpObservation, RendererWebMcpResult, RendererWebMcpToolId,
-};
+#[cfg(feature = "devtools")]
+use moli_page_types::RendererWebMcpObservation;
+use moli_page_types::{RendererWebMcpEvent, RendererWebMcpResult, RendererWebMcpToolId};
 
 use crate::{
     abort_signal_route::ResolvedAbortSignal,
@@ -718,39 +718,43 @@ fn finish_failure<'s>(
     host_ptr: *mut PageScriptHost,
     id: u64,
     message: &str,
-    exception: Option<v8::Local<'s, v8::Value>>,
+    _exception: Option<v8::Local<'s, v8::Value>>,
 ) {
     let Some(mut pending) = take_active_invocation(unsafe { &mut *host_ptr }, id) else {
         return;
     };
-    let (sessions, wrapper) = {
-        let store = &unsafe { &*host_ptr }.native_bridge().web_mcp;
-        (
-            store
-                .enabled_sessions
-                .iter()
-                .filter(|_| pending.frame_tree.is_none())
-                .cloned()
-                .collect::<Vec<_>>(),
-            store.object_wrapper.clone(),
-        )
-    };
-    for session in sessions {
-        let exception = exception.and_then(|value| wrapper.as_ref()?.wrap(scope, &session, value));
-        let message = if exception.is_some() {
-            String::new()
-        } else {
-            message.into()
+    #[cfg(feature = "devtools")]
+    {
+        let (sessions, wrapper) = {
+            let store = &unsafe { &*host_ptr }.native_bridge().web_mcp;
+            (
+                store
+                    .enabled_sessions
+                    .iter()
+                    .filter(|_| pending.frame_tree.is_none())
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                store.object_wrapper.clone(),
+            )
         };
-        unsafe { &*host_ptr }.append_live_turn_observation(
-            crate::runtime::RendererProtocolObservation::WebMcp(RendererWebMcpObservation {
-                session,
-                event: RendererWebMcpEvent::ToolResponded {
-                    invocation_id: id,
-                    result: RendererWebMcpResult::Error { message, exception },
-                },
-            }),
-        );
+        for session in sessions {
+            let exception =
+                _exception.and_then(|value| wrapper.as_ref()?.wrap(scope, &session, value));
+            let message = if exception.is_some() {
+                String::new()
+            } else {
+                message.into()
+            };
+            unsafe { &*host_ptr }.append_live_turn_observation(
+                crate::runtime::RendererProtocolObservation::WebMcp(RendererWebMcpObservation {
+                    session,
+                    event: RendererWebMcpEvent::ToolResponded {
+                        invocation_id: id,
+                        result: RendererWebMcpResult::Error { message, exception },
+                    },
+                }),
+            );
+        }
     }
     complete_for_caller(
         scope,

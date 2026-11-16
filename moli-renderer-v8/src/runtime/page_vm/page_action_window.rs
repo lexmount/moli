@@ -57,6 +57,7 @@ impl PageVm {
             .map(|deadline| RendererPageReadyDescriptor::ActionWindow { deadline })
     }
 
+    #[cfg(feature = "devtools")]
     pub(in crate::runtime) fn queue_wheel_event(
         &mut self,
         x: f64,

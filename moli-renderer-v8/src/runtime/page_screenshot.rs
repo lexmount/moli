@@ -102,6 +102,7 @@ impl RendererVisualStateToken {
         }))
     }
 
+    #[cfg(feature = "devtools")]
     fn has_same_resource_generation(&self, other: &Self) -> bool {
         self.0.resource_generation == other.0.resource_generation
     }
@@ -229,6 +230,7 @@ impl PageVm {
 
     /// Polls one screencast subscription. Only this request accepts a known
     /// visual state and only this reply can report `Unchanged`.
+    #[cfg(feature = "devtools")]
     pub(super) fn capture_screencast_frame(
         &mut self,
         request: RendererCaptureScreencastFrameRequest,
@@ -245,6 +247,7 @@ impl PageVm {
         self.capture_screencast_frame_with_before_layout(request, before_layout)
     }
 
+    #[cfg(feature = "devtools")]
     fn capture_screencast_frame_with_before_layout(
         &mut self,
         request: RendererCaptureScreencastFrameRequest,
@@ -433,6 +436,7 @@ impl RendererImageCaptureOutcome {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn visual_state_for_captured_screencast_frame(
     before: RendererVisualStateToken,
     after: RendererVisualStateToken,

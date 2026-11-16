@@ -318,6 +318,7 @@ impl RendererBrowserContextRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn force_update_service_worker_registration_for_page_load(
         &self,
         scope_url: &Url,
@@ -844,5 +845,15 @@ mod tests {
             ),
             RequestRedirectMode::Error
         );
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+impl RendererBrowserContextRuntime {
+    fn force_update_service_worker_registration_for_page_load(
+        &self,
+        _scope: &Url,
+    ) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        None
     }
 }

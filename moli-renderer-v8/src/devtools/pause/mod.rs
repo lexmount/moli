@@ -6,21 +6,29 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
+#[cfg(feature = "devtools")]
+use moli_page_types::V8InspectorSessionState;
+use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use parking_lot::{Condvar, Mutex};
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
 use crate::devtools::target::RendererDevToolsTargetHandle;
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererInspectorIngressTicket;
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererInspectorPauseCommandEffect;
 #[cfg(test)]
 use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::runtime::{
-    PageId, PendingRendererOutputRecord, RendererInspectorIngressTicket,
-    RendererInspectorPauseCommandEffect, RendererOutputResidenceIdentity,
-    RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
+    PageId, RendererOutputResidenceIdentity, RendererRuntimeCommandCausalIdentity,
     RendererTurnOutputJournal,
+};
+#[cfg(feature = "devtools")]
+use crate::runtime::{
+    PendingRendererOutputRecord, RendererProtocolObservation, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorMessageBatch,
 };
 
 mod causality;
@@ -33,8 +41,10 @@ use causality::{
 pub(crate) use causality::{
     RendererInspectorPauseCommandOutputRoute, RendererInspectorPauseNotificationRoute,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use loop_state::RendererInspectorPauseExitReason;
+pub(crate) use loop_state::RendererInspectorPauseLoopPolicy;
 use loop_state::RendererInspectorPausePhase;
-pub(crate) use loop_state::{RendererInspectorPauseExitReason, RendererInspectorPauseLoopPolicy};
 
 #[derive(Clone)]
 pub(crate) struct RendererInspectorPauseBridge {
@@ -72,6 +82,7 @@ struct RendererInspectorPauseBridgeState {
 }
 
 #[must_use]
+#[cfg(feature = "devtools")]
 pub(crate) struct RendererInspectorPausePrefaceGuard {
     bridge: RendererInspectorPauseBridge,
     id: u64,
@@ -100,6 +111,7 @@ impl RendererInspectorPauseLoopWake {
     }
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for RendererInspectorPausePrefaceGuard {
     fn drop(&mut self) {
         self.bridge.cancel_pause_preface(self.id);
@@ -176,6 +188,7 @@ impl RendererInspectorPauseBridge {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn outbound_route(
         &self,
         target: RendererDevToolsTargetHandle,
@@ -201,6 +214,7 @@ impl RendererInspectorPauseBridge {
         self.shared.state.lock().phase != RendererInspectorPausePhase::Running
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn begin_command_dispatch(
         &self,
         command_id: u64,
@@ -246,6 +260,7 @@ impl RendererInspectorPauseBridge {
         }
     }
 
+    #[cfg(feature = "devtools")]
     fn finish_command_dispatch(&self, command_id: u64) {
         let mut state = self.shared.state.lock();
         let dispatch = state
@@ -292,6 +307,7 @@ impl RendererInspectorPauseBridge {
         self.shared.state.lock().pending_command_transition = None;
     }
 
+    #[cfg(feature = "devtools")]
     fn stage_pause_preface(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -324,6 +340,7 @@ impl RendererInspectorPauseBridge {
         })
     }
 
+    #[cfg(feature = "devtools")]
     fn cancel_pause_preface(&self, id: u64) {
         let mut state = self.shared.state.lock();
         if let Some(position) = state
@@ -335,6 +352,7 @@ impl RendererInspectorPauseBridge {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn arm_session_detach(&self) {
         let mut state = self.shared.state.lock();
         state.session_detach_arms = state
@@ -346,6 +364,7 @@ impl RendererInspectorPauseBridge {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn disarm_session_detach(&self) {
         let mut state = self.shared.state.lock();
         state.session_detach_arms = state
@@ -354,6 +373,7 @@ impl RendererInspectorPauseBridge {
             .expect("runtime inspector session detach arm count underflow");
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn enter_pause(&self) -> Option<RendererInspectorPauseLoopPolicy> {
         let mut state = self.shared.state.lock();
         if state.target_closed || state.phase != RendererInspectorPausePhase::Entering {
@@ -381,6 +401,7 @@ impl RendererInspectorPauseBridge {
             .expect("document replacement scope must be balanced");
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn wait_for_pause_work<T>(
         &self,
         mut claim: impl FnMut() -> Option<T>,
@@ -406,6 +427,7 @@ impl RendererInspectorPauseBridge {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn request_quit(&self) {
         let mut state = self.shared.state.lock();
         if state.phase != RendererInspectorPausePhase::Running {
@@ -414,6 +436,7 @@ impl RendererInspectorPauseBridge {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn leave_pause(&self) {
         let mut state = self.shared.state.lock();
         state.phase = RendererInspectorPausePhase::Running;
@@ -465,6 +488,7 @@ impl RendererInspectorPauseBridge {
         self.shared.pause_loop_wake.notify_all();
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn record_v8_state_update(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -639,6 +663,7 @@ impl RendererInspectorSessionOutboundRoute {
             .detach_session(self.agent_token, &self.session);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn stage_pause_preface(
         &self,
         messages: Vec<RendererRuntimeInspectorMessage>,
@@ -651,11 +676,13 @@ impl RendererInspectorSessionOutboundRoute {
     }
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) struct RendererInspectorPauseCommandDispatchGuard {
     bridge: RendererInspectorPauseBridge,
     command_id: Option<u64>,
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for RendererInspectorPauseCommandDispatchGuard {
     fn drop(&mut self) {
         if let Some(command_id) = self.command_id {

@@ -1,10 +1,16 @@
-use std::{pin::pin, sync::Arc};
+#[cfg(feature = "devtools")]
+use std::pin::pin;
+use std::sync::Arc;
 
+#[cfg(feature = "devtools")]
 use anyhow::{Result, anyhow, bail};
 
-use super::{ScriptVm, inspector::PageInspectorSessionTarget};
+use super::ScriptVm;
+#[cfg(feature = "devtools")]
+use super::inspector::PageInspectorSessionTarget;
 
 impl ScriptVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn blob_uuid_for_runtime_object_id(
         &mut self,
         inspector_session_id: Option<&str>,

@@ -79,6 +79,7 @@ impl super::PageDocumentCommandTarget {
             .as_ref()
             .or_else(|| self.network_pause.as_ref()?.response_body())
     }
+    #[cfg(feature = "devtools")]
     pub fn update_native_interception_policy(
         &self,
         classes: crate::page::SubresourceInterceptionClasses,
@@ -112,6 +113,7 @@ impl super::PageDocumentCommandTarget {
         self
     }
 
+    #[cfg(feature = "devtools")]
     pub fn start_resource_command(
         &self,
         command: crate::RendererPageCommand,

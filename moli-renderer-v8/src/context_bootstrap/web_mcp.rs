@@ -23,7 +23,11 @@ pub(crate) use declarative::invocation::{
     form_submission_failed,
 };
 pub(crate) use declarative::{note_mutation, prepare_registration_task, queue_registration_task};
-pub(crate) use devtools::{configure_session, dispatch_command, emit as emit_protocol_event};
+#[cfg(feature = "devtools")]
+pub(crate) use devtools::configure_session;
+#[cfg(feature = "devtools")]
+pub(crate) use devtools::dispatch_command;
+pub(crate) use devtools::emit as emit_protocol_event;
 pub(crate) use lifecycle::queue_retirement_task;
 pub(crate) use navigation::{
     bind_child_navigation, bind_root_navigation, cancel_child_navigation, commit_child_navigation,

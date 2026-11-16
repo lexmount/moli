@@ -1,7 +1,11 @@
+#[cfg(feature = "devtools")]
 use crate::runtime::WorkerInspectorError;
+#[cfg(feature = "devtools")]
 use anyhow::{Context as _, Result};
+#[cfg(feature = "devtools")]
 use tokio::sync::oneshot;
 
+#[cfg(feature = "devtools")]
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 use crate::worker::{WorkerDevToolsHandle, WorkerHandle};
 
@@ -39,9 +43,12 @@ impl RendererBrowserContextRuntime {
         let DedicatedWorkerDevToolsTarget::Loading { inspector_sessions } = target else {
             return;
         };
+        #[cfg(not(feature = "devtools"))]
+        let _ = inspector_sessions;
         let handle = handle.devtools_handle();
         // Keep attachment updates and handle publication under one lock. A
         // concurrent detach must either remove a pending id or retire its token.
+        #[cfg(feature = "devtools")]
         for session in inspector_sessions.drain(..) {
             let _ = handle.attach_runtime_inspector_session(session);
         }
@@ -86,6 +93,7 @@ impl RendererBrowserContextRuntime {
             })
     }
 
+    #[cfg(feature = "devtools")]
     fn dedicated_worker_devtools_target(
         &self,
         instance_id: u64,
@@ -97,6 +105,7 @@ impl RendererBrowserContextRuntime {
             .cloned()
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_dedicated_worker_runtime_protocol_message(
         &self,
         instance_id: u64,
@@ -112,6 +121,7 @@ impl RendererBrowserContextRuntime {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_dedicated_worker_runtime_protocol_message_with_deferred_response(
         &self,
         instance_id: u64,
@@ -128,6 +138,7 @@ impl RendererBrowserContextRuntime {
         .await
     }
 
+    #[cfg(feature = "devtools")]
     pub async fn dispatch_dedicated_worker_runtime_protocol_message_with_devtools_session_response(
         &self,
         instance_id: u64,
@@ -174,6 +185,7 @@ impl RendererBrowserContextRuntime {
         )
     }
 
+    #[cfg(feature = "devtools")]
     async fn dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(
         &self,
         instance_id: u64,
@@ -198,6 +210,7 @@ impl RendererBrowserContextRuntime {
             .context(WorkerInspectorError::DedicatedUnavailable)?
     }
 
+    #[cfg(feature = "devtools")]
     pub fn attach_dedicated_worker_runtime_inspector_session(
         &self,
         instance_id: u64,
@@ -218,6 +231,7 @@ impl RendererBrowserContextRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn detach_dedicated_worker_runtime_inspector_session(
         &self,
         instance_id: u64,
@@ -237,6 +251,7 @@ impl RendererBrowserContextRuntime {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub fn run_dedicated_worker_if_waiting_for_debugger_for_devtools(
         &self,
         instance_id: u64,

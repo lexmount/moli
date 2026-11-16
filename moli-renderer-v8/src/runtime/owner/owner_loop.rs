@@ -1,6 +1,7 @@
 use super::*;
 
 impl RendererOwnerHandle {
+    #[cfg(feature = "devtools")]
     pub(super) fn enqueue_inspector_main_receiver_wake(
         wake: RendererInspectorMainOwnerWake,
         pending_turns: &mut RenderRuntimePendingTurnQueue,
@@ -52,11 +53,15 @@ impl RendererOwnerHandle {
                         }
                     }
                     while let Ok(envelope) = rx.try_recv() {
-                        if let RenderRuntimeEnvelope::Command { command, reply_tx } = envelope {
-                            self.release_rejected_command_output_reservation(&command);
-                            let _ = reply_tx.send(Err(anyhow!(
-                                "renderer browser context was dropped before command dispatch"
-                            )));
+                        match envelope {
+                            RenderRuntimeEnvelope::Command { command, reply_tx } => {
+                                self.release_rejected_command_output_reservation(&command);
+                                let _ = reply_tx.send(Err(anyhow!(
+                                    "renderer browser context was dropped before command dispatch"
+                                )));
+                            }
+                            #[cfg(feature = "devtools")]
+                            RenderRuntimeEnvelope::InspectorMainReceiverWake(_) => {}
                         }
                     }
                     break;
@@ -213,6 +218,7 @@ impl RendererOwnerHandle {
                                 );
                             }
                         }
+                        #[cfg(feature = "devtools")]
                         RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
                             reply_tx,
                             turn,
@@ -526,6 +532,7 @@ impl RendererOwnerHandle {
     ) {
         let (command, reply_tx) = match envelope {
             RenderRuntimeEnvelope::Command { command, reply_tx } => (*command, reply_tx),
+            #[cfg(feature = "devtools")]
             RenderRuntimeEnvelope::InspectorMainReceiverWake(wake) => {
                 Self::enqueue_inspector_main_receiver_wake(wake, pending_turns);
                 return;
@@ -575,6 +582,7 @@ impl RendererOwnerHandle {
                 );
                 let _ = reply_tx.send(result);
             }
+            #[cfg(feature = "devtools")]
             RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
                 reply_tx: main_reply_tx,
                 turn,
@@ -741,6 +749,7 @@ impl RendererOwnerHandle {
             } => {
                 self.cancel_pending_turn_on_owner_local_store(*turn);
             }
+            #[cfg(feature = "devtools")]
             RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
                 reply_tx,
                 turn,
@@ -1074,6 +1083,7 @@ impl RendererOwnerHandle {
             RenderRuntimeTurn::RunOwnerMaintenance { task } => {
                 self.run_one_owner_maintenance_turn(task).await
             }
+            #[cfg(feature = "devtools")]
             RenderRuntimeTurn::RunInspectorMainReceiver { wake } => {
                 let Some(dispatch) = dispatch_inspector_main_owner_wake(wake) else {
                     return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
@@ -1093,6 +1103,7 @@ impl RendererOwnerHandle {
                     }),
                 }
             }
+            #[cfg(feature = "devtools")]
             RenderRuntimeTurn::RunDevToolsMainCommand {
                 token,
                 command,

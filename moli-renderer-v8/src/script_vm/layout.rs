@@ -12,6 +12,7 @@ impl moli_dom::accessibility::AccessibilityStyleSource
 }
 
 impl ScriptVm {
+    #[cfg(feature = "devtools")]
     pub(crate) fn accessibility_payloads(
         &self,
         handle: DomHandle,
@@ -77,6 +78,7 @@ impl ScriptVm {
             .install_prepared_style_sheets_for_document(document);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn computed_style_property_values_for_document_snapshot(
         &self,
         handles: impl IntoIterator<Item = DomHandle>,
@@ -184,6 +186,7 @@ impl ScriptVm {
         .map_err(anyhow::Error::new)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn visual_state_token(
         &self,
         document: crate::runtime::RendererDocumentLifecycleIdentity,
@@ -417,6 +420,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn observable_geometry_query_for_document(
         &self,
         document: DomHandle,
@@ -426,6 +430,7 @@ impl ScriptVm {
         crate::native_bridge::element::observable_geometry_query(&host, document, query)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn observable_geometry_batch_for_document(
         &mut self,
         document: DomHandle,
@@ -435,6 +440,7 @@ impl ScriptVm {
         crate::native_bridge::element::observable_geometry_batch(&host, document, batch)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn observable_deep_hit_test_for_current_document(
         &mut self,
         point: moli_layout::LayoutPoint,
@@ -480,6 +486,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn computed_style_properties_for_inspector_handle(
         &self,
         handle: DomHandle,
@@ -501,10 +508,12 @@ impl ScriptVm {
         .unwrap_or(false)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn owner_style_sheet_text(&self, owner: DomHandle) -> Option<String> {
         self._context_host.borrow().owner_style_sheet_text(owner)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn linked_stylesheet_source_for_owner(
         &self,
         owner: DomHandle,
@@ -514,6 +523,7 @@ impl ScriptVm {
             .linked_stylesheet_source_for_owner(owner)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn stylesheet_owner_is_csp_blocked(&self, owner: DomHandle) -> bool {
         self._context_host
             .borrow()
@@ -664,6 +674,7 @@ impl ScriptVm {
         Rc::downgrade(&self._context_host)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn scroll_live_node_handle_into_view_if_needed(
         &mut self,
         handle: DomHandle,
@@ -698,6 +709,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn client_rect_for_live_node_handle(
         &mut self,
         handle: DomHandle,
@@ -741,6 +753,7 @@ impl ScriptVm {
         }))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn compose_layout_quads_to_top(
         &mut self,
         mut document: DomHandle,

@@ -7,16 +7,19 @@ pub(crate) use self::evaluation::dispatch_media_query_list_change_events;
 pub(super) use self::evaluation::{
     install_media_query_list_template_bindings, window_match_media_callback,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use self::events::SimpleObjectEventListenerInspectorSnapshot;
 pub(in crate::context_bootstrap) use self::events::dispatch_media_query_list_event;
+#[cfg(feature = "devtools")]
+pub(crate) use self::events::simple_event_target_inspector_listener_snapshots;
 pub(crate) use self::events::{
-    ResolvedSimpleEventTarget, SimpleObjectEventListenerInspectorSnapshot,
-    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    ResolvedSimpleEventTarget, dispatch_simple_event_target_event,
+    dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback, simple_event_target_inspector_listener_snapshots,
-    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
-    simple_object_has_event_listeners,
+    simple_event_target_handler_setter_callback, simple_object_event_listeners_snapshot,
+    simple_object_event_set_handler, simple_object_has_event_listeners,
 };
 pub(super) use self::events::{
     media_query_list_add_listener_callback, media_query_list_remove_listener_callback,

@@ -1,12 +1,17 @@
+#[cfg(feature = "devtools")]
 use anyhow::Result;
+#[cfg(feature = "devtools")]
 use url::Url;
 
+use super::Page;
+#[cfg(feature = "devtools")]
 use super::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererNetworkResourceLoadPreparation,
+    CompletedPageCommand, PendingPageCommand, RendererNetworkResourceLoadPreparation,
     RendererPageCommand, RendererPageReply,
 };
 
 impl Page {
+    #[cfg(feature = "devtools")]
     pub fn start_prepare_network_resource_load(
         &self,
         frame_id: String,
@@ -22,6 +27,7 @@ impl Page {
         })
     }
 
+    #[cfg(feature = "devtools")]
     pub fn finish_prepare_network_resource_load(
         &mut self,
         completion: CompletedPageCommand,

@@ -902,6 +902,7 @@ impl HostEventTargetRegistry {
             .collect()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_listener_snapshots(
         &self,
         target: EventTargetHandle,
@@ -1103,6 +1104,7 @@ impl HostEventTargetRegistry {
             .or_insert(registration_id);
     }
 
+    #[cfg(feature = "devtools")]
     fn event_type_registration_id(
         &self,
         target: EventTargetHandle,

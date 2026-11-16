@@ -218,3 +218,48 @@ pub struct NativeCommandTerminal<Output> {
     pub attachment_id: RendererAgentAttachmentId,
     pub reply: NativeProtocolResponse<Output>,
 }
+
+impl crate::InspectorPauseEffect {
+    pub fn from_message(message: Option<&serde_json::Value>) -> Self {
+        match message
+            .and_then(|message| message.get("method"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("Debugger.resume") => Self::Resume,
+            Some(
+                "Debugger.continueToLocation"
+                | "Debugger.restartFrame"
+                | "Debugger.stepInto"
+                | "Debugger.stepOut"
+                | "Debugger.stepOver",
+            ) => Self::Step,
+            _ => Self::None,
+        }
+    }
+}
+
+/// Opaque capabilities retained by the worker runtime.
+pub trait WorkerCommandHandles {
+    type SessionLifetime;
+    type ResponseSender;
+    type ProtocolResponseSender;
+}
+
+pub enum WorkerCommand<Handles: WorkerCommandHandles> {
+    DispatchProtocolMessage {
+        lifetime: Handles::SessionLifetime,
+        inspector_session_id: Option<String>,
+        raw_json: String,
+        deferred_response: Option<Handles::ResponseSender>,
+        response_tx: Handles::ProtocolResponseSender,
+    },
+    AttachSession {
+        lifetime: Handles::SessionLifetime,
+        inspector_session_id: Option<String>,
+    },
+    DetachSession {
+        lifetime: Handles::SessionLifetime,
+        inspector_session_id: Option<String>,
+    },
+    RunIfWaitingForDebugger,
+}

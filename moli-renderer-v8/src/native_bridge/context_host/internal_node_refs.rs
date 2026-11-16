@@ -4,6 +4,7 @@ const JS_MAX_SAFE_INTEGER_TOKEN: u64 = (1_u64 << 53) - 1;
 const MAX_INTERNAL_REFERENCE_TOKEN_ATTEMPTS: usize = 16;
 
 impl PageScriptHost {
+    #[cfg(feature = "devtools")]
     pub(crate) fn register_internal_node_reference(&mut self, handle: DomHandle) -> Option<u64> {
         self.dom_host().node(handle)?;
 
@@ -24,10 +25,12 @@ impl PageScriptHost {
         self.dom_host().node(handle).is_some().then_some(handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn discard_internal_node_reference(&mut self, token: u64) {
         self.internal_node_references.remove(&token);
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn register_internal_inspector_value_reference<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -55,10 +58,12 @@ impl PageScriptHost {
             .map(|value| v8::Local::new(scope, value))
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn discard_internal_inspector_value_reference(&mut self, token: u64) {
         self.internal_inspector_value_references.remove(&token);
     }
 
+    #[cfg(feature = "devtools")]
     fn internal_reference_token_is_available(&self, token: u64) -> bool {
         token != 0
             && !self.internal_node_references.contains_key(&token)
@@ -68,6 +73,7 @@ impl PageScriptHost {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn random_js_safe_token() -> Option<u64> {
     let mut bytes = [0_u8; 8];
     moli_crypto::fill_secure_random(&mut bytes).ok()?;

@@ -17,6 +17,7 @@ impl RendererOutputRecord {
                 observation_transport_charge_bytes(observation)
             }
             RendererOutputItem::OwnerAction(action) => owner_action_transport_charge_bytes(action),
+            #[cfg(feature = "devtools")]
             RendererOutputItem::NativeTerminal(terminal) => native_terminal_charge_bytes(terminal),
         };
         std::mem::size_of::<Self>()
@@ -25,6 +26,7 @@ impl RendererOutputRecord {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn native_terminal_charge_bytes(terminal: &super::RendererNativeCommandTerminal) -> usize {
     let mut charge = terminal.session.wire_session_id().map_or(0, string_charge);
     let response = &terminal.reply;
@@ -67,6 +69,7 @@ fn native_terminal_charge_bytes(terminal: &super::RendererNativeCommandTerminal)
     charge
 }
 
+#[cfg(feature = "devtools")]
 fn runtime_command_output_charge_bytes(
     output: &crate::runtime::RendererRuntimeCommandOutput,
 ) -> usize {
@@ -114,6 +117,7 @@ fn json_charge(value: &serde_json::Value) -> usize {
 
 fn observation_transport_charge_bytes(observation: &RendererProtocolObservation) -> usize {
     match observation {
+        #[cfg(feature = "devtools")]
         RendererProtocolObservation::WebMcp(observation) => {
             use moli_page_types::{RendererWebMcpEvent as Event, RendererWebMcpResult as Result};
             let frame_charge = |frame: &Option<String>| frame.as_deref().map_or(0, string_charge);
@@ -170,6 +174,7 @@ fn observation_transport_charge_bytes(observation: &RendererProtocolObservation)
         RendererProtocolObservation::RuntimeBinding(call) => {
             string_charge(&call.name).saturating_add(string_charge(&call.payload))
         }
+        #[cfg(feature = "devtools")]
         RendererProtocolObservation::DomMutations(batch) => batch.events.iter().fold(
             batch.events.capacity().saturating_mul(128),
             |total, event| total.saturating_add(dom_mutation_transport_charge_bytes(event)),

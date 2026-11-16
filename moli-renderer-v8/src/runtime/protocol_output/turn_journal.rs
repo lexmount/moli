@@ -247,6 +247,7 @@ impl RendererTurnOutputJournal {
     /// outside the journal lock and must not allocate a second cursor.
     /// Publication and its retention lease share this lock, so retirement
     /// cannot close the stream between admitting the prefix and its fence.
+    #[cfg(feature = "devtools")]
     pub(crate) fn publish_resolved_prefix_and_declare_fence(
         &self,
         publication: RendererOutputPublication,
