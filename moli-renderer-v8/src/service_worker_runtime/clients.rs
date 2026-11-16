@@ -10,6 +10,7 @@ static NEXT_SERVICE_WORKER_EXPOSED_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 pub(crate) struct ServiceWorkerWindowClientDocument {
     pub(crate) url: Url,
     pub(crate) controller_source: Option<ServiceWorkerClientId>,
+    pub(crate) navigation_destination: moli_fetch::NavigationRequestDestination,
 }
 
 impl From<Url> for ServiceWorkerWindowClientDocument {
@@ -17,6 +18,7 @@ impl From<Url> for ServiceWorkerWindowClientDocument {
         Self {
             url,
             controller_source: None,
+            navigation_destination: moli_fetch::NavigationRequestDestination::Document,
         }
     }
 }

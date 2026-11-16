@@ -317,6 +317,7 @@ fn local_window_inherits_only_its_parents_controller_in_the_same_partition() {
                 ServiceWorkerWindowClientDocument {
                     url: local_url.clone(),
                     controller_source: Some(parent_id),
+                    navigation_destination: moli_fetch::NavigationRequestDestination::Document,
                 },
                 storage_key,
                 ServiceWorkerClientFrameType::Nested,

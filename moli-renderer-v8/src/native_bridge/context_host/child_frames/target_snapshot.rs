@@ -10,6 +10,7 @@ use url::Url;
 /// task or a subsequent refresh of the owner element's live attributes.
 #[derive(Clone, Debug, Default)]
 pub(in crate::native_bridge::context_host) struct ChildNavigationTargetSnapshot {
+    owner_kind: super::discovery::ChildFrameOwnerElementKind,
     required_csp: Option<IframeCspAttribute>,
     embedding_origin: Option<String>,
     owner_referrer_policy: Option<String>,
@@ -18,6 +19,12 @@ pub(in crate::native_bridge::context_host) struct ChildNavigationTargetSnapshot 
 }
 
 impl ChildNavigationTargetSnapshot {
+    pub(in crate::native_bridge::context_host) fn navigation_destination(
+        &self,
+    ) -> moli_fetch::NavigationRequestDestination {
+        self.owner_kind.navigation_destination()
+    }
+
     pub(in crate::native_bridge::context_host) fn with_resource_timing_initiator(
         mut self,
         initiator: crate::context_bootstrap::ResourceTimingInitiator,
@@ -80,6 +87,7 @@ impl ChildNavigationTargetSnapshot {
                 policy.as_str().as_bytes().to_vec(),
             ));
         }
+        request = request.with_navigation_destination(self.navigation_destination());
         let metadata = request
             .subresource_request_metadata()
             .cloned()
@@ -95,6 +103,15 @@ impl ChildNavigationTargetSnapshot {
 }
 
 impl PageScriptHost {
+    pub(in crate::native_bridge::context_host) fn navigation_destination_for_child_context(
+        &self,
+        handle: DomHandle,
+    ) -> moli_fetch::NavigationRequestDestination {
+        self.child_frame_owner_element_kind(handle)
+            .unwrap_or_default()
+            .navigation_destination()
+    }
+
     pub(in crate::native_bridge::context_host) fn snapshot_child_navigation_target(
         &self,
         handle: DomHandle,
@@ -121,6 +138,9 @@ impl PageScriptHost {
             None
         };
         let snapshot = ChildNavigationTargetSnapshot {
+            owner_kind: self
+                .child_frame_owner_element_kind(handle)
+                .unwrap_or_default(),
             embedding_origin,
             owner_referrer_policy,
             creator_referrer_policy,

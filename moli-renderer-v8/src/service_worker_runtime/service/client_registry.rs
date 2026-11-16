@@ -2,6 +2,7 @@ use super::registration_lookup::{
     attach_controller_to_client_locked, controller_registration_for_client_locked,
 };
 use super::*;
+use crate::service_worker_runtime::ServiceWorkerRequestDestination;
 
 type WindowClientQueryTarget = (
     crate::types::ServiceWorkerWindowClientTarget,
@@ -89,13 +90,13 @@ impl ServiceWorkerRuntimeService {
 
     pub(crate) fn register_reserved_client_with_storage_key(
         &self,
-        document_url: Url,
+        document: impl Into<ServiceWorkerWindowClientDocument>,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
         self.register_reserved_client_with_storage_key_and_bypass(
-            document_url,
+            document.into(),
             storage_key,
             frame_type,
             document_owner,
@@ -111,7 +112,7 @@ impl ServiceWorkerRuntimeService {
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
         self.register_reserved_client_with_storage_key_and_bypass(
-            document_url,
+            document_url.into(),
             storage_key,
             frame_type,
             document_owner,
@@ -121,7 +122,7 @@ impl ServiceWorkerRuntimeService {
 
     fn register_reserved_client_with_storage_key_and_bypass(
         &self,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
@@ -130,7 +131,7 @@ impl ServiceWorkerRuntimeService {
         let client_id = self.inner.client_id_allocator.allocate();
         let inserted = self.register_window_client_with_storage_key(
             client_id,
-            document_url.into(),
+            document,
             storage_key,
             frame_type,
             document_owner,
@@ -494,6 +495,7 @@ impl ServiceWorkerRuntimeService {
                     &current_document_url,
                     &storage_key,
                     document.controller_source,
+                    document.navigation_destination,
                 )
             {
                 state.record_target_version_updated(version_id);
@@ -644,6 +646,7 @@ impl ServiceWorkerRuntimeService {
                     &current_document_url,
                     &storage_key,
                     document.controller_source,
+                    document.navigation_destination,
                 )
             {
                 state.record_target_version_updated(version_id);
@@ -923,8 +926,12 @@ fn select_window_client_controller_locked(
     document_url: &Url,
     storage_key: &str,
     controller_source: Option<ServiceWorkerClientId>,
+    destination: moli_fetch::NavigationRequestDestination,
 ) -> Option<ServiceWorkerVersionId> {
     let Some(source_id) = controller_source else {
+        if ServiceWorkerRequestDestination::from(destination).bypasses_service_worker() {
+            return None;
+        }
         return select_controller_for_new_client_locked(
             state,
             client_id,

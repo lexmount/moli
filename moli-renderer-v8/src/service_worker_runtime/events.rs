@@ -546,11 +546,14 @@ pub(crate) enum ServiceWorkerRequestDestination {
     Audio,
     AudioWorklet,
     Document,
+    Embed,
     Font,
+    Frame,
     Iframe,
     Image,
     Json,
     Manifest,
+    Object,
     Report,
     Script,
     SharedWorker,
@@ -569,11 +572,14 @@ impl ServiceWorkerRequestDestination {
             Self::Audio => "audio",
             Self::AudioWorklet => "audioworklet",
             Self::Document => "document",
+            Self::Embed => "embed",
             Self::Font => "font",
+            Self::Frame => "frame",
             Self::Iframe => "iframe",
             Self::Image => "image",
             Self::Json => "json",
             Self::Manifest => "manifest",
+            Self::Object => "object",
             Self::Report => "report",
             Self::Script => "script",
             Self::SharedWorker => "sharedworker",
@@ -586,6 +592,19 @@ impl ServiceWorkerRequestDestination {
             // destination is empty, including service-worker interception.
             Self::Dictionary => "",
         }
+    }
+
+    /// Handle Fetch returns before controller selection or router evaluation
+    /// for resources embedded by these elements.
+    pub(crate) const fn bypasses_service_worker(self) -> bool {
+        matches!(self, Self::Embed | Self::Object)
+    }
+
+    pub(crate) const fn is_navigation(self) -> bool {
+        matches!(
+            self,
+            Self::Document | Self::Frame | Self::Iframe | Self::Embed | Self::Object
+        )
     }
 
     pub(crate) fn for_subresource_resource_type(
@@ -608,6 +627,19 @@ impl ServiceWorkerRequestDestination {
     }
 }
 
+impl From<moli_fetch::NavigationRequestDestination> for ServiceWorkerRequestDestination {
+    fn from(destination: moli_fetch::NavigationRequestDestination) -> Self {
+        use moli_fetch::NavigationRequestDestination;
+        match destination {
+            NavigationRequestDestination::Document => Self::Document,
+            NavigationRequestDestination::Frame => Self::Frame,
+            NavigationRequestDestination::Iframe => Self::Iframe,
+            NavigationRequestDestination::Embed => Self::Embed,
+            NavigationRequestDestination::Object => Self::Object,
+        }
+    }
+}
+
 pub(crate) fn service_worker_opaque_response_rejection(
     request_mode: RequestMode,
     destination: ServiceWorkerRequestDestination,
@@ -618,13 +650,12 @@ pub(crate) fn service_worker_opaque_response_rejection(
                 .to_owned(),
         );
     }
-    if matches!(
-        destination,
-        ServiceWorkerRequestDestination::Document
-            | ServiceWorkerRequestDestination::Iframe
-            | ServiceWorkerRequestDestination::Worker
-            | ServiceWorkerRequestDestination::SharedWorker
-    ) {
+    if destination.is_navigation()
+        || matches!(
+            destination,
+            ServiceWorkerRequestDestination::Worker | ServiceWorkerRequestDestination::SharedWorker
+        )
+    {
         return Some(
             "FetchEvent.respondWith rejected an opaque Response for a client request".to_owned(),
         );

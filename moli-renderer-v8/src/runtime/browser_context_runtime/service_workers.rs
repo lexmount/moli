@@ -168,7 +168,7 @@ impl RendererBrowserContextRuntime {
             request,
             navigation_loader,
             completion_tx,
-            ServiceWorkerRequestDestination::Iframe,
+            request.navigation_destination().into(),
         )
         .await
     }
@@ -418,14 +418,14 @@ impl RendererBrowserContextRuntime {
 
     pub(crate) fn register_reserved_service_worker_client(
         &self,
-        document_url: Url,
+        document: impl Into<ServiceWorkerWindowClientDocument>,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
         self.service_worker_runtime()
             .register_reserved_client_with_storage_key(
-                document_url,
+                document,
                 storage_key,
                 frame_type,
                 document_owner,
@@ -820,11 +820,10 @@ fn main_resource_fetch_event_redirect_mode(
     destination: ServiceWorkerRequestDestination,
     request_redirect_mode: moli_fetch::RequestRedirectMode,
 ) -> moli_fetch::RequestRedirectMode {
-    match destination {
-        ServiceWorkerRequestDestination::Document | ServiceWorkerRequestDestination::Iframe => {
-            moli_fetch::RequestRedirectMode::Manual
-        }
-        _ => request_redirect_mode,
+    if destination.is_navigation() {
+        moli_fetch::RequestRedirectMode::Manual
+    } else {
+        request_redirect_mode
     }
 }
 

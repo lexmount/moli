@@ -1277,10 +1277,7 @@ pub(super) fn service_worker_fetch_browser_metadata(
 }
 
 fn service_worker_fetch_is_navigation_request(job: &ServiceWorkerFetchJob) -> bool {
-    matches!(
-        job.destination,
-        ServiceWorkerRequestDestination::Document | ServiceWorkerRequestDestination::Iframe
-    )
+    job.destination.is_navigation()
 }
 
 fn service_worker_fetch_response_requires_body_security_policy(

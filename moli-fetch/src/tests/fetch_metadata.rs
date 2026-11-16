@@ -4,6 +4,9 @@ use super::*;
 enum RequestKind {
     Navigation,
     Iframe,
+    Frame,
+    Embed,
+    Object,
     Fetch,
     Script(crate::RequestResourceType),
 }
@@ -17,6 +20,16 @@ impl RequestKind {
                 .with_initiator_url(&target.join("/creator")?)
                 .with_request_origin(moli_url::WebOrigin::from_url(target))
                 .with_subframe_navigation_cookie_context(),
+            Self::Frame | Self::Embed | Self::Object => request
+                .with_initiator_url(&target.join("/creator")?)
+                .with_request_origin(moli_url::WebOrigin::from_url(target))
+                .with_subframe_navigation_cookie_context()
+                .with_navigation_destination(match self {
+                    Self::Frame => crate::NavigationRequestDestination::Frame,
+                    Self::Embed => crate::NavigationRequestDestination::Embed,
+                    Self::Object => crate::NavigationRequestDestination::Object,
+                    _ => unreachable!(),
+                }),
             Self::Fetch => request
                 .with_initiator_url(&target.join("/creator")?)
                 .with_request_origin(moli_url::WebOrigin::from_url(target))
@@ -33,7 +46,9 @@ impl RequestKind {
 
     fn mode(self) -> &'static str {
         match self {
-            Self::Navigation | Self::Iframe => "navigate",
+            Self::Navigation | Self::Iframe | Self::Frame | Self::Embed | Self::Object => {
+                "navigate"
+            }
             Self::Fetch => "no-cors",
             Self::Script(_) => "cors",
         }
@@ -43,6 +58,9 @@ impl RequestKind {
         match self {
             Self::Navigation => "document",
             Self::Iframe => "iframe",
+            Self::Frame => "frame",
+            Self::Embed => "embed",
+            Self::Object => "object",
             Self::Fetch => "empty",
             Self::Script(_) => "script",
         }
@@ -308,6 +326,9 @@ fn browser_metadata_requires_a_potentially_trustworthy_current_destination() -> 
         for kind in [
             RequestKind::Navigation,
             RequestKind::Iframe,
+            RequestKind::Frame,
+            RequestKind::Embed,
+            RequestKind::Object,
             RequestKind::Fetch,
             RequestKind::Script(crate::RequestResourceType::Script),
             RequestKind::Script(crate::RequestResourceType::ParserBlockingScript),
@@ -446,6 +467,9 @@ async fn check_redirects(transport: Transport) -> Result<()> {
     for kind in [
         RequestKind::Navigation,
         RequestKind::Iframe,
+        RequestKind::Frame,
+        RequestKind::Embed,
+        RequestKind::Object,
         RequestKind::Fetch,
         RequestKind::Script(crate::RequestResourceType::Script),
         RequestKind::Script(crate::RequestResourceType::ParserBlockingScript),

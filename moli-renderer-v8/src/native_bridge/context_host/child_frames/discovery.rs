@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // Pages and user contexts. Do not reuse them when a document is replaced.
 static NEXT_CHILD_BROWSING_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ChildFrameOwnerElementKind {
+    #[default]
     Iframe,
     Frame,
     Embed,
@@ -16,6 +17,15 @@ pub(super) enum ChildFrameOwnerElementKind {
 }
 
 impl ChildFrameOwnerElementKind {
+    pub(super) fn navigation_destination(self) -> moli_fetch::NavigationRequestDestination {
+        match self {
+            Self::Iframe => moli_fetch::NavigationRequestDestination::Iframe,
+            Self::Frame => moli_fetch::NavigationRequestDestination::Frame,
+            Self::Embed => moli_fetch::NavigationRequestDestination::Embed,
+            Self::Object => moli_fetch::NavigationRequestDestination::Object,
+        }
+    }
+
     pub(super) fn navigation_attribute(self) -> &'static str {
         match self {
             Self::Iframe | Self::Frame | Self::Embed => "src",
