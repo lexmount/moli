@@ -248,15 +248,15 @@ Le document et les styles n'ont qu'une seule source de vérité : le DOM natif, 
 
 ## Données de test
 
-Moli est mesuré sur des suites publiques aux tâches fixes. Chaque ligne indique ce que signifie une réussite et où reproduire le résultat.
+Moli est mesuré sur des suites publiques aux tâches fixes. Chaque ligne indique ce qui est mesuré et renvoie aux détails.
 
-| Domaine | Suite | Une réussite signifie | Moli | Détails |
+| Domaine | Suite | Mesure | Moli | Détails |
 | --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 tâches sur des sites en ligne | Le contenu demandé est obtenu depuis un site en ligne | **89,8 %**, premier des cinq navigateurs | [Web Fetch](#web-fetch) |
-| Extraction de contenu | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 pages figées | Le contenu principal correspond à l'annotation humaine | **39,27 %**, premier des cinq | [Web Fetch](#web-fetch) |
-| Automatisation du navigateur | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1 308 tâches comparables | Une tâche CDP, d'outil d'automatisation ou de plateforme Web réussit | **81,9 %** ; Chrome 99,8 % | [Automatisation du navigateur](#automatisation-du-navigateur) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 430 tâches sur des sites en ligne | Part des tâches où le contenu demandé est obtenu depuis un site en ligne | **89,8 %**, premier des cinq navigateurs | [Web Fetch](#web-fetch) |
+| Extraction de contenu | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 pages figées | Score de qualité d'extraction par rapport aux annotations humaines (plus haut est meilleur) | **39,27 %**, premier des cinq | [Web Fetch](#web-fetch) |
+| Automatisation du navigateur | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 1 308 tâches comparables | Part des tâches CDP, d'outils d'automatisation et de plateforme Web réussies | **81,9 %** ; Chrome 99,8 % | [Automatisation du navigateur](#automatisation-du-navigateur) |
 | Consommation de ressources | Lexbench-Headless-Browser · 557 tâches terminées par tous les moteurs locaux | Temps CPU et mémoire de pointe médians par tâche | **15 %** du temps CPU de Chrome, **13 %** de sa mémoire | [Consommation de ressources](#consommation-de-ressources) |
-| Standards du Web | Tests [WPT](https://github.com/web-platform-tests/wpt) sélectionnés | Un test WPT réussit | **1 612 000** tests réussis en une exécution complète | — |
+| Standards du Web | Tests [WPT](https://github.com/web-platform-tests/wpt) sélectionnés | Tests WPT réussis | **1 612 000** tests réussis en une exécution complète | — |
 
 ### Web Fetch
 

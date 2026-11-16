@@ -246,15 +246,15 @@ Moli は、Chromium を外から操作するだけの仕組みではなく、独
 
 ## 検証結果
 
-Moli は、タスクが固定された公開ベンチマークで測定しています。各行に、何をもって合格とするかと、結果を再現できる場所を示します。
+Moli は、タスクが固定された公開ベンチマークで測定しています。各行に、何を測っているかと詳細へのリンクを示します。
 
-| 分野 | ベンチマーク | 合格の条件 | Moli | 詳細 |
+| 分野 | ベンチマーク | 指標 | Moli | 詳細 |
 | --- | --- | --- | --- | --- |
-| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 実サイト 430 タスク | 必要な内容を実サイトから取得できる | **89.8%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
-| 本文抽出 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 保存済み 545 ページ | 本文が人手によるアノテーションと一致する | **39.27%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
-| ブラウザ自動操作 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 比較可能な 1,308 タスク | CDP、自動操作ツール、Web プラットフォームのタスクが成功する | **81.9%**、Chrome は 99.8% | [ブラウザ自動操作](#ブラウザ自動操作) |
+| Web Fetch | [LexBench-Web-Fetch](https://huggingface.co/datasets/Lexmount/LexBench-Web-Fetch/tree/v1.0.0) · 実サイト 430 タスク | 必要な内容を実サイトから取得できたタスクの割合 | **89.8%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
+| 本文抽出 | [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 保存済み 545 ページ | 人手によるアノテーションに対する抽出品質スコア（高いほど良い） | **39.27%**、5 ブラウザ中 1 位 | [Web Fetch](#web-fetch) |
+| ブラウザ自動操作 | [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) · 比較可能な 1,308 タスク | CDP、自動操作ツール、Web プラットフォームのタスクの成功率 | **81.9%**、Chrome は 99.8% | [ブラウザ自動操作](#ブラウザ自動操作) |
 | リソース使用量 | Lexbench-Headless-Browser · すべてのローカルエンジンが完了した 557 タスク | タスクあたりの CPU 時間とピークメモリの中央値 | Chrome の CPU 時間の **15%**、メモリの **13%** | [リソース使用量](#リソース使用量) |
-| Web 標準 | 選定した [WPT](https://github.com/web-platform-tests/wpt) テスト | WPT テストに合格する | 1 回の全件実行で **161万2,000件** が合格 | — |
+| Web 標準 | 選定した [WPT](https://github.com/web-platform-tests/wpt) テスト | 合格した WPT テスト数 | 1 回の全件実行で **161万2,000件** が合格 | — |
 
 ### Web Fetch
 
