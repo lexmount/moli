@@ -1,6 +1,77 @@
 use super::*;
 
 #[test]
+fn editing_shortcuts_delete_joins_paragraphs_without_removing_a_character() {
+    for (open, close) in [
+        ("<p>", "</p>"),
+        ("<div>", "</div>"),
+        ("<span style='display:block'>", "</span>"),
+    ] {
+        for backward in [false, true] {
+            for separator in ["", "\n  "] {
+                let mut vm = new_parsed_test_vm(
+                    "https://editing-block-boundary.test/",
+                    &format!(
+                        "<div id=editor contenteditable>{open}ab{close}{separator}{open}cd{close}</div>"
+                    ),
+                );
+                vm.eval("globalThis.editor=document.getElementById('editor');globalThis.before=editor.innerHTML;globalThis.left=editor.firstElementChild;globalThis.right=editor.lastElementChild;globalThis.rightText=right.firstChild;editor.focus()").unwrap();
+                vm.eval(if backward {
+                    "getSelection().collapse(right.firstChild,0)"
+                } else {
+                    "getSelection().collapse(left.firstChild,2)"
+                })
+                .unwrap();
+                key(
+                    &mut vm,
+                    if backward { "Backspace" } else { "Delete" },
+                    if backward { "Backspace" } else { "Delete" },
+                    0,
+                );
+                assert_eq!(
+                    vm.eval("editor.textContent+':'+editor.children.length")
+                        .unwrap(),
+                    "abcd:1"
+                );
+                key(&mut vm, "z", "KeyZ", 2);
+                assert_eq!(vm.eval("editor.innerHTML===before && editor.firstElementChild===left && editor.lastElementChild===right && right.firstChild===rightText").unwrap(), "true");
+                key(&mut vm, "z", "KeyZ", 10);
+                assert_eq!(vm.eval("editor.textContent").unwrap(), "abcd");
+            }
+        }
+    }
+}
+
+#[test]
+fn editing_shortcuts_delete_crosses_hidden_subtrees_without_editing_hidden_text() {
+    for attributes in [
+        "hidden",
+        "style='display:none'",
+        "style='visibility:hidden'",
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://editing-hidden-boundary.test/",
+            &format!(
+                "<div id=editor contenteditable><b>ab</b><span id=hidden {attributes}>SECRET</span><i>cd</i></div>"
+            ),
+        );
+        vm.eval("globalThis.editor=document.getElementById('editor');globalThis.hidden=document.getElementById('hidden');globalThis.hiddenText=hidden.firstChild;editor.focus();getSelection().collapse(editor.firstChild.firstChild,2)").unwrap();
+        key(&mut vm, "Delete", "Delete", 0);
+        assert_eq!(vm.eval("editor.textContent").unwrap(), "abd");
+        assert_eq!(
+            vm.eval("hiddenText.data+':'+hidden.isConnected").unwrap(),
+            "SECRET:false"
+        );
+        key(&mut vm, "z", "KeyZ", 2);
+        assert_eq!(
+            vm.eval("editor.textContent+':'+(document.getElementById('hidden')===hidden)")
+                .unwrap(),
+            "abSECRETcd:true"
+        );
+    }
+}
+
+#[test]
 fn editing_shortcuts_delete_crosses_inline_text_nodes_and_undo_restores_them() {
     for (key_name, code, offset, caret_node, expected) in [
         (
