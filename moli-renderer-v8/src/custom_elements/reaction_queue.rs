@@ -36,6 +36,16 @@ impl CustomElementReactionCoordinator {
         self.stack.pop();
     }
 
+    pub(super) fn current_queue_has_pending_reactions(&self) -> bool {
+        self.stack.last().is_some_and(|queue| {
+            queue.pending_handles().any(|handle| {
+                self.element_reactions
+                    .get(&handle)
+                    .is_some_and(|reactions| !reactions.is_drained())
+            })
+        })
+    }
+
     pub(super) fn enqueue_reaction(
         &mut self,
         handle: DomHandle,
@@ -107,6 +117,43 @@ mod tests {
 
     fn handle(index: usize) -> DomHandle {
         DomHandle::new(index)
+    }
+
+    #[test]
+    fn current_pending_reactions_exclude_backup_outer_and_drained_queues() {
+        let mut reactions = CustomElementReactionCoordinator::default();
+        assert!(reactions.enqueue_reaction(handle(1), CustomElementReaction::Connected));
+        reactions.mark_backup_queue_flush_scheduled();
+        assert!(!reactions.current_queue_has_pending_reactions());
+
+        reactions.push_element_queue();
+        assert!(!reactions.current_queue_has_pending_reactions());
+        reactions.enqueue_reaction(handle(2), CustomElementReaction::Connected);
+        assert!(reactions.current_queue_has_pending_reactions());
+
+        reactions.push_element_queue();
+        assert!(!reactions.current_queue_has_pending_reactions());
+        reactions.enqueue_reaction(handle(3), CustomElementReaction::Connected);
+        assert!(reactions.current_queue_has_pending_reactions());
+        // Nested delivery can drain the reaction while its handle remains in
+        // an element queue. That stale entry must not trigger a checkpoint.
+        assert_eq!(
+            reactions.next_reaction(handle(3)),
+            Some(CustomElementReaction::Connected)
+        );
+        assert!(!reactions.current_queue_has_pending_reactions());
+
+        reactions.pop_element_queue();
+        assert!(reactions.current_queue_has_pending_reactions());
+        reactions.clear_reactions(handle(2));
+        assert!(!reactions.current_queue_has_pending_reactions());
+        reactions.pop_element_queue();
+        assert!(!reactions.current_queue_has_pending_reactions());
+        assert_eq!(reactions.next_backup_element(), Some(handle(1)));
+        assert_eq!(
+            reactions.next_reaction(handle(1)),
+            Some(CustomElementReaction::Connected)
+        );
     }
 
     #[test]

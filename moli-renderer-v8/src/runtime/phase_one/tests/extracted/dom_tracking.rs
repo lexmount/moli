@@ -3,6 +3,48 @@ use crate::document_runtime::DevToolsDomMutationFact;
 use crate::live_document_parser::LiveDocumentParserStepOutcome;
 
 #[test]
+fn parser_empty_reaction_queue_does_not_deliver_observers_before_pending_text() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(tokio::task::LocalSet::new().run_until(async {
+        let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+            r#"<!doctype html><html><head><script>
+customElements.define('x-unused', class extends HTMLElement {});
+window.bodyRead = 'not-called';
+const observer = new MutationObserver(records => {
+  if (records.some(record => [...record.addedNodes].includes(document.body))) {
+    window.bodyRead = document.body.firstChild?.data ?? null;
+    document.body.appendChild(document.createElement('i'));
+    observer.disconnect();
+  }
+});
+observer.observe(document.documentElement, {childList: true});
+</script></head>seed</body></html>"#,
+        )
+        .await;
+        // Deliver remaining microtasks after the parser has returned. An
+        // empty parser reaction scope must not have delivered them mid-token.
+        page_vm.vm_mut().eval("void 0").unwrap();
+        let actual = page_vm
+            .vm_mut()
+            .eval(
+                "JSON.stringify({ \
+               read: window.bodyRead, \
+               children: [...document.body.childNodes].map(node => \
+                 node.nodeType === 3 ? '#text:' + node.data : node.localName) \
+             })",
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!({"read": "seed", "children": ["#text:seed", "i"]})
+        );
+    }));
+}
+
+#[test]
 fn parser_implicit_body_insertion_does_not_commit_following_character_fragments() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

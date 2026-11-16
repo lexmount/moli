@@ -198,9 +198,6 @@ impl DocumentRuntime {
         }
         self.dispatch_parser_focus_resets(scope, host_ptr, &followups.focus_resets);
         if followups.custom_element_reaction_queue_flush_requested {
-            crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(
-                scope,
-            );
             custom_elements::flush_parser_custom_element_reaction_queue(scope, host_ptr);
             self.parser_reentry.custom_element_reaction_queue_active = false;
         }

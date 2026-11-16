@@ -19,6 +19,10 @@ impl ElementQueue {
         self.handles.push(handle);
     }
 
+    pub(super) fn pending_handles(&self) -> impl Iterator<Item = DomHandle> + '_ {
+        self.handles[self.index..].iter().copied()
+    }
+
     pub(super) fn next(&mut self) -> Option<DomHandle> {
         let handle = self.handles.get(self.index).copied()?;
         self.index += 1;
