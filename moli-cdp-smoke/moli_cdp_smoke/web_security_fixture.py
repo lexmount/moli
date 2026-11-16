@@ -66,6 +66,8 @@ class WebSecurityFixture:
                     observed['destination'] = headers.get('sec-fetch-dest')
                 if parsed.path in ('/web-security/audio', '/web-security/video'):
                     observed['mode'] = headers.get('sec-fetch-mode')
+                if query.get('witness_referrer') == ['1']:
+                    observed['referrer'] = headers.get('referer')
                 self._requests.setdefault(case, []).append(observed)
         status, mime, payload = 200, 'text/plain', 'payload'
         extra = {'X-Secret':'visible', 'Set-Cookie':'hidden=1; Path=/; SameSite=Lax'}
@@ -77,6 +79,8 @@ class WebSecurityFixture:
             status = int(query.get('status', ['302'])[0])
             if 'to' in query:
                 extra['Location'] = query['to'][0]
+            if 'policy' in query:
+                extra['Referrer-Policy'] = query['policy'][0]
         elif route == 'corp':
             extra['Cross-Origin-Resource-Policy'] = 'same-origin'
         elif route == 'orb':

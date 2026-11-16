@@ -18,6 +18,7 @@ from ..diagnostics import new_cdp_session
 from ..fixture import FixtureServer
 from ..serve import BrowserProcess, start_browser, stop_browser, wait_for_browser_endpoint
 from ..web_security_fixture import READ
+from .web_security_forms import observe_forms
 from .web_security_loaders import observe_loaders
 from .web_security_service_workers import observe_stylesheet_redirect
 
@@ -209,6 +210,7 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
                 await popup.close()
 
             observed.update(await observe_loaders(page,context,source,peer,mode))
+            observed.update(await observe_forms(page,context,source,peer,mode))
             observed.update(await observe_stylesheet_redirect(page,context,source,peer,mode,service_worker=False))
 
             # Distinct registrable domains exercise default Site Isolation.
