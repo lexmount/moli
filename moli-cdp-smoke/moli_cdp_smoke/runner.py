@@ -83,12 +83,12 @@ from .groups.target_semantics import run_target_semantics_group
 from .groups.target_lifecycle import run_target_lifecycle_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
+from .groups.web_security import browser_args as web_security_browser_args, run_web_security_group
 from .groups.webgl_viewport import run_webgl_viewport_group
 from .groups.font_face import run_font_face_payload_group
 from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
 from .groups.workers_native import run_native_worker_loading_group
-from .groups.web_security import browser_args as web_security_browser_args, run_web_security_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
 from .helpers import attach_cdp_event_collector
 from .progress import await_with_progress
