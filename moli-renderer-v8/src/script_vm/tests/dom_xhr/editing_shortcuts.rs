@@ -1,6 +1,7 @@
 use super::*;
 mod clipboard;
 mod history;
+mod text_boundaries;
 fn key(vm: &mut StandaloneScriptVmHarness, key: &str, code: &str, modifiers: u8) {
     vm.dispatch_key_event("keydown", key, code, "", modifiers, false, false)
         .unwrap();

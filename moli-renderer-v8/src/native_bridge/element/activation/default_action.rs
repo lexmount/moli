@@ -383,6 +383,53 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput(
     )
 }
 
+// Crossing an inline text boundary must not cross into another editing host
+// or through an atomic / read-only / inert editing boundary.
+fn adjacent_editable_text(
+    runtime: &PageScriptHost,
+    editing_host: DomHandle,
+    mut current: DomHandle,
+    backward: bool,
+) -> Option<DomHandle> {
+    loop {
+        let sibling = loop {
+            let node = runtime.dom_host().node(current)?;
+            if let Some(sibling) = if backward {
+                node.prev_sibling()
+            } else {
+                node.next_sibling()
+            } {
+                break sibling;
+            }
+            current = node.parent_node()?;
+            if current == editing_host {
+                return None;
+            }
+        };
+        current = sibling;
+        loop {
+            let node = runtime.dom_host().node(current)?;
+            if contenteditable_editing_host(runtime, current) != Some(editing_host)
+                || node.as_element().is_some_and(|element| {
+                    !super::super::focus::can_descend_into_editable_content(element)
+                })
+            {
+                return None;
+            }
+            if node.as_text().is_some_and(|text| !text.data().is_empty()) {
+                return Some(current);
+            }
+            let child = if backward {
+                node.last_child()
+            } else {
+                node.first_child()
+            };
+            let Some(child) = child else { break };
+            current = child;
+        }
+    }
+}
+
 pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -425,37 +472,77 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<
             }
         }
     }
-    let undo = super::editing_history::capture_edit(scope, runtime_ptr, handle);
-    let inserted = if let Some(selection) = window_selection(scope) {
-        if let Some((node, mut start, mut end)) = selected_text_node_range(scope, target, selection)
-        {
-            if start == end
-                && matches!(
-                    input_type,
-                    TextEditInputType::DeleteContentBackward
-                        | TextEditInputType::DeleteContentForward
+    let selection = window_selection(scope);
+    let mut text_range =
+        selection.and_then(|selection| selected_text_node_range(scope, target, selection));
+    let mut original_caret = None;
+    if let Some((node, mut start, mut end)) = text_range
+        && start == end
+        && matches!(
+            input_type,
+            TextEditInputType::DeleteContentBackward | TextEditInputType::DeleteContentForward
+        )
+    {
+        let Some(node_handle) = crate::native_bridge::callback_value_dom_handle(scope, node.into())
+        else {
+            return false;
+        };
+        let runtime = unsafe { &*runtime_ptr };
+        let value = runtime
+            .dom_host()
+            .text_content(node_handle)
+            .unwrap_or_default();
+        let units = utf16_units(&value);
+        let backward = input_type == TextEditInputType::DeleteContentBackward;
+        if backward {
+            start = crate::util::utf16_previous_scalar_boundary(&units, start);
+        } else {
+            end = crate::util::utf16_next_scalar_boundary(&units, end);
+        }
+        if start == end {
+            let Some(adjacent) = adjacent_editable_text(runtime, handle, node_handle, backward)
+            else {
+                return false;
+            };
+            let value = runtime
+                .dom_host()
+                .text_content(adjacent)
+                .unwrap_or_default();
+            let units = utf16_units(&value);
+            let Some(adjacent) = node_wrapper_from_handle(scope, adjacent) else {
+                return false;
+            };
+            original_caret = Some((node, start as u32));
+            text_range = Some(if backward {
+                (
+                    adjacent,
+                    crate::util::utf16_previous_scalar_boundary(&units, units.len()),
+                    units.len(),
                 )
-            {
-                let value = node
-                    .get(scope, v8str(scope, "textContent").into())
-                    .and_then(|value| value.to_string(scope))
-                    .map(|value| value.to_rust_string_lossy(scope))
-                    .unwrap_or_default();
-                let units = utf16_units(&value);
-                if input_type == TextEditInputType::DeleteContentBackward {
-                    start = crate::util::utf16_previous_scalar_boundary(&units, start);
-                } else {
-                    end = crate::util::utf16_next_scalar_boundary(&units, end);
-                }
-                if start == end {
-                    return false;
-                }
-            }
+            } else {
+                (
+                    adjacent,
+                    0,
+                    crate::util::utf16_next_scalar_boundary(&units, 0),
+                )
+            });
+        } else {
+            text_range = Some((node, start, end));
+        }
+    }
+    let additional_node = original_caret.and(text_range).and_then(|(node, _, _)| {
+        crate::native_bridge::callback_value_dom_handle(scope, node.into())
+    });
+    let undo =
+        super::editing_history::capture_edit_including(scope, runtime_ptr, handle, additional_node);
+    let inserted = if let Some(selection) = selection {
+        if let Some((node, start, end)) = text_range {
             if !replace_text_node_range(scope, node, start, end, replacement_text) {
                 return false;
             }
             let caret = u32::try_from(start.saturating_add(utf16_len(replacement_text)))
                 .unwrap_or(u32::MAX);
+            let (node, caret) = original_caret.unwrap_or((node, caret));
             collapse_selection_to(scope, selection, node, caret);
             true
         } else {

@@ -136,6 +136,15 @@ pub(crate) fn capture_edit(
     ptr: *mut PageScriptHost,
     target: DomHandle,
 ) -> Option<EditSnapshot> {
+    capture_edit_including(scope, ptr, target, None)
+}
+
+pub(super) fn capture_edit_including(
+    scope: &mut v8::PinScope<'_, '_>,
+    ptr: *mut PageScriptHost,
+    target: DomHandle,
+    additional_node: Option<DomHandle>,
+) -> Option<EditSnapshot> {
     let host = unsafe { &*ptr };
     let selected = selection(scope, host, target.index());
     // The common ancestor of the selected boundaries is the smallest region
@@ -163,6 +172,15 @@ pub(crate) fn capture_edit(
                 }
                 current = dom.node(node).and_then(|node| node.parent_node());
             }
+        }
+    }
+    if let Some(additional) = additional_node {
+        let dom = host.dom_host().dom();
+        if !dom.node(target)?.contains(dom, additional) {
+            return None;
+        }
+        while !dom.node(root)?.contains(dom, additional) {
+            root = dom.node(root)?.parent_node()?;
         }
     }
     let mut nodes = BTreeMap::new();
