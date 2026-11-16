@@ -567,6 +567,13 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 .spawn(move || {
                     while let Some(message) = rx.blocking_recv() {
                         if let Some(devtools) = &devtools {
+                            if let crate::worker::WorkerToParentMessage::RuntimeInspectorResponse(
+                                publication,
+                            ) = message
+                            {
+                                devtools.publish_response(publication);
+                                continue;
+                            }
                             devtools.message(&message);
                         }
                         let _ = wake_tx.send(crate::worker::WorkerMessage::NestedWorkerEvent {

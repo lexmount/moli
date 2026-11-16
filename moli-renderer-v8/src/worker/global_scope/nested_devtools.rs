@@ -17,6 +17,17 @@ impl NestedWorkerDevTools {
         publish(&self.journal, event);
     }
 
+    pub(crate) fn publish_response(
+        &self,
+        publication: crate::runtime::RendererRuntimeInspectorResponsePublication,
+    ) {
+        let predecessor = self
+            .journal
+            .last_published_cursor()
+            .map(|cursor| self.journal.declare_fence(cursor));
+        let _ = publication.commit(predecessor);
+    }
+
     pub(crate) fn message(&self, message: &WorkerToParentMessage) {
         match message {
             WorkerToParentMessage::Console(console) => self.publish(Event::Console {
