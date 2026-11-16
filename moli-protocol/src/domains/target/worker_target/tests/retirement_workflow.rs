@@ -10,16 +10,26 @@ fn install_attached_worker(
     owner_page: TargetPageResidenceIdentity,
     host: moli_core::RendererOwnerLocalHostId,
 ) {
+    let mut worker = DedicatedWorkerTargetState::new(
+        owner_page,
+        host,
+        101,
+        "TID-retiring-worker".into(),
+        String::new(),
+        Vec::new(),
+    );
+    // Retirement tests start with an attached, fully loaded execution.
+    let url = "https://example.test/retiring-worker.js";
+    worker.record_main_script(
+        url.to_owned(),
+        crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+            url, 200, false,
+        ))),
+        false,
+    );
     conn.browser_context_by_id_mut("BID-1")
         .unwrap()
-        .insert_dedicated_worker_target(DedicatedWorkerTargetState::new(
-            owner_page,
-            host,
-            101,
-            "TID-retiring-worker".into(),
-            String::new(),
-            Vec::new(),
-        ));
+        .insert_dedicated_worker_target(worker);
     let route = conn
         .prepare_auto_attached_dedicated_worker_session_binding(
             "TID-retiring-worker",

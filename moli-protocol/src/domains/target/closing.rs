@@ -57,6 +57,19 @@ pub(super) fn start_devtools_close_target_command(
         return super::target_command_error(-32000, "Target is closing");
     }
     let access = conn.protocol_state_access();
+    if let Some(crate::conn::CdpSessionRoute::DedicatedWorkerTarget {
+        browser_context_id,
+        target_id,
+    }) = conn.target_session_route_for_target_id(command.target_id.as_str())
+        && conn
+            .browser_context_by_id(&browser_context_id)
+            .and_then(|context| context.dedicated_worker_target(&target_id))
+            .is_some_and(|target| target.main_script().is_none())
+    {
+        // No native execution exists yet. Do not retire the protocol target
+        // while its constructor still owns an in-progress script load.
+        return super::target_command_error(-32602, "Specified target doesn't support closing");
+    }
     if let Some(closing) =
         crate::conn::PreparedDefaultTargetClose::prepare(conn, command.target_id.as_str())
     {
