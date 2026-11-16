@@ -7,9 +7,19 @@ enum ScriptResponse {
     HttpError,
 }
 
+#[derive(Clone, Copy)]
+enum ScriptLifecycle {
+    Complete,
+    RemoveFrame,
+    ReplaceFrame,
+    ReplaceTop,
+    CancelSrcdoc,
+}
+
 async fn check_child_parser_script_network_progress(
     client_redirect: bool,
     script_response: ScriptResponse,
+    lifecycle: ScriptLifecycle,
 ) {
     let requested = Arc::new(tokio::sync::Notify::new());
     let (release, release_rx) = tokio::sync::watch::channel(false);
@@ -28,18 +38,27 @@ async fn check_child_parser_script_network_progress(
         )
         .route(
             "/child",
-            get(|| async {
-                axum::response::Html("<script src='/pending.js'></script><p>child</p>")
+            get(move || async move {
+                axum::response::Html(format!(
+                    "{}<script src='/pending.js'></script><p>child</p>",
+                    if matches!(lifecycle, ScriptLifecycle::CancelSrcdoc) {
+                        "<script>window.cancelled = 0; navigation.addEventListener('navigate', e => { if (e.destination.url === 'about:srcdoc') { e.preventDefault(); window.cancelled++; } });</script>"
+                    } else {
+                        ""
+                    }
+                ))
             }),
         )
+        .route("/fresh", get(|| async { axum::response::Html("<p>fresh</p>") }))
         .route(
             "/pending.js",
             get({
                 let requested = Arc::clone(&requested);
-                move || {
+                move |headers: axum::http::HeaderMap| {
                     let requested = Arc::clone(&requested);
                     let mut release_rx = release_rx.clone();
                     async move {
+                        assert_eq!(headers[header::COOKIE], "regression=present");
                         requested.notify_one();
                         // A transport failure can retry a reused connection.
                         // Keep the gate open for every attempt after release.
@@ -89,6 +108,14 @@ async fn check_child_parser_script_network_progress(
     ] {
         send_cdp_command(&mut socket, id, method, Some(&session.session_id), params).await;
     }
+    send_cdp_command(
+        &mut socket,
+        71,
+        "Network.setCookie",
+        Some(&session.session_id),
+        json!({"name": "regression", "value": "present", "url": base_url}),
+    )
+    .await;
     send_cdp_command_without_wait(
         &mut socket,
         8,
@@ -152,6 +179,105 @@ async fn check_child_parser_script_network_progress(
         "the child must not complete while its parser script is pending"
     );
 
+    if matches!(
+        lifecycle,
+        ScriptLifecycle::RemoveFrame | ScriptLifecycle::ReplaceFrame | ScriptLifecycle::ReplaceTop
+    ) {
+        let method = if matches!(lifecycle, ScriptLifecycle::ReplaceTop) {
+            "Page.navigate"
+        } else {
+            "Runtime.evaluate"
+        };
+        let params = match lifecycle {
+            ScriptLifecycle::RemoveFrame => json!({"expression": "child.remove()"}),
+            ScriptLifecycle::ReplaceFrame => {
+                json!({"expression": format!("child.src = '{base_url}/fresh'")})
+            }
+            ScriptLifecycle::ReplaceTop => json!({"url": format!("{base_url}/fresh")}),
+            _ => unreachable!(),
+        };
+        messages.extend(
+            send_cdp_command(&mut socket, 90, method, Some(&session.session_id), params).await,
+        );
+        let failed = |message: &serde_json::Value| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == request_id
+        };
+        if !messages.iter().any(failed) {
+            messages.extend(
+                timeout(
+                    Duration::from_secs(10),
+                    recv_until_match(&mut socket, failed),
+                )
+                .await
+                .expect("retiring the Document must abort its announced script before release"),
+            );
+        }
+        let terminal = messages.iter().find(|message| failed(message)).unwrap();
+        assert_eq!(terminal["params"]["errorText"], "net::ERR_ABORTED");
+        assert_eq!(terminal["params"]["canceled"], true);
+        let idle = |message: &serde_json::Value| {
+            message["method"] == "Page.lifecycleEvent"
+                && message["params"]["frameId"] == session.target_id
+                && message["params"]["name"] == "networkIdle"
+        };
+        if !messages.iter().any(idle) {
+            messages.extend(
+                timeout(Duration::from_secs(10), recv_until_match(&mut socket, idle))
+                    .await
+                    .expect("a retired child request must not block top-level networkIdle"),
+            );
+        }
+        let _ = release.send(true);
+        messages
+            .extend(send_cdp_command(&mut socket, 91, "Browser.getVersion", None, json!({})).await);
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| {
+                    message["method"] == "Network.requestWillBeSent"
+                        && message["params"]["request"]["url"] == script_url
+                })
+                .count(),
+            1,
+            "retired completion must not announce the old script in the new loader"
+        );
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(protocol_server).await;
+        return;
+    }
+    if matches!(lifecycle, ScriptLifecycle::CancelSrcdoc) {
+        messages.extend(
+            send_cdp_command(
+                &mut socket,
+                90,
+                "Runtime.evaluate",
+                Some(&session.session_id),
+                json!({"expression": "child.srcdoc = '<p>replacement</p>'"}),
+            )
+            .await,
+        );
+        assert_eq!(
+            cdp_runtime_evaluate_string(
+                &mut socket,
+                &session.session_id,
+                91,
+                "String(child.contentWindow.cancelled)"
+            )
+            .await,
+            "1"
+        );
+        assert_eq!(
+            cdp_runtime_evaluate_string(
+                &mut socket,
+                &session.session_id,
+                92,
+                "child.contentWindow.location.href"
+            )
+            .await,
+            child_url
+        );
+    }
     release.send(true).unwrap();
     let failed = !matches!(script_response, ScriptResponse::Success);
     let terminal_method = if failed {
@@ -174,7 +300,7 @@ async fn check_child_parser_script_network_progress(
             && message["params"]["frameId"] == child_frame_id
             && message["params"]["name"] == "load"
     };
-    if !messages.iter().any(child_loaded) {
+    if matches!(lifecycle, ScriptLifecycle::Complete) && !messages.iter().any(child_loaded) {
         messages.extend(
             timeout(
                 Duration::from_secs(10),
@@ -196,6 +322,29 @@ async fn check_child_parser_script_network_progress(
         1,
         "terminal delivery must not announce the script twice"
     );
+    if !matches!(script_response, ScriptResponse::TransportError) {
+        let extra_info = messages
+            .iter()
+            .filter(|message| {
+                message["method"] == "Network.requestWillBeSentExtraInfo"
+                    && message["params"]["requestId"] == request_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(extra_info.len(), 1, "publish Cookie ExtraInfo exactly once");
+        assert_eq!(
+            extra_info[0]["params"]["headers"]["Cookie"],
+            "regression=present"
+        );
+        assert!(
+            extra_info[0]["params"]["associatedCookies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| {
+                    entry["cookie"]["name"] == "regression" && entry["cookie"]["value"] == "present"
+                })
+        );
+    }
     assert_eq!(
         messages
             .iter()
@@ -236,16 +385,18 @@ async fn check_child_parser_script_network_progress(
                 .count(),
             1
         );
-        assert_eq!(
-            cdp_runtime_evaluate_string(
-                &mut socket,
-                &session.session_id,
-                11,
-                "String(document.querySelector('iframe').contentWindow.childScriptLoaded)"
-            )
-            .await,
-            "true"
-        );
+        if matches!(lifecycle, ScriptLifecycle::Complete) {
+            assert_eq!(
+                cdp_runtime_evaluate_string(
+                    &mut socket,
+                    &session.session_id,
+                    11,
+                    "String(document.querySelector('iframe').contentWindow.childScriptLoaded)"
+                )
+                .await,
+                "true"
+            );
+        }
     }
     let _ = socket.close(None).await;
     abort_test_cdp_server(protocol_server).await;
@@ -253,15 +404,70 @@ async fn check_child_parser_script_network_progress(
 
 #[tokio::test]
 async fn websocket_cdp_client_redirect_announces_pending_child_parser_script() {
-    check_child_parser_script_network_progress(true, ScriptResponse::Success).await;
+    check_child_parser_script_network_progress(
+        true,
+        ScriptResponse::Success,
+        ScriptLifecycle::Complete,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn websocket_cdp_child_parser_script_failure_finishes_announced_request() {
-    check_child_parser_script_network_progress(false, ScriptResponse::TransportError).await;
+    check_child_parser_script_network_progress(
+        false,
+        ScriptResponse::TransportError,
+        ScriptLifecycle::Complete,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn websocket_cdp_child_parser_script_http_error_does_not_reannounce_request() {
-    check_child_parser_script_network_progress(false, ScriptResponse::HttpError).await;
+    check_child_parser_script_network_progress(
+        false,
+        ScriptResponse::HttpError,
+        ScriptLifecycle::Complete,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_removed_child_parser_script_finishes_before_response() {
+    check_child_parser_script_network_progress(
+        false,
+        ScriptResponse::Success,
+        ScriptLifecycle::RemoveFrame,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_replaced_child_parser_script_finishes_before_response() {
+    check_child_parser_script_network_progress(
+        false,
+        ScriptResponse::Success,
+        ScriptLifecycle::ReplaceFrame,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_top_navigation_retires_started_child_parser_script() {
+    check_child_parser_script_network_progress(
+        false,
+        ScriptResponse::Success,
+        ScriptLifecycle::ReplaceTop,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_cancelled_srcdoc_keeps_child_script_network_completion() {
+    check_child_parser_script_network_progress(
+        false,
+        ScriptResponse::Success,
+        ScriptLifecycle::CancelSrcdoc,
+    )
+    .await;
 }

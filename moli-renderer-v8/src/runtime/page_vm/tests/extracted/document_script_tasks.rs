@@ -1,6 +1,61 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn retired_announced_child_classic_completion_does_not_replay_network() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        let root_document = page_vm.document_lifecycle.identity().document;
+        let mut queue = RendererPageNetworkingSource::new_for_test();
+        queue.enqueue_local_for_test(RendererPageResourceCompletion::child_classic_script(
+            root_document,
+            ChildClassicScriptLoadCompletion {
+                owner: FrameDocumentTaskOwner::new(
+                    crate::frame_owner_model::FrameSchedulerLaneId(4),
+                    crate::frame_owner_model::LocalWindowId(5),
+                    DocumentId(6),
+                ),
+                load_id: 7,
+                handle: NodeId::new(401),
+                script_handle: NodeId::new(402),
+                result: Ok("globalThis.__retiredScriptRan = true".to_owned()),
+                network_result: Some(Arc::new(Err("late transport completion".to_owned()))),
+                network_attribution: ChildClassicScriptNetworkAttribution {
+                    // The original admission was already retired; its handle
+                    // must never become a new request in this Document.
+                    request_handle: Some(crate::types::SubresourceNetworkRequestHandle::new(77)),
+                    frame_id: Some("retired-child".to_owned()),
+                    document_url: Url::parse("https://retired-child.test/").unwrap(),
+                    request_url: Url::parse("https://retired-child.test/script.js").unwrap(),
+                },
+            },
+        ));
+        let activity_before = page_vm.vm().subresource_activity_epoch();
+        let outcome = page_vm
+            .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            outcome.action.document_effect,
+            PageResourceCompletionDocumentEffect::DiscardedStaleOwner { .. }
+        ));
+        assert_eq!(
+            outcome.action.output_effect,
+            PageResourceCompletionOutputEffect::None
+        );
+        assert_eq!(page_vm.vm().subresource_activity_epoch(), activity_before);
+        assert!(page_vm.vm_mut().take_network_output().is_empty());
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("String(globalThis.__retiredScriptRan)")
+                .unwrap(),
+            "undefined"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stale_child_classic_completion_preserves_network_without_document_activity() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();

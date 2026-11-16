@@ -1500,6 +1500,7 @@ impl DynamicScriptOwner {
                             context.browser_context_runtime,
                             context.client_id,
                             context.document_url,
+                            None,
                         )
                         .await
                     } else {

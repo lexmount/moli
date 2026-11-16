@@ -2163,7 +2163,7 @@ impl PageScriptHost {
             }
         });
 
-        let mut aborted = 0;
+        let mut aborted = self.retire_child_classic_script_network_loads(registry_id);
         for internal_id in ordinary_ids.iter().copied() {
             let _ = self
                 .browser_context_runtime
