@@ -1334,6 +1334,7 @@ impl PageScriptHost {
         let document = ServiceWorkerWindowClientDocument {
             url: document_url,
             controller_source,
+            navigation_destination: self.navigation_destination_for_child_context(handle),
         };
         let document_owner = self
             .frame_owner_store
@@ -1378,6 +1379,7 @@ impl PageScriptHost {
         handle: crate::document_runtime::DomHandle,
         document_url: &Url,
         storage_key: String,
+        destination: moli_fetch::NavigationRequestDestination,
     ) {
         if !matches!(document_url.scheme(), "http" | "https") {
             self.clear_pending_service_worker_child_client(handle);
@@ -1397,7 +1399,11 @@ impl PageScriptHost {
         let client_id = self
             .browser_context_runtime
             .register_reserved_service_worker_client(
-                document_url.clone(),
+                ServiceWorkerWindowClientDocument {
+                    url: document_url.clone(),
+                    controller_source: None,
+                    navigation_destination: destination,
+                },
                 storage_key,
                 ServiceWorkerClientFrameType::Nested,
                 None,

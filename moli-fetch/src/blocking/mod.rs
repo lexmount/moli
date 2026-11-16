@@ -404,11 +404,7 @@ fn append_browser_navigation_headers(
         request,
         request_url,
         "navigate",
-        if request.is_subframe_navigation_request() {
-            "iframe"
-        } else {
-            "document"
-        },
+        request.navigation_destination().as_str(),
     );
 
     if request.browser_navigation_kind() == crate::BrowserNavigationRequestKind::Reload {

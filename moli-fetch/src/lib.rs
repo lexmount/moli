@@ -93,11 +93,11 @@ pub use referrer_policy::{
     response_referrer_policy_from_headers, sanitized_referrer_url,
 };
 pub use request::{
-    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, Request, RequestAuth,
-    RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
-    RequestHeaderOverride, RequestMode, RequestOverrides, RequestPriorityHints,
-    RequestRedirectCheck, RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy,
-    RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
+    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy,
+    NavigationRequestDestination, Request, RequestAuth, RequestAuthScheme, RequestAuthTarget,
+    RequestCacheMode, RequestCredentialsMode, RequestHeaderOverride, RequestMode, RequestOverrides,
+    RequestPriorityHints, RequestRedirectCheck, RequestRedirectHandling, RequestRedirectMode,
+    RequestRedirectPolicy, RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
     ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
 };
 mod mixed_content;
