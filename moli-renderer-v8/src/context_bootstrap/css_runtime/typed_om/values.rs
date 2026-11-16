@@ -360,6 +360,28 @@ fn css_style_value_to_string_callback<'s>(
 
 /// Serializes genuine CSSStyleValue internal slots, never author-overridable
 /// toString/value/unit properties. Callers must first validate the native brand.
+/// Retain native doubles for declaration input; public stringification is for display.
+pub(super) fn serialize_for_declaration<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    if let Some(unit) = css_unit_value_unit(scope, value) {
+        let number = css_unit_value_number(scope, value)?;
+        if number.is_finite() {
+            return Some(
+                moli_css_parse::CssDeclaredUnitValue {
+                    value: number,
+                    unit,
+                }
+                .declaration_text(),
+            );
+        }
+    } else if web_api_interfaces::CSSMathValue::is_instance(scope, value) {
+        return math::serialize_for_declaration(scope, value);
+    }
+    serialize(scope, value)
+}
+
 pub(super) fn serialize<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Object>,

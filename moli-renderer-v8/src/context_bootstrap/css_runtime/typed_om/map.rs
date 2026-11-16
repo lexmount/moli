@@ -349,6 +349,23 @@ fn style_values_for_property<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
+    if let Some(value) =
+        detached_css_style::css_declaration_typed_numeric_value(scope, style, property)
+    {
+        match value {
+            moli_css_parse::CssDeclaredNumericValue::Unit(value) => {
+                return vec![values::unit_value(scope, value.value, value.unit)];
+            }
+            moli_css_parse::CssDeclaredNumericValue::Expression(source) => {
+                let base_url = parse::base_url(scope);
+                if let Some(parsed) =
+                    moli_css_parse::parse_typed_style_value(property, &source, base_url.as_ref())
+                {
+                    return values::from_parsed(scope, property, &source, parsed);
+                }
+            }
+        }
+    }
     if native_bridge::element::style_declaration_is_computed(scope, style)
         && let Some(parsed) =
             native_bridge::element::computed_typed_style_value_from_object(scope, style, property)

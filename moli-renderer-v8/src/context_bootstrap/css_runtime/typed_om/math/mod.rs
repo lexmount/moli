@@ -12,7 +12,7 @@ mod types;
 
 pub(super) use parsing::from_declared;
 pub(super) use reification::from_native;
-pub(super) use serialization::serialize;
+pub(super) use serialization::{serialize, serialize_for_declaration};
 use types::NumericType;
 
 const VALUES_SLOT: &str = "__moliCssMathValues";

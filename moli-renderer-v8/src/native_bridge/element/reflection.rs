@@ -1135,6 +1135,8 @@ pub(super) fn set_reflected_style_attribute_with_inline_base_url(
     handle: DomHandle,
     value: &str,
     inline_base_url: Option<&url::Url>,
+    state: crate::css_style::CssInlineStyleDeclarationState,
+    resolution_text: String,
 ) {
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
@@ -1148,6 +1150,8 @@ pub(super) fn set_reflected_style_attribute_with_inline_base_url(
             handle,
             crate::style_engine::InlineStyleCspState::Cssom,
         );
+        runtime.set_element_inline_style_resolution_text(handle, resolution_text);
+        runtime.set_element_inline_style_declaration_state(handle, state);
         if let Some(inline_base_url) = inline_base_url {
             runtime.set_element_inline_style_base_url(handle, inline_base_url.clone());
         }
