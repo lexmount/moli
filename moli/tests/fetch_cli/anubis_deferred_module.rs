@@ -192,8 +192,9 @@ fn cli_deferred_module_observes_stylesheet_unblocked_parser_dom() -> Result<()> 
     let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(AnubisDeferredModuleFixture::spawn())?;
     let url = server.url("/anubis/challenge");
-    let output = Command::new(env!("CARGO_BIN_EXE_moli"))
-        .args([
+    let output = {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+        command.args([
             "fetch",
             "--http-no-proxy",
             "*",
@@ -208,8 +209,12 @@ fn cli_deferred_module_observes_stylesheet_unblocked_parser_dom() -> Result<()> 
             "--dump",
             "html",
             &url,
-        ])
-        .output()?;
+        ]);
+        super::subprocess::run_command_with_process_timeout(
+            command,
+            std::time::Duration::from_secs(60),
+        )
+    }?;
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
 

@@ -4,18 +4,3 @@ retries = 2
 status-level = "retry"
 final-status-level = "flaky"
 success-output = "never"
-
-# CLI tests initialize browsers and spawn child processes; bound their overlap
-# on shared runners while the rest of the workspace keeps its normal parallelism.
-[test-groups.cli-timing]
-max-threads = 4
-
-# These two regressions deliberately leave less than one stability window.
-# Reserve the full pool rather than enlarging the timeout and losing coverage.
-[[profile.ci.overrides]]
-filter = 'binary(fetch_cli) & test(cli_quiet_page_)'
-threads-required = "num-test-threads"
-
-[[profile.ci.overrides]]
-filter = 'binary(fetch_cli) & !test(cli_quiet_page_)'
-test-group = "cli-timing"
