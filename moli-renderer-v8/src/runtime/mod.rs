@@ -137,6 +137,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageNavigationApiTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageOpfsTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPagePopupLoadEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageRenderingUpdate;
+pub(crate) use self::page_vm::AuthorizedCurrentPageScriptPreparationError;
 pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerClientMessage;
 pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerInternalTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageSharedWorkerClientEvent;

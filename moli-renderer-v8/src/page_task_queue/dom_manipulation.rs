@@ -31,6 +31,10 @@ use super::{
         RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
         RendererPagePopupLoadEventTask,
     },
+    script_preparation_error::{
+        RendererPageScriptPreparationErrorOwner, RendererPageScriptPreparationErrorSender,
+        RendererPageScriptPreparationErrorTask,
+    },
     storage_event_delivery::{
         RendererPageStorageEventDeliveryOwner, RendererPageStorageEventDeliverySender,
         RendererPageStorageEventDeliveryTask,
@@ -64,6 +68,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     HashChange(RendererPageHashChangeDeliveryOwner),
     ElementToggle(RendererPageElementToggleEventOwner),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
+    ScriptPreparationError(RendererPageScriptPreparationErrorOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
     PopupLoadEvent(RendererPagePopupLoadEventOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
@@ -80,6 +85,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     HashChange(RendererPageHashChangeDeliveryTask),
     ElementToggle(RendererPageElementToggleEventTask),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
+    ScriptPreparationError(RendererPageScriptPreparationErrorTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
     PopupLoadEvent(RendererPagePopupLoadEventTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
@@ -103,6 +109,9 @@ impl RendererPageDomManipulationTask {
             }
             Self::FileEntryFileCallback(task) => {
                 RendererPageDomManipulationOwner::FileEntryFileCallback(task.owner())
+            }
+            Self::ScriptPreparationError(task) => {
+                RendererPageDomManipulationOwner::ScriptPreparationError(task.owner())
             }
             Self::ImageLoadEvent(task) => {
                 RendererPageDomManipulationOwner::ImageLoadEvent(task.owner())
@@ -142,6 +151,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     HashChange(super::PageHashChangeDeliveryTurnAction),
     ElementToggle(super::PageElementToggleEventTurnAction),
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
+    ScriptPreparationError(super::PageScriptPreparationErrorTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
     PopupLoadEvent(super::PagePopupLoadEventTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
@@ -193,6 +203,10 @@ impl RendererPageDomManipulationSender {
 
     pub(crate) fn file_entry_file_callback(&self) -> RendererPageFileEntryFileCallbackSender {
         RendererPageFileEntryFileCallbackSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn script_preparation_error(&self) -> RendererPageScriptPreparationErrorSender {
+        RendererPageScriptPreparationErrorSender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn image_load_event(&self) -> RendererPageImageLoadEventSender {
