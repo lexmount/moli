@@ -16,12 +16,27 @@ pub(super) fn is_image(role: &str) -> bool {
     matches!(role, "image" | "doc-cover" | "graphics-symbol" | "SvgRoot")
 }
 
-pub(super) fn ax_role(document: &NativeDom, node: &Node) -> &'static str {
+/// During name traversal, `None` selects the potential role before its name
+/// is known. AX payloads resolve the role using the computed name.
+pub(super) fn ax_role(
+    document: &NativeDom,
+    node: &Node,
+    accessible_name: Option<&str>,
+) -> &'static str {
     match node.kind() {
         NodeData::Document(_) => "RootWebArea",
         NodeData::DocumentType(_) => "none",
         NodeData::Element(element) => {
-            explicit_aria_role(document, node, element).unwrap_or_else(|| native_ax_role(element))
+            let role = explicit_aria_role(document, node, element)
+                .unwrap_or_else(|| native_ax_role(element));
+            // HTML-AAM maps an unnamed section to generic. Core-AAM also
+            // falls back to the host role for an explicit unnamed region.
+            if role == "region" && accessible_name == Some("") && element.is_html_element("section")
+            {
+                "generic"
+            } else {
+                role
+            }
         }
         NodeData::Text(_) | NodeData::CDataSection(_) => "StaticText",
         NodeData::Comment(_) | NodeData::ProcessingInstruction(_) => "none",
@@ -37,7 +52,7 @@ fn native_ax_role(element: &Element) -> &'static str {
         "aside" => "complementary",
         "header" => "banner",
         "footer" => "contentinfo",
-        "section" => "region",
+        "section" if element.is_html_element("section") => "region",
         "article" | "hgroup" => "article",
         "address" => "group",
         "a" => {
@@ -425,7 +440,7 @@ mod tests {
                         document.set_attribute_ns(heading, namespace, prefix, property, "false")
                     );
                     assert_eq!(
-                        ax_role(&document, document.node(heading).unwrap()),
+                        ax_role(&document, document.node(heading).unwrap(), None),
                         if namespace.is_none() {
                             "heading"
                         } else {
@@ -449,7 +464,7 @@ mod tests {
                 assert!(document.set_attribute(heading, "role", role));
                 assert!(document.set_attribute(heading, property, "false"));
                 assert_eq!(
-                    ax_role(&document, document.node(heading).unwrap()),
+                    ax_role(&document, document.node(heading).unwrap(), None),
                     "none",
                     "{property}"
                 );
@@ -476,7 +491,7 @@ mod tests {
                 assert!(document.set_attribute(heading, "role", role));
                 assert!(document.set_attribute(heading, "tabindex", tabindex));
                 assert_eq!(
-                    ax_role(&document, document.node(heading).unwrap()),
+                    ax_role(&document, document.node(heading).unwrap(), None),
                     expected,
                     "tabindex={tabindex:?}"
                 );
@@ -515,7 +530,7 @@ mod tests {
                 }
                 assert!(document.set_attribute(element, "role", role));
                 assert_eq!(
-                    ax_role(&document, document.node(element).unwrap()),
+                    ax_role(&document, document.node(element).unwrap(), None),
                     *expected,
                     "{tag} role={role}, attributes={attributes:?}"
                 );
@@ -535,7 +550,10 @@ mod tests {
             let button = document.create_element("button");
             document.append_child(parent, button);
             document.set_attribute(button, "role", "presentation");
-            assert_eq!(ax_role(&document, document.node(button).unwrap()), expected);
+            assert_eq!(
+                ax_role(&document, document.node(button).unwrap(), None),
+                expected
+            );
         }
     }
 
@@ -548,13 +566,13 @@ mod tests {
 
         assert!(document.set_attribute(element, "role", "unknown STATUS"));
         assert_eq!(
-            ax_role(&document, document.node(element).expect("element")),
+            ax_role(&document, document.node(element).expect("element"), None),
             "status"
         );
 
         assert!(document.set_attribute(element, "role", "button status"));
         assert_eq!(
-            ax_role(&document, document.node(element).expect("element")),
+            ax_role(&document, document.node(element).expect("element"), None),
             "button"
         );
     }
@@ -567,7 +585,7 @@ mod tests {
         assert!(document.append_child(document.document_node_id(), password));
         assert!(document.set_attribute(password, "type", "password"));
         assert_eq!(
-            ax_role(&document, document.node(password).expect("element")),
+            ax_role(&document, document.node(password).expect("element"), None),
             "textbox"
         );
 
@@ -575,7 +593,7 @@ mod tests {
         assert!(document.append_child(document.document_node_id(), hidden));
         assert!(document.set_attribute(hidden, "type", "hidden"));
         assert_eq!(
-            ax_role(&document, document.node(hidden).expect("element")),
+            ax_role(&document, document.node(hidden).expect("element"), None),
             "none"
         );
     }

@@ -168,8 +168,8 @@ fn ax_element_name(
     }
     if traversal.follows_aria_labelledby()
         && let Some(labelled_by) = element
-            .attribute("aria-labelledby")
-            .or_else(|| element.attribute("aria-labeledby"))
+            .attribute_ns("", "aria-labelledby")
+            .or_else(|| element.attribute_ns("", "aria-labeledby"))
     {
         let tree_scope = ax_tree_scope_root(document, node_id);
         let label_ids = labelled_by
@@ -195,7 +195,7 @@ fn ax_element_name(
         }
     }
 
-    if let Some(aria_label) = element.attribute("aria-label") {
+    if let Some(aria_label) = element.attribute_ns("", "aria-label") {
         let aria_label = normalize_ax_whitespace(aria_label);
         if !aria_label.is_empty() {
             return Ok(AxName::alternative(aria_label));
@@ -224,13 +224,13 @@ fn ax_element_name(
     if matches!(
         traversal,
         AxNameTraversal::Contents | AxNameTraversal::NativeLabel
-    ) && ax_role(document, node) == "generic"
+    ) && ax_role(document, node, None) == "generic"
     {
         return Ok(AxName::contents(content));
     }
 
     let alternative = element
-        .attribute("title")
+        .attribute_ns("", "title")
         .map(normalize_ax_whitespace)
         .filter(|title| !title.is_empty())
         .or_else(|| {
@@ -434,7 +434,7 @@ fn ax_is_text_control(element: &Element) -> bool {
 }
 
 fn ax_name_comes_from_contents(document: &NativeDom, node: &Node, element: &Element) -> bool {
-    let role = ax_role(document, node);
+    let role = ax_role(document, node, None);
     if role == "row" {
         return ax_row_name_comes_from_contents(document, node);
     }
@@ -468,7 +468,7 @@ fn ax_row_name_comes_from_contents(document: &NativeDom, node: &Node) -> bool {
         let Some(ancestor_node) = document.node(ancestor_id) else {
             return false;
         };
-        match ax_role(document, ancestor_node) {
+        match ax_role(document, ancestor_node, None) {
             "grid" | "treegrid" => return true,
             "generic" | "none" | "group" | "rowgroup" => {
                 ancestor = ancestor_node.parent_node_id();
@@ -581,7 +581,12 @@ pub(super) fn ax_value(document: &NativeDom, node_id: NodeId, node: &Node) -> Op
     }))
 }
 
-pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) -> Vec<Value> {
+pub(super) fn ax_properties(
+    document: &NativeDom,
+    node_id: NodeId,
+    node: &Node,
+    role: &str,
+) -> Vec<Value> {
     let mut properties = Vec::new();
     match node.kind() {
         NodeData::Document(_) => {
@@ -592,7 +597,6 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
             properties.push(ax_bool_property("focused", "booleanOrUndefined", true));
         }
         NodeData::Element(element) => {
-            let role = ax_role(document, node);
             if role == "status" {
                 let live = element
                     .attribute("aria-live")
