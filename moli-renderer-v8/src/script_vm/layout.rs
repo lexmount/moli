@@ -1,13 +1,55 @@
 use super::*;
 
-impl moli_dom::accessibility::AccessibilityStyleSource
-    for crate::native_bridge::element::StyleObservation<'_>
-{
+use crate::native_bridge::element::{ScrollFocusAxes, StyleObservation};
+use moli_dom::accessibility::{AccessibilityStyle, AccessibilityStyleSource};
+use std::collections::HashMap;
+
+struct AccessibilityObservation<'a> {
+    runtime: &'a PageScriptHost,
+    document: DomHandle,
+    styles: StyleObservation<'a>,
+    // Derived on the first scroll candidate so a full AX tree takes one pass
+    // over the published boxes, even when it contains many scroll containers.
+    scroll_ranges: Option<HashMap<DomHandle, ScrollFocusAxes>>,
+}
+
+impl AccessibilityStyleSource for AccessibilityObservation<'_> {
     fn element_style(
         &mut self,
         node_id: DomHandle,
     ) -> Option<moli_dom::accessibility::AccessibilityStyle> {
-        self.read(node_id).accessibility_style()
+        self.styles.read(node_id).accessibility_style()
+    }
+
+    fn element_style_with_scroll_focus(
+        &mut self,
+        node_id: DomHandle,
+    ) -> Option<(AccessibilityStyle, bool)> {
+        let computed = self.styles.read(node_id);
+        let style = computed.accessibility_style()?;
+        let scrollable = !style.display_none
+            && style.visibility_visible
+            && ScrollFocusAxes::for_style(&computed).is_some_and(|axes| {
+                self.scroll_ranges
+                    .get_or_insert_with(|| {
+                        self.runtime
+                            .with_latest_layout_tree_for_document(self.document, |tree| {
+                                tree.boxes
+                                    .iter()
+                                    .filter_map(|layout_box| {
+                                        Some((
+                                            layout_box.principal_source?,
+                                            ScrollFocusAxes::for_extent(&layout_box.scroll_extent)?,
+                                        ))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    })
+                    .get(&node_id)
+                    .is_some_and(|extent| axes.intersects(*extent))
+            });
+        Some((style, scrollable))
     }
 }
 
@@ -55,7 +97,8 @@ impl ScriptVm {
         ) -> Option<T>,
     ) -> Option<T> {
         let host = self._context_host.borrow();
-        let mut document = host.dom_host().owner_document_handle(handle)?;
+        let source_document = host.dom_host().owner_document_handle(handle)?;
+        let mut document = source_document;
         let mut frame_state = moli_dom::accessibility::AccessibilityFrameState::Active;
         while let Some(owner) = host.child_browsing_context_host_for_document_handle(document) {
             if host.dom_host().is_inert_in_document(owner) {
@@ -64,7 +107,12 @@ impl ScriptVm {
             }
             document = host.dom_host().owner_document_handle(owner)?;
         }
-        let mut observation = crate::native_bridge::element::StyleObservation::new(&host);
+        let mut observation = AccessibilityObservation {
+            runtime: &host,
+            document: source_document,
+            styles: StyleObservation::new(&host),
+            scroll_ranges: None,
+        };
         let mut input =
             moli_dom::accessibility::AccessibilityInput::new(&mut observation, frame_state);
         read(host.dom_host(), &mut input)

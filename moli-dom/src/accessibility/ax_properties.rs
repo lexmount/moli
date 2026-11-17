@@ -592,6 +592,7 @@ pub(super) fn ax_properties(
     node_id: NodeId,
     node: &Node,
     role: &str,
+    scrollable: bool,
 ) -> Vec<Value> {
     let mut properties = Vec::new();
     match node.kind() {
@@ -652,7 +653,7 @@ pub(super) fn ax_properties(
                 && document.is_disabled_form_control(node_id);
             if disabled {
                 properties.push(ax_bool_property("disabled", "boolean", true));
-            } else if focus_support == FocusSupport::Supported || element.is_html_element("option")
+            } else if focus_support.supports_focus(scrollable) || element.is_html_element("option")
             {
                 properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
             }

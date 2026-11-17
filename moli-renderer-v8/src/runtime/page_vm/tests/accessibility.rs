@@ -287,6 +287,84 @@ async fn local_accessibility_requests_only_allocate_backend_ids_used_by_the_payl
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn accessibility_uses_published_scroll_ranges_without_layout() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.test/ax-scroll.html")?,
+        );
+        page.vm_mut().set_layout_policy(crate::real_layout_test_policy());
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <div id="vertical" role="none" style="width:100px;height:40px;overflow:auto">
+                    <div id="tall" style="height:200px">Vertical content</div>
+                </div>
+                <div id="horizontal" role="presentation" style="width:100px;height:40px;overflow:auto hidden">
+                    <div style="width:200px;height:1px">Horizontal content</div>
+                </div>
+                <div id="fits" role="none" style="width:100px;height:40px;overflow:scroll">
+                    <div style="width:1px;height:1px"></div>
+                </div>
+                <div id="clipped" role="none" style="width:100px;height:40px;overflow:hidden auto">
+                    <div style="width:200px;height:1px"></div>
+                </div>`;
+        "#)?;
+        let handle = |page: &PageVm, id| {
+            page.vm().document_runtime.dom_host().element_handle_by_id(id)
+                .expect("scroll fixture")
+        };
+        let vertical = handle(&page, "vertical");
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let cold = page.accessibility_node_payload_for_live_handle(vertical).expect("cold AX node");
+        assert_eq!(cold["ignored"], true);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert!(page.vm().layout_snapshot_cache_observability_for_test().3.is_none());
+
+        let outcome = page.vm_mut().eval(r#"
+            document.getElementById('vertical').focus({preventScroll:true});
+            document.activeElement.id
+        "#)?;
+        assert_eq!(outcome, "vertical");
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let cache = page.vm().layout_snapshot_cache_observability_for_test();
+        assert!(cache.3.is_some());
+        let tree = page.accessibility_tree_payloads_for_document(None).expect("warm AX tree");
+        for (id, focusable) in [
+            ("vertical", true), ("horizontal", true), ("fits", false), ("clipped", false),
+        ] {
+            let node = page.accessibility_node_payload_for_live_handle(handle(&page, id))
+                .expect("warm AX node");
+            assert_eq!(node["ignored"], !focusable, "{id}");
+            assert_eq!(node["role"]["value"], if focusable { "generic" } else { "none" }, "{id}");
+            let property = node["properties"].as_array().is_some_and(|properties|
+                properties.iter().any(|property| property["name"] == "focusable"
+                    && property["value"]["value"] == true));
+            assert_eq!(property, focusable, "{id}");
+            let full = tree.iter().find(|full| full["nodeId"] == node["nodeId"]);
+            assert_eq!(full, Some(&node), "{id}");
+        }
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(page.vm().layout_snapshot_cache_observability_for_test(), cache);
+
+        page.vm_mut().eval("document.getElementById('vertical').style.overflow = 'hidden'")?;
+        let clipped = page.accessibility_node_payload_for_live_handle(vertical).expect("clipped AX node");
+        assert_eq!(clipped["ignored"], true);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+
+        page.vm_mut().eval(r#"
+            document.getElementById('vertical').style.overflow = 'auto';
+            document.getElementById('tall').style.height = '1px';
+        "#)?;
+        page.vm_mut().publish_layout_for_test()?;
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let resized = page.accessibility_node_payload_for_live_handle(vertical).expect("resized AX node");
+        assert_eq!(resized["ignored"], true);
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("AX uses only already published scroll ranges");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn accessibility_style_reads_never_publish_cold_or_warm_layout() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

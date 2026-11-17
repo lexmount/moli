@@ -270,7 +270,13 @@ fn ax_node_payload(
     let properties = if ignored {
         Vec::new()
     } else {
-        ax_properties(document, node_id, node, role)
+        ax_properties(
+            document,
+            node_id,
+            node,
+            role,
+            projection.state(node_id).ok()?.scrollable_for_focus,
+        )
     };
     let parent_id = match projected.parent {
         Some(parent) => Some(AccessibilityNodeId::Dom(NonZeroU32::new(

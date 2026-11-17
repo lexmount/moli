@@ -297,7 +297,7 @@ pub(crate) use events::{
 pub(crate) use focus::is_disabled_form_control;
 use focus::is_focusable;
 pub(crate) use focus::{
-    contenteditable_editing_host, focus_element, focus_live_element_for_inspector,
+    ScrollFocusAxes, contenteditable_editing_host, focus_element, focus_live_element_for_inspector,
     initial_contenteditable_caret, perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event, perform_mouse_focus_default_action,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
