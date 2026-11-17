@@ -789,6 +789,58 @@ document.body.innerHTML = `
     .expect("inline SVG computed-paint fixture should run");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_clips_inline_svg_to_its_viewport_unless_overflow_is_visible() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/inline-svg-overflow.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;background:white}
+svg{position:absolute;top:10px;display:block}
+</style>`;
+document.body.innerHTML = `
+<svg id=clipped width="20" height="20" style="left:10px"><rect width="40" height="40" fill="red"></rect></svg>
+<svg id=visible width="20" height="20" style="left:60px;overflow:visible"><rect width="40" height="40" fill="blue"></rect></svg>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(110, 60, 1.0))?
+            .expect("inline SVG overflow fixture must retain a layout root");
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * raster.width + x) * 4) as usize;
+            <[u8; 4]>::try_from(&raster.rgba[index..index + 4]).expect("RGBA pixel")
+        };
+
+        assert_eq!(pixel(20, 20), [255, 0, 0, 255]);
+        assert_eq!(
+            pixel(40, 40),
+            [255, 255, 255, 255],
+            "the UA sheet must clip an embedded svg to its viewport"
+        );
+        assert_eq!(pixel(70, 20), [0, 0, 255, 255]);
+        assert_eq!(
+            pixel(90, 40),
+            [0, 0, 255, 255],
+            "author overflow:visible must still paint outside the viewport"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline SVG overflow fixture should run");
+}
+
 // Inline SVG text is painted from a `usvg::Tree` reparsed out of the live
 // subtree, so text only survives when the root carries the font that applies
 // to it. Two otherwise identical badges draw the same string: one inherits its

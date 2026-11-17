@@ -337,6 +337,37 @@ fn marquee_user_agent_overflow_overrides_author_styles() {
 }
 
 #[test]
+fn embedded_svg_user_agent_overflow_clips_to_its_viewport() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-user-agent-overflow.test/",
+        r#"<!doctype html>
+<svg id=embedded><svg id=nested></svg></svg>
+<svg id=authored style="overflow: visible"></svg>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.body.appendChild(document.createElement('svg'));
+  return [...document.querySelectorAll('#embedded, #nested, #authored'), html]
+    .map(element => {
+      const style = getComputedStyle(element);
+      return `${style.overflow} ${style.getPropertyValue('overflow-clip-margin')}`;
+    })
+    .join('|');
+})()
+"#,
+        )
+        .expect("svg user-agent overflow should evaluate");
+
+    assert_eq!(
+        result,
+        "hidden content-box|hidden content-box|visible content-box|visible 0px"
+    );
+}
+
+#[test]
 fn dialog_user_agent_display_tracks_open_state() {
     let mut vm = new_parsed_test_vm(
         "https://dialog-user-agent-display.test/",

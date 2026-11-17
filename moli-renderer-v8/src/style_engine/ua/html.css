@@ -5,7 +5,8 @@
  * third_party/blink/renderer/core/html/resources/html.css at
  * a03603fe9af6230a12f1b2fb2c18a7d003a0d937. The cascade shape, standard
  * properties, system colors, light-dark() values and observable control
- * states are retained.
+ * states are retained. The embedded svg viewport rule comes from
+ * third_party/blink/renderer/core/css/svg.css at the same revision.
  *
  * Blink-only values have explicit Moli owners:
  *
@@ -28,6 +29,7 @@
  */
 
 @namespace url(http://www.w3.org/1999/xhtml);
+@namespace svg url(http://www.w3.org/2000/svg);
 
 html {
   color: CanvasText;
@@ -607,4 +609,11 @@ a:any-link {
 
 body {
   margin: 8px;
+}
+
+/* An svg element embedded in a document clips to its viewport. A root svg
+ * element keeps visible overflow, as in Chromium. */
+svg|svg:not(:root) {
+  overflow: hidden;
+  overflow-clip-margin: content-box;
 }
