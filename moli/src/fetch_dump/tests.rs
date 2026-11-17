@@ -351,6 +351,143 @@ async fn semantic_dump_preserves_protocol_json_bytes_and_text_fields() -> Result
 }
 
 #[tokio::test]
+async fn semantic_presentational_links_keep_native_roles_and_targets() -> Result<()> {
+    let (_browser, mut page, server) = load_page(
+        r#"<!doctype html><a href="/go" role="presentation">Go presentation</a>
+        <a href="/go" role="none" tabindex="-1">Go none</a>
+        <a href="/go" role="button">Explicit button</a>
+        <button role="presentation">Native button</button>"#,
+    )
+    .await?;
+    let (nodes, text) = semantic_nodes_and_text(&mut page).await?;
+    let target = page.final_url().join("/go")?;
+    for name in ["Go presentation", "Go none"] {
+        assert_semantic_target(&nodes, &text, name, "link", Some(target.as_str()), true);
+    }
+    assert_semantic_target(&nodes, &text, "Explicit button", "button", None, false);
+    assert_semantic_target(&nodes, &text, "Native button", "button", None, false);
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn semantic_url_trimming_preserves_unicode_path_data() -> Result<()> {
+    let (_browser, mut page, server) = load_page(
+        r#"<!doctype html><base href="/assets/">
+        <a href="&nbsp;">NBSP</a><a href=" &#x2003; ">EM space</a>
+        <a href="">Empty</a><a href=" &#x9;&#xA; ">HTML spaces</a>"#,
+    )
+    .await?;
+    let (nodes, text) = semantic_nodes_and_text(&mut page).await?;
+    for (name, path) in [
+        ("NBSP", "/assets/%C2%A0"),
+        ("EM space", "/assets/%E2%80%83"),
+        ("Empty", "/assets/"),
+        ("HTML spaces", "/assets/"),
+    ] {
+        let target = page.final_url().join(path)?;
+        assert_semantic_target(&nodes, &text, name, "link", Some(target.as_str()), true);
+    }
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn semantic_svg_href_ignores_unrelated_namespaces() -> Result<()> {
+    let (_browser, mut page, server) = load_page(
+        r#"<!doctype html><base href="/assets/">
+        <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+          <a id="legacy" xlink:href="/real" aria-label="Legacy"><text>Legacy</text></a>
+          <a id="primary" href="/primary" xlink:href="/real" aria-label="Primary"><text>Primary</text></a>
+          <a id="empty" href="" xlink:href="/real" aria-label="Empty SVG"><text>Empty</text></a>
+          <a id="foreign" role="link" aria-label="Foreign"><text>Foreign</text></a>
+        </svg>"#,
+    ).await?;
+    let result = page.evaluate_runtime_expression_by_value_async(
+        "(() => { for (const node of document.querySelectorAll('svg a')) node.setAttributeNS('urn:example', 'href', '/wrong'); return document.getElementById('legacy').getAttributeNS('urn:example', 'href'); })()"
+    ).await?;
+    assert_eq!(result["value"], "/wrong", "{result}");
+    let (nodes, text) = semantic_nodes_and_text(&mut page).await?;
+    for (name, path) in [
+        ("Legacy", "/real"),
+        ("Primary", "/primary"),
+        ("Empty SVG", "/assets/"),
+    ] {
+        let target = page.final_url().join(path)?;
+        assert_semantic_target(&nodes, &text, name, "link", Some(target.as_str()), true);
+    }
+    assert_semantic_target(&nodes, &text, "Foreign", "link", None, false);
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn semantic_mathml_links_do_not_invent_native_targets() -> Result<()> {
+    let (_browser, mut page, server) = load_page(
+        r#"<!doctype html><math><a role="link" href="/other" aria-label="Math reference">M</a></math>
+        <a href="/other">HTML reference</a>"#,
+    ).await?;
+    let (nodes, text) = semantic_nodes_and_text(&mut page).await?;
+    assert_semantic_target(&nodes, &text, "Math reference", "link", None, false);
+    let target = page.final_url().join("/other")?;
+    assert_semantic_target(
+        &nodes,
+        &text,
+        "HTML reference",
+        "link",
+        Some(target.as_str()),
+        true,
+    );
+    server.abort();
+    Ok(())
+}
+
+async fn semantic_nodes_and_text(page: &mut Page) -> Result<(Vec<Value>, String)> {
+    let nodes = serde_json::from_str(&super::semantic::render_json(page, false).await?)?;
+    let text = super::semantic::render_text(page, false).await?;
+    Ok((nodes, text))
+}
+
+fn assert_semantic_target(
+    nodes: &[Value],
+    text: &str,
+    name: &str,
+    role: &str,
+    target: Option<&str>,
+    show_target: bool,
+) {
+    let node = nodes
+        .iter()
+        .find(|node| node["name"]["value"] == name && node["role"]["value"] == role)
+        .unwrap_or_else(|| panic!("missing {role}: {name}: {text}"));
+    let urls = node["properties"]
+        .as_array()
+        .expect("AX properties")
+        .iter()
+        .filter(|property| property["name"] == "url")
+        .map(|property| property["value"]["value"].as_str().expect("AX URL"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        urls,
+        target.into_iter().collect::<Vec<_>>(),
+        "{role}: {name} URL"
+    );
+    let arrow = if show_target {
+        format!(" → {}", target.expect("link target"))
+    } else {
+        String::new()
+    };
+    let expected = format!(
+        "- {role}: {name}{arrow} [backendNodeId={}]",
+        node["backendDOMNodeId"]
+    );
+    assert!(
+        text.lines().any(|line| line.trim_start() == expected),
+        "missing {expected}: {text}"
+    );
+}
+
+#[tokio::test]
 async fn semantic_link_urls_follow_computed_roles() -> Result<()> {
     let (_browser, mut page, http_server) =
         load_page(include_str!("../../tests/fixtures/semantic-link-urls.html")).await?;

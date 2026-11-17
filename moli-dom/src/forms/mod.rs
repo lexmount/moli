@@ -45,3 +45,5 @@ pub use validity::FormControlValidity;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use text::parse_html_integer_prefix;
