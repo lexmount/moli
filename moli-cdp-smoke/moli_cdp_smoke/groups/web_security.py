@@ -157,6 +157,15 @@ async def observe_mode(endpoint: str, source: str, peer: FixtureServer,
                         init = {} if method == 'GET' else {'method':'PUT','headers':{'X-Author':'kept'},'body':'request-body'}
                         result = await worker_read(page,source,url(target,'echo',key),api,kind,init)
                         observed[kind+'-'+api+'-'+method] = {'result':result,'requests':peer.web_security.requests(key)}
+                for route in ('orb','corp'):
+                    key = mode+'-'+kind+'-fetch-'+route
+                    result = await worker_read(page,source,url(target,route,key),'fetch',kind,{'mode':'no-cors'})
+                    observed[kind+'-fetch-'+route] = {'result':result,'requests':peer.web_security.requests(key)}
+                key = mode+'-'+kind+'-fetch-redirect-timing'
+                destination = '/web-security/timing?' + urlencode({'case':key,'cors':1})
+                resource = url(target,'redirect',key,cors=1,to=destination)
+                result = await worker_read(page,source,resource,'fetch',kind,{'probeTiming':True})
+                observed[kind+'-fetch-redirect-timing'] = {'result':result,'requests':peer.web_security.requests(key)}
                 key = mode+'-cross-worker-'+kind
                 result = await worker_read(page,target,url(target,'echo',key),'fetch',kind,{'probeOrigin':True})
                 observed['cross-worker-'+kind] = {'result':result,'requests':peer.web_security.requests(key)}

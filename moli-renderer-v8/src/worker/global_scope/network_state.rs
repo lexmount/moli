@@ -5,11 +5,6 @@ use super::*;
 pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
     pub(in crate::worker) resource_timing: crate::context_bootstrap::FetchResourceTiming,
-    pub(in crate::worker) credentials_mode: RequestCredentialsMode,
-    pub(in crate::worker) request_mode: moli_fetch::RequestMode,
-    pub(in crate::worker) redirect_mode: RequestRedirectMode,
-
-    pub(in crate::worker) policy_context: crate::types::SubresourcePolicyContext,
     pub(in crate::worker) signal_id: Option<u32>,
     pub(in crate::worker) load: ResourceLoadLease,
     pub(in crate::worker) request_url: Url,
@@ -36,6 +31,7 @@ pub(crate) struct WorkerFetchStreamingStarted {
     pub(crate) fetch_id: u32,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) head: ResponseHead,
+    pub(crate) metadata: Arc<moli_fetch_types::FetchResponseMetadata>,
 }
 
 pub(crate) struct WorkerFetchStreamingChunk {
@@ -46,29 +42,14 @@ pub(crate) struct WorkerFetchStreamingChunk {
 pub(crate) struct WorkerFetchStreamingFinished {
     pub(crate) fetch_id: u32,
     pub(crate) body_source_id: NetworkBodySourceId,
-    pub(crate) head: ResponseHead,
-    pub(crate) result: Result<SubresourceResponseBody, String>,
+    pub(crate) result: Result<crate::context_bootstrap::ResourcePerformanceEntry, String>,
 }
 
 pub(crate) struct WorkerFetchResponse {
-    pub(crate) response: Box<Response>,
-    pub(crate) filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
-}
-impl WorkerFetchResponse {
-    pub(super) fn response_filter(
-        &self,
-    ) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
-        self.filter.clone()
-    }
-    pub(super) fn head(&self) -> ResponseHead {
-        self.response.head()
-    }
-    pub(super) fn subresource_response_body(&self) -> SubresourceResponseBody {
-        SubresourceResponseBody::from_fetch_response(&self.response)
-    }
-    pub(super) fn into_fetch_parts(self) -> (ResponseHead, ResponseBody) {
-        self.response.into_body()
-    }
+    pub(crate) head: ResponseHead,
+    pub(crate) body: ResponseBody,
+    pub(crate) metadata: moli_fetch_types::FetchResponseMetadata,
+    pub(crate) resource_timing: crate::context_bootstrap::ResourcePerformanceEntry,
 }
 
 pub(in crate::worker) struct PendingWorkerXhr {

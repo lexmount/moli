@@ -46,7 +46,7 @@ pub(super) fn start<'s>(
         resource_type: SubresourceResourceType::Fetch,
         request_cookie_report: None,
     };
-    let (fetch_id, completion, control) = {
+    let (fetch_id, completion, control, resource_timing) = {
         let mut state = state.borrow_mut();
         let fetch_id = next_fetch_id(&mut state);
         let resource_timing =
@@ -55,12 +55,7 @@ pub(super) fn start<'s>(
             fetch_id,
             PendingWorkerFetch {
                 resolver: v8::Global::new(scope, resolver),
-                resource_timing,
-                credentials_mode: request.credentials_mode,
-                request_mode: request.request_mode,
-                redirect_mode: request.redirect_mode(),
-
-                policy_context,
+                resource_timing: resource_timing.clone(),
                 signal_id,
                 load: load.clone(),
                 request_url: request.url.clone(),
@@ -81,7 +76,12 @@ pub(super) fn start<'s>(
                     state.content_security_reporting_endpoints.clone(),
                 ),
         };
-        (fetch_id, state.fetch_completion_tx.clone(), control)
+        (
+            fetch_id,
+            state.fetch_completion_tx.clone(),
+            control,
+            resource_timing,
+        )
     };
     let service_worker = state.borrow().service_worker_runtime.clone();
     let service_worker_client = state.borrow().service_worker_client_id;
@@ -90,7 +90,7 @@ pub(super) fn start<'s>(
         control
             .fetch_load(request, info, load, cancel, policy_context)
             .with_service_worker(service_worker, service_worker_client, metadata)
-            .run_fetch(completion, fetch_id)
+            .run_fetch(completion, fetch_id, resource_timing)
             .await;
     });
     Some(promise)
