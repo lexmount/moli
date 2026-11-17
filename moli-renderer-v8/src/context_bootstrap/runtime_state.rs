@@ -1716,6 +1716,7 @@ pub(crate) fn finish_context_bootstrap(
         ("MessageEvent", "MessageEvent"),
         ("StorageEvent", "StorageEvent"),
         ("PageTransitionEvent", "PageTransitionEvent"),
+        ("PageRevealEvent", "PageRevealEvent"),
         ("PopStateEvent", "PopStateEvent"),
         (
             "NavigationCurrentEntryChangeEvent",
