@@ -592,36 +592,36 @@ fn collection_length_getter_for<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    rv.set(v8::Number::new(scope, length as f64).into());
+    rv.set(length);
 }
 
 fn native_collection_length<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Option<usize> {
+) -> Option<v8::Local<'s, v8::Value>> {
     if let Some(length) = static_collection_length_from_internal_field(scope, object) {
         return Some(length);
     }
-    if let Ok((runtime_ptr, descriptor)) = live_collection_descriptor_from_object(scope, object) {
-        return Some(descriptor.resolve(unsafe { &*runtime_ptr }).len());
-    }
-    get_private_value(scope, object, STATIC_COLLECTION_LENGTH_SLOT)
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as usize)
+    let length = if let Ok((runtime_ptr, descriptor)) =
+        live_collection_descriptor_from_object(scope, object)
+    {
+        descriptor.resolve(unsafe { &*runtime_ptr }).len()
+    } else {
+        get_private_value(scope, object, STATIC_COLLECTION_LENGTH_SLOT)
+            .and_then(|value| value.number_value(scope))
+            .filter(|value| value.is_finite() && *value >= 0.0)? as usize
+    };
+    Some(v8::Number::new(scope, length as f64).into())
 }
 
 fn static_collection_length_from_internal_field<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Option<usize> {
-    if object.internal_field_count() <= STATIC_COLLECTION_LENGTH_INTERNAL_FIELD {
-        return None;
-    }
+) -> Option<v8::Local<'s, v8::Value>> {
+    // The branded static wrapper factories store an immutable V8 Number here.
+    // Reuse it instead of converting through Rust on every property read.
+    // get_internal_field checks the field count; live wrappers have no slot.
     object
         .get_internal_field(scope, STATIC_COLLECTION_LENGTH_INTERNAL_FIELD)
         .and_then(|value| v8::Local::<v8::Value>::try_from(value).ok())
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as usize)
 }
