@@ -463,6 +463,8 @@ impl PageScriptHost {
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
+            script_preparation_errors:
+                super::script_preparation_errors::ScriptPreparationErrorState::default(),
             user_interaction_tasks:
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
             pending_image_load_events: HashMap::new(),
@@ -899,6 +901,16 @@ impl PageScriptHost {
             )
             .dom_manipulation()
             .file_entry_file_callback()
+    }
+
+    pub(crate) fn page_script_preparation_error_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageScriptPreparationErrorSender {
+        self.page_task_capabilities
+            .get()
+            .expect("a live Page Window must install its task capabilities before script preparation error admission")
+            .dom_manipulation()
+            .script_preparation_error()
     }
 
     pub(crate) fn page_file_reading_sender(

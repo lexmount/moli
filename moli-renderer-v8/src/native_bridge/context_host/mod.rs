@@ -100,6 +100,7 @@ mod html_serialization;
 mod image_decodes;
 mod image_loads;
 mod image_resources;
+mod script_preparation_errors;
 pub(crate) use image_resources::{
     CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
     ScannedImagePreloadAdmission,
@@ -953,6 +954,7 @@ pub(crate) struct PageScriptHost {
     file_reading_tasks: file_reading_tasks::FileReadingState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
+    script_preparation_errors: script_preparation_errors::ScriptPreparationErrorState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
     next_image_load_event_id: u64,
