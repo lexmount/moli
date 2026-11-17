@@ -450,11 +450,12 @@ impl ConnectedStyleImportRoot {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectedLoadNetworkResult {
-    /// Request provenance survives clearing the stylesheet installation owner.
-    pub(crate) resource_timing_initiator_type: &'static str,
     /// Completed observation of the physical connected-link request. Element
     /// movement and delayed Page delivery do not change its timing or origin.
     pub(crate) resource_timing: Option<Box<crate::context_bootstrap::ResourcePerformanceEntry>>,
+    /// Original request source, independent of later stylesheet installation
+    /// authority and of the common stylesheet resource destination.
+    pub(crate) resource_timing_initiator_type: &'static str,
     pub(crate) import_options: Option<crate::stylesheet_blocking::StylesheetFetchOptions>,
     pub(crate) consumed_preload_error: bool,
     /// Exact request Document, independent of an element's current location.
@@ -2784,8 +2785,8 @@ mod tests {
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "link",
                 resource_timing: None,
+                resource_timing_initiator_type: "link",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -2808,6 +2809,7 @@ mod tests {
         assert_eq!(results.len(), 1);
         let result = results.into_iter().next().unwrap();
         assert_eq!(result.request_url, stale_url);
+        assert_eq!(result.resource_timing_initiator_type, "link");
         assert!(
             result.source_owners.is_empty(),
             "stale connected stylesheet results must not retain a source owner"
@@ -2838,8 +2840,8 @@ mod tests {
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "link",
                 resource_timing: None,
+                resource_timing_initiator_type: "link",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -2897,8 +2899,8 @@ mod tests {
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "link",
                 resource_timing: None,
+                resource_timing_initiator_type: "link",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -2956,8 +2958,8 @@ mod tests {
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "link",
                 resource_timing: None,
+                resource_timing_initiator_type: "link",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3569,8 +3571,8 @@ mod tests {
             successful: false,
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "link",
                 resource_timing: None,
+                resource_timing_initiator_type: "link",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3633,6 +3635,12 @@ mod tests {
                 roots: Vec::new(),
             },
         ] {
+            let resource_timing_initiator_type =
+                if matches!(&parameters, ConnectedLoadParameters::StyleImports { .. }) {
+                    "css"
+                } else {
+                    "link"
+                };
             let mut runtime = DocumentRuntime::new(&document);
             let first_a = ConnectedLoadOperation::new_for_test(
                 owner,
@@ -3670,8 +3678,8 @@ mod tests {
                 successful: true,
                 network_results: vec![ConnectedLoadNetworkResult {
                     network_observed: false,
-                    resource_timing_initiator_type: "css",
                     resource_timing: None,
+                    resource_timing_initiator_type,
                     import_options: None,
                     consumed_preload_error: false,
                     document_owner: None,
@@ -3749,8 +3757,8 @@ mod tests {
             successful: true,
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "css",
                 resource_timing: None,
+                resource_timing_initiator_type: "css",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3816,8 +3824,8 @@ mod tests {
             successful: true,
             network_results: vec![ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "css",
                 resource_timing: None,
+                resource_timing_initiator_type: "css",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
@@ -3962,8 +3970,8 @@ mod tests {
             .ready_connected_load_network_results
             .push_back(ConnectedLoadNetworkResult {
                 network_observed: false,
-                resource_timing_initiator_type: "link",
                 resource_timing: None,
+                resource_timing_initiator_type: "link",
                 import_options: None,
                 consumed_preload_error: false,
                 document_owner: None,
