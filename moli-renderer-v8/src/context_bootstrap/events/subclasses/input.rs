@@ -1,7 +1,7 @@
 use super::*;
-use crate::context_bootstrap::events::{modifiers::EventModifierInit, ui::UiEventInit};
+use crate::context_bootstrap::events::ui::UiEventInit;
 use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
-use crate::context_bootstrap::{range, touch_runtime};
+use crate::context_bootstrap::range;
 use crate::util::get_private_value;
 use crate::{web_api_interfaces, webidl};
 use webidl::WebIdlDictionarySerialize;
@@ -48,47 +48,9 @@ fn live_range_value<'s>(
     range::live_range_from_static_range(scope, *range).map(Into::into)
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "TouchEventInit")]
-pub(super) struct TouchEventInit<'s> {
-    #[webidl(inherit)]
-    modifiers: EventModifierInit<'s>,
-    #[webidl(sequence, interface = web_api_interfaces::Touch, default = Vec::new())]
-    changed_touches: Vec<v8::Local<'s, v8::Object>>,
-    #[webidl(sequence, interface = web_api_interfaces::Touch, default = Vec::new())]
-    target_touches: Vec<v8::Local<'s, v8::Object>>,
-    #[webidl(sequence, interface = web_api_interfaces::Touch, default = Vec::new())]
-    touches: Vec<v8::Local<'s, v8::Object>>,
-}
-
-pub(super) enum InteractionEventInit<'s> {
-    Input(InputEventInit<'s>),
-    Touch(TouchEventInit<'s>),
-}
-
-impl<'s> InteractionEventInit<'s> {
-    pub(super) fn parse(
-        scope: &mut v8::PinScope<'s, '_>,
-        args: &v8::FunctionCallbackArguments<'s>,
-        kind: EventSubclassKind,
-    ) -> Option<Self> {
-        use super::super::parse_event_dictionary;
-        Some(match kind {
-            EventSubclassKind::InputEvent => {
-                Self::Input(parse_event_dictionary(scope, args, "InputEvent")?)
-            }
-            EventSubclassKind::TouchEvent => {
-                Self::Touch(parse_event_dictionary(scope, args, "TouchEvent")?)
-            }
-            _ => unreachable!("interaction event kind"),
-        })
-    }
-
+impl<'s> InputEventInit<'s> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        match self {
-            Self::Input(init) => init.ui.event_flags(),
-            Self::Touch(init) => init.modifiers.event_flags(),
-        }
+        self.ui.event_flags()
     }
 
     pub(super) fn initialize(
@@ -96,20 +58,7 @@ impl<'s> InteractionEventInit<'s> {
         scope: &mut v8::PinScope<'s, '_>,
         event: v8::Local<'s, v8::Object>,
     ) -> bool {
-        match self {
-            Self::Input(init) => init.initialize_snapshot(scope, event).is_some(),
-            Self::Touch(init) => {
-                init.modifiers.initialize(scope, event);
-                touch_runtime::initialize_touch_event_lists(
-                    scope,
-                    event,
-                    &init.touches,
-                    &init.target_touches,
-                    &init.changed_touches,
-                );
-                true
-            }
-        }
+        self.initialize_snapshot(scope, event).is_some()
     }
 }
 

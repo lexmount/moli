@@ -135,6 +135,69 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         );
     }
 
+    let mouse = subclasses::build_template(scope, EventSubclassKind::MouseEvent).unwrap();
+    mouse.inherit(ui);
+    finish_template(scope, interfaces::MouseEvent::DESCRIPTOR, mouse);
+    for kind in [
+        EventSubclassKind::WheelEvent,
+        EventSubclassKind::PointerEvent,
+        EventSubclassKind::DragEvent,
+        EventSubclassKind::KeyboardEvent,
+        EventSubclassKind::TouchEvent,
+    ] {
+        let template = subclasses::build_template(scope, kind).unwrap();
+        template.inherit(
+            if matches!(
+                kind,
+                EventSubclassKind::KeyboardEvent | EventSubclassKind::TouchEvent
+            ) {
+                ui
+            } else {
+                mouse
+            },
+        );
+        if kind == EventSubclassKind::PointerEvent {
+            // The embedder controls exposure; these callbacks only copy native payloads.
+            let coalesced = v8::FunctionTemplate::new(
+                scope,
+                subclasses::pointer_event_get_coalesced_events_callback,
+            );
+            let predicted = v8::FunctionTemplate::new(
+                scope,
+                subclasses::pointer_event_get_predicted_events_callback,
+            );
+            let prototype = template.prototype_template(scope);
+            prototype.set(v8str(scope, "getCoalescedEvents").into(), coalesced.into());
+            prototype.set(v8str(scope, "getPredictedEvents").into(), predicted.into());
+        }
+        if kind == EventSubclassKind::KeyboardEvent {
+            let method = v8::FunctionTemplate::new(scope, subclasses::keyboard_event_init_callback);
+            template
+                .prototype_template(scope)
+                .set(v8str(scope, "initKeyboardEvent").into(), method.into());
+        }
+        if kind == EventSubclassKind::TouchEvent {
+            moli_webapi::touch::install_touch_template_bindings(scope, template, "TouchEvent");
+        }
+        finish_template(
+            scope,
+            interfaces::descriptor(kind.constructor_name()).unwrap(),
+            template,
+        );
+    }
+    for interface in [
+        interfaces::Touch::DESCRIPTOR,
+        interfaces::TouchList::DESCRIPTOR,
+    ] {
+        let template = if interface.name() == "Touch" {
+            v8::FunctionTemplate::new(scope, moli_webapi::touch::touch_constructor_callback)
+        } else {
+            v8::FunctionTemplate::new(scope, illegal_constructor)
+        };
+        moli_webapi::touch::install_touch_template_bindings(scope, template, interface.name());
+        finish_template(scope, interface, template);
+    }
+
     let progress =
         v8::FunctionTemplate::new(scope, events::progress::progress_event_constructor_callback);
     progress.inherit(event);
@@ -1240,9 +1303,13 @@ fn ui_event_window_checks_use_the_embedder_predicate_before_initializing_state()
         eval(
             scope,
             r#"(() => {
-      try {new UIEvent('denied', {view:windowValue});}
-      catch (error) {return error instanceof TypeError;}
-      return false;
+      for (const Constructor of [UIEvent, FocusEvent, CompositionEvent, MouseEvent, WheelEvent,
+        PointerEvent, DragEvent, KeyboardEvent, TouchEvent]) {
+        let error;
+        try {new Constructor('denied', {view:windowValue});} catch (value) {error=value;}
+        if (!(error instanceof TypeError)) return false;
+      }
+      return true;
     })()"#
         )
         .is_true()
@@ -1279,5 +1346,91 @@ fn ui_event_window_checks_use_the_embedder_predicate_before_initializing_state()
             .reads
             .get(),
         1
+    );
+}
+
+#[test]
+fn pointing_event_payloads_and_pointer_snapshots_work_without_a_page() {
+    check(
+        r#"(() => {
+      const mouse = new MouseEvent('move', {view:windowValue, relatedTarget:sourceElement,
+        clientX:1.25, clientY:2.5, screenX:7, screenY:8, button:1, buttons:3, altKey:true});
+      assert(mouse instanceof UIEvent && mouse.view === windowValue && mouse.relatedTarget === sourceElement);
+      assert(mouse.clientX === 1.25 && mouse.x === 1.25 && mouse.pageY === 2.5);
+      assert(mouse.screenX === 7 && mouse.button === 1 && mouse.buttons === 3 && mouse.altKey);
+      const wheel = new WheelEvent('wheel', {deltaX:1.5, deltaY:-2.25, deltaMode:1});
+      assert(wheel instanceof MouseEvent && wheel.deltaMode === 1 && wheel.deltaY === -2.25);
+      assert(wheel.wheelDeltaX === 1 && wheel.wheelDeltaY === -2 && wheel.wheelDelta === -2);
+      const sample = new PointerEvent('sample', {pointerId:1});
+      const pointer = new PointerEvent('pointer', {view:windowValue, pointerId:3, tiltX:30,
+        pressure:.5, pointerType:'pen\ud800', coalescedEvents:[sample], predictedEvents:[sample]});
+      assert(pointer instanceof MouseEvent && pointer.pointerId === 3 && pointer.pressure === .5);
+      assert(pointer.tiltX === 30 && pointer.tiltY === 0 && pointer.azimuthAngle === 0);
+      assert(Math.abs(pointer.altitudeAngle - Math.PI/3) < 1e-12 && pointer.pointerType === 'pen\ud800');
+      for (const method of ['getCoalescedEvents','getPredictedEvents']) {
+        const first = pointer[method](), second = pointer[method]();
+        assert(first !== second && first.length === 1 && first[0] === sample && second[0] === sample);
+        first.length = 0;
+        assert(pointer[method]().length === 1);
+      }
+      const drag = new DragEvent('drag', {view:windowValue, dataTransfer:clipboard});
+      assert(drag instanceof MouseEvent && drag.dataTransfer === clipboard);
+      for (const [Constructor, init] of [
+        [DragEvent, {dataTransfer:{}}],
+        [PointerEvent, {coalescedEvents:[Object.create(PointerEvent.prototype)]}]
+      ]) {
+        let error;
+        try {new Constructor('bad', init);} catch (value) {error=value;}
+        assert(error instanceof TypeError);
+      }
+      return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn keyboard_event_values_and_legacy_reinitialization_share_the_native_state() {
+    check(
+        r#"(() => {
+      const order = [], values = {view:windowValue, altKey:true, modifierAltGraph:true,
+        key:'key\ud800', code:'code\udfff', which:4294967297.9, repeat:true};
+      const event = new KeyboardEvent('keydown', new Proxy(values, {
+        get(value, key) {order.push(key); return value[key];}
+      }));
+      assert(order.slice(0,6).join() === 'bubbles,cancelable,composed,detail,sourceCapabilities,view');
+      assert(order.indexOf('shiftKey') < order.indexOf('charCode') && order.filter(key => key === 'view').length === 1);
+      assert(event instanceof UIEvent && event.view === windowValue && event.altKey);
+      assert(event.key === 'key\ud800' && event.code === 'code\udfff' && event.which === 1 && event.repeat);
+      event.initKeyboardEvent('keyup', true, true, windowValue, 'new\ud800', 2, true, false, true, false);
+      assert(event.type === 'keyup' && event.bubbles && event.cancelable && event.view === windowValue);
+      assert(event.key === 'new\ud800' && event.location === 2 && !event.repeat);
+      assert(event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey);
+      return true;
+    })()"#,
+    );
+}
+
+#[test]
+fn touch_event_lists_preserve_native_identity_without_a_document_or_public_constructors() {
+    check(
+        r#"(() => {
+      const NativeTouch = Touch, NativeList = TouchList;
+      const touch = new NativeTouch({identifier:7, target:sourceElement, clientX:3.5});
+      Object.defineProperty(globalThis, 'Touch', {configurable:true, get() {throw new Error('public Touch');}});
+      Object.defineProperty(globalThis, 'TouchList', {configurable:true, get() {throw new Error('public TouchList');}});
+      const event = new TouchEvent('touchstart', {view:windowValue, altKey:true,
+        touches:new Set([touch]), targetTouches:[touch], changedTouches:[touch]});
+      assert(event instanceof UIEvent && event.view === windowValue && event.altKey);
+      assert(event.touches instanceof NativeList && event.targetTouches instanceof NativeList);
+      assert(event.touches !== event.targetTouches && event.touches[0] === touch && event.targetTouches[0] === touch);
+      assert(event.changedTouches.item(0) === touch && [...event.touches][0] === touch);
+      assert(touch.target === sourceElement && touch.clientX === 3.5 && event.touches.item(1) === null);
+      const second = new TouchEvent('next', {touches:[touch]});
+      assert(second.touches !== event.touches && second.touches[0] === touch);
+      let error;
+      try {new TouchEvent('bad', {touches:[Object.create(NativeTouch.prototype)]});} catch (value) {error=value;}
+      assert(error instanceof TypeError);
+      return true;
+    })()"#,
     );
 }

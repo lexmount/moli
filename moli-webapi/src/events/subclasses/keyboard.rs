@@ -1,7 +1,8 @@
 use super::super::ui::initialize_legacy_ui_event;
 use super::*;
-use crate::webidl;
+use moli_v8_util::v8_string_from_utf16_units;
 use moli_webapi_declare::WebApiObject;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 /// Own KeyboardEventInit members, including the legacy code members.
@@ -101,7 +102,7 @@ struct InitKeyboardEventArgs<'s> {
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
-    #[webidl(nullable, interface = crate::web_api_interfaces::Window, brand_check = crate::context_bootstrap::is_window_receiver)]
+    #[webidl(nullable, interface = crate::interfaces::Window, brand_check = crate::events::ui::is_window_receiver)]
     view: Option<v8::Local<'s, v8::Object>>,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
     key: webidl::DomString16,
@@ -126,7 +127,7 @@ struct LegacyKeyboardEventInitDeclaration<'scope> {
     repeat: bool,
 }
 
-pub(in crate::context_bootstrap) fn keyboard_event_init_callback<'s>(
+pub fn keyboard_event_init_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::{get_private_value, v8_string, v8_string_from_utf16_units, v8str};
+use crate::util::{get_private_value, v8_string, v8str};
 pub(crate) use moli_webapi::events::subclasses::construct_original_page_transition_event;
 use moli_webapi_declare::WebApiObject;
 

@@ -1,58 +1,6 @@
 use super::*;
 
-// Every kind has a complete derived dictionary. A new kind must select its
-// dictionary explicitly; there is no legacy EventInit-only fallback.
-enum SubclassInit<'s> {
-    Pointing(pointer::PointerEventInitPayload<'s>),
-    Interaction(input::InteractionEventInit<'s>),
-    Keyboard(keyboard::KeyboardEventInit<'s>),
-}
-
-impl<'s> SubclassInit<'s> {
-    fn parse(
-        scope: &mut v8::PinScope<'s, '_>,
-        args: &v8::FunctionCallbackArguments<'s>,
-        kind: EventSubclassKind,
-    ) -> Option<Self> {
-        Some(match kind {
-            EventSubclassKind::MouseEvent
-            | EventSubclassKind::WheelEvent
-            | EventSubclassKind::PointerEvent
-            | EventSubclassKind::DragEvent => {
-                Self::Pointing(pointer::PointerEventInitPayload::parse(scope, args, kind)?)
-            }
-            EventSubclassKind::InputEvent | EventSubclassKind::TouchEvent => {
-                Self::Interaction(input::InteractionEventInit::parse(scope, args, kind)?)
-            }
-            EventSubclassKind::KeyboardEvent => {
-                Self::Keyboard(keyboard::parse_keyboard_event_init(scope, args)?)
-            }
-            _ => unreachable!("value event templates are constructed in moli-webapi"),
-        })
-    }
-
-    fn event_flags(&self) -> (bool, bool, bool) {
-        match self {
-            Self::Pointing(init) => init.event_flags(),
-            Self::Interaction(init) => init.event_flags(),
-            Self::Keyboard(init) => init.event_flags(),
-        }
-    }
-
-    fn initialize(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        event: v8::Local<'s, v8::Object>,
-    ) -> bool {
-        match self {
-            Self::Pointing(init) => init.initialize(scope, event),
-            Self::Interaction(init) => return init.initialize(scope, event),
-            Self::Keyboard(init) => keyboard::initialize_keyboard_event(scope, event, init),
-        }
-        true
-    }
-}
-
+// InputEvent retains native live Range snapshots. Other event constructors are shared.
 fn event_subclass_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -87,7 +35,13 @@ fn event_subclass_constructor_callback<'s>(
     let Some(event_type) = event_type_argument(scope, &args, kind.constructor_name()) else {
         return;
     };
-    let Some(init) = SubclassInit::parse(scope, &args, kind) else {
+    let init = match kind {
+        EventSubclassKind::InputEvent => {
+            parse_event_dictionary::<input::InputEventInit>(scope, &args, "InputEvent")
+        }
+        _ => unreachable!("value event templates are constructed in moli-webapi"),
+    };
+    let Some(init) = init else {
         return;
     };
     if let Some(wrapper) = moli_webapi::events::subclasses::construct_subclass(

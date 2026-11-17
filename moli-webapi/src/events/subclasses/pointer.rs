@@ -1,11 +1,10 @@
 use super::EventSubclassKind;
 use moli_webapi_declare::WebApiObject;
 
-use crate::context_bootstrap::events::modifiers::EventModifierInit;
-use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
-use crate::util::throw_type_error;
-use crate::web_api_interfaces;
-use crate::webidl;
+use crate::events::modifiers::EventModifierInit;
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::throw_type_error;
+use moli_webidl as webidl;
 
 const POINTER_EVENT_COALESCED_EVENTS_SLOT: &str = "__moliPointerEventCoalescedEvents";
 const POINTER_EVENT_PREDICTED_EVENTS_SLOT: &str = "__moliPointerEventPredictedEvents";
@@ -209,7 +208,7 @@ impl<'s> PointerEventInit<'s> {
         )
         .initialize(scope, event)
         .expect("PointerEvent state should initialize");
-        let pointer_type = crate::util::v8_string_from_utf16_units(scope, &self.pointer_type.0)
+        let pointer_type = moli_v8_util::v8_string_from_utf16_units(scope, &self.pointer_type.0)
             .expect("PointerEvent pointerType should fit in a V8 string");
         PointerEventTailInitDeclaration::new(self.is_primary, pointer_type)
             .initialize(scope, event)
@@ -228,7 +227,7 @@ impl<'s> PointerEventInit<'s> {
 pub(super) struct DragEventInit<'s> {
     #[webidl(inherit)]
     mouse: MouseEventInit<'s>,
-    #[webidl(nullable, interface = web_api_interfaces::DataTransfer, brand_check = is_branded_data_transfer_object)]
+    #[webidl(nullable, interface = web_api_interfaces::DataTransfer)]
     data_transfer: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -473,7 +472,7 @@ fn pointer_event_sequence_copy<'s>(
     event: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> v8::Local<'s, v8::Array> {
-    let Some(stored) = crate::context_bootstrap::event_private_value(scope, event, slot)
+    let Some(stored) = crate::events::state::event_private_value(scope, event, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
     else {
         return v8::Array::new(scope, 0);
@@ -491,9 +490,7 @@ fn pointer_event_sequence_callback<'s>(
     slot: &'static str,
     method: &'static str,
 ) {
-    if super::super::event_subclass_kind(scope, args.this())
-        != Some(EventSubclassKind::PointerEvent)
-    {
+    if super::event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::PointerEvent) {
         throw_type_error(
             scope,
             &format!("Failed to execute '{method}' on 'PointerEvent': Illegal invocation"),
@@ -503,7 +500,7 @@ fn pointer_event_sequence_callback<'s>(
     rv.set(pointer_event_sequence_copy(scope, args.this(), slot).into());
 }
 
-pub(in crate::context_bootstrap) fn pointer_event_get_coalesced_events_callback<'s>(
+pub fn pointer_event_get_coalesced_events_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -517,7 +514,7 @@ pub(in crate::context_bootstrap) fn pointer_event_get_coalesced_events_callback<
     );
 }
 
-pub(in crate::context_bootstrap) fn pointer_event_get_predicted_events_callback<'s>(
+pub fn pointer_event_get_predicted_events_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -535,7 +532,7 @@ fn is_pointer_event_sequence_item<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
-    super::super::event_subclass_kind(scope, event) == Some(super::EventSubclassKind::PointerEvent)
+    super::event_subclass_kind(scope, event) == Some(super::EventSubclassKind::PointerEvent)
 }
 
 pub(super) enum PointerEventInitPayload<'s> {
@@ -550,8 +547,8 @@ impl<'s> PointerEventInitPayload<'s> {
         args: &v8::FunctionCallbackArguments<'s>,
         kind: super::EventSubclassKind,
     ) -> Option<Self> {
-        use super::super::parse_event_dictionary;
         use super::EventSubclassKind;
+        use crate::events::init::parse_event_dictionary;
         Some(match kind {
             EventSubclassKind::MouseEvent => {
                 Self::Mouse(parse_event_dictionary(scope, args, "MouseEvent")?)

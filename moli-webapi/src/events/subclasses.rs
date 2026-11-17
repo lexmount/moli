@@ -13,8 +13,15 @@ pub use basic::initialize_text_event;
 mod captured_mouse;
 mod clipboard_change;
 mod custom;
+mod keyboard;
 mod navigation;
+mod pointer;
+mod touch;
+pub use keyboard::keyboard_event_init_callback;
 pub use navigation::NAVIGATE_EVENT_SYNTHETIC_SLOT;
+pub use pointer::{
+    pointer_event_get_coalesced_events_callback, pointer_event_get_predicted_events_callback,
+};
 pub mod error;
 pub mod font;
 pub mod message;
@@ -46,6 +53,9 @@ const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventRetu
 pub const FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT: &str = "__moliFontFaceSetLoadEventFontfaces";
 
 enum SubclassInit<'s> {
+    Pointing(pointer::PointerEventInitPayload<'s>),
+    Keyboard(keyboard::KeyboardEventInit<'s>),
+    Touch(touch::TouchEventInit<'s>),
     Basic(basic::BasicEventInit<'s>),
     CurrentEntry(navigation::NavigationCurrentEntryChangeEventInitMembers<'s>),
     Navigate(navigation::NavigateEventInitMembers<'s>),
@@ -67,6 +77,18 @@ impl<'s> SubclassInit<'s> {
         kind: EventSubclassKind,
     ) -> Option<Self> {
         Some(match kind {
+            EventSubclassKind::MouseEvent
+            | EventSubclassKind::WheelEvent
+            | EventSubclassKind::PointerEvent
+            | EventSubclassKind::DragEvent => {
+                Self::Pointing(pointer::PointerEventInitPayload::parse(scope, args, kind)?)
+            }
+            EventSubclassKind::KeyboardEvent => {
+                Self::Keyboard(keyboard::parse_keyboard_event_init(scope, args)?)
+            }
+            EventSubclassKind::TouchEvent => {
+                Self::Touch(parse_event_dictionary(scope, args, "TouchEvent")?)
+            }
             EventSubclassKind::UiEvent
             | EventSubclassKind::FocusEvent
             | EventSubclassKind::TextEvent
@@ -124,6 +146,9 @@ impl<'s> SubclassInit<'s> {
     }
     fn event_flags(&self) -> (bool, bool, bool) {
         match self {
+            Self::Pointing(init) => init.event_flags(),
+            Self::Keyboard(init) => init.event_flags(),
+            Self::Touch(init) => init.event_flags(),
             Self::Basic(init) => init.event_flags(),
             Self::CurrentEntry(init) => init.event_flags(),
             Self::Navigate(init) => init.event_flags(),
@@ -145,6 +170,9 @@ impl<'s> SubclassInit<'s> {
         event: v8::Local<'s, v8::Object>,
     ) -> bool {
         match self {
+            Self::Pointing(init) => init.initialize(scope, event),
+            Self::Keyboard(init) => keyboard::initialize_keyboard_event(scope, event, init),
+            Self::Touch(init) => init.initialize(scope, event),
             Self::Basic(init) => init.initialize(scope, event),
             Self::CurrentEntry(init) => init.initialize(scope, event),
             Self::Navigate(init) => init.initialize(scope, event),
@@ -264,7 +292,13 @@ pub fn build_template<'s>(
     kind: EventSubclassKind,
 ) -> Option<v8::Local<'s, v8::FunctionTemplate>> {
     match kind {
-        EventSubclassKind::UiEvent
+        EventSubclassKind::MouseEvent
+        | EventSubclassKind::WheelEvent
+        | EventSubclassKind::PointerEvent
+        | EventSubclassKind::DragEvent
+        | EventSubclassKind::KeyboardEvent
+        | EventSubclassKind::TouchEvent
+        | EventSubclassKind::UiEvent
         | EventSubclassKind::FocusEvent
         | EventSubclassKind::TextEvent
         | EventSubclassKind::CompositionEvent
