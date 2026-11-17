@@ -369,6 +369,105 @@ async fn assert_dom_resource_initiator(path: &str, source: &str) {
 }
 
 #[tokio::test]
+async fn image_resource_timing_retains_element_type_without_splitting_reuse() {
+    let server = dom_initiator_server().await;
+    let mut request_counts = Vec::new();
+    for (label, first_kind, second_kind) in [
+        ("html-control", "img", "img"),
+        ("svg-first", "image", "img"),
+        ("html-first", "img", "image"),
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut page = new_storage_page_task_executor_test_vm_with_loader(
+            &format!("{}/document.html", server.origin),
+            &loader,
+        );
+        page.eval(r#"
+          globalThis.imageEvents=[];
+          globalThis.appendTimingImage=(id,kind,url)=>{
+            const svg='http://www.w3.org/2000/svg';
+            const image=kind==='image'?document.createElementNS(svg,'image'):new Image();
+            image.onload=()=>imageEvents.push(id+':load');
+            image.onerror=()=>imageEvents.push(id+':error');
+            if(kind==='image') {
+              const root=document.createElementNS(svg,'svg');
+              image.setAttribute('width','1');image.setAttribute('height','1');
+              image.setAttribute('href',url);root.appendChild(image);document.body.appendChild(root);
+            } else {
+              image.src=url;document.body.appendChild(image);
+            }
+          };
+        "#).unwrap();
+        let url = format!("{}/image.gif?reuse={label}", server.origin);
+        let encoded_url = serde_json::to_string(&url).unwrap();
+        let before = server.requests.load(Ordering::SeqCst);
+        for (id, kind, caller, expected) in [
+            ("first", first_kind, "first-caller", "first:load"),
+            (
+                "second",
+                second_kind,
+                "second-caller",
+                "first:load,second:load",
+            ),
+        ] {
+            exec_resource_initiator_script(
+                &mut page,
+                &server.origin,
+                caller,
+                &format!("appendTimingImage({id:?},{kind:?},{encoded_url})"),
+            );
+            advance_page_task_executor_until_eval_equals(
+                &mut page,
+                &loader,
+                "imageEvents.join(',')",
+                expected,
+                "native HTML/SVG image load",
+            )
+            .await;
+        }
+        let requests = server.requests.load(Ordering::SeqCst) - before;
+        let entries: Vec<serde_json::Value> = serde_json::from_str(
+            &page
+                .eval(&format!(
+                    "JSON.stringify(performance.getEntriesByName({encoded_url}).map(e=>e.toJSON()))"
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        // The fixture forbids HTTP caching. Decoded-pixel reuse must not create
+        // either another fetch or a synthetic resource-timing observation.
+        assert!((1..=2).contains(&requests), "{label}: {requests}");
+        assert_eq!(entries.len(), requests, "{label}: {entries:?}");
+        for (index, entry) in entries.iter().enumerate() {
+            let kind = if index == 0 { first_kind } else { second_kind };
+            let caller = if index == 0 {
+                "first-caller"
+            } else {
+                "second-caller"
+            };
+            assert_eq!(entry["initiatorType"], kind, "{label}: {entry}");
+            assert_eq!(
+                entry["initiatorUrl"],
+                format!("{}/{caller}.js", server.origin)
+            );
+            assert_eq!(entry["responseStatus"], 200, "{label}: {entry}");
+            assert!(entry["encodedBodySize"].as_u64().unwrap() > 0, "{entry}");
+            assert!(
+                entry["responseEnd"].as_f64().unwrap() >= entry["fetchStart"].as_f64().unwrap(),
+                "{entry}"
+            );
+        }
+        request_counts.push(requests);
+    }
+    assert_eq!(
+        request_counts,
+        vec![request_counts[0]; 3],
+        "element attribution must not split native image reuse"
+    );
+}
+
+#[tokio::test]
 async fn image_timing_retains_the_triggering_script_initiator() {
     assert_dom_resource_initiator(
         "/image.gif",

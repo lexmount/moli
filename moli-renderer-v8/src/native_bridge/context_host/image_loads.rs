@@ -63,13 +63,16 @@ impl PageScriptHost {
     ) -> Option<PendingImageLoadEvent> {
         let node = self.dom_host().node(image_handle)?;
         let element = node.as_element()?;
-        if !element.is_image_resource_element()
-            && self.embedded_image_resource(image_handle).is_none()
-        {
+        let embedded_destination = self
+            .embedded_image_resource(image_handle)
+            .map(|(_, destination)| destination);
+        if !element.is_image_resource_element() && embedded_destination.is_none() {
             return None;
         }
         let owner_document_handle = node.owner_document()?;
-        let resource_timing_initiator_type = if element.is_svg_element("image") {
+        let resource_timing_initiator_type = if let Some(destination) = embedded_destination {
+            destination.as_str()
+        } else if element.is_svg_element("image") {
             "image"
         } else {
             "img"
