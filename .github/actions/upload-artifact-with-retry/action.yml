@@ -1,0 +1,99 @@
+name: Upload artifact with retry
+description: Upload an artifact with three attempts and bounded exponential backoff.
+
+inputs:
+  name:
+    description: Artifact name.
+    default: artifact
+  path:
+    description: File, directory or wildcard paths to upload.
+    required: true
+  if-no-files-found:
+    description: Behavior when no files match (warn, error or ignore).
+    default: warn
+  retention-days:
+    description: Artifact retention; zero uses the repository default.
+    default: "0"
+  compression-level:
+    description: Zlib compression level from zero to nine.
+    default: "6"
+  include-hidden-files:
+    description: Include hidden files in the upload.
+    default: "false"
+  overwrite:
+    description: Replace an existing artifact on the initial attempt.
+    default: "false"
+
+outputs:
+  artifact-id:
+    description: ID returned by the successful attempt.
+    value: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.artifact-id || steps.retry_1.outcome == 'success' && steps.retry_1.outputs.artifact-id || steps.retry_2.outputs.artifact-id }}
+  artifact-url:
+    description: Download URL returned by the successful attempt.
+    value: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.artifact-url || steps.retry_1.outcome == 'success' && steps.retry_1.outputs.artifact-url || steps.retry_2.outputs.artifact-url }}
+  artifact-digest:
+    description: SHA-256 digest returned by the successful attempt.
+    value: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.artifact-digest || steps.retry_1.outcome == 'success' && steps.retry_1.outputs.artifact-digest || steps.retry_2.outputs.artifact-digest }}
+
+runs:
+  using: composite
+  steps:
+    # Callers also upload diagnostics after a failed build or test step.
+    - name: Upload artifact (attempt 1 of 3)
+      id: initial
+      if: ${{ always() }}
+      continue-on-error: true
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        overwrite: ${{ inputs.overwrite }}
+
+    - name: Back off before attempt 2
+      if: ${{ !cancelled() && steps.initial.outcome == 'failure' }}
+      shell: bash
+      run: |
+        delay=$((30 + RANDOM % 6))
+        echo "Artifact upload failed; retrying attempt 2 of 3 in ${delay}s."
+        sleep "$delay"
+
+    - name: Upload artifact (attempt 2 of 3)
+      id: retry_1
+      if: ${{ !cancelled() && steps.initial.outcome == 'failure' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        # A failed request may already have created or finalized this artifact.
+        overwrite: "true"
+
+    - name: Back off before attempt 3
+      if: ${{ !cancelled() && steps.retry_1.outcome == 'failure' }}
+      shell: bash
+      run: |
+        delay=$((60 + RANDOM % 6))
+        echo "Artifact upload failed; retrying attempt 3 of 3 in ${delay}s."
+        sleep "$delay"
+
+    # Propagate the last failure; best-effort callers keep their own policy.
+    - name: Upload artifact (attempt 3 of 3)
+      id: retry_2
+      if: ${{ !cancelled() && steps.retry_1.outcome == 'failure' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        overwrite: "true"
