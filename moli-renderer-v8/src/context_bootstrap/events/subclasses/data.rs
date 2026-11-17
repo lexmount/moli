@@ -20,9 +20,8 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
-use webidl::WebIdlDictionarySerialize;
 
-const NAVIGATE_EVENT_SYNTHETIC_SLOT: &str = "__lmNavigateEventSynthetic";
+use moli_webapi::events::subclasses::NAVIGATE_EVENT_SYNTHETIC_SLOT;
 const NAVIGATE_EVENT_INTERCEPTED_SLOT: &str = "__lmNavigateEventIntercepted";
 const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
 const NAVIGATE_EVENT_PRECOMMIT_SEEN_SLOT: &str = "__lmNavigateEventPrecommitSeen";
@@ -129,38 +128,6 @@ struct NavigateEventMethodsDeclaration {
         data = object
     )]
     scroll: (),
-}
-
-pub(super) fn initialize_navigation_current_entry_change_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: super::navigation_init::NavigationCurrentEntryChangeEventInitMembers<'s>,
-) {
-    init.initialize_snapshot(scope, event)
-        .expect("current entry event state");
-}
-
-pub(super) fn initialize_navigate_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: super::navigation_init::NavigateEventInitMembers<'s>,
-) {
-    init.initialize_snapshot(scope, event)
-        .expect("NavigateEvent state");
-    define_navigate_event_internal_flag(scope, event, true);
-}
-
-fn define_navigate_event_internal_flag(
-    scope: &mut v8::PinScope<'_, '_>,
-    event: v8::Local<'_, v8::Object>,
-    synthetic: bool,
-) {
-    crate::context_bootstrap::set_event_private_value(
-        scope,
-        event,
-        NAVIGATE_EVENT_SYNTHETIC_SLOT,
-        v8::Boolean::new(scope, synthetic).into(),
-    );
 }
 
 fn navigate_event_private_value<'s>(

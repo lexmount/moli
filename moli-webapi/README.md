@@ -15,6 +15,7 @@ The direct binding migration includes these groups:
 | Collections and records | FileList, Touch/TouchList, native WebIDL collection iterators, CryptoKey, IDBKeyRange/IDBRecord, MutationRecord, IntersectionObserverEntry, IdleDeadline, EventCounts, Highlight/HighlightRegistry and their live iterators |
 | Canvas and media values | WebGL binding state and methods, ImageBitmap value lifetime, TextMetrics, CanvasGradient validation, MediaCapabilities and MediaSource capability queries |
 | Standalone constructors and conversions | TextEncoder, value-event dictionaries and constructors, TrustedHTML/TrustedScript/TrustedScriptURL, credential values and JSON conversions, NavigatorUAData, AbortSignal value/argument shapes, base64, CSS identifier escaping, PushMessageData and PushSubscriptionOptions |
+| Constructor and owner separation | Event/ProgressEvent, navigation event values, ExtendableEvent/ExtendableMessageEvent/FetchEvent values, WebSocketError and close dictionaries, TextDecoder with a weakly bound codec component, Animation/KeyframeEffect values, DOMParser creation-realm state, XMLSerializer/FileReaderSync shells, IdleDetector/VTTCue initial state, and initial OffscreenCanvas/2D context values |
 
 The remaining Renderer bindings were checked for actual host dependencies, including dependencies hidden behind parent-module imports. These groups still require their current native owners:
 
@@ -22,14 +23,14 @@ The remaining Renderer bindings were checked for actual host dependencies, inclu
 | --- | --- |
 | Window, navigation, DOM, CSSOM and SVG | Document identity, wrapper projection, live nodes and collections, layout/style state, mutation and navigation lifecycle |
 | UI, pointer, keyboard, InputEvent and TouchEvent construction | Window authorization, native target/range conversion and dispatch; independent Touch values and lists are shared |
-| TextDecoder, streams and compression | The context-owned codec store, native finalizers and execution queues |
+| Streams and compression | Stream/controller ownership, callback residence and execution queues; TextDecoder and its codec store are shared, with the host explicitly retiring the component at teardown |
 | Fetch, Request/Response, Blob/File, WebSocket, service workers, storage and IndexedDB | Request/body ownership, backend handles, asynchronous execution and lifecycle checks; IDBKeyRange/IDBRecord, key conversions and version-event payloads are shared |
 | WebCrypto execution | Backend work and owner-bound completion; CryptoKey values are shared |
 | Screen, viewport, permissions, media devices, battery and network information | Live host state, active-document checks, overrides or handler ownership |
-| TextTrackCue/VTTCue | Native track ordering, DOM fragment creation and event-handler ownership |
+| TextTrackCue/VTTCue operations | Native track ordering, DOM fragment creation and event-handler ownership; VTTCue construction and initial values are shared |
 | MediaSession and credential signals | Traced callbacks retain resource initiators; signals validate the effective RP domain; independent credential values and JSON rules are shared |
 | Trusted Types policies | CSP enforcement, default-policy callbacks, violations and realm materialization; trusted value objects are shared |
-| Canvas 2D, OffscreenCanvas and image sources | Pixel/backing-store ownership, source conversion and layout-dependent measurement; already-resolved values and WebGL state are shared |
+| Canvas 2D, OffscreenCanvas and image operations | Drawing/backing-store ownership, source conversion and layout-dependent measurement; construction, initial values and WebGL state are shared |
 
 `tests/` exercises the extracted bindings in bare V8 realms. Renderer, Worker and browser integration tests continue to cover their host wiring. The callback source-boundary tests inventory both Renderer and shared binding calls so moving code does not remove those checks.
 

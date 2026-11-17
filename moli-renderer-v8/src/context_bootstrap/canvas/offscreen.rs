@@ -11,19 +11,10 @@ use crate::util::{
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi::webgl::{build_webgl_context_object, build_webgl2_context_object};
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
 const OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT: &str = "__moliOffscreenCanvasContextKind";
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::OffscreenCanvas)]
-struct OffscreenCanvasObjectDeclaration {
-    #[webapi(slot = OFFSCREEN_CANVAS_WIDTH_SLOT)]
-    width: f64,
-    #[webapi(slot = OFFSCREEN_CANVAS_HEIGHT_SLOT)]
-    height: f64,
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::OffscreenCanvas, receiver)]
@@ -242,15 +233,3 @@ pub(crate) fn offscreen_canvas_transfer_to_image_bitmap_callback<'s>(
 
 const OFFSCREEN_CANVAS_ATTRIBUTE_SLOTS: &[&str] =
     &[OFFSCREEN_CANVAS_WIDTH_SLOT, OFFSCREEN_CANVAS_HEIGHT_SLOT];
-
-pub(super) fn init_offscreen_canvas_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    width: u32,
-    height: u32,
-) {
-    OffscreenCanvasObjectDeclaration::new(width as f64, height as f64)
-        .bind_into(scope, object)
-        .expect("OffscreenCanvas declaration should initialize object");
-    reset_canvas_like_backing_store(scope, object);
-}

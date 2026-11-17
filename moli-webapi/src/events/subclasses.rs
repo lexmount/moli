@@ -11,6 +11,8 @@ mod accessors;
 mod captured_mouse;
 mod clipboard_change;
 mod custom;
+mod navigation;
+pub use navigation::NAVIGATE_EVENT_SYNTHETIC_SLOT;
 pub mod error;
 pub mod font;
 pub mod message;
@@ -42,6 +44,8 @@ const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventRetu
 pub const FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT: &str = "__moliFontFaceSetLoadEventFontfaces";
 
 enum SubclassInit<'s> {
+    CurrentEntry(navigation::NavigationCurrentEntryChangeEventInitMembers<'s>),
+    Navigate(navigation::NavigateEventInitMembers<'s>),
     Captured(captured_mouse::CapturedMouseEventInit),
     Custom(custom::CustomEventInit<'s>),
     Message(message::MessageEventInit<'s>),
@@ -60,6 +64,12 @@ impl<'s> SubclassInit<'s> {
         kind: EventSubclassKind,
     ) -> Option<Self> {
         Some(match kind {
+            EventSubclassKind::NavigationCurrentEntryChangeEvent => Self::CurrentEntry(
+                navigation::parse_current_entry_change_event_init(scope, args)?,
+            ),
+            EventSubclassKind::NavigateEvent => {
+                Self::Navigate(navigation::parse_navigate_event_init(scope, args)?)
+            }
             EventSubclassKind::CapturedMouseEvent => {
                 Self::Captured(captured_mouse::CapturedMouseEventInit::parse(scope, args)?)
             }
@@ -105,6 +115,8 @@ impl<'s> SubclassInit<'s> {
     }
     fn event_flags(&self) -> (bool, bool, bool) {
         match self {
+            Self::CurrentEntry(init) => init.event_flags(),
+            Self::Navigate(init) => init.event_flags(),
             Self::Captured(init) => init.event_flags(),
             Self::Custom(init) => init.event_flags(),
             Self::Message(init) => init.event_flags(),
@@ -123,6 +135,8 @@ impl<'s> SubclassInit<'s> {
         event: v8::Local<'s, v8::Object>,
     ) -> bool {
         match self {
+            Self::CurrentEntry(init) => init.initialize(scope, event),
+            Self::Navigate(init) => init.initialize(scope, event),
             Self::Captured(init) => return init.initialize(scope, event),
             Self::Custom(init) => init.initialize(scope, event),
             Self::Message(init) => message::initialize_message_event(scope, event, init),
@@ -240,6 +254,8 @@ pub fn build_template<'s>(
 ) -> Option<v8::Local<'s, v8::FunctionTemplate>> {
     match kind {
         EventSubclassKind::CapturedMouseEvent
+        | EventSubclassKind::NavigateEvent
+        | EventSubclassKind::NavigationCurrentEntryChangeEvent
         | EventSubclassKind::MessageEvent
         | EventSubclassKind::StorageEvent
         | EventSubclassKind::CustomEvent

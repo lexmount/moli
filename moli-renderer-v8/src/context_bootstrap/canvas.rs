@@ -7,32 +7,17 @@ use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 use std::str::FromStr;
 
-const OFFSCREEN_CANVAS_WIDTH_SLOT: &str = "__moliOffscreenCanvasWidth";
-const OFFSCREEN_CANVAS_HEIGHT_SLOT: &str = "__moliOffscreenCanvasHeight";
-const CANVAS_CONTEXT_FILL_STYLE_SLOT: &str = "__moliCanvasContextFillStyle";
-const CANVAS_CONTEXT_FONT_SLOT: &str = "__moliCanvasContextFont";
-const CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT: &str =
-    "__moliCanvasContextImageSmoothingEnabled";
-const CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT: &str =
-    "__moliCanvasContextImageSmoothingQuality";
-const CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT: &str = "__moliCanvasContextGlobalAlpha";
-const CANVAS_CONTEXT_GLOBAL_COMPOSITE_OPERATION_SLOT: &str =
-    "__moliCanvasContextGlobalCompositeOperation";
-const CANVAS_CONTEXT_LINE_WIDTH_SLOT: &str = "__moliCanvasContextLineWidth";
-const CANVAS_CONTEXT_LINE_CAP_SLOT: &str = "__moliCanvasContextLineCap";
-const CANVAS_CONTEXT_LINE_JOIN_SLOT: &str = "__moliCanvasContextLineJoin";
-const CANVAS_CONTEXT_MITER_LIMIT_SLOT: &str = "__moliCanvasContextMiterLimit";
-const CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT: &str = "__moliCanvasContextLineDashOffset";
-const CANVAS_CONTEXT_STROKE_STYLE_SLOT: &str = "__moliCanvasContextStrokeStyle";
-
-pub(crate) const DEFAULT_GLOBAL_ALPHA: f64 = 1.0;
-pub(crate) const DEFAULT_GLOBAL_COMPOSITE_OPERATION: &str = "source-over";
-pub(crate) const DEFAULT_LINE_WIDTH: f64 = 1.0;
-pub(crate) const DEFAULT_LINE_CAP: &str = "butt";
-pub(crate) const DEFAULT_LINE_JOIN: &str = "miter";
-pub(crate) const DEFAULT_MITER_LIMIT: f64 = 10.0;
-pub(crate) const DEFAULT_LINE_DASH_OFFSET: f64 = 0.0;
-pub(crate) const DEFAULT_STROKE_STYLE: &str = "#000000";
+pub(crate) use moli_webapi::canvas_context_values::{
+    CANVAS_CONTEXT_FILL_STYLE_SLOT, CANVAS_CONTEXT_FONT_SLOT, CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT,
+    CANVAS_CONTEXT_GLOBAL_COMPOSITE_OPERATION_SLOT, CANVAS_CONTEXT_IMAGE_SMOOTHING_ENABLED_SLOT,
+    CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT, CANVAS_CONTEXT_LINE_CAP_SLOT,
+    CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT, CANVAS_CONTEXT_LINE_JOIN_SLOT,
+    CANVAS_CONTEXT_LINE_WIDTH_SLOT, CANVAS_CONTEXT_MITER_LIMIT_SLOT,
+    CANVAS_CONTEXT_STROKE_STYLE_SLOT, DEFAULT_GLOBAL_ALPHA, DEFAULT_GLOBAL_COMPOSITE_OPERATION,
+    DEFAULT_LINE_CAP, DEFAULT_LINE_DASH_OFFSET, DEFAULT_LINE_JOIN, DEFAULT_LINE_WIDTH,
+    DEFAULT_MITER_LIMIT, DEFAULT_STROKE_STYLE, OFFSCREEN_CANVAS_HEIGHT_SLOT,
+    OFFSCREEN_CANVAS_WIDTH_SLOT,
+};
 
 /// Composite operations recognised by the HTML Canvas 2D spec.
 ///

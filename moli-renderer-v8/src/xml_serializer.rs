@@ -6,7 +6,7 @@ use crate::{
     web_api_interfaces, webidl,
 };
 
-use super::util::{throw_type_error, v8_string, v8str};
+use super::util::{v8_string, v8str};
 
 const VOID_HTML: &[&str] = &[
     "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
@@ -16,20 +16,7 @@ const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NAMESPACE: &str = "http://www.w3.org/2000/xmlns/";
 
-pub(super) fn xml_serializer_constructor_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'XMLSerializer': Please use the 'new' operator.",
-        );
-        return;
-    }
-    rv.set(args.this().into());
-}
+pub(super) use moli_webapi::constructors::xml_serializer_constructor_callback;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "XMLSerializer.serializeToString")]
