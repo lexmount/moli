@@ -995,6 +995,24 @@ pub(super) fn serialize_html(
     .then_some(html)
 }
 
+pub(super) fn serialize_html_with_stored_scripting_state(
+    dom: &NativeDom,
+    node_id: NativeNodeId,
+    target: HtmlSerializationTarget,
+) -> Option<String> {
+    let scripting_enabled_for_node =
+        |node| dom.node_document_scripting_enabled(node).unwrap_or(false);
+    let mut html = String::new();
+    serialize_html_into_sink(
+        dom,
+        node_id,
+        HtmlSerializationOptions::new(target, &scripting_enabled_for_node),
+        &mut html,
+    )
+    .expect("standard node serialization cannot enter embedded documents")
+    .then_some(html)
+}
+
 pub(in crate::native) fn serialize_html_with_options<'a>(
     dom: &'a NativeDom,
     node_id: NativeNodeId,
@@ -1026,7 +1044,8 @@ pub(super) fn serialize_html_with_limit(
     node_id: NativeNodeId,
     max_bytes: usize,
 ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
-    let scripting_enabled_for_node = |_: NativeNodeId| true;
+    let scripting_enabled_for_node =
+        |node| dom.node_document_scripting_enabled(node).unwrap_or(false);
     let mut out = BoundedHtmlSerialization::new(max_bytes);
     if !serialize_html_into_sink(
         dom,
