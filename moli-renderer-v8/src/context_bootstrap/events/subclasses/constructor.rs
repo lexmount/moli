@@ -30,9 +30,7 @@ impl<'s> SubclassInit<'s> {
             | EventSubclassKind::DragEvent => {
                 Self::Pointing(pointer::PointerEventInitPayload::parse(scope, args, kind)?)
             }
-            EventSubclassKind::InputEvent
-            | EventSubclassKind::TouchEvent
-            | EventSubclassKind::CapturedMouseEvent => {
+            EventSubclassKind::InputEvent | EventSubclassKind::TouchEvent => {
                 Self::Interaction(input::InteractionEventInit::parse(scope, args, kind)?)
             }
             EventSubclassKind::KeyboardEvent => {

@@ -1,7 +1,8 @@
-use super::super::media_queries::initialize_simple_event_target;
-use super::*;
+use crate::dom_exception::new_dom_exception_value as dom_exception_value;
+use crate::event_target::initialize_simple_event_target;
+use moli_v8_util::throw_type_error;
 
-pub(in crate::context_bootstrap) fn event_target_constructor_callback<'s>(
+pub fn event_target_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -18,7 +19,7 @@ pub(in crate::context_bootstrap) fn event_target_constructor_callback<'s>(
     rv.set(target.into());
 }
 
-pub(in crate::context_bootstrap) fn xpath_evaluator_constructor_callback<'s>(
+pub fn xpath_evaluator_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -33,7 +34,7 @@ pub(in crate::context_bootstrap) fn xpath_evaluator_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(in crate::context_bootstrap) fn illegal_constructor_callback(
+pub fn illegal_constructor_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -41,7 +42,7 @@ pub(in crate::context_bootstrap) fn illegal_constructor_callback(
     throw_type_error(scope, "Illegal constructor");
 }
 
-pub(in crate::context_bootstrap) fn shell_constructor_callback<'s>(
+pub fn shell_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
@@ -53,7 +54,7 @@ pub(in crate::context_bootstrap) fn shell_constructor_callback<'s>(
     unsupported_constructor_callback(scope, args, rv);
 }
 
-pub(in crate::context_bootstrap) fn unsupported_constructor_callback(
+pub fn unsupported_constructor_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,

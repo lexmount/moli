@@ -1,6 +1,6 @@
 use super::*;
 
-mod base64;
+use moli_webapi::base64;
 mod dialogs;
 mod navigator;
 mod obsolete;
@@ -21,21 +21,20 @@ pub(crate) use navigator::{
 };
 pub(super) use navigator::{
     build_legacy_storage_info_object, build_legacy_storage_quota_object,
-    build_navigator_ua_data_object, global_caches_getter_callback, install_cache_template_bindings,
-    navigator_get_battery_callback, navigator_java_enabled_callback,
-    navigator_media_devices_get_user_media_callback, navigator_permissions_query_callback,
-    navigator_send_beacon_callback, navigator_storage_estimate_callback,
-    navigator_storage_get_directory_callback, navigator_storage_persist_callback,
-    navigator_storage_persisted_callback, navigator_ua_data_get_high_entropy_values_callback,
-    navigator_ua_data_to_json_callback, navigator_vibrate_callback,
-    permission_status_name_getter_callback, permission_status_state_getter_callback,
-    settle_storage_bucket_operation, storage_bucket_caches_getter_callback,
-    storage_bucket_durability_callback, storage_bucket_estimate_callback,
-    storage_bucket_expires_callback, storage_bucket_get_directory_callback,
-    storage_bucket_indexed_db_getter_callback, storage_bucket_manager_delete_callback,
-    storage_bucket_manager_keys_callback, storage_bucket_manager_open_callback,
-    storage_bucket_name_getter_callback, storage_bucket_persist_callback,
-    storage_bucket_persisted_callback, storage_bucket_set_expires_callback,
+    global_caches_getter_callback, install_cache_template_bindings, navigator_get_battery_callback,
+    navigator_java_enabled_callback, navigator_media_devices_get_user_media_callback,
+    navigator_permissions_query_callback, navigator_send_beacon_callback,
+    navigator_storage_estimate_callback, navigator_storage_get_directory_callback,
+    navigator_storage_persist_callback, navigator_storage_persisted_callback,
+    navigator_vibrate_callback, permission_status_name_getter_callback,
+    permission_status_state_getter_callback, settle_storage_bucket_operation,
+    storage_bucket_caches_getter_callback, storage_bucket_durability_callback,
+    storage_bucket_estimate_callback, storage_bucket_expires_callback,
+    storage_bucket_get_directory_callback, storage_bucket_indexed_db_getter_callback,
+    storage_bucket_manager_delete_callback, storage_bucket_manager_keys_callback,
+    storage_bucket_manager_open_callback, storage_bucket_name_getter_callback,
+    storage_bucket_persist_callback, storage_bucket_persisted_callback,
+    storage_bucket_set_expires_callback,
 };
 pub(super) use obsolete::window_obsolete_noop_callback;
 pub(super) use performance::performance_now_callback;

@@ -4,40 +4,16 @@ use crate::{
     util::{callback_data_index_value, callback_data_item, get_private_value},
     webidl,
 };
+pub(in crate::context_bootstrap) use moli_webapi::text_encoder::text_encoder_constructor_callback;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use webidl::WebIdlDictionarySerialize;
 
-const TEXT_ENCODER_ENCODING_SLOT: &str = "__lmTextEncoderEncoding";
 const TEXT_DECODER_ENCODING_SLOT: &str = "__lmTextDecoderEncoding";
 const TEXT_DECODER_FATAL_SLOT: &str = "__lmTextDecoderFatal";
 const TEXT_DECODER_IGNORE_BOM_SLOT: &str = "__lmTextDecoderIgnoreBOM";
-const TEXT_ENCODER_ENCODING_SLOT_INDEX: usize = 0;
-const TEXT_DECODER_ENCODING_SLOT_INDEX: usize = 1;
-const TEXT_DECODER_FATAL_SLOT_INDEX: usize = 2;
-const TEXT_DECODER_IGNORE_BOM_SLOT_INDEX: usize = 3;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::TextEncoder)]
-struct TextEncoderObjectDeclaration {
-    #[webapi(slot = TEXT_ENCODER_ENCODING_SLOT)]
-    encoding: &'static str,
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TextEncoder, enumerable, receiver)]
-struct TextEncoderPrototypeDeclaration {
-    #[webapi(method, length = 0, callback = text_encoder_encode_callback)]
-    encode: (),
-    #[webapi(method, length = 2, callback = text_encoder_encode_into_callback)]
-    encode_into: (),
-    #[webapi(
-        accessor_property,
-        getter = text_codec_string_attribute_getter_callback,
-        data = callback_data_index_value(scope, TEXT_ENCODER_ENCODING_SLOT_INDEX),
-        enumerable
-    )]
-    encoding: (),
-}
+const TEXT_DECODER_ENCODING_SLOT_INDEX: usize = 0;
+const TEXT_DECODER_FATAL_SLOT_INDEX: usize = 1;
+const TEXT_DECODER_IGNORE_BOM_SLOT_INDEX: usize = 2;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::TextDecoder)]
@@ -72,33 +48,6 @@ struct TextDecoderPrototypeDeclaration {
         enumerable
     )]
     ignore_bom: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct TextEncoderEncodeIntoResultDeclaration {
-    read: usize,
-    written: usize,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "TextEncoder.encode")]
-struct TextEncoderEncodeArgs {
-    #[webidl(default = "")]
-    input: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "TextEncoder.encodeInto")]
-struct TextEncoderEncodeIntoArgs<'s> {
-    #[webidl(default = "")]
-    input: String,
-    #[webidl(
-        required,
-        allow_shared,
-        missing_message = "Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'."
-    )]
-    dest: v8::Local<'s, v8::Uint8Array>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -145,7 +94,7 @@ pub(in crate::context_bootstrap) fn install_text_codec_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match interface_name {
         "TextEncoder" => {
-            TextEncoderPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            moli_webapi::text_encoder::install(scope, template);
         }
         "TextDecoder" => {
             TextDecoderPrototypeDeclaration::initialize_prototype_template(scope, prototype);
@@ -190,83 +139,10 @@ fn text_codec_bool_attribute_getter_callback<'s>(
 }
 
 const TEXT_CODEC_SLOTS: &[&str] = &[
-    TEXT_ENCODER_ENCODING_SLOT,
     TEXT_DECODER_ENCODING_SLOT,
     TEXT_DECODER_FATAL_SLOT,
     TEXT_DECODER_IGNORE_BOM_SLOT,
 ];
-
-pub(in crate::context_bootstrap) fn text_encoder_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(scope, "TextEncoder constructor must be called with new");
-        return;
-    }
-    TextEncoderObjectDeclaration::new("utf-8")
-        .initialize(scope, args.this())
-        .expect("TextEncoder declaration should initialize object");
-    rv.set(args.this().into());
-}
-
-fn text_encoder_encode_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<TextEncoderEncodeArgs>(scope, &args) else {
-        rv.set_undefined();
-        return;
-    };
-    let encoded = parsed.input.into_bytes();
-    if let Some(array) = new_uint8_array_from_bytes(scope, encoded) {
-        rv.set(array.into());
-    } else {
-        rv.set_undefined();
-    }
-}
-
-fn text_encoder_encode_into_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<TextEncoderEncodeIntoArgs>(scope, &args) else {
-        rv.set_undefined();
-        return;
-    };
-    let dest_len = parsed.dest.byte_length();
-    let encoded = parsed.input.as_bytes();
-    let mut read_chars: usize = 0;
-    let mut written: usize = 0;
-    for ch in parsed.input.chars() {
-        let ch_len = ch.len_utf8();
-        if written + ch_len > dest_len {
-            break;
-        }
-        written += ch_len;
-        read_chars += ch.len_utf16();
-    }
-
-    if written > 0 {
-        let bytes = &encoded[..written];
-        let destination = webidl::AllowSharedBufferSource::View(parsed.dest.into());
-        assert!(
-            destination.write_bytes(scope, bytes),
-            "encoded bytes fit the converted view"
-        );
-    }
-
-    let result = TextEncoderEncodeIntoResultDeclaration {
-        read: read_chars,
-        written,
-    }
-    .bind(scope)
-    .expect("TextEncoder encodeInto result declaration should bind");
-    rv.set(result.into());
-}
 
 pub(in crate::context_bootstrap) fn text_decoder_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

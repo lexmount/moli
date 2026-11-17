@@ -351,8 +351,12 @@ fn count_shared_microtask_boundaries(source: &str) -> usize {
 
 fn renderer_source_inventory(count: fn(&str) -> usize) -> BTreeMap<String, usize> {
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    source_inventory(&source_root, count)
+}
+
+fn source_inventory(source_root: &Path, count: fn(&str) -> usize) -> BTreeMap<String, usize> {
     let mut sources = Vec::new();
-    collect_rust_sources(&source_root, &source_root, &mut sources);
+    collect_rust_sources(source_root, source_root, &mut sources);
     sources
         .into_iter()
         .filter_map(|(path, source)| {
@@ -408,4 +412,23 @@ fn count_direct_v8_calls(source: &str) -> usize {
     source.matches(concat!(".call(", "scope")).count()
         + source.matches(concat!(".call(&", "scope")).count()
         + source.matches(concat!(".call(&mut", "scope")).count()
+}
+
+#[test]
+fn shared_webapi_callback_and_native_forwarding_inventory_is_frozen() {
+    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../moli-webapi/src");
+    assert_eq!(
+        source_inventory(&source_root, count_direct_v8_calls),
+        BTreeMap::from([
+            // The typed synchronous callback adapter delegates relevant/incumbent
+            // context handling to the existing Web IDL callback kernel.
+            ("callbacks.rs".to_owned(), 1),
+            // Captured native collection intrinsics, not author callback calls.
+            ("webidl_iterator.rs".to_owned(), 4),
+        ])
+    );
+    assert!(
+        source_inventory(&source_root, count_raw_global_functions).is_empty(),
+        "shared bindings must use typed callback tracing rather than raw V8 roots"
+    );
 }

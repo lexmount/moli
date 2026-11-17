@@ -66,3 +66,16 @@ pub mod canvas_gradient;
 pub mod image_bitmap;
 pub mod text_metrics;
 pub mod webgl;
+
+pub mod constructors;
+pub mod text_encoder;
+
+pub mod abort_signal_values;
+
+pub mod credentials;
+pub mod trusted_values;
+
+pub mod navigator_ua_data;
+
+pub mod base64;
+pub mod css_escape;

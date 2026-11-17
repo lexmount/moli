@@ -8,6 +8,7 @@ use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{set_private_value, throw_type_error, v8str};
 
 mod accessors;
+mod captured_mouse;
 mod clipboard_change;
 mod custom;
 pub mod error;
@@ -41,6 +42,7 @@ const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventRetu
 pub const FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT: &str = "__moliFontFaceSetLoadEventFontfaces";
 
 enum SubclassInit<'s> {
+    Captured(captured_mouse::CapturedMouseEventInit),
     Custom(custom::CustomEventInit<'s>),
     Message(message::MessageEventInit<'s>),
     Storage(storage::StorageEventInitMembers<'s>),
@@ -58,6 +60,9 @@ impl<'s> SubclassInit<'s> {
         kind: EventSubclassKind,
     ) -> Option<Self> {
         Some(match kind {
+            EventSubclassKind::CapturedMouseEvent => {
+                Self::Captured(captured_mouse::CapturedMouseEventInit::parse(scope, args)?)
+            }
             EventSubclassKind::MessageEvent => {
                 Self::Message(message::parse_message_event_init(scope, args)?)
             }
@@ -100,6 +105,7 @@ impl<'s> SubclassInit<'s> {
     }
     fn event_flags(&self) -> (bool, bool, bool) {
         match self {
+            Self::Captured(init) => init.event_flags(),
             Self::Custom(init) => init.event_flags(),
             Self::Message(init) => init.event_flags(),
             Self::Storage(init) => init.event_flags(),
@@ -117,6 +123,7 @@ impl<'s> SubclassInit<'s> {
         event: v8::Local<'s, v8::Object>,
     ) -> bool {
         match self {
+            Self::Captured(init) => return init.initialize(scope, event),
             Self::Custom(init) => init.initialize(scope, event),
             Self::Message(init) => message::initialize_message_event(scope, event, init),
             Self::Storage(init) => storage::initialize_storage_event(scope, event, init),
@@ -232,7 +239,8 @@ pub fn build_template<'s>(
     kind: EventSubclassKind,
 ) -> Option<v8::Local<'s, v8::FunctionTemplate>> {
     match kind {
-        EventSubclassKind::MessageEvent
+        EventSubclassKind::CapturedMouseEvent
+        | EventSubclassKind::MessageEvent
         | EventSubclassKind::StorageEvent
         | EventSubclassKind::CustomEvent
         | EventSubclassKind::ClipboardEvent

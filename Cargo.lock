@@ -3748,6 +3748,7 @@ dependencies = [
  "moli-web-errors",
  "serde_json",
  "v8",
+ "widestring",
 ]
 
 [[package]]
@@ -3794,8 +3795,10 @@ name = "moli-webapi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "cssparser",
  "http",
+ "moli-browser-profile",
  "moli-canvas",
  "moli-fetch-types",
  "moli-geometry",

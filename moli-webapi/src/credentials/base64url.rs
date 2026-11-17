@@ -15,7 +15,7 @@ const BASE64URL: GeneralPurpose = GeneralPurpose::new(
         .with_decode_allow_trailing_bits(true),
 );
 
-pub(super) fn decode(text: &Text) -> Option<Vec<u8>> {
+pub fn decode(text: &Text) -> Option<Vec<u8>> {
     let ascii = text
         .0
         .0

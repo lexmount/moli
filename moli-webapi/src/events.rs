@@ -79,3 +79,6 @@ fn initialize_event_object<'s>(
     let event_type = moli_v8_util::v8_string(scope, event_type).expect("event type value");
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
 }
+
+pub mod idb_version_change_event;
+pub mod media_query_list_event;

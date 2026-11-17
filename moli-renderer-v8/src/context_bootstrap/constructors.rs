@@ -13,7 +13,7 @@ use crate::{
 };
 use moli_webapi::dom_exception;
 
-mod core;
+use moli_webapi::constructors as core;
 mod custom_elements_registry;
 mod document_nodes;
 mod dom_implementation;
