@@ -55,13 +55,8 @@ pub(crate) fn network_response_filter(
     request_mode: RequestMode,
     web_security_disabled: bool,
 ) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
-    let kind = head
-        .fetch_metadata_with_web_security(
-            &request_origin.into(),
-            request_mode,
-            web_security_disabled,
-        )
-        .response_type;
+    let kind =
+        head.fetch_response_type(&request_origin.into(), request_mode, web_security_disabled);
     matches!(
         kind,
         FetchResponseFilter::Opaque | FetchResponseFilter::OpaqueRedirect
