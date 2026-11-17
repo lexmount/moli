@@ -2528,6 +2528,20 @@ pub(super) struct HtmlAreaElementPrototypeDeclaration {
     download: (),
     #[webapi(
         accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::AreaHreflang
+    )]
+    hreflang: (),
+    #[webapi(
+        accessor_property = "type",
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::AreaType
+    )]
+    r#type: (),
+    #[webapi(
+        accessor_property,
         getter = html_shape_getter_function,
         setter = dom_string_reflection_setter_function,
         setter_data = DomStringReflection::AreaShape

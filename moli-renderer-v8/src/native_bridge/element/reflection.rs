@@ -174,8 +174,10 @@ pub(super) enum DomStringReflection {
     AreaAlt,
     AreaCoords,
     AreaDownload,
+    AreaHreflang,
     AreaReferrerPolicy,
     AreaShape,
+    AreaType,
     BrClear,
     DataValue,
     EmbedHeight,
@@ -353,6 +355,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflectionDescriptor::new("HTMLAreaElement", "download", "download"),
         ),
         (
+            DomStringReflection::AreaHreflang,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLAreaElement",
+                "area",
+                "hreflang",
+                "hreflang",
+            ),
+        ),
+        (
             DomStringReflection::AreaReferrerPolicy,
             DomStringReflectionDescriptor::new(
                 "HTMLAreaElement",
@@ -363,6 +374,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::AreaShape,
             DomStringReflectionDescriptor::new("HTMLAreaElement", "shape", "shape"),
+        ),
+        (
+            DomStringReflection::AreaType,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLAreaElement",
+                "area",
+                "type",
+                "type",
+            ),
         ),
         (
             DomStringReflection::BrClear,
