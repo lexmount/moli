@@ -1,6 +1,6 @@
 use super::ResourcePerformanceEntry;
 use crate::types::AsyncSubresourceFetchResponseFilter;
-use moli_fetch::{RequestMode, ResponseCacheState, ResponseHead};
+use moli_fetch::{FetchResponseMetadata, ResponseCacheState, ResponseHead};
 use moli_url::WebOrigin;
 use url::Url;
 
@@ -23,17 +23,12 @@ impl FetchResourceTiming {
     pub(crate) fn completed(
         &self,
         url: &Url,
-        origin: &WebOrigin,
-        mode: RequestMode,
         head: &ResponseHead,
         body_size: usize,
-        filter: Option<&AsyncSubresourceFetchResponseFilter>,
-        web_security_disabled: bool,
+        metadata: &FetchResponseMetadata,
+        delivery: Option<&AsyncSubresourceFetchResponseFilter>,
     ) -> ResourcePerformanceEntry {
-        let network_filter =
-            crate::network_host::network_response_filter(origin, head, mode, web_security_disabled);
-        let filter = filter.or(network_filter.as_ref());
-        let readable = filter.is_none_or(|filter| filter.is_readable());
+        let readable = metadata.response_type.is_readable();
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
             url.as_str(),
             "fetch",
@@ -50,30 +45,17 @@ impl FetchResourceTiming {
             entry.response_status = 0.0;
             entry.content_type.clear();
         }
-        if filter.is_some_and(|filter| filter.service_worker_metadata().is_some()) {
+        if delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some()) {
             // Bytes delivered by a Service Worker are not a network transfer
             // to this global, even when respondWith forwards a fetched body.
             entry.transfer_size = 0.0;
         }
-        if !Self::allows_timing(origin, head, filter) {
+        if !metadata.timing_allow_passed {
             entry.transfer_size = 0.0;
             entry.encoded_body_size = 0.0;
             entry.decoded_body_size = 0.0;
         }
         entry
-    }
-
-    fn allows_timing(
-        origin: &WebOrigin,
-        head: &ResponseHead,
-        filter: Option<&AsyncSubresourceFetchResponseFilter>,
-    ) -> bool {
-        filter
-            .and_then(|filter| filter.service_worker_metadata())
-            .map_or_else(
-                || head.timing_allow_passed(origin),
-                |metadata| metadata.timing_allow_passed,
-            )
     }
 
     pub(crate) fn failed(&self, url: &Url) -> ResourcePerformanceEntry {
@@ -82,5 +64,64 @@ impl FetchResourceTiming {
             "fetch",
             Some(self.start_unix_millis),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moli_fetch::FetchResponseType::{Basic, Opaque};
+
+    #[test]
+    fn completed_uses_the_response_snapshot_and_keeps_delivery_separate() {
+        let timing = FetchResourceTiming {
+            start_unix_millis: 42.0,
+            initiator_url: "https://page.test/script.js".to_owned(),
+        };
+        let url = Url::parse("https://cross.test/body").unwrap();
+        let head = ResponseHead {
+            final_url: url.clone(),
+            status: 200,
+            status_text: None,
+            headers: vec![
+                ("Content-Type".into(), b"text/plain".to_vec()),
+                ("Timing-Allow-Origin".into(), b"*".to_vec()),
+            ],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: Default::default(),
+            negotiated_http_version: None,
+        };
+        let delivered = AsyncSubresourceFetchResponseFilter::service_worker(Default::default());
+        for (kind, tao, service_worker, transfer, size, status) in [
+            (Basic, true, false, 309.0, 9.0, 200.0),
+            (Opaque, true, false, 309.0, 9.0, 0.0),
+            (Basic, false, false, 0.0, 0.0, 200.0),
+            (Opaque, false, false, 0.0, 0.0, 0.0),
+            (Basic, true, true, 0.0, 9.0, 200.0),
+            (Opaque, true, true, 0.0, 9.0, 0.0),
+            (Basic, false, true, 0.0, 0.0, 200.0),
+            (Opaque, false, true, 0.0, 0.0, 0.0),
+        ] {
+            let metadata = FetchResponseMetadata {
+                response_type: kind,
+                timing_allow_passed: tao,
+                ..Default::default()
+            };
+            let entry = timing.completed(
+                &url,
+                &head,
+                9,
+                &metadata,
+                service_worker.then_some(&delivered),
+            );
+            assert_eq!(entry.transfer_size, transfer);
+            assert_eq!(entry.encoded_body_size, size);
+            assert_eq!(entry.decoded_body_size, size);
+            assert_eq!(entry.response_status, status);
+        }
     }
 }

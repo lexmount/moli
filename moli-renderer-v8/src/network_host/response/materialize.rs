@@ -19,10 +19,8 @@ pub(crate) struct FetchResponseRequest<'a> {
     pub(crate) mode: RequestMode,
 }
 
-impl FetchResponseRequest<'_> {
-    fn has_null_body(self, status: u16) -> bool {
-        matches!(self.method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
-    }
+fn has_null_body(method: &str, status: u16) -> bool {
+    matches!(method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
 }
 
 #[derive(WebApiObject)]
@@ -112,21 +110,25 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     body: moli_fetch::ResponseBody,
 ) -> v8::Local<'s, v8::Object> {
     let metadata = head.fetch_metadata(&request_origin.into(), request.mode);
-    build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
-        scope, request, head, body, metadata,
+    build_fetch_response_object_from_body_source_with_metadata(
+        scope,
+        request.method,
+        head,
+        body,
+        &metadata,
     )
 }
 
-pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode_with_metadata<'s>(
+pub(crate) fn build_fetch_response_object_from_body_source_with_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    request: FetchResponseRequest<'_>,
+    method: &str,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
-    metadata: FetchResponseMetadata,
+    metadata: &FetchResponseMetadata,
 ) -> v8::Local<'s, v8::Object> {
     let filter = metadata.response_type;
-    let obj = build_fetch_response_object_head(scope, &head, &metadata, None);
-    let body_stream = if request.has_null_body(head.status) {
+    let obj = build_fetch_response_object_head(scope, &head, metadata, None);
+    let body_stream = if has_null_body(method, head.status) {
         None
     } else if filtered_response_exposes_body(filter) {
         network_body_stream_from_response_body(scope, obj, body)
@@ -146,25 +148,25 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
     body_source_id: NetworkBodySourceId,
 ) -> v8::Local<'s, v8::Object> {
     let metadata = head.fetch_metadata(&request_origin.into(), request.mode);
-    build_fetch_response_object_from_stream_for_request_mode_with_metadata(
+    build_fetch_response_object_from_stream_with_metadata(
         scope,
-        request,
+        request.method,
         head,
         body_source_id,
-        metadata,
+        &metadata,
     )
 }
 
-pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_metadata<'s>(
+pub(crate) fn build_fetch_response_object_from_stream_with_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    request: FetchResponseRequest<'_>,
+    method: &str,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
-    metadata: FetchResponseMetadata,
+    metadata: &FetchResponseMetadata,
 ) -> v8::Local<'s, v8::Object> {
-    build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
+    build_fetch_response_object_from_stream_with_surface_url(
         scope,
-        request,
+        method,
         head,
         body_source_id,
         None,
@@ -172,17 +174,17 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode_with_meta
     )
 }
 
-pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_mode<'s>(
+pub(crate) fn build_navigation_preload_response_object_from_stream_with_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_url: &url::Url,
-    request: FetchResponseRequest<'_>,
+    method: &str,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
-    metadata: FetchResponseMetadata,
+    metadata: &FetchResponseMetadata,
 ) -> v8::Local<'s, v8::Object> {
-    build_fetch_response_object_from_stream_for_request_mode_with_surface_url(
+    build_fetch_response_object_from_stream_with_surface_url(
         scope,
-        request,
+        method,
         head,
         body_source_id,
         Some(request_url.as_str()),
@@ -190,20 +192,20 @@ pub(crate) fn build_navigation_preload_response_object_from_stream_for_request_m
     )
 }
 
-fn build_fetch_response_object_from_stream_for_request_mode_with_surface_url<'s>(
+fn build_fetch_response_object_from_stream_with_surface_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    request: FetchResponseRequest<'_>,
+    method: &str,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
     filtered_surface_url: Option<&str>,
-    metadata: FetchResponseMetadata,
+    metadata: &FetchResponseMetadata,
 ) -> v8::Local<'s, v8::Object> {
     let filter = metadata.response_type;
     let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
         .then_some(filtered_surface_url)
         .flatten();
-    let obj = build_fetch_response_object_head(scope, &head, &metadata, filtered_surface_url);
-    if request.has_null_body(head.status) {
+    let obj = build_fetch_response_object_head(scope, &head, metadata, filtered_surface_url);
+    if has_null_body(method, head.status) {
         // Fetch nulls the internal body, including for filtered responses. Do
         // not register a body source: subsequent transport chunks and terminal
         // events then have no stream to enqueue into or retain bytes for.

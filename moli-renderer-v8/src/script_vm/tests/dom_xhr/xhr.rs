@@ -2875,32 +2875,40 @@ fn install_streaming_fetch_response_fixture(
             let document_url =
                 Url::parse("https://streaming-fetch-body-cancel.test/").expect("URL should parse");
             let resolver = v8::PromiseResolver::new(scope).expect("resolver should be created");
+            let head = moli_fetch::ResponseHead {
+                final_url: request_url.clone(),
+                status: 200,
+                status_text: None,
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                cache_state: Default::default(),
+                negotiated_http_version: None,
+            };
+            let request_origin = moli_url::WebOrigin::from_url(&document_url);
+            let metadata = head.fetch_metadata_with_web_security(
+                &request_origin,
+                moli_fetch::RequestMode::Cors,
+                load_client.web_security_disabled(),
+            );
             let response =
-                crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                crate::network_host::build_fetch_response_object_from_stream_with_metadata(
                     scope,
-                    &document_url,
-                    crate::network_host::FetchResponseRequest {
-                        method: "GET",
-                        mode: moli_fetch::RequestMode::Cors,
-                    },
-                    moli_fetch::ResponseHead {
-                        final_url: request_url.clone(),
-                        status: 200,
-                        status_text: None,
-                        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
-                        request_cookie_report: None,
-                        cookie_set_reports: Vec::new(),
-                        redirected: false,
-                        redirect_chain: Vec::new(),
-                        from_cache: false,
-                        cache_state: Default::default(),
-                        negotiated_http_version: None,
-                    },
+                    "GET",
+                    head.clone(),
                     body_source_id,
+                    &metadata,
                 );
             let global = context.global(scope);
             let _ = global.set(scope, v8str(scope, global_name).into(), response.into());
-            let continuation = pending_fetch_continuation(scope, resolver, &context_host.borrow());
+            let mut continuation =
+                pending_fetch_continuation(scope, resolver, &context_host.borrow());
+            if let super::PendingSubresourceContinuation::Fetch(fetch) = &mut continuation {
+                fetch.response_metadata = Some(metadata);
+            }
 
             context_host
                 .borrow_mut()
@@ -2909,7 +2917,7 @@ fn install_streaming_fetch_response_fixture(
                     pending: super::PendingSubresourceFetchState {
                         dispatch: None,
                         redirect_headers: None,
-                        request_origin: moli_url::WebOrigin::from_url(&document_url),
+                        request_origin,
                         info: crate::types::PendingSubresourceFetchInfo {
                             internal_id,
                             network_request_handle,
@@ -2945,19 +2953,7 @@ fn install_streaming_fetch_response_fixture(
                     request_headers: Vec::new().into(),
                     request_body: None,
                     body_source_id,
-                    head: moli_fetch::ResponseHead {
-                        final_url: request_url,
-                        status: 200,
-                        status_text: None,
-                        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
-                        request_cookie_report: None,
-                        cookie_set_reports: Vec::new(),
-                        redirected: false,
-                        redirect_chain: Vec::new(),
-                        from_cache: false,
-                        cache_state: Default::default(),
-                        negotiated_http_version: None,
-                    },
+                    head,
                     network_request_headers: None,
                     body_capture: crate::types::StreamingSubresourceBody::new(None, None),
                     event_source_parser: None,

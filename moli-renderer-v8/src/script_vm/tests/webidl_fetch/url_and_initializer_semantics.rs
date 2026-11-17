@@ -1040,9 +1040,9 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                 let scope = &mut scope.init();
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
-                let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
+                let response = crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
                     scope,
-                    crate::network_host::FetchResponseRequest { method: "GET", mode: moli_fetch::RequestMode::Cors },
+                    "GET",
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 302,
@@ -1057,7 +1057,7 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
-                    moli_fetch_types::FetchResponseMetadata { response_type: filter, url_list: vec![final_url.clone()], timing_allow_passed: false, redirected: false },
+                    &moli_fetch_types::FetchResponseMetadata { response_type: filter, url_list: vec![final_url.clone()], timing_allow_passed: false, redirected: false },
                 );
                 let global = context.global(scope);
                 let _ = global.set(
@@ -1553,16 +1553,16 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                                 scope, &document_url, request,
                                 moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
                             ),
-                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
-                                scope, request, head,
+                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
+                                scope, request.method, head,
                                 moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
-                                metadata,
+                                &metadata,
                             ),
                             "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                                 scope, &document_url, request, head, id,
                             ),
-                            "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_for_request_mode(
-                                scope, &document_url, request, head, id, metadata,
+                            "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_with_metadata(
+                                scope, &document_url, request.method, head, id, &metadata,
                             ),
                             _ => unreachable!(),
                         };
