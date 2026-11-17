@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <title>AX link URLs</title>
+  <base href="/assets/">
+</head>
+<body>
+  <a href="guide#top">Docs</a>
+  <a role="doc-noteref" href="#note">Footnote</a>
+  <a role="doc-backlink" href="../article#back">Backlink</a>
+  <a role="doc-biblioref" href="https://references.test/book">Bibliography</a>
+  <a role="doc-glossref" href="/glossary#term">Glossary</a>
+  <a role="button" href="/ignored">Anchor button</a>
+  <a role="image" aria-label="Anchor image" href="/ignored">Artwork</a>
+  <a href="">Empty href</a>
+  <img role="link" alt="Help" tabindex="0" src="/help.svg" onclick="location.href='/docs'">
+  <img role="link" alt="Image href" tabindex="0" href="/ignored" src="/help.svg">
+  <img role="doc-noteref" alt="Image footnote" src="/help.svg">
+  <img alt="Photo" src="photo.svg">
+  <img role="button" alt="Picture button" src="photo.svg">
+  <img role="doc-cover" alt="Cover" src="cover.svg">
+  <img role="graphics-symbol" alt="Symbol" src="symbol.svg">
+  <input type="image" alt="Submit" src="submit.svg">
+  <input type="image" role="link" alt="Input link" src="submit.svg">
+  <span role="link" tabindex="0" href="/ignored" onclick="location.href='/docs'">Script only</span>
+  <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="60">
+    <a href="vector#top" aria-label="SVG link"><text x="0" y="20">Vector</text></a>
+    <a xlink:href="legacy#top" aria-label="SVG legacy link"><text x="0" y="40">Legacy</text></a>
+  </svg>
+</body>
+</html>

@@ -9,7 +9,7 @@ use url::Url;
 
 use super::ax_dom::ax_child_ids;
 use super::ax_projection::{AxTreeProjection, AxUnavailable};
-use super::ax_roles::{ax_role, heading_level};
+use super::ax_roles::{ax_role, heading_level, is_image, is_link};
 
 const MAX_AX_NAME_VISITED_OBJECTS: usize = 100;
 
@@ -434,30 +434,32 @@ fn ax_is_text_control(element: &Element) -> bool {
 }
 
 fn ax_name_comes_from_contents(document: &NativeDom, node: &Node, element: &Element) -> bool {
-    if ax_role(node) == "row" {
+    let role = ax_role(node);
+    if role == "row" {
         return ax_row_name_comes_from_contents(document, node);
     }
 
-    matches!(
-        ax_role(node),
-        "button"
-            | "cell"
-            | "checkbox"
-            | "columnheader"
-            | "gridcell"
-            | "heading"
-            | "link"
-            | "menuitem"
-            | "menuitemcheckbox"
-            | "menuitemradio"
-            | "option"
-            | "radio"
-            | "rowheader"
-            | "switch"
-            | "tab"
-            | "tooltip"
-            | "treeitem"
-    ) || matches!(element.local_name(), "caption" | "figcaption" | "legend")
+    is_link(role)
+        || matches!(
+            role,
+            "button"
+                | "cell"
+                | "checkbox"
+                | "columnheader"
+                | "gridcell"
+                | "heading"
+                | "menuitem"
+                | "menuitemcheckbox"
+                | "menuitemradio"
+                | "option"
+                | "radio"
+                | "rowheader"
+                | "switch"
+                | "tab"
+                | "tooltip"
+                | "treeitem"
+        )
+        || matches!(element.local_name(), "caption" | "figcaption" | "legend")
 }
 
 fn ax_row_name_comes_from_contents(document: &NativeDom, node: &Node) -> bool {
@@ -590,7 +592,8 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
             properties.push(ax_bool_property("focused", "booleanOrUndefined", true));
         }
         NodeData::Element(element) => {
-            if ax_role(node) == "status" {
+            let role = ax_role(node);
+            if role == "status" {
                 let live = element
                     .attribute("aria-live")
                     .map(str::trim)
@@ -629,20 +632,11 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
                 use super::ax_roles::listitem_level;
                 properties.push(ax_integer_property("level", listitem_level(document, node)));
             }
-            if element.is_html_element("a")
-                && let Some(url) = element
-                    .attribute("href")
-                    .and_then(|href| ax_resolve_element_url(document, href))
-            {
+            if let Some(url) = ax_element_url(document, element, role) {
                 properties.push(ax_string_property("url", url.as_str()));
-                properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
             }
-            if element.is_html_element("img")
-                && let Some(url) = element
-                    .attribute("src")
-                    .and_then(|src| ax_resolve_element_url(document, src))
-            {
-                properties.push(ax_string_property("url", url.as_str()));
+            if element.is_html_element("a") && element.has_attribute("href") {
+                properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
             }
             if element.is_html_element("button") {
                 let disabled = ax_control_is_disabled(document, node_id, element);
@@ -975,11 +969,42 @@ pub(super) fn ax_integer_property(name: &str, value: usize) -> Value {
     })
 }
 
+fn ax_element_url(document: &NativeDom, element: &Element, role: &str) -> Option<Url> {
+    // Follow Blink's AXNodeObject::Url: the computed role selects the kind of
+    // URL, and the native element must provide that kind of address.
+    if is_link(role) {
+        let href = if element.is_html_element("a")
+            || element.is_html_element("area")
+            || element.is_html_element("link")
+            || (element.namespace() == "http://www.w3.org/1998/Math/MathML"
+                && element.local_name() == "a")
+        {
+            element.attribute("href")
+        } else if element.is_svg_element("a") {
+            element
+                .attribute("href")
+                .or_else(|| element.attribute_ns("http://www.w3.org/1999/xlink", "href"))
+        } else {
+            None
+        };
+        return href.and_then(|href| ax_resolve_element_url(document, href));
+    }
+    if is_image(role) && element.is_html_element("img") {
+        return element
+            .attribute("src")
+            .filter(|src| !src.trim().is_empty())
+            .and_then(|src| ax_resolve_element_url(document, src));
+    }
+    if role == "button" && element.is_html_input() && element.input_type() == InputType::Image {
+        return element
+            .attribute("src")
+            .and_then(|src| ax_resolve_element_url(document, src));
+    }
+    None
+}
+
 fn ax_resolve_element_url(document: &NativeDom, value: &str) -> Option<Url> {
     let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
     let base = document.document().map(|doc| doc.base_url().clone());
     base.as_ref()
         .and_then(|base| Url::options().base_url(Some(base)).parse(value).ok())

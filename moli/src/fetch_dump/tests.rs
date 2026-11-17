@@ -351,6 +351,84 @@ async fn semantic_dump_preserves_protocol_json_bytes_and_text_fields() -> Result
 }
 
 #[tokio::test]
+async fn semantic_link_urls_follow_computed_roles() -> Result<()> {
+    let (_browser, mut page, http_server) =
+        load_page(include_str!("../../tests/fixtures/semantic-link-urls.html")).await?;
+    let nodes: Vec<Value> =
+        serde_json::from_str(&super::semantic::render_json(&mut page, false).await?)?;
+    let text = super::semantic::render_text(&mut page, false).await?;
+    let origin = page.final_url().clone();
+    for (name, role, target, show_target) in [
+        ("Docs", "link", Some("/assets/guide#top"), true),
+        ("Footnote", "doc-noteref", Some("/assets/#note"), true),
+        ("Backlink", "doc-backlink", Some("/article#back"), true),
+        (
+            "Bibliography",
+            "doc-biblioref",
+            Some("https://references.test/book"),
+            true,
+        ),
+        ("Glossary", "doc-glossref", Some("/glossary#term"), true),
+        ("Anchor button", "button", None, false),
+        ("Anchor image", "image", None, false),
+        ("Empty href", "link", Some("/assets/"), true),
+        ("Help", "link", None, false),
+        ("Image href", "link", None, false),
+        ("Image footnote", "doc-noteref", None, false),
+        ("Photo", "image", Some("/assets/photo.svg"), false),
+        ("Picture button", "button", None, false),
+        ("Cover", "doc-cover", Some("/assets/cover.svg"), false),
+        (
+            "Symbol",
+            "graphics-symbol",
+            Some("/assets/symbol.svg"),
+            false,
+        ),
+        ("Submit", "button", Some("/assets/submit.svg"), false),
+        ("Input link", "link", None, false),
+        ("Script only", "link", None, false),
+        ("SVG link", "link", Some("/assets/vector#top"), true),
+        ("SVG legacy link", "link", Some("/assets/legacy#top"), true),
+    ] {
+        let node = nodes
+            .iter()
+            .find(|node| node["name"]["value"] == name && node["role"]["value"] == role)
+            .unwrap_or_else(|| panic!("missing {role}: {name}: {nodes:?}"));
+        let properties = node["properties"].as_array().expect("AX properties");
+        let urls = properties
+            .iter()
+            .filter(|property| property["name"] == "url")
+            .map(|property| property["value"]["value"].as_str().expect("AX URL"))
+            .collect::<Vec<_>>();
+        let target = target.map(|target| origin.join(target)).transpose()?;
+        assert_eq!(
+            urls,
+            target
+                .as_ref()
+                .map(|url| url.as_str())
+                .into_iter()
+                .collect::<Vec<_>>(),
+            "{role}: {name} URL"
+        );
+        let arrow = if show_target {
+            format!(" → {}", target.as_ref().expect("link target"))
+        } else {
+            String::new()
+        };
+        let expected = format!(
+            "- {role}: {name}{arrow} [backendNodeId={}]",
+            node["backendDOMNodeId"]
+        );
+        assert!(
+            text.lines().any(|line| line.trim_start() == expected),
+            "missing {expected:?}: {text}"
+        );
+    }
+    http_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn render_semantic_tree_dumps_include_child_frames_only_when_requested() -> Result<()> {
     let (_browser, mut page, http_server) = load_page(
             r#"<!doctype html><html><body><iframe srcdoc="<button aria-label='Child action'>inside</button>"></iframe></body></html>"#,

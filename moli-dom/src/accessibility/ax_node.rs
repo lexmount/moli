@@ -58,6 +58,11 @@ struct AccessibilityNodeRareData {
 }
 
 impl AccessibilityNode {
+    /// Whether the computed AX role is a link, including document references.
+    pub fn is_link(&self) -> bool {
+        super::ax_roles::is_link(self.role)
+    }
+
     /// An ordinary AX node includes an empty properties array even when it
     /// needs no rare allocation. Synthetic nodes can omit it via set_rare_data.
     pub fn new(node_id: AccessibilityNodeId, role: &'static str) -> Self {
@@ -236,6 +241,35 @@ mod tests {
 
     fn id(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("nonzero fixture ID")
+    }
+
+    #[test]
+    fn is_link_includes_document_reference_roles() {
+        for role in [
+            "link",
+            "doc-backlink",
+            "doc-biblioref",
+            "doc-glossref",
+            "doc-noteref",
+        ] {
+            assert!(
+                AccessibilityNode::new(AccessibilityNodeId::Dom(id(1)), role).is_link(),
+                "{role}"
+            );
+        }
+        for role in [
+            "button",
+            "image",
+            "doc-cover",
+            "doc-footnote",
+            "doc-biblioentry",
+            "generic",
+        ] {
+            assert!(
+                !AccessibilityNode::new(AccessibilityNodeId::Dom(id(1)), role).is_link(),
+                "{role}"
+            );
+        }
     }
 
     #[test]
