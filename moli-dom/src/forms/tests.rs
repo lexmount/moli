@@ -71,6 +71,14 @@ fn integer_prefix_parsers_follow_html_attribute_rules() {
     assert_eq!(parse_non_negative_length_attribute("-1"), None);
     assert_eq!(parse_non_negative_length_attribute("abc"), None);
     assert_eq!(parse_non_negative_length_attribute("2147483648"), None);
+    assert_eq!(parse_non_negative_length_attribute("\u{b}12"), None);
+    assert_eq!(parse_non_negative_length_attribute("\t12"), Some(12));
+    assert_eq!(
+        parse_non_negative_length_attribute(" \t\n\r\u{c}+12tail"),
+        Some(12)
+    );
+    assert_eq!(parse_non_negative_length_attribute("12\u{b}"), Some(12));
+    assert_eq!(parse_non_negative_length_attribute("+\t12"), None);
 }
 
 #[test]
