@@ -9,6 +9,7 @@ use crate::{
 use super::{
     AccessibilityFrameState, AccessibilityInput, AccessibilityStyleSource,
     ax_dom::{ax_child_ids, ax_child_ids_reversed},
+    ax_roles::{AxRole, ax_role},
 };
 
 /// Request-local memoization. Resolving a parent never expands its children,
@@ -49,6 +50,7 @@ impl AxNodeState {
 pub(super) struct AxProjectedNode {
     pub(super) parent: Option<NodeId>,
     pub(super) ignored_reason: Option<AxIgnoredReason>,
+    pub(super) role: AxRole,
 }
 
 #[derive(Clone, Copy)]
@@ -61,6 +63,7 @@ enum AxProjectionEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AxIgnoredReason {
     Uninteresting,
+    PresentationalRole,
     AriaHiddenSubtree { root: NodeId },
     NotRendered,
     NotVisible,
@@ -190,6 +193,7 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
                 },
                 AxNodeInclusion::Include => {
                     let state = self.state(id)?;
+                    let role = ax_role(self.document, node);
                     let ignored_reason = if node.is_document() {
                         None
                     } else {
@@ -206,6 +210,10 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
                                     .map(|root| AxIgnoredReason::AriaHiddenSubtree { root })
                             })
                             .or_else(|| {
+                                matches!(role, AxRole::Presentational)
+                                    .then_some(AxIgnoredReason::PresentationalRole)
+                            })
+                            .or_else(|| {
                                 node.as_element()
                                     .is_some_and(|element| {
                                         ax_is_uninteresting_container(self.document, id, element)
@@ -216,6 +224,7 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
                     AxProjectionEntry::Included(AxProjectedNode {
                         parent: projected_parent,
                         ignored_reason,
+                        role,
                     })
                 }
             };
@@ -238,6 +247,14 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
         Ok(self
             .node(node_id)?
             .is_some_and(|node| node.ignored_reason != Some(AxIgnoredReason::NotRendered)))
+    }
+
+    pub(super) fn role_for_name(&self, node: &Node) -> &'static str {
+        match self.entries.get(&node.id()) {
+            Some(AxProjectionEntry::Included(projected)) => projected.role,
+            _ => ax_role(self.document, node),
+        }
+        .for_name()
     }
 
     pub(super) fn children(&mut self, node_id: NodeId) -> Result<Vec<NodeId>, AxUnavailable> {
@@ -344,7 +361,7 @@ fn ax_aria_hidden(element: &Element) -> bool {
         return false;
     }
     element
-        .attribute("aria-hidden")
+        .attribute_ns("", "aria-hidden")
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
 }
 
@@ -475,6 +492,7 @@ mod tests {
                 NodeId::new(index),
                 AxProjectionEntry::Included(AxProjectedNode {
                     parent,
+                    role: AxRole::Fixed("generic"),
                     ignored_reason: (index > 0 && index < DEPTH)
                         .then_some(AxIgnoredReason::Uninteresting),
                 }),

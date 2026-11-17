@@ -99,93 +99,14 @@ pub(crate) fn form_control_is_effectively_disabled(
     runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
-    if runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| disabled_attribute_applies_to_control(runtime, handle, element))
-    {
-        return true;
-    }
-    if option_is_disabled_by_optgroup(runtime, handle) {
-        return true;
-    }
-
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
-        else {
-            current = runtime.dom_host().parent_node(parent);
-            continue;
-        };
-        if parent_element.is_html_fieldset()
-            && parent_element.has_attribute_ns("", "disabled")
-            && !control_is_in_first_legend(runtime, handle, parent)
-        {
-            return true;
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-
-    false
-}
-
-fn disabled_attribute_applies_to_control(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    element: &Element,
-) -> bool {
-    element.has_attribute_ns("", "disabled")
-        && (is_form_associated_custom_element_handle(runtime, handle)
-            || matches!(
-                element.local_name(),
-                "button" | "input" | "select" | "textarea" | "option" | "optgroup" | "fieldset"
-            ))
-}
-
-fn option_is_disabled_by_optgroup(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    if !runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_element("option"))
-    {
-        return false;
-    }
-
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
-        else {
-            current = runtime.dom_host().parent_node(parent);
-            continue;
-        };
-        match parent_element.local_name() {
-            "optgroup" => return parent_element.has_attribute_ns("", "disabled"),
-            "select" | "hr" | "datalist" | "option" => return false,
-            _ => {}
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    false
-}
-
-fn control_is_in_first_legend(
-    runtime: &PageScriptHost,
-    control: DomHandle,
-    fieldset: DomHandle,
-) -> bool {
-    for child in runtime.dom_host().child_handles(fieldset) {
-        if runtime
-            .dom_host()
-            .node(child)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.is_html_element("legend"))
-        {
-            return node_contains(runtime, child, control);
-        }
-    }
-    false
+    let dom = runtime.dom_host().dom();
+    dom.is_disabled_form_control(handle)
+        || (is_form_associated_custom_element_handle(runtime, handle)
+            && (dom
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.has_attribute_ns("", "disabled"))
+                || dom.disabled_fieldset_ancestor(handle).is_some()))
 }
 
 pub(super) fn node_contains(

@@ -237,29 +237,9 @@ impl NativeDom {
         }
         out
     }
-
-    fn option_is_disabled(&self, option_id: NativeNodeId) -> bool {
-        let mut current = Some(option_id);
-        while let Some(candidate) = current {
-            let Some(element) = self.node(candidate).and_then(Node::as_element) else {
-                current = self.parent_node(candidate);
-                continue;
-            };
-            if matches!(element.local_name(), "option" | "optgroup")
-                && element.has_attribute("disabled")
-            {
-                return true;
-            }
-            if element.is_html_select() {
-                return false;
-            }
-            current = self.parent_node(candidate);
-        }
-        false
-    }
 }
 
-fn select_display_size(select: &Element) -> i32 {
+pub(crate) fn select_display_size(select: &Element) -> i32 {
     select
         .attribute_ns("", "size")
         .map(parse_non_negative_integer_prefix)

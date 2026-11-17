@@ -1,5 +1,5 @@
 use super::*;
-use crate::forms::{ButtonTypeState, InputType, parse_non_negative_integer_prefix};
+use crate::forms::{ButtonTypeState, InputType};
 
 impl DomHost {
     pub fn option_value(&self, handle: DomHandle) -> Option<String> {
@@ -211,67 +211,8 @@ impl DomHost {
     }
 
     pub fn select_selected_option_elements(&self, select_handle: DomHandle) -> Vec<DomHandle> {
-        let options = self.select_option_elements(select_handle);
-        let Some(select) = self.node(select_handle).and_then(Node::as_element) else {
-            return Vec::new();
-        };
-        if select.has_attribute_ns("", "multiple") {
-            return options
-                .into_iter()
-                .filter(|handle| {
-                    self.node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(Element::selected)
-                })
-                .collect();
-        }
-
-        if let Some(selected) = options.iter().rev().copied().find(|handle| {
-            self.node(*handle)
-                .and_then(Node::as_element)
-                .is_some_and(Element::selected)
-        }) {
-            return vec![selected];
-        }
-
-        if select.select_explicit_none() || select_display_size(select) != 1 {
-            return Vec::new();
-        }
-
-        options
-            .into_iter()
-            .find(|handle| !self.option_is_disabled(*handle))
-            .into_iter()
-            .collect()
+        self.dom.select_selected_option_elements(select_handle)
     }
-
-    fn option_is_disabled(&self, handle: DomHandle) -> bool {
-        let mut current = Some(handle);
-        while let Some(candidate) = current {
-            let Some(element) = self.node(candidate).and_then(Node::as_element) else {
-                current = self.parent_node(candidate);
-                continue;
-            };
-            if matches!(element.local_name(), "option" | "optgroup")
-                && element.has_attribute("disabled")
-            {
-                return true;
-            }
-            if element.is_html_select() {
-                return false;
-            }
-            current = self.parent_node(candidate);
-        }
-        false
-    }
-}
-
-fn select_display_size(select: &Element) -> i32 {
-    select
-        .attribute_ns("", "size")
-        .map(parse_non_negative_integer_prefix)
-        .unwrap_or(0)
-        .max(1)
 }
 
 fn is_listed_form_control_element(element: &Element) -> bool {

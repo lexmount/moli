@@ -1,6 +1,7 @@
 use crate::{
     NodeData, NodeId,
-    native::{Element, NativeDom, Node},
+    forms::InputType,
+    native::{Element, FocusSupport, NativeDom, Node, select_display_size},
 };
 
 /// Chromium's ui::IsLink classification for computed AX roles.
@@ -16,35 +17,62 @@ pub(super) fn is_image(role: &str) -> bool {
     matches!(role, "image" | "doc-cover" | "graphics-symbol" | "SvgRoot")
 }
 
-/// During name traversal, `None` selects the potential role before its name
-/// is known. AX payloads resolve the role using the computed name.
-pub(super) fn ax_role(
-    document: &NativeDom,
-    node: &Node,
-    accessible_name: Option<&str>,
-) -> &'static str {
-    match node.kind() {
+#[derive(Clone, Copy)]
+pub(super) enum AxRole {
+    Fixed(&'static str),
+    NamedRegion,
+    Presentational,
+}
+
+impl AxRole {
+    pub(super) fn for_name(self) -> &'static str {
+        match self {
+            Self::Fixed(role) => role,
+            Self::NamedRegion => "region",
+            Self::Presentational => "none",
+        }
+    }
+
+    pub(super) fn with_name(self, name: &str) -> &'static str {
+        if matches!(self, Self::NamedRegion) && name.is_empty() {
+            "generic"
+        } else {
+            self.for_name()
+        }
+    }
+}
+
+/// Resolve native and ARIA semantics before traversing the accessible name.
+pub(super) fn ax_role(document: &NativeDom, node: &Node) -> AxRole {
+    AxRole::Fixed(match node.kind() {
         NodeData::Document(_) => "RootWebArea",
         NodeData::DocumentType(_) => "none",
         NodeData::Element(element) => {
-            let role = explicit_aria_role(document, node, element)
-                .unwrap_or_else(|| native_ax_role(element));
+            let role = match explicit_aria_role(document, node, element) {
+                Some("none") => return AxRole::Presentational,
+                Some(role) => role,
+                None => native_ax_role(element),
+            };
             // HTML-AAM maps an unnamed section to generic. Core-AAM also
             // falls back to the host role for an explicit unnamed region.
-            if role == "region" && accessible_name == Some("") && element.is_html_element("section")
-            {
-                "generic"
-            } else {
-                role
+            if role == "region" && element.is_html_element("section") {
+                return AxRole::NamedRegion;
             }
+            role
         }
         NodeData::Text(_) | NodeData::CDataSection(_) => "StaticText",
         NodeData::Comment(_) | NodeData::ProcessingInstruction(_) => "none",
         NodeData::DocumentFragment(_) => "generic",
-    }
+    })
 }
 
 fn native_ax_role(element: &Element) -> &'static str {
+    if element.hyperlink_href().is_some() {
+        return "link";
+    }
+    if element.namespace() != "http://www.w3.org/1999/xhtml" {
+        return "generic";
+    }
     match element.local_name() {
         "html" | "body" | "div" | "span" => "generic",
         "main" => "main",
@@ -52,39 +80,29 @@ fn native_ax_role(element: &Element) -> &'static str {
         "aside" => "complementary",
         "header" => "banner",
         "footer" => "contentinfo",
-        "section" if element.is_html_element("section") => "region",
+        "section" => "region",
         "article" | "hgroup" => "article",
         "address" => "group",
-        "a" => {
-            if super::ax_dom::ax_link_href(element).is_some() {
-                "link"
-            } else {
-                "generic"
-            }
-        }
         "button" => "button",
-        "input" => match element.attribute("type").unwrap_or("text") {
-            "text" | "email" | "tel" | "url" | "password" => "textbox",
-            "search" => "searchbox",
-            "number" => "spinbutton",
-            "checkbox" => "checkbox",
-            "radio" => "radio",
-            "button" | "submit" | "reset" | "image" => "button",
-            "hidden" => "none",
-            "color" => "color",
-            "file" => "file",
-            "month" => "month",
-            "datetime-local" | "week" | "time" | "date" => "combobox",
+        "input" => match element.input_type() {
+            InputType::Search => "searchbox",
+            InputType::Number => "spinbutton",
+            InputType::Checkbox => "checkbox",
+            InputType::Radio => "radio",
+            InputType::Button | InputType::Submit | InputType::Reset | InputType::Image => "button",
+            InputType::Hidden => "none",
+            InputType::Color => "color",
+            InputType::File => "file",
+            InputType::Month => "month",
+            InputType::DatetimeLocal | InputType::Week | InputType::Time | InputType::Date => {
+                "combobox"
+            }
             _ => "textbox",
         },
         "form" => "form",
         "textarea" => "textbox",
         "select" => {
-            if element.has_attribute("multiple")
-                || element
-                    .attribute("size")
-                    .is_some_and(|size| size.trim() != "1")
-            {
+            if element.has_attribute_ns("", "multiple") || select_display_size(element) > 1 {
                 "listbox"
             } else {
                 "combobox"
@@ -145,14 +163,15 @@ fn explicit_aria_role(
 ) -> Option<&'static str> {
     let role = element
         .attribute_ns("", "role")?
-        .split_whitespace()
+        .split_ascii_whitespace()
         .find_map(aria_role_to_ax_role)?;
     // Blink resolves presentational-role conflicts before selecting the native
     // role. Explicit semantic overrides such as button keep their precedence.
     if role == "none"
         && !element.is_html_element("iframe")
         && !element.is_html_element("frame")
-        && (super::ax_dom::ax_supports_focus(document, node) || has_global_aria_property(element))
+        && (has_global_aria_property(element)
+            || document.focus_support(node.id()) == FocusSupport::Supported)
     {
         None
     } else {
@@ -440,7 +459,7 @@ mod tests {
                         document.set_attribute_ns(heading, namespace, prefix, property, "false")
                     );
                     assert_eq!(
-                        ax_role(&document, document.node(heading).unwrap(), None),
+                        ax_role(&document, document.node(heading).unwrap()).for_name(),
                         if namespace.is_none() {
                             "heading"
                         } else {
@@ -464,7 +483,7 @@ mod tests {
                 assert!(document.set_attribute(heading, "role", role));
                 assert!(document.set_attribute(heading, property, "false"));
                 assert_eq!(
-                    ax_role(&document, document.node(heading).unwrap(), None),
+                    ax_role(&document, document.node(heading).unwrap()).for_name(),
                     "none",
                     "{property}"
                 );
@@ -491,7 +510,7 @@ mod tests {
                 assert!(document.set_attribute(heading, "role", role));
                 assert!(document.set_attribute(heading, "tabindex", tabindex));
                 assert_eq!(
-                    ax_role(&document, document.node(heading).unwrap(), None),
+                    ax_role(&document, document.node(heading).unwrap()).for_name(),
                     expected,
                     "tabindex={tabindex:?}"
                 );
@@ -530,7 +549,7 @@ mod tests {
                 }
                 assert!(document.set_attribute(element, "role", role));
                 assert_eq!(
-                    ax_role(&document, document.node(element).unwrap(), None),
+                    ax_role(&document, document.node(element).unwrap()).for_name(),
                     *expected,
                     "{tag} role={role}, attributes={attributes:?}"
                 );
@@ -551,7 +570,7 @@ mod tests {
             document.append_child(parent, button);
             document.set_attribute(button, "role", "presentation");
             assert_eq!(
-                ax_role(&document, document.node(button).unwrap(), None),
+                ax_role(&document, document.node(button).unwrap()).for_name(),
                 expected
             );
         }
@@ -566,13 +585,13 @@ mod tests {
 
         assert!(document.set_attribute(element, "role", "unknown STATUS"));
         assert_eq!(
-            ax_role(&document, document.node(element).expect("element"), None),
+            ax_role(&document, document.node(element).expect("element")).for_name(),
             "status"
         );
 
         assert!(document.set_attribute(element, "role", "button status"));
         assert_eq!(
-            ax_role(&document, document.node(element).expect("element"), None),
+            ax_role(&document, document.node(element).expect("element")).for_name(),
             "button"
         );
     }
@@ -585,7 +604,7 @@ mod tests {
         assert!(document.append_child(document.document_node_id(), password));
         assert!(document.set_attribute(password, "type", "password"));
         assert_eq!(
-            ax_role(&document, document.node(password).expect("element"), None),
+            ax_role(&document, document.node(password).expect("element")).for_name(),
             "textbox"
         );
 
@@ -593,7 +612,7 @@ mod tests {
         assert!(document.append_child(document.document_node_id(), hidden));
         assert!(document.set_attribute(hidden, "type", "hidden"));
         assert_eq!(
-            ax_role(&document, document.node(hidden).expect("element"), None),
+            ax_role(&document, document.node(hidden).expect("element")).for_name(),
             "none"
         );
     }
