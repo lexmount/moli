@@ -293,7 +293,11 @@ fn ax_node_payload(
     };
     let mut payload = AccessibilityNode::new(
         AccessibilityNodeId::Dom(backend_node_id),
-        if ignored { "none" } else { ax_role(node) },
+        if ignored {
+            "none"
+        } else {
+            ax_role(document, node)
+        },
     );
     payload.ignored = ignored;
     payload.name = (!name.is_empty()).then_some(name);

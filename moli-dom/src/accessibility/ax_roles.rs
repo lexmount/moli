@@ -16,12 +16,12 @@ pub(super) fn is_image(role: &str) -> bool {
     matches!(role, "image" | "doc-cover" | "graphics-symbol" | "SvgRoot")
 }
 
-pub(super) fn ax_role(node: &Node) -> &'static str {
+pub(super) fn ax_role(document: &NativeDom, node: &Node) -> &'static str {
     match node.kind() {
         NodeData::Document(_) => "RootWebArea",
         NodeData::DocumentType(_) => "none",
         NodeData::Element(element) => {
-            explicit_aria_role(element).unwrap_or_else(|| native_ax_role(element))
+            explicit_aria_role(document, node, element).unwrap_or_else(|| native_ax_role(element))
         }
         NodeData::Text(_) | NodeData::CDataSection(_) => "StaticText",
         NodeData::Comment(_) | NodeData::ProcessingInstruction(_) => "none",
@@ -40,7 +40,13 @@ fn native_ax_role(element: &Element) -> &'static str {
         "section" => "region",
         "article" | "hgroup" => "article",
         "address" => "group",
-        "a" => "link",
+        "a" => {
+            if super::ax_dom::ax_link_href(element).is_some() {
+                "link"
+            } else {
+                "generic"
+            }
+        }
         "button" => "button",
         "input" => match element.attribute("type").unwrap_or("text") {
             "text" | "email" | "tel" | "url" | "password" => "textbox",
@@ -117,11 +123,53 @@ fn native_ax_role(element: &Element) -> &'static str {
     }
 }
 
-fn explicit_aria_role(element: &Element) -> Option<&'static str> {
-    element
-        .attribute("role")?
+fn explicit_aria_role(
+    document: &NativeDom,
+    node: &Node,
+    element: &Element,
+) -> Option<&'static str> {
+    let role = element
+        .attribute_ns("", "role")?
         .split_whitespace()
-        .find_map(aria_role_to_ax_role)
+        .find_map(aria_role_to_ax_role)?;
+    // Blink resolves presentational-role conflicts before selecting the native
+    // role. Explicit semantic overrides such as button keep their precedence.
+    if role == "none"
+        && !element.is_html_element("iframe")
+        && !element.is_html_element("frame")
+        && (super::ax_dom::ax_supports_focus(document, node) || has_global_aria_property(element))
+    {
+        None
+    } else {
+        Some(role)
+    }
+}
+
+fn has_global_aria_property(element: &Element) -> bool {
+    // Chromium AXObject::DoesUndoRolePresentation. Deprecated global states
+    // such as aria-disabled, and aria-hidden, do not undo presentation.
+    [
+        "aria-atomic",
+        "aria-braillelabel",
+        "aria-brailleroledescription",
+        "aria-busy",
+        "aria-controls",
+        "aria-current",
+        "aria-describedby",
+        "aria-description",
+        "aria-details",
+        "aria-flowto",
+        "aria-keyshortcuts",
+        "aria-label",
+        "aria-labeledby",
+        "aria-labelledby",
+        "aria-live",
+        "aria-owns",
+        "aria-relevant",
+        "aria-roledescription",
+    ]
+    .into_iter()
+    .any(|name| element.has_attribute_ns("", name))
 }
 
 // Keep this mapping aligned with Blink's generated AriaRoleToInternalRole().
@@ -321,6 +369,61 @@ mod tests {
     use url::Url;
 
     #[test]
+    fn presentation_conflicts_use_focus_support_and_global_aria_properties() {
+        let cases = [
+            ("a", vec![("href", "/go")], "link"),
+            ("a", vec![], "none"),
+            ("a", vec![("tabindex", "-1")], "generic"),
+            ("button", vec![], "button"),
+            ("button", vec![("disabled", ""), ("tabindex", "0")], "none"),
+            ("input", vec![("type", "hidden"), ("tabindex", "0")], "none"),
+            ("img", vec![("tabindex", "-1")], "image"),
+            ("img", vec![("tabindex", "0tail")], "image"),
+            ("img", vec![("tabindex", "invalid")], "none"),
+            ("img", vec![("tabindex", "\u{a0}0")], "none"),
+            ("img", vec![("aria-label", "")], "image"),
+            ("img", vec![("aria-live", "off")], "image"),
+            ("img", vec![("aria-hidden", "false")], "none"),
+            ("img", vec![("aria-disabled", "true")], "none"),
+            ("div", vec![("contenteditable", "true")], "generic"),
+        ];
+        let mut document = NativeDom::new_html(Url::parse("https://example.test/").unwrap());
+        let root = document.create_element("main");
+        assert!(document.append_child(document.document_node_id(), root));
+        for role in ["presentation", "none"] {
+            for (tag, attributes, expected) in &cases {
+                let element = document.create_element(tag);
+                assert!(document.append_child(root, element));
+                for (name, value) in attributes {
+                    assert!(document.set_attribute(element, name, value));
+                }
+                assert!(document.set_attribute(element, "role", role));
+                assert_eq!(
+                    ax_role(&document, document.node(element).unwrap()),
+                    *expected,
+                    "{tag} role={role}, attributes={attributes:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn presentation_conflicts_respect_disabled_fieldsets_and_the_first_legend() {
+        let mut document = NativeDom::new_html(Url::parse("https://example.test/").unwrap());
+        let fieldset = document.create_element("fieldset");
+        document.append_child(document.document_node_id(), fieldset);
+        document.set_attribute(fieldset, "disabled", "");
+        let legend = document.create_element("legend");
+        document.append_child(fieldset, legend);
+        for (parent, expected) in [(legend, "button"), (fieldset, "none")] {
+            let button = document.create_element("button");
+            document.append_child(parent, button);
+            document.set_attribute(button, "role", "presentation");
+            assert_eq!(ax_role(&document, document.node(button).unwrap()), expected);
+        }
+    }
+
+    #[test]
     fn explicit_aria_role_uses_chromium_fallback_token_order() {
         let mut document =
             NativeDom::new_html(Url::parse("https://example.test/").expect("valid URL"));
@@ -328,10 +431,16 @@ mod tests {
         assert!(document.append_child(document.document_node_id(), element));
 
         assert!(document.set_attribute(element, "role", "unknown STATUS"));
-        assert_eq!(ax_role(document.node(element).expect("element")), "status");
+        assert_eq!(
+            ax_role(&document, document.node(element).expect("element")),
+            "status"
+        );
 
         assert!(document.set_attribute(element, "role", "button status"));
-        assert_eq!(ax_role(document.node(element).expect("element")), "button");
+        assert_eq!(
+            ax_role(&document, document.node(element).expect("element")),
+            "button"
+        );
     }
 
     #[test]
@@ -342,13 +451,16 @@ mod tests {
         assert!(document.append_child(document.document_node_id(), password));
         assert!(document.set_attribute(password, "type", "password"));
         assert_eq!(
-            ax_role(document.node(password).expect("element")),
+            ax_role(&document, document.node(password).expect("element")),
             "textbox"
         );
 
         let hidden = document.create_element("input");
         assert!(document.append_child(document.document_node_id(), hidden));
         assert!(document.set_attribute(hidden, "type", "hidden"));
-        assert_eq!(ax_role(document.node(hidden).expect("element")), "none");
+        assert_eq!(
+            ax_role(&document, document.node(hidden).expect("element")),
+            "none"
+        );
     }
 }

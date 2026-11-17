@@ -193,13 +193,12 @@ impl DomHost {
             let already_exists = element.attributes().iter().any(|existing| {
                 existing.namespace() == attribute.namespace()
                     && existing.local_name() == attribute.local_name()
-                    && existing.prefix() == attribute.prefix()
             });
 
             if !already_exists {
                 named_index_changed |= attribute.local_name().eq_ignore_ascii_case("id")
                     || attribute.local_name().eq_ignore_ascii_case("name");
-                let attribute_changed = element.set_attribute(
+                let attribute_changed = element.set_attribute_ns(
                     attribute.local_name().to_owned(),
                     attribute.namespace().to_owned(),
                     attribute.prefix().map(str::to_owned),
@@ -245,6 +244,65 @@ mod tests {
         DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://parser-element.test/").expect("test url"),
         ))
+    }
+
+    #[test]
+    fn parser_attribute_merge_preserves_namespace_and_local_name_identity() {
+        let mut host = test_host();
+        let element = host.create_parser_element_without_attributes(
+            "a".to_owned(),
+            "http://www.w3.org/2000/svg".to_owned(),
+            None,
+        );
+        let xlink = "http://www.w3.org/1999/xlink";
+        let attribute = |namespace: &str, prefix: Option<&str>, value: &str| {
+            Attribute::new(
+                "href".to_owned(),
+                namespace.to_owned(),
+                prefix.map(str::to_owned),
+                value.to_owned(),
+            )
+        };
+        host.add_attrs_if_missing_for_parser(
+            element,
+            vec![
+                attribute("", None, "/primary"),
+                attribute(xlink, Some("xlink"), "/real"),
+            ],
+        );
+        host.add_attrs_if_missing_for_parser(
+            element,
+            vec![
+                attribute(xlink, Some("alias"), "/must-not-replace"),
+                attribute("urn:example", None, "/foreign"),
+            ],
+        );
+        for (namespace, expected) in [
+            ("", "/primary"),
+            (xlink, "/real"),
+            ("urn:example", "/foreign"),
+        ] {
+            assert_eq!(
+                host.get_attribute_ns(element, Some(namespace), "href")
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        let attributes = host
+            .node(element)
+            .unwrap()
+            .as_element()
+            .unwrap()
+            .attributes();
+        assert_eq!(attributes.len(), 3);
+        assert_eq!(
+            attributes
+                .iter()
+                .find(|attr| attr.namespace() == xlink)
+                .unwrap()
+                .prefix(),
+            Some("xlink")
+        );
     }
 
     #[test]

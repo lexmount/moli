@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use url::Url;
 
-use super::ax_dom::ax_child_ids;
+use super::ax_dom::{ax_child_ids, ax_control_is_disabled, ax_link_href};
 use super::ax_projection::{AxTreeProjection, AxUnavailable};
 use super::ax_roles::{ax_role, heading_level, is_image, is_link};
 
@@ -224,7 +224,7 @@ fn ax_element_name(
     if matches!(
         traversal,
         AxNameTraversal::Contents | AxNameTraversal::NativeLabel
-    ) && ax_role(node) == "generic"
+    ) && ax_role(document, node) == "generic"
     {
         return Ok(AxName::contents(content));
     }
@@ -434,7 +434,7 @@ fn ax_is_text_control(element: &Element) -> bool {
 }
 
 fn ax_name_comes_from_contents(document: &NativeDom, node: &Node, element: &Element) -> bool {
-    let role = ax_role(node);
+    let role = ax_role(document, node);
     if role == "row" {
         return ax_row_name_comes_from_contents(document, node);
     }
@@ -468,7 +468,7 @@ fn ax_row_name_comes_from_contents(document: &NativeDom, node: &Node) -> bool {
         let Some(ancestor_node) = document.node(ancestor_id) else {
             return false;
         };
-        match ax_role(ancestor_node) {
+        match ax_role(document, ancestor_node) {
             "grid" | "treegrid" => return true,
             "generic" | "none" | "group" | "rowgroup" => {
                 ancestor = ancestor_node.parent_node_id();
@@ -592,7 +592,7 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
             properties.push(ax_bool_property("focused", "booleanOrUndefined", true));
         }
         NodeData::Element(element) => {
-            let role = ax_role(node);
+            let role = ax_role(document, node);
             if role == "status" {
                 let live = element
                     .attribute("aria-live")
@@ -635,7 +635,7 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
             if let Some(url) = ax_element_url(document, element, role) {
                 properties.push(ax_string_property("url", url.as_str()));
             }
-            if element.is_html_element("a") && element.has_attribute("href") {
+            if element.is_html_element("a") && ax_link_href(element).is_some() {
                 properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
             }
             if element.is_html_element("button") {
@@ -789,56 +789,6 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
     properties
 }
 
-fn ax_control_is_disabled(document: &NativeDom, node_id: NodeId, element: &Element) -> bool {
-    if element.has_attribute("disabled") {
-        return true;
-    }
-    if !matches!(
-        element.local_name(),
-        "button" | "input" | "select" | "textarea"
-    ) {
-        return false;
-    }
-
-    let mut ancestor = document.parent_node(node_id);
-    while let Some(ancestor_id) = ancestor {
-        let Some(ancestor_node) = document.node(ancestor_id) else {
-            break;
-        };
-        if ancestor_node.as_element().is_some_and(|ancestor| {
-            ancestor.is_html_fieldset() && ancestor.has_attribute("disabled")
-        }) && !ax_is_inside_first_legend(document, node_id, ancestor_id)
-        {
-            return true;
-        }
-        ancestor = ancestor_node.parent_node_id();
-    }
-    false
-}
-
-fn ax_is_inside_first_legend(document: &NativeDom, node_id: NodeId, fieldset_id: NodeId) -> bool {
-    let Some(first_legend) = document.child_ids(fieldset_id).find(|child_id| {
-        document
-            .node(*child_id)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.is_html_element("legend"))
-    }) else {
-        return false;
-    };
-
-    let mut current = Some(node_id);
-    while let Some(current_id) = current {
-        if current_id == first_legend {
-            return true;
-        }
-        if current_id == fieldset_id {
-            return false;
-        }
-        current = document.parent_node(current_id);
-    }
-    false
-}
-
 fn ax_option_is_selected(document: &NativeDom, option_id: NodeId) -> bool {
     let Some(option_node) = document.node(option_id) else {
         return false;
@@ -973,38 +923,28 @@ fn ax_element_url(document: &NativeDom, element: &Element, role: &str) -> Option
     // Follow Blink's AXNodeObject::Url: the computed role selects the kind of
     // URL, and the native element must provide that kind of address.
     if is_link(role) {
-        let href = if element.is_html_element("a")
-            || element.is_html_element("area")
-            || element.is_html_element("link")
-            || (element.namespace() == "http://www.w3.org/1998/Math/MathML"
-                && element.local_name() == "a")
-        {
-            element.attribute("href")
-        } else if element.is_svg_element("a") {
-            element
-                .attribute("href")
-                .or_else(|| element.attribute_ns("http://www.w3.org/1999/xlink", "href"))
-        } else {
-            None
-        };
-        return href.and_then(|href| ax_resolve_element_url(document, href));
+        return ax_link_href(element).and_then(|href| ax_resolve_element_url(document, href));
     }
     if is_image(role) && element.is_html_element("img") {
         return element
-            .attribute("src")
-            .filter(|src| !src.trim().is_empty())
+            .attribute_ns("", "src")
+            .filter(|src| !trim_html_spaces(src).is_empty())
             .and_then(|src| ax_resolve_element_url(document, src));
     }
     if role == "button" && element.is_html_input() && element.input_type() == InputType::Image {
         return element
-            .attribute("src")
+            .attribute_ns("", "src")
             .and_then(|src| ax_resolve_element_url(document, src));
     }
     None
 }
 
+fn trim_html_spaces(value: &str) -> &str {
+    value.trim_matches(|character: char| character.is_ascii_whitespace())
+}
+
 fn ax_resolve_element_url(document: &NativeDom, value: &str) -> Option<Url> {
-    let value = value.trim();
+    let value = trim_html_spaces(value);
     let base = document.document().map(|doc| doc.base_url().clone());
     base.as_ref()
         .and_then(|base| Url::options().base_url(Some(base)).parse(value).ok())
