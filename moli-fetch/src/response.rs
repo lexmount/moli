@@ -122,7 +122,7 @@ impl ResponseHead {
         disabled: bool,
     ) -> crate::FetchResponseMetadata {
         crate::FetchResponseMetadata {
-            response_type: self.fetch_response_type(origin, mode, disabled),
+            response_type: self.fetch_response_type_with_web_security(origin, mode, disabled),
             url_list: self.url_list().to_vec(),
             timing_allow_passed: self.timing_allow_passed(origin),
             redirected: self.redirected,
@@ -131,6 +131,16 @@ impl ResponseHead {
 
     /// Classify without allocating response metadata or evaluating TAO.
     pub fn fetch_response_type(
+        &self,
+        origin: &moli_url::WebOrigin,
+        mode: crate::RequestMode,
+    ) -> crate::FetchResponseType {
+        self.fetch_response_type_with_web_security(origin, mode, false)
+    }
+
+    /// Classify with the associated client's startup policy without allocating
+    /// response metadata or evaluating TAO.
+    pub fn fetch_response_type_with_web_security(
         &self,
         origin: &moli_url::WebOrigin,
         mode: crate::RequestMode,

@@ -55,13 +55,16 @@ fn response_metadata_preserves_redirect_taint_and_sticky_timing_authorization() 
             let head = redirected_head(allowed);
             let metadata = head.fetch_metadata(&origin, mode);
             assert_eq!(metadata.timing_allow_passed, allowed);
+            let expected = if mode == RequestMode::Cors {
+                FetchResponseType::Cors
+            } else {
+                FetchResponseType::Opaque
+            };
+            assert_eq!(metadata.response_type, expected);
+            assert_eq!(head.fetch_response_type(&origin, mode), expected);
             assert_eq!(
-                metadata.response_type,
-                if mode == RequestMode::Cors {
-                    FetchResponseType::Cors
-                } else {
-                    FetchResponseType::Opaque
-                }
+                head.fetch_response_type_with_web_security(&origin, mode, false),
+                expected
             );
             assert_eq!(
                 metadata
@@ -103,6 +106,10 @@ fn disabled_web_security_changes_network_readability_without_forging_identity_or
         let strict = head.fetch_metadata(&origin, mode);
         let readable = head.fetch_metadata_with_web_security(&origin, mode, true);
         assert_eq!(readable.response_type, FetchResponseType::Basic);
+        assert_eq!(
+            head.fetch_response_type_with_web_security(&origin, mode, true),
+            FetchResponseType::Basic
+        );
         assert_eq!(readable.url_list, strict.url_list);
         assert_eq!(readable.redirected, strict.redirected);
         assert_eq!(readable.timing_allow_passed, strict.timing_allow_passed);
@@ -111,6 +118,16 @@ fn disabled_web_security_changes_network_readability_without_forging_identity_or
         redirect
             .headers
             .push(("Location".into(), b"/next".to_vec()));
+        assert_eq!(
+            redirect.fetch_response_type(&origin, mode),
+            FetchResponseType::OpaqueRedirect
+        );
+        for disabled in [false, true] {
+            assert_eq!(
+                redirect.fetch_response_type_with_web_security(&origin, mode, disabled),
+                FetchResponseType::OpaqueRedirect
+            );
+        }
         assert_eq!(
             redirect
                 .fetch_metadata_with_web_security(&origin, mode, true)
