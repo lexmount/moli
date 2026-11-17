@@ -1124,74 +1124,25 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     started: WorkerFetchStreamingStarted,
 ) {
-    let request_origin = state.borrow().request_origin();
-    let mut reject = None;
-
-    // The native loader admits every hop before dispatch and delivers CSP
-    // violations separately. JS only filters and settles the response here.
-    let response_input = {
-        let mut state_ref = state.borrow_mut();
-        let Some(pending) = state_ref.pending_fetches.get_mut(&started.fetch_id) else {
+    let (resolver, method) = {
+        let mut state = state.borrow_mut();
+        let Some(pending) = state.pending_fetches.get_mut(&started.fetch_id) else {
             return;
         };
-        if let Err(message) = validate_fetch_response_security_policy(
-            &request_origin,
-            &started.head,
-            pending.request_mode,
-            pending.credentials_mode,
-            pending.policy_context,
-            pending.load.request_client().web_security_disabled(),
-        ) {
-            pending.load.cancel();
-            reject = Some((pending.resolver.clone(), message));
-            None
-        } else {
-            let mut observable_head = started.head.clone();
-            observable_head.headers = filter_cors_exposed_response_headers(
-                &request_origin,
-                &observable_head,
-                pending.credentials_mode,
-                pending.load.request_client().web_security_disabled(),
-            );
-            pending.streaming_body_source_id = Some(started.body_source_id);
-            Some((
-                pending.resolver.clone(),
-                started.head.fetch_metadata_with_web_security(
-                    &request_origin,
-                    pending.request_mode,
-                    pending.load.request_client().web_security_disabled(),
-                ),
-                pending.request_method.clone(),
-                observable_head,
-            ))
-        }
+        pending.streaming_body_source_id = Some(started.body_source_id);
+        (pending.resolver.clone(), pending.request_method.clone())
     };
-    if let Some((resolver, message)) = reject {
-        let pending = state.borrow_mut().pending_fetches.remove(&started.fetch_id);
-        if let Some(pending) = pending {
-            crate::context_bootstrap::record_resource_performance_entry(
-                scope,
-                pending.resource_timing.failed(&pending.request_url),
-            );
-        }
-        if let Some(message) = v8_string(scope, &message) {
-            let resolver = v8::Local::new(scope, &resolver);
-            let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
-        }
-        return;
-    }
-    if let Some((resolver, metadata, request_method, observable_head)) = response_input {
-        let response_obj =
-            crate::network_host::build_fetch_response_object_from_stream_with_metadata(
-                scope,
-                &request_method,
-                observable_head,
-                started.body_source_id,
-                &metadata,
-            );
-        let resolver = v8::Local::new(scope, &resolver);
-        let _ = resolver.resolve(scope, response_obj.into());
-    }
+    // Security checks, exposed headers and immutable metadata belong to the
+    // native load. This task only constructs the Response in its Worker realm.
+    let response = crate::network_host::build_fetch_response_object_from_stream_with_metadata(
+        scope,
+        &method,
+        started.head,
+        started.body_source_id,
+        &started.metadata,
+    );
+    let resolver = v8::Local::new(scope, &resolver);
+    let _ = resolver.resolve(scope, response.into());
 }
 
 pub(in crate::worker) fn finish_worker_streaming_fetch(
@@ -1199,7 +1150,6 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     finished: WorkerFetchStreamingFinished,
 ) {
-    let request_origin = state.borrow().request_origin();
     let Some(pending) = state
         .borrow_mut()
         .pending_fetches
@@ -1207,25 +1157,10 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     else {
         return;
     };
-    let web_security_disabled = pending.load.request_client().web_security_disabled();
     pending.load.finish();
-    let head = finished.head;
     match finished.result {
-        Ok(body) => {
-            crate::context_bootstrap::record_resource_performance_entry(
-                scope,
-                pending.resource_timing.completed(
-                    &pending.request_url,
-                    &head,
-                    body.len(),
-                    &head.fetch_metadata_with_web_security(
-                        &request_origin,
-                        pending.request_mode,
-                        web_security_disabled,
-                    ),
-                    None,
-                ),
-            );
+        Ok(entry) => {
+            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
             close_pending_network_body_stream(scope, finished.body_source_id);
         }
         Err(error_text) => {
@@ -1239,7 +1174,7 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
             error_pending_network_body_stream_with_reason(
                 scope,
                 finished.body_source_id,
-                error_text.clone(),
+                error_text,
                 reason,
             );
         }
@@ -1251,7 +1186,6 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     state: &Rc<RefCell<WorkerGlobalState>>,
     completion: WorkerFetchCompletion,
 ) {
-    let request_origin = state.borrow().request_origin();
     let Some(pending) = state
         .borrow_mut()
         .pending_fetches
@@ -1259,101 +1193,21 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     else {
         return;
     };
-    let web_security_disabled = pending.load.request_client().web_security_disabled();
     pending.load.finish();
     let resolver = v8::Local::new(scope, &pending.resolver);
     match completion.result {
         Ok(response) => {
-            let response_head = response.head();
-            // Request mode determines redirect filtering, even without Location.
-            // Select it at settlement so response interception cannot lose it.
-            let response_filter = response.response_filter().or_else(|| {
-                (pending.redirect_mode == RequestRedirectMode::Manual
-                    && matches!(response_head.status, 301 | 302 | 303 | 307 | 308))
-                .then_some(crate::types::FetchResponseType::OpaqueRedirect.into())
-            });
-            let security_validation = if response_filter
-                .as_ref()
-                .is_some_and(|filter| filter.service_worker_metadata().is_some())
-            {
-                // respondWith has already enforced the request's response type.
-                // Its exposed headers cannot be revalidated as a raw CORS response.
-                Ok(())
-            } else {
-                validate_fetch_response_security_policy_with_body_classified(
-                    &request_origin,
-                    &response_head,
-                    response.response.body_bytes(),
-                    pending.request_mode,
-                    pending.credentials_mode,
-                    pending.policy_context,
-                    web_security_disabled,
-                )
-            };
-            let opaque_response_blocked = match security_validation {
-                Ok(()) => false,
-                Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(_)) => true,
-                Err(violation) => {
-                    crate::context_bootstrap::record_resource_performance_entry(
-                        scope,
-                        pending.resource_timing.failed(&pending.request_url),
-                    );
-                    let message = violation.into_message();
-                    if let Some(message) = v8_string(scope, &message) {
-                        let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
-                    } else {
-                        let _ = resolver.reject(scope, v8::undefined(scope).into());
-                    }
-                    return;
-                }
-            };
-
-            let mut metadata = crate::network_host::fetch_response_metadata(
-                &request_origin,
-                &response_head,
-                pending.request_mode,
-                response_filter.as_ref(),
-                web_security_disabled,
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                response.resource_timing,
             );
-            if opaque_response_blocked {
-                metadata.response_type = crate::types::FetchResponseType::Opaque;
-                metadata.timing_allow_passed = false;
-            }
-            let entry = pending.resource_timing.completed(
-                &pending.request_url,
-                &response_head,
-                response.subresource_response_body().len(),
-                &metadata,
-                response_filter.as_ref(),
-            );
-            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
-            let filtered_headers = if response_filter
-                .as_ref()
-                .is_some_and(|filter| filter.is_readable())
-            {
-                response_head.headers.clone()
-            } else {
-                filter_cors_exposed_response_headers(
-                    &request_origin,
-                    &response_head,
-                    pending.credentials_mode,
-                    web_security_disabled,
-                )
-            };
-            let (mut head, body) = response.into_fetch_parts();
-            head.headers = filtered_headers;
-            let body = if opaque_response_blocked {
-                ResponseBody::materialized_bytes(Vec::new())
-            } else {
-                body
-            };
             let response_obj =
                 crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
                     scope,
                     &pending.request_method,
-                    head,
-                    body,
-                    &metadata,
+                    response.head,
+                    response.body,
+                    &response.metadata,
                 );
             let _ = resolver.resolve(scope, response_obj.into());
         }

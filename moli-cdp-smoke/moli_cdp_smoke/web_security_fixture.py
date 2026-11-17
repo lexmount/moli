@@ -14,12 +14,25 @@ from .config import REPO_ROOT
 READ = """async function read(url, api='fetch', init={}) {
   try {
     if (api === 'fetch') {
+      const timing = init.probeTiming && new Promise(resolve => {
+        const observer = new PerformanceObserver(list => {
+          const entry = list.getEntries().find(entry => entry.initiatorType === 'fetch');
+          if (entry) {
+            observer.disconnect();
+            resolve({name:entry.name,initiatorType:entry.initiatorType,
+              count:performance.getEntriesByName(entry.name).length});
+          }
+        });
+        observer.observe({type:'resource'});
+      });
       const request = new Request(url, init);
       const response = await fetch(request);
       const copy = response.clone();
-      return {mode:request.mode, type:response.type, status:response.status,
+      const result = {mode:request.mode, type:response.type, status:response.status,
         redirected:response.redirected, body:await response.text(), clone:await copy.text(),
         secret:response.headers.get('x-secret'), cookie:response.headers.get('set-cookie')};
+      if (timing) result.timing = await timing;
+      return result;
     }
     const xhr = new XMLHttpRequest();
     xhr.open(init.method || 'GET', url, api !== 'sync-xhr');
