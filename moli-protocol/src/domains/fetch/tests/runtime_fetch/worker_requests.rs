@@ -2435,6 +2435,16 @@ fetch('/worker-auth')
         "worker, area"
     );
 
+    ctx.process_async(json!({"id":37_709,"method":"Network.getCookies","sessionId":"SID-1","params":{"urls":[api_url]}})).await;
+    assert!(take_response_by_id(&mut ctx, 37_709).get("error").is_none());
+    assert!(
+        !ctx.sent.iter().any(
+            |event| event["method"] == "Network.responseReceivedExtraInfo"
+                && event["params"]["requestId"] == network_id
+        ),
+        "retryable 401 must not be published as a selected response"
+    );
+
     ctx.process_async(json!({
         "id": 37_705,
         "method": "Fetch.continueWithAuth",
@@ -2474,6 +2484,20 @@ fetch('/worker-auth')
     )
     .await;
 
+    let extras = ctx
+        .sent
+        .iter()
+        .filter(|event| {
+            event["method"] == "Network.responseReceivedExtraInfo"
+                && event["params"]["requestId"] == network_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        extras.len(),
+        1,
+        "one selected authenticated response: {extras:?}"
+    );
+    assert_eq!(extras[0]["params"]["statusCode"], 200);
     server.abort();
 }
 

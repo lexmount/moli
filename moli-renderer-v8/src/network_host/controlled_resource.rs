@@ -552,29 +552,6 @@ impl ControlledResourceLoad {
                     );
                 }
             }
-            if self.interception.is_worker()
-                && let Some(request) = observations.final_request_observation()
-                && let Some(wire) = observations.final_response_observation()
-            {
-                // The journal retains 304 and wire headers before cache merging.
-                self.interception.publish_network(
-                    crate::types::ScriptNetworkOutputItem::SubresourceResponseExtraInfo {
-                        handle: self
-                            .info
-                            .network_request_handle
-                            .expect("native request handle"),
-                        info: Box::new(moli_fetch::NetworkResponseExtraInfo {
-                            request_extra_info: moli_fetch::NetworkRequestExtraInfo {
-                                headers: request.headers().to_vec(),
-                                cookie_report: request.cookie_report().cloned().unwrap_or_default(),
-                            },
-                            status: wire.status(),
-                            headers: wire.headers().to_vec(),
-                            cookie_set_reports: response.head.cookie_set_reports.clone(),
-                        }),
-                    },
-                );
-            }
             let mut response = response;
             let mut body_from_network = body_from_network;
             let mut continued_response_head = None;
@@ -623,6 +600,30 @@ impl ControlledResourceLoad {
                     D::Fail(error) => return Err(error),
                     _ => unreachable!("auth pause accepts only auth decisions"),
                 }
+            }
+            if self.interception.is_worker()
+                && let Some(request) = observations.final_request_observation()
+                && let Some(wire) = observations.final_response_observation()
+            {
+                // Select after auth retry, but before response interception.
+                // The journal retains 304 and wire headers before cache merging.
+                self.interception.publish_network(
+                    crate::types::ScriptNetworkOutputItem::SubresourceResponseExtraInfo {
+                        handle: self
+                            .info
+                            .network_request_handle
+                            .expect("native request handle"),
+                        info: Box::new(moli_fetch::NetworkResponseExtraInfo {
+                            request_extra_info: moli_fetch::NetworkRequestExtraInfo {
+                                headers: request.headers().to_vec(),
+                                cookie_report: request.cookie_report().cloned().unwrap_or_default(),
+                            },
+                            status: wire.status(),
+                            headers: wire.headers().to_vec(),
+                            cookie_set_reports: response.head.cookie_set_reports.clone(),
+                        }),
+                    },
+                );
             }
             if intercept_response {
                 let (pause, rx) = self.pause(InterceptionPhase::Response);
