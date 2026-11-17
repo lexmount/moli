@@ -14,6 +14,7 @@ async fn child_autofocus_shares_top_document_connection_order_and_processed_stat
             ).await?;
             page_vm.vm_mut().eval("document.body.innerHTML='<iframe id=child></iframe>'")?;
             materialize_child_realm_through_page_turn_for_test(&mut page_vm, "child")?;
+            super::rendering_update::finish_initial_document_reveals_for_rendering_test(&mut page_vm, &loader).await?;
             page_vm.vm_mut().eval(r#"
 const frame=document.getElementById('child');
 const child=frame.contentWindow;
@@ -151,6 +152,7 @@ async fn child_autofocus_obeys_sandbox_and_inherited_permissions_policy() {
             let markup=format!("<iframe id=child {attributes}></iframe>");
             page_vm.vm_mut().eval(&format!("document.body.innerHTML={markup:?}"))?;
             materialize_child_realm_through_page_turn_for_test(&mut page_vm,"child")?;
+            super::rendering_update::finish_initial_document_reveals_for_rendering_test(&mut page_vm, &loader).await?;
             page_vm.vm_mut().eval(
                 "document.getElementById('child').contentDocument.body.innerHTML='<input autofocus>'"
             )?;

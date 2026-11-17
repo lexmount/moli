@@ -344,6 +344,9 @@ impl ScriptVm {
             host.queue_non_layout_environment_change();
             host.set_document_activity(activity);
             host.note_window_focus_changes();
+            if activity.visible {
+                host.queue_visible_document_reveals();
+            }
         }
         Ok(())
     }

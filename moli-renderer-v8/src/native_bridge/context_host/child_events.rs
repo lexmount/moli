@@ -95,6 +95,24 @@ impl PageScriptHost {
                 })
     }
 
+    pub(super) fn child_window_event_has_observers(
+        &self,
+        target: ChildWindowEventTarget,
+        event_type: &(impl EventTypeKey + ?Sized),
+    ) -> bool {
+        self.child_window_event_target_is_current(target)
+            && self
+                .child_window_event_listeners
+                .get(&target.child_handle())
+                .and_then(|listeners| listeners.get(event_type))
+                .is_some_and(|listeners| {
+                    listeners.iter().any(|entry| {
+                        entry.local_window_id == Some(target.owner().local_window_id)
+                            && !matches!(entry.callback_state, EventHandlerPropertyState::Null)
+                    })
+                })
+    }
+
     fn child_window_event_requires_runtime_dispatch(
         &self,
         handle: DomHandle,

@@ -74,6 +74,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     NavigationApi,
     OpfsTask,
     RenderingUpdate,
+    DocumentReveal,
     ResourceCompletion,
     MainDocumentRuntime(PageMainDocumentRuntimeActionKind),
     ServiceWorkerClientMessage,
@@ -252,6 +253,11 @@ impl PageSelectedTaskTestSelector {
                 descriptor,
                 RendererPageReadyDescriptor::RenderingUpdate { .. }
             ),
+            Self::DocumentReveal => matches!(
+                descriptor,
+                RendererPageReadyDescriptor::RenderingUpdate { head, .. }
+                    if head.kind() == crate::page_task_queue::RendererPageRenderingUpdateTaskKind::DocumentReveal
+            ),
             Self::ResourceCompletion => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::Networking {
@@ -353,6 +359,9 @@ impl PageSelectedTaskTestSelector {
 
     fn matches_task(self, task: &RendererPageSchedulerTask) -> bool {
         match (self, task) {
+            (Self::DocumentReveal, RendererPageSchedulerTask::RenderingUpdate(task)) => {
+                task.kind() == crate::page_task_queue::RendererPageRenderingUpdateTaskKind::DocumentReveal
+            }
             (Self::ChildDocumentLifecycle, RendererPageSchedulerTask::ChildFrameTask(task))
             | (
                 Self::ChildDocumentLifecycle,

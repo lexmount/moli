@@ -200,6 +200,11 @@ impl ScriptVm {
                 let document = {
                     let mut host = self._context_host.borrow_mut();
                     host.note_lightweight_popup_load_event_finished(window.document_owner);
+                    host.queue_document_reveal_for_dispatch_scope(
+                        crate::native_bridge::OwnerDispatchScope::LightweightPopup(
+                            window.document_owner.popup_id(),
+                        ),
+                    );
                     host.lightweight_popup_document_owner_is_current(window.document_owner)
                         .then(|| {
                             host.lightweight_popup_document_handle(window.document_owner.popup_id())

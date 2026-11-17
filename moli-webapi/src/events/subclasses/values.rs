@@ -302,6 +302,20 @@ pub fn construct_native_interest_event<'s>(
     )
 }
 
+pub fn construct_original_page_reveal_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::PageRevealEvent,
+        "pagereveal",
+        SubclassInit::Values(ValueEventInit::PageReveal(PageRevealInit {
+            base: EventInit::default(),
+            view_transition: None,
+        })),
+    )
+}
+
 pub fn construct_original_page_transition_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

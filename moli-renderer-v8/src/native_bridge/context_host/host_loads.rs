@@ -372,6 +372,9 @@ impl PageScriptHost {
                     self.arm_child_meta_refresh_navigation(scope, runtime, finished_child_handle);
                     self.publish_child_frame_load_finish(finish);
                     self.note_lightweight_popup_child_frame_load_finished(finished_child_handle);
+                    self.queue_document_reveal_for_dispatch_scope(
+                        super::OwnerDispatchScope::Child(finished_child_handle),
+                    );
                     if let Some(document) =
                         self.child_browsing_context_document_handle(finished_child_handle)
                     {

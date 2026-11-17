@@ -5390,6 +5390,9 @@ impl PageScriptHost {
             crate::native_bridge::WindowDocumentOwner::LightweightPopup(window.document_owner),
         );
         self.queue_lightweight_popup_post_parse_autofocus(popup_id);
+        self.queue_document_reveal_for_dispatch_scope(super::OwnerDispatchScope::LightweightPopup(
+            popup_id,
+        ));
         self.publish_lightweight_popup_load_event_if_ready(popup_id);
     }
 

@@ -60,7 +60,7 @@ fn realtime_element_scroll_drives_dom_and_further_scroll_without_polling() {
 }
 
 #[test]
-fn realtime_autofocus_and_animation_scan_share_the_ordered_frame() {
+fn realtime_reveal_autofocus_and_animation_keep_lifecycle_order() {
     run_page_vm_large_stack_async_test("realtime-pre-animation", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
@@ -101,12 +101,19 @@ fn realtime_autofocus_and_animation_scan_share_the_ordered_frame() {
         dispatch_main_document_domcontentloaded_for_rendering_test(&mut page)
             .await
             .unwrap();
+        assert_eq!(
+            page.vm_mut().eval("events.join('|')").unwrap(),
+            "dcl|dcl-microtask"
+        );
+        finish_initial_document_reveals_for_rendering_test(&mut page, &loader)
+            .await
+            .unwrap();
         page.vm_mut()
             .set_viewport_surface(Some(viewport(960)))
             .unwrap();
         assert_eq!(
             page.vm_mut().eval("events.join('|')").unwrap(),
-            "dcl|dcl-microtask"
+            "dcl|dcl-microtask|focus|focus-microtask"
         );
         let deadline = page
             .next_rendering_opportunity_deadline_for_test()

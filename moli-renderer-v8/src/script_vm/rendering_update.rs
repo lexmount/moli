@@ -82,6 +82,28 @@ impl ScriptVm {
         if task.kind() == RendererPageRenderingUpdateTaskKind::FrameLifecycle {
             return self.apply_realtime_rendering_opportunity(task.task_id(), owner.target());
         }
+        if task.kind() == RendererPageRenderingUpdateTaskKind::DocumentReveal
+            && owner.target().dispatch_scope() == crate::native_bridge::OwnerDispatchScope::Top
+            && self
+                .prepare_main_document_event(
+                    crate::host::EventTargetHandle::Window,
+                    crate::host::EventTargetHandle::Window,
+                    "pagereveal",
+                )
+                .is_none()
+            && self
+                ._context_host
+                .borrow()
+                .can_apply_unobserved_document_reveal(owner.target())
+        {
+            return self
+                ._context_host
+                .borrow_mut()
+                .apply_unobserved_document_reveal(task.task_id(), owner.target())
+                .ok_or_else(|| {
+                    anyhow!("authorized native document reveal lost its exact payload")
+                });
+        }
         let (mut invoked, animation_owner) =
             self.with_default_context_scope(|scope, host_ptr| {
                 unsafe { &mut *host_ptr }

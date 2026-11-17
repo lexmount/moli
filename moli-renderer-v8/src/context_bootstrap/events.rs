@@ -1,7 +1,9 @@
 use super::*;
 use crate::util::{get_private_value, v8_string, v8str};
 use moli_webapi::events::subclasses::BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT;
-pub(crate) use moli_webapi::events::subclasses::construct_original_page_transition_event;
+pub(crate) use moli_webapi::events::subclasses::{
+    construct_original_page_reveal_event, construct_original_page_transition_event,
+};
 use moli_webapi_declare::WebApiObject;
 
 mod base;

@@ -5,6 +5,7 @@ pub(super) async fn run_opportunity(
     page: &mut PageVm,
     loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<()> {
+    finish_initial_document_reveals_for_rendering_test(page, loader).await?;
     let deadline = page
         .next_rendering_opportunity_deadline_for_test()
         .expect("pending opportunity");

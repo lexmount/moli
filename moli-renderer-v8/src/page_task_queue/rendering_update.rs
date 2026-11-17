@@ -35,6 +35,7 @@ impl RendererPageRenderingUpdateTaskId {
 /// slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageRenderingUpdateTaskKind {
+    DocumentReveal,
     DocumentScrollEvents,
     AnimationStartScan,
     SvgAnimationEvents,

@@ -2,6 +2,203 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn page_reveal_after_domcontentloaded_uses_rendering_source_without_a_timer() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _queue, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/document-reveal-source")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.revealEvents = [];
+const RevealEvent = PageRevealEvent;
+onpagereveal = event => revealEvents.push([
+    event instanceof RevealEvent, event.isTrusted, event.target === window,
+    event.viewTransition === null, event.bubbles, event.cancelable
+]);
+window.PageRevealEvent = () => { throw new Error('author constructor'); };
+'installed'
+"#,
+        )?;
+        let owner =
+            dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+        assert_eq!(page_vm.vm_mut().eval("revealEvents.length")?, "0");
+        assert!(page_vm.vm().next_timeout_deadline().is_none());
+        let task = page_vm
+            .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+            .expect("the parser lifecycle must request a rendering opportunity");
+        let (selected_owner, kind) = task.rendering_update_owner_and_kind().unwrap();
+        assert_eq!(
+            selected_owner.target().owner(),
+            crate::native_bridge::WindowDocumentOwner::Frame(owner)
+        );
+        assert_eq!(kind, RendererPageRenderingUpdateTaskKind::DocumentReveal);
+        page_vm
+            .run_claimed_selected_page_task_for_test(task, &loader)
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("JSON.stringify(revealEvents)")?,
+            "[[true,true,true,true,false,false]]"
+        );
+        assert!(page_vm.vm().next_timeout_deadline().is_none());
+        assert!(
+            page_vm
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                )
+                .is_none()
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("Document reveal must use the exact rendering source");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn page_reveal_waits_for_visibility_and_fires_once() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for observed in [false, true] {
+            let (mut page_vm, _queue, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/hidden-document-reveal")?,
+            );
+            page_vm.vm_mut().set_document_activity_for_bootstrap(
+                moli_page_types::DocumentActivity::new(false, false),
+            );
+            if observed {
+                page_vm
+                    .vm_mut()
+                    .eval("globalThis.reveals=0; onpagereveal=()=>reveals++")?;
+            }
+            dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+            let document = page_vm.vm().document_runtime.document_handle();
+            // This standalone Page fixture eagerly initializes its default world.
+            let realms_before = page_vm
+                .vm()
+                .runtime_realm_inventory()
+                .into_iter()
+                .map(|realm| realm.context_id)
+                .collect::<Vec<_>>();
+            assert_eq!(realms_before.len(), 1);
+            assert!(
+                !page_vm
+                    .vm()
+                    .document_runtime
+                    .dom_host()
+                    .node(document)
+                    .unwrap()
+                    .as_document()
+                    .unwrap()
+                    .has_been_revealed()
+            );
+            assert!(
+                page_vm
+                    .claim_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::RenderingUpdate
+                    )
+                    .is_none()
+            );
+
+            page_vm
+                .vm_mut()
+                .set_document_activity(moli_page_types::DocumentActivity::default())?;
+            let task = page_vm
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                )
+                .expect("becoming visible must request the first rendering opportunity");
+            assert_eq!(
+                task.rendering_update_owner_and_kind().unwrap().1,
+                RendererPageRenderingUpdateTaskKind::EnvironmentChange
+            );
+            page_vm
+                .run_claimed_selected_page_task_for_test(task, &loader)
+                .await?;
+            assert!(
+                page_vm
+                    .vm()
+                    .document_runtime
+                    .dom_host()
+                    .node(document)
+                    .unwrap()
+                    .as_document()
+                    .unwrap()
+                    .has_been_revealed()
+            );
+            assert_eq!(
+                page_vm
+                    .vm()
+                    .runtime_realm_inventory()
+                    .into_iter()
+                    .map(|realm| realm.context_id)
+                    .collect::<Vec<_>>(),
+                realms_before
+            );
+            for visible in [false, true] {
+                page_vm
+                    .vm_mut()
+                    .set_document_activity(moli_page_types::DocumentActivity::new(
+                        visible, visible,
+                    ))?;
+                let task = page_vm.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::RenderingUpdate,
+                );
+                assert!(task.is_some());
+                if let Some(task) = task {
+                    assert_eq!(
+                        task.rendering_update_owner_and_kind().unwrap().1,
+                        RendererPageRenderingUpdateTaskKind::EnvironmentChange
+                    );
+                    page_vm
+                        .run_claimed_selected_page_task_for_test(task, &loader)
+                        .await?;
+                }
+            }
+            if observed {
+                assert_eq!(page_vm.vm_mut().eval("String(reveals)")?, "1");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("only the first visible rendering opportunity reveals each Document");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn page_reveal_flushes_new_autofocus_before_environment_reporting() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _queue, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://example.com/reveal-focus-media")?,
+        );
+        page_vm.vm_mut().eval(r#"
+            globalThis.order=[];
+            onpagereveal=()=>{
+              order.push('reveal:'+document.activeElement.tagName);
+              const input=document.createElement('input');input.id='from-reveal';input.autofocus=true;
+              input.addEventListener('focus',event=>order.push('focus:'+input.id+':'+event.isTrusted));
+              document.body.append(input);
+            };
+            matchMedia('(prefers-color-scheme: dark)').onchange=()=>order.push('media:'+document.activeElement.id);
+            'installed'
+        "#)?;
+        page_vm.vm_mut().set_emulated_media(&crate::protocol_types::EmulatedMediaOverrides {
+            color_scheme: Some("dark".to_owned()), ..Default::default()
+        });
+        dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+        let task=page_vm.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+            .expect("the environment update owns the initial rendering opportunity");
+        assert_eq!(task.rendering_update_owner_and_kind().unwrap().1, RendererPageRenderingUpdateTaskKind::EnvironmentChange);
+        assert_eq!(page_vm.vm_mut().eval("order.length")?, "0");
+        page_vm.run_claimed_selected_page_task_for_test(task, &loader).await?;
+        assert_eq!(page_vm.vm_mut().eval("order.join('|')")?, "reveal:BODY|focus:from-reveal:true|media:from-reveal");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("reveal and autofocus precede later phases of every rendering opportunity");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn main_document_autofocus_runs_as_a_rendering_update_after_domcontentloaded() {
     run_page_vm_async_test(async move {
         let loader =
@@ -87,6 +284,7 @@ async fn late_autofocus_insertion_queues_a_rendering_update_across_load_boundari
 
             let owner =
                 dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+            finish_initial_document_reveals_for_rendering_test(&mut page_vm, &loader).await?;
             assert!(
                 page_vm
                     .claim_exact_selected_page_task_for_test(
@@ -351,6 +549,7 @@ async fn focused_document_autofocus_checks_focus_at_rendering_time() {
                     Url::parse("https://example.com/focused-autofocus-candidate")?,
                 );
                 dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+                finish_initial_document_reveals_for_rendering_test(&mut page_vm, &loader).await?;
                 let view = if popup { "open()" } else { "window" };
                 page_vm.vm_mut().eval(&format!(
                     "globalThis.focusWindow={view}; const d=focusWindow.document; \
@@ -532,6 +731,8 @@ async fn rendering_update_without_a_live_event_target_only_checkpoints() {
             Url::parse("https://example.com/rendering-missing-event-target").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        dispatch_main_document_domcontentloaded_for_rendering_test(&mut page_vm).await?;
+        finish_initial_document_reveals_for_rendering_test(&mut page_vm, &loader).await?;
 
         page_vm.vm_mut().eval(
             r#"
@@ -795,6 +996,7 @@ document.body.appendChild(frame);
 "#,
         )?;
         materialize_child_realm_through_page_turn_for_test(&mut page_vm, "scroll-stale-child")?;
+        finish_initial_document_reveals_for_rendering_test(&mut page_vm, &loader).await?;
         page_vm.vm_mut().eval(
             r#"
 globalThis.__retiredChildScrollEvents = 0;
