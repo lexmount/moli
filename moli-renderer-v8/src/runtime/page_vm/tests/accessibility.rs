@@ -1,6 +1,112 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn implicit_section_role_depends_on_the_computed_accessible_name() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.test/section.html")?,
+        );
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <span id="label" hidden>Referenced name</span>
+                <span id="empty-label"></span>
+                <section id="plain"><p>Plain contents</p></section>
+                <section id="unnamed" role="none" aria-hidden="false"><p>Visible body text</p></section>
+                <section id="named" role="none" aria-hidden="false" aria-label="News">Body text</section>
+                <section id="titled" title="From title">Body text</section>
+                <section id="referenced" role="presentation" aria-labelledby="label">Body text</section>
+                <section id="empty-reference" aria-labelledby="empty-label">Body text</section>
+                <section id="whitespace" aria-label=" &#9; ">Body text</section>
+                <section id="foreign-label" role="none" aria-hidden="false">Body text</section>
+                <section id="explicit" role="region">Body text</section>
+                <section id="override" role="group" aria-label="Explicit group">Body text</section>`;
+            document.getElementById('foreign-label').setAttributeNS('urn:test', 'aria-label', 'Foreign label');
+        "#)?;
+        let nodes = page.accessibility_tree_payloads_for_document(None).expect("full AX tree");
+        for (id, role, name) in [
+            ("plain", "generic", ""),
+            ("unnamed", "generic", ""),
+            ("named", "region", "News"),
+            ("titled", "region", "From title"),
+            ("referenced", "region", "Referenced name"),
+            ("empty-reference", "generic", ""),
+            ("whitespace", "generic", ""),
+            ("foreign-label", "generic", ""),
+            ("explicit", "generic", ""),
+            ("override", "group", "Explicit group"),
+        ] {
+            let handle = page.vm().document_runtime.dom_host().element_handle_by_id(id)
+                .expect("fixture element");
+            let partial = page.accessibility_node_payload_for_live_handle(handle).expect("local AX node");
+            assert_eq!(partial["ignored"], false, "{id}");
+            assert_eq!(partial["role"]["value"], role, "{id}");
+            assert_eq!(partial["name"]["value"].as_str().unwrap_or(""), name, "{id}");
+            let full = nodes.iter().find(|node| node["nodeId"] == partial["nodeId"])
+                .expect("same AX node in the full tree");
+            assert_eq!(full, &partial, "{id}");
+        }
+        let handle = page.vm().document_runtime.dom_host().element_handle_by_id("referenced")
+            .expect("referenced section");
+        let before = page.accessibility_node_payload_for_live_handle(handle).expect("named AX node");
+        page.vm_mut().eval("document.getElementById('label').textContent = ''")?;
+        let after = page.accessibility_node_payload_for_live_handle(handle).expect("unnamed AX node");
+        assert_eq!(after["nodeId"], before["nodeId"]);
+        assert_eq!(after["role"]["value"], "generic");
+        assert!(after["name"].is_null());
+        assert!(nodes.iter().any(|node| node["role"]["value"] == "StaticText"
+            && node["name"]["value"] == "Visible body text" && node["ignored"] == false));
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("implicit section roles follow the live accessible name");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn presentational_role_conflicts_limit_contenteditable_to_html() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.test/editing.html")?,
+        );
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <h2 id="editor" contenteditable="plaintext-only" role="none">Editor</h2>
+                <svg>
+                    <g id="editable" contenteditable="true" role="none"><text>SVG editor</text></g>
+                    <g id="plain" role="presentation"><text>SVG group</text></g>
+                    <g id="tabindex" contenteditable="true" role="presentation" tabindex="0"><text>Focusable</text></g>
+                    <a id="link" contenteditable="true" role="none" href="/go"><text>Go</text></a>
+                    <foreignObject contenteditable="true" width="100" height="100">
+                        <h2 id="embedded" contenteditable="true" role="none">Embedded HTML editor</h2>
+                    </foreignObject>
+                </svg>`;
+        "#)?;
+        for (id, role) in [
+            ("editor", "heading"),
+            ("editable", "none"),
+            ("plain", "none"),
+            ("tabindex", "generic"),
+            ("link", "link"),
+            ("embedded", "heading"),
+        ] {
+            let handle = page.vm().document_runtime.dom_host().element_handle_by_id(id)
+                .expect("fixture element");
+            let node = page.accessibility_node_payload_for_live_handle(handle).expect("local AX node");
+            assert_eq!(node["role"]["value"], role, "{id}");
+            if id == "link" {
+                assert!(node["properties"].as_array().unwrap().iter().any(|property|
+                    property["name"] == "url" && property["value"]["value"] == "https://example.test/go"
+                ));
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("only HTML contenteditable affects presentational role conflicts");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn local_accessibility_requests_only_allocate_backend_ids_used_by_the_payload() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

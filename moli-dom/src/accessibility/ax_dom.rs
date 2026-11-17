@@ -124,6 +124,9 @@ pub(super) fn ax_supports_focus(document: &NativeDom, node: &Node) -> bool {
 
 fn ax_is_editing_host(document: &NativeDom, node: &Node) -> bool {
     fn editable(element: &Element) -> Option<bool> {
+        if element.namespace() != "http://www.w3.org/1999/xhtml" {
+            return None;
+        }
         let value = element.attribute_ns("", "contenteditable")?;
         if value.is_empty()
             || value.eq_ignore_ascii_case("true")
