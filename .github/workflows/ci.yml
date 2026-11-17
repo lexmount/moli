@@ -349,7 +349,20 @@ jobs:
           printf '%s\n' '${{ needs.resolve-refs.outputs.head_sha }}' > "$package_dir/revision.txt"
           (cd "$package_dir" && sha256sum moli > SHA256SUMS)
           tar -C target/ci-package -czf target/moli-release-head.tar.gz moli-release-head
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      # Use workflow code even when HEAD/base predates the retry helper.
+      - &checkout-upload-helper
+        name: Checkout artifact upload helper
+        id: checkout_upload_helper
+        if: ${{ always() }}
+        uses: actions/checkout@v4
+        with: &upload-helper-source
+          ref: ${{ github.workflow_sha }}
+          path: .ci-upload-helper
+          sparse-checkout: .github/actions/upload-artifact-with-retry
+          persist-credentials: false
+      - name: Upload release artifact
+        if: ${{ success() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: moli-release-head
           path: target/moli-release-head.tar.gz
@@ -392,7 +405,10 @@ jobs:
           printf '%s\n' '${{ needs.resolve-refs.outputs.base_sha }}' > "$package_dir/revision.txt"
           (cd "$package_dir" && sha256sum moli > SHA256SUMS)
           tar -C target/ci-package -czf target/moli-release-base.tar.gz moli-release-base
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - *checkout-upload-helper
+      - name: Upload release artifact
+        if: ${{ success() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: moli-release-base
           path: target/moli-release-base.tar.gz
@@ -453,9 +469,10 @@ jobs:
           if [[ -f target/webmainbench-results/summary.md ]]; then
             cat target/webmainbench-results/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
+      - *checkout-upload-helper
       - name: Upload every page's output and diagnostics
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: webmainbench-results
           path: target/webmainbench-results
@@ -517,9 +534,10 @@ jobs:
             echo "::error::Chromium reference smoke ended with '$CHROMIUM_SMOKE_RESULT'; inspect the 'CDP smoke (Chromium)' job. The preceding step reports the Moli suite result."
             exit 1
           fi
+      - *checkout-upload-helper
       - name: Upload diagnostics
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: cdp-smoke-diagnostics
           path: target/smoke/cdp-ci
@@ -580,9 +598,10 @@ jobs:
             --browser chromium --strict-full-suite --repeat 2 --retries 3 --jobs 4 \
             "${chromium_overrides[@]}" \
             --output-dir target/smoke/cdp-chromium-ci
+      - *checkout-upload-helper
       - name: Upload Chromium diagnostics
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: cdp-smoke-chromium-diagnostics
           path: target/smoke/cdp-chromium-ci
@@ -620,9 +639,10 @@ jobs:
           uv run --locked --script scripts/check-native-pdf.py
           --moli target/ci-bin/moli-release-head/moli
           --output-dir target/native-pdf-ci
+      - *checkout-upload-helper
       - name: Upload PDFs and reader evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: native-pdf-results
           path: target/native-pdf-ci
@@ -678,10 +698,17 @@ jobs:
           uv run --project moli-webdriver-smoke --no-sync \
             moli-webdriver-smoke --continue-on-failure \
             2>&1 | tee target/smoke/webdriver-ci/run.log
-      - name: Upload diagnostics
+      - &checkout-upload-helper-best-effort
+        name: Checkout artifact upload helper
+        id: checkout_upload_helper
         if: ${{ always() }}
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/checkout@v4
+        with: *upload-helper-source
+      - name: Upload diagnostics
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
+        continue-on-error: true
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: webdriver-smoke-diagnostics
           path: target/smoke/webdriver-ci
@@ -752,10 +779,11 @@ jobs:
         run: >-
           uv run --project moli-frontend-smoke --no-sync
           moli-frontend-smoke-analyze results target/frontend-smoke
+      - *checkout-upload-helper-best-effort
       - name: Upload frontend evidence
-        if: ${{ always() && steps.frontend.outcome != 'skipped' }}
+        if: ${{ always() && steps.frontend.outcome != 'skipped' && steps.checkout_upload_helper.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: frontend-differential-results
           path: target/frontend-smoke
@@ -805,10 +833,11 @@ jobs:
           --moli-bin "$PWD/target/ci-bin/moli-release-head/moli"
           --target moli-cdp --gate-target moli-cdp --runs 3
           --output-dir target/benchmark/cdp-session
+      - *checkout-upload-helper-best-effort
       - name: Upload evidence
-        if: ${{ always() }}
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: runtime-contract-results
           path: target/benchmark
@@ -862,10 +891,11 @@ jobs:
           --moli-bin "$PWD/target/ci-bin/moli-release-head/moli"
           --chrome-bin "${{ steps.chromium.outputs.binary }}"
           --output-dir target/benchmark/agent-resource
+      - *checkout-upload-helper-best-effort
       - name: Upload evidence
-        if: ${{ always() }}
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: agent-episode-results
           path: target/benchmark
@@ -924,10 +954,11 @@ jobs:
           --moli-bin "$PWD/target/ci-bin/moli-release-head/moli"
           --profile smoke --baseline-report target/release-regression/base-matrix
           --output-dir target/release-regression/head-matrix
+      - *checkout-upload-helper-best-effort
       - name: Upload evidence
-        if: ${{ always() }}
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: release-regression-results
           # Package sizes stay in the JSON reports and image manifests. Upload
@@ -968,10 +999,11 @@ jobs:
           --site-source fixture --goto-timeout-ms 1500 --server-hang-ms 3000
           --sample-interval-ms 100 --assert-fixture-contract
           --output-dir target/spider-fixture
+      - *checkout-upload-helper-best-effort
       - name: Upload evidence
-        if: ${{ always() }}
+        if: ${{ always() && steps.checkout_upload_helper.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: spider-fixture-results
           path: target/spider-fixture
@@ -1025,9 +1057,10 @@ jobs:
           if [[ -f "$BENCHMARK_OUTPUT/comment.md" ]]; then
             cat "$BENCHMARK_OUTPUT/comment.md" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - *checkout-upload-helper
       - name: Upload full evidence
-        if: ${{ always() && !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && !cancelled() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: spider-bench-results
           path: ${{ env.BENCHMARK_OUTPUT }}
@@ -1127,9 +1160,10 @@ jobs:
           if [[ -f "$BENCHMARK_OUTPUT/comment.md" ]]; then
             cat "$BENCHMARK_OUTPUT/comment.md" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - *checkout-upload-helper
       - name: Upload full evidence
-        if: ${{ always() && !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && !cancelled() && steps.checkout_upload_helper.outcome == 'success' }}
+        uses: ./.ci-upload-helper/.github/actions/upload-artifact-with-retry
         with:
           name: sequential-navigation-soak-results
           path: ${{ env.BENCHMARK_OUTPUT }}
