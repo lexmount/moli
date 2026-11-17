@@ -24,7 +24,8 @@ function checkExtendableEventWaitUntil(event) {
   assert(reads === 0 && traps === 0, 'brand checks precede conversion and do not invoke traps');
   for (const synthetic of [
     new ExtendableEvent('synthetic'),
-    new ExtendableMessageEvent('synthetic')
+    new ExtendableMessageEvent('synthetic'),
+    new FetchEvent('synthetic', {request: new Request('https://example.test/')})
   ]) {
     throws(() => waitUntil.call(synthetic), 'TypeError', 'required argument');
     const before = reads;
