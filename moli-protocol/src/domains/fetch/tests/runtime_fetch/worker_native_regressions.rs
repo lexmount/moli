@@ -472,3 +472,147 @@ async fn worker_continue_response_preserves_wire_info_without_creating_a_redirec
     .await;
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_cache_revalidation_reports_wire_304_and_effective_200() {
+    let validations = Arc::new(AtomicUsize::new(0));
+    let count = validations.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/page",
+                    get(|| async { axum::response::Html("<!doctype html>worker cache") }),
+                )
+                .route(
+                    "/worker.js",
+                    get(|| async {
+                        (
+                            [("content-type", "text/javascript")],
+                            r#"
+                onmessage=async()=>{
+                    const r=await fetch('/asset',{cache:'no-cache',credentials:'omit'});
+                    postMessage({status:r.status,body:await r.text()});
+                };
+                postMessage('ready');
+            "#,
+                        )
+                    }),
+                )
+                .route(
+                    "/asset",
+                    get(move |headers: HeaderMap| {
+                        let count = count.clone();
+                        async move {
+                            if headers
+                                .get("if-none-match")
+                                .is_some_and(|value| value == "\"worker-cache\"")
+                            {
+                                count.fetch_add(1, Ordering::SeqCst);
+                                (
+                                    StatusCode::NOT_MODIFIED,
+                                    [("etag", "\"worker-cache\""), ("x-validated", "wire-304")],
+                                    "",
+                                )
+                                    .into_response()
+                            } else {
+                                (
+                                    StatusCode::OK,
+                                    [
+                                        ("etag", "\"worker-cache\""),
+                                        ("cache-control", "max-age=0, must-revalidate"),
+                                        ("x-cached", "body-200"),
+                                    ],
+                                    "cached body",
+                                )
+                                    .into_response()
+                            }
+                        }
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let cache_dir = std::env::temp_dir().join(format!(
+        "moli-worker-304-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut config = moli_fetch::FetchConfig::default();
+    config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+    let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(config));
+    let mut browser = ctx.with_fixture(|conn| conn.new_browser_context("BID-1".into()));
+    browser.set_active_target_id("TID-1");
+    browser.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.install_navigation_fixture_for_session_owner(&format!("{origin}/page"), Some("SID-1"))
+        .await;
+    ctx.observe_worker_network_for_test(None).await;
+    command(&mut ctx, 58_000, "Network.enable", json!({})).await;
+    enable_runtime_async(&mut ctx, "SID-1", 58_001).await;
+    let ready=command(&mut ctx,58_002,"Runtime.evaluate",json!({"expression":"new Promise(resolve=>{globalThis.cacheWorker=new Worker('/worker.js');cacheWorker.onmessage=e=>resolve(e.data);})","awaitPromise":true,"returnByValue":true})).await;
+    assert_eq!(ready["result"]["result"]["value"], "ready");
+    let url = format!("{origin}/asset");
+    for (index, wire_status) in [200, 304].into_iter().enumerate() {
+        let start = ctx.sent.len();
+        let response=command(&mut ctx,58_010+index as u64,"Runtime.evaluate",json!({"expression":"new Promise(resolve=>{cacheWorker.onmessage=e=>resolve(e.data);cacheWorker.postMessage('fetch');})","awaitPromise":true,"returnByValue":true})).await;
+        assert_eq!(
+            response["result"]["result"]["value"],
+            json!({"status":200,"body":"cached body"})
+        );
+        let network_id = ctx
+            .sent
+            .iter()
+            .skip(start)
+            .find(|e| {
+                e["method"] == "Network.requestWillBeSent" && e["params"]["request"]["url"] == url
+            })
+            .unwrap()["params"]["requestId"]
+            .clone();
+        wait_until_scheduler_message(&mut ctx, "worker cache terminal", |e| {
+            e["method"] == "Network.loadingFinished" && e["params"]["requestId"] == network_id
+        })
+        .await;
+        let extras = ctx
+            .sent
+            .iter()
+            .filter(|e| {
+                e["method"] == "Network.responseReceivedExtraInfo"
+                    && e["params"]["requestId"] == network_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(extras.len(), 1, "one cache response ExtraInfo: {extras:?}");
+        assert_eq!(extras[0]["params"]["statusCode"], wire_status);
+        if index == 1 {
+            assert_eq!(extras[0]["params"]["headers"]["x-validated"], "wire-304");
+            assert!(extras[0]["params"]["headers"].get("x-cached").is_none());
+        }
+        let response = ctx
+            .sent
+            .iter()
+            .find(|e| {
+                e["method"] == "Network.responseReceived" && e["params"]["requestId"] == network_id
+            })
+            .unwrap();
+        assert_eq!(response["params"]["response"]["status"], 200);
+    }
+    assert_eq!(validations.load(Ordering::SeqCst), 1);
+    command(
+        &mut ctx,
+        58_020,
+        "Runtime.evaluate",
+        json!({"expression":"cacheWorker.terminate()"}),
+    )
+    .await;
+    server.abort();
+    drop(ctx);
+    std::fs::remove_dir_all(cache_dir).unwrap();
+}

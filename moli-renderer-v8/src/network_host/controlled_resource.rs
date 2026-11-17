@@ -501,8 +501,12 @@ impl ControlledResourceLoad {
             }
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
-            let (response, body_from_network, observed_request_headers) = match synthetic.take() {
-                Some(response) => (LoadedResponse::from_response(response), false, None),
+            let (response, body_from_network, observations) = match synthetic.take() {
+                Some(response) => (
+                    LoadedResponse::from_response(response),
+                    false,
+                    moli_fetch::NetworkObservationJournal::default(),
+                ),
                 None => {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
@@ -519,13 +523,14 @@ impl ControlledResourceLoad {
                         Some(&preflight_observer),
                     )
                     .await?;
-                    let (response, observation) = observed.into_parts();
-                    let headers = observation.map(|observation| observation.into_headers());
-                    (response, true, headers)
+                    let (response, observations) = observed.into_parts_with_observation_journal();
+                    (response, true, observations)
                 }
             };
             if network_request_headers.is_none() {
-                network_request_headers = observed_request_headers;
+                network_request_headers = observations
+                    .final_request_observation()
+                    .map(|request| request.headers().to_vec());
                 if self.interception.is_worker()
                     && let Some(headers) = &network_request_headers
                 {
@@ -547,12 +552,11 @@ impl ControlledResourceLoad {
                     );
                 }
             }
-            if body_from_network
-                && self.interception.is_worker()
-                && let Some(headers) = &network_request_headers
+            if self.interception.is_worker()
+                && let Some(request) = observations.final_request_observation()
+                && let Some(wire) = observations.final_response_observation()
             {
-                // The wire response is an immutable transport fact, available
-                // before auth/response interception can block or rewrite it.
+                // The journal retains 304 and wire headers before cache merging.
                 self.interception.publish_network(
                     crate::types::ScriptNetworkOutputItem::SubresourceResponseExtraInfo {
                         handle: self
@@ -561,15 +565,11 @@ impl ControlledResourceLoad {
                             .expect("native request handle"),
                         info: Box::new(moli_fetch::NetworkResponseExtraInfo {
                             request_extra_info: moli_fetch::NetworkRequestExtraInfo {
-                                headers: headers.clone(),
-                                cookie_report: response
-                                    .head
-                                    .request_cookie_report
-                                    .clone()
-                                    .unwrap_or_default(),
+                                headers: request.headers().to_vec(),
+                                cookie_report: request.cookie_report().cloned().unwrap_or_default(),
                             },
-                            status: response.head.status,
-                            headers: response.head.headers.clone(),
+                            status: wire.status(),
+                            headers: wire.headers().to_vec(),
                             cookie_set_reports: response.head.cookie_set_reports.clone(),
                         }),
                     },
