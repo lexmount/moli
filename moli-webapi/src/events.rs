@@ -11,11 +11,13 @@ pub mod fetch;
 pub mod ice_error_event;
 pub mod init;
 pub mod kind;
+pub mod modifiers;
 pub mod progress;
 pub mod service_worker;
 pub mod speech;
 pub mod state;
 pub mod subclasses;
+pub mod ui;
 pub mod value;
 pub mod webrtc;
 
@@ -79,6 +81,9 @@ pub fn new_event_wrapper<'s>(
 pub struct EventRuntime {
     /// Returns this realm's DOM high resolution timestamp.
     pub timestamp: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>) -> f64,
+    /// Applies the embedder's native Window predicate, including retained globals.
+    pub is_window_receiver:
+        for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool,
     /// Binds the author's wrapper to private state and the embedder's world cache.
     pub initialize_wrapper: for<'s, 'i> fn(
         &mut v8::PinScope<'s, 'i>,

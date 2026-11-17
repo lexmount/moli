@@ -1,6 +1,7 @@
 use super::super::ui::UiEventInit;
 use super::*;
-use crate::{web_api_interfaces, webidl};
+use crate::interfaces as web_api_interfaces;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 #[derive(webidl::WebIdlDictionary)]
@@ -50,7 +51,7 @@ impl<'s> CompositionEventInit<'s> {
 }
 
 // Legacy createEvent("TextEvent") uses an empty, internal dictionary.
-pub(in crate::context_bootstrap::events) fn initialize_text_event<'s>(
+pub fn initialize_text_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
@@ -87,7 +88,7 @@ impl<'s> BasicEventInit<'s> {
         args: &v8::FunctionCallbackArguments<'s>,
         kind: EventSubclassKind,
     ) -> Option<Self> {
-        use super::super::parse_event_dictionary;
+        use crate::events::init::parse_event_dictionary;
         Some(match kind {
             EventSubclassKind::UiEvent => Self::Ui(parse_event_dictionary(scope, args, "UIEvent")?),
             EventSubclassKind::FocusEvent => {
