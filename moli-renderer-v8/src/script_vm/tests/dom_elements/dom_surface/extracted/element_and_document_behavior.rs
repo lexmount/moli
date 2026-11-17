@@ -1618,3 +1618,41 @@ frame.contentWindow.location.reload();
         "true|1|about:blank"
     );
 }
+
+#[test]
+fn area_hyperlink_metadata_checks_receiver_before_converting() {
+    let mut vm = new_storage_html_test_vm("https://area-native-metadata.test/");
+    let result = vm
+        .eval(
+            r#"
+JSON.stringify((() => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const child = frame.contentWindow;
+    const area = document.createElement("area");
+    const wrongs = [document.createElement("a"), document.createElement("div"),
+        document.createElementNS("http://www.w3.org/2000/svg", "area")];
+    return ["hreflang", "type"].map(name => {
+        const descriptor = Object.getOwnPropertyDescriptor(child.HTMLAreaElement.prototype, name);
+        let conversions = 0;
+        const input = { toString() { ++conversions; return "example-é"; } };
+        descriptor.set.call(area, input);
+        const reflected = descriptor.get.call(area) === "example-é" &&
+            area.getAttribute(name) === "example-é";
+        const invalidReceivers = wrongs.every(node => {
+            let getRejected = false;
+            let setRejected = false;
+            try { descriptor.get.call(node); } catch (error) { getRejected = error instanceof child.TypeError; }
+            try { descriptor.set.call(node, input); } catch (error) { setRejected = error instanceof child.TypeError; }
+            return getRejected && setRejected && !node.hasAttribute(name);
+        });
+        descriptor.set.call(area, null);
+        return [reflected, invalidReceivers, conversions,
+            descriptor.get.call(area) === "null" && area.getAttribute(name) === "null"];
+    });
+})())
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"[[true,true,1,true],[true,true,1,true]]"#);
+}
