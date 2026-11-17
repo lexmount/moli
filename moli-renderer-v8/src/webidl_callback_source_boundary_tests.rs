@@ -181,11 +181,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "context_bootstrap/css_runtime/highlights.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
         "context_bootstrap/web_storage/interceptors.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
@@ -423,6 +418,10 @@ fn shared_webapi_callback_and_native_forwarding_inventory_is_frozen() {
             // The typed synchronous callback adapter delegates relevant/incumbent
             // context handling to the existing Web IDL callback kernel.
             ("callbacks.rs".to_owned(), 1),
+            // Runtime-generated Highlight mapper; retains the native microtask policy.
+            ("highlights/iterators.rs".to_owned(), 1),
+            // The captured Highlight runtime initializer, formerly in the Renderer.
+            ("highlights.rs".to_owned(), 1),
             // Captured native collection intrinsics, not author callback calls.
             ("webidl_iterator.rs".to_owned(), 4),
         ])

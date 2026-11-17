@@ -1,9 +1,8 @@
 use crate::{
-    context_bootstrap::performance_runtime::{
-        ResourcePerformanceEntry, install::EVENT_COUNTS_TRACKED_TYPES,
-    },
+    context_bootstrap::performance_runtime::ResourcePerformanceEntry,
     util::{array_push_value, get_private_value, set_private_value, v8_string},
 };
+use moli_webapi::performance::event_counts::EVENT_COUNTS_TRACKED_TYPES;
 
 const WINDOW_PERFORMANCE_PROJECTED_LIFECYCLE_SLOT: &str =
     "__moliWindowPerformanceProjectedLifecycle";

@@ -112,16 +112,6 @@ struct ServiceWorkerNavigationPreloadStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscriptionOptions, prototype = "Object")]
-struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
-    #[webapi(data_property = "userVisibleOnly", readonly)]
-    user_visible_only: bool,
-
-    #[webapi(data_property = "applicationServerKey", readonly)]
-    application_server_key: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SyncManager)]
 struct ServiceWorkerSyncManagerDeclaration {
     #[webapi(
@@ -2465,12 +2455,11 @@ fn build_service_worker_push_subscription_object<'s>(
     scope_url: &url::Url,
     snapshot: &crate::service_worker_runtime::ServiceWorkerPushSubscriptionSnapshot,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let options = ServiceWorkerPushSubscriptionOptionsDeclaration::new(
+    let options = moli_webapi::push_values::new_subscription_options(
+        scope,
         snapshot.user_visible_only,
         v8::null(scope).into(),
-    )
-    .bind(scope)
-    .ok()?;
+    )?;
     let subscription = ServiceWorkerPushSubscriptionDeclaration {
         endpoint: snapshot.endpoint.clone(),
         expiration_time: v8::null(scope).into(),

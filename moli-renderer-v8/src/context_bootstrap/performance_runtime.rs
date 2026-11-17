@@ -26,8 +26,6 @@ pub(in crate::context_bootstrap) const PERFORMANCE_NAVIGATION_SLOT: &str =
 
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_SLOT: &str =
     "__moliPerformanceEventCounts";
-pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_VALUES_SLOT: &str =
-    "__moliPerformanceEventCountsValues";
 pub(super) const PERFORMANCE_NAVIGATION_ENTRY_SLOT: &str = "__moliPerformanceNavigationEntry";
 pub(super) const PERFORMANCE_LAST_ENTRY_ID_SLOT: &str = "__moliPerformanceLastEntryId";
 pub(super) const PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT: &str =
