@@ -297,7 +297,11 @@ impl CdpSchedulerEventReceivers {
                     CdpSchedulerInterleavedInput::BackgroundNavigationCompletion,
                 )
             }
-            maybe_completion = self.deferred_attachment_binding_completion_rx.recv() => {
+            maybe_completion = self
+                .deferred_attachment_binding_completion_rx
+                .recv(),
+            if !self.deferred_attachment_binding_completion_rx.is_closed() =>
+            {
                 maybe_completion.map(
                     CdpSchedulerInterleavedInput::DeferredAttachmentBindingCompletion,
                 )

@@ -283,7 +283,11 @@ impl SchedulerInputReceivers {
                 maybe_completion = self.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
                 }
-                maybe_completion = self.deferred_attachment_binding_completion_rx.recv() => {
+                maybe_completion = self
+                    .deferred_attachment_binding_completion_rx
+                    .recv(),
+                if !self.deferred_attachment_binding_completion_rx.is_closed() =>
+                {
                     maybe_completion.map(SchedulerInput::DeferredAttachmentBindingCompletion)
                 }
                 maybe_event = self.background_event_rx.recv() => {
@@ -311,7 +315,11 @@ impl SchedulerInputReceivers {
                 maybe_completion = self.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
                 }
-                maybe_completion = self.deferred_attachment_binding_completion_rx.recv() => {
+                maybe_completion = self
+                    .deferred_attachment_binding_completion_rx
+                    .recv(),
+                if !self.deferred_attachment_binding_completion_rx.is_closed() =>
+                {
                     maybe_completion.map(SchedulerInput::DeferredAttachmentBindingCompletion)
                 }
                 maybe_event = self.background_event_rx.recv() => {
