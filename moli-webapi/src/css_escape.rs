@@ -1,7 +1,7 @@
-use super::*;
-use crate::util::{v8_string_from_utf16_units, v8_string_to_u16_string};
+use moli_v8_util::throw_type_error;
+use moli_v8_util::{v8_string_from_utf16_units, v8_string_to_u16_string};
 
-pub(super) fn css_escape_callback<'s>(
+pub fn css_escape_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -102,10 +102,9 @@ fn push_simple_escape(output: &mut Vec<u16>, unit: u16) {
 #[cfg(test)]
 mod tests {
     use super::css_escape_utf16;
-    use crate::util::utf16_units;
 
     fn escape_to_string(input: &str) -> String {
-        String::from_utf16(&css_escape_utf16(&utf16_units(input)))
+        String::from_utf16(&css_escape_utf16(&input.encode_utf16().collect::<Vec<_>>()))
             .expect("escaped test output should be valid UTF-16")
     }
 

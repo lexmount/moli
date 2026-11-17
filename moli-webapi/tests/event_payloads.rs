@@ -138,6 +138,7 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         EventSubclassKind::SecurityPolicyViolationEvent,
         EventSubclassKind::FontFaceSetLoadEvent,
         EventSubclassKind::ClipboardChangeEvent,
+        EventSubclassKind::CapturedMouseEvent,
     ] {
         let template = subclasses::build_template(scope, kind).unwrap();
         template.inherit(event);
@@ -156,6 +157,25 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
             template,
         );
     }
+    let query = events::media_query_list_event::build_media_query_list_event_template(scope);
+    query.inherit(event);
+    finish_template(scope, interfaces::MediaQueryListEvent::DESCRIPTOR, query);
+    let version = v8::FunctionTemplate::new(
+        scope,
+        events::idb_version_change_event::idb_version_change_event_constructor_callback,
+    );
+    version.inherit(event);
+    let version_prototype = version.prototype_template(scope);
+    events::idb_version_change_event::install_version_change_event_template_bindings(
+        scope,
+        version_prototype,
+        "IDBVersionChangeEvent",
+    );
+    finish_template(
+        scope,
+        interfaces::IDBVersionChangeEvent::DESCRIPTOR,
+        version,
+    );
     let before_unload = v8::FunctionTemplate::new(scope, illegal_constructor);
     before_unload.inherit(event);
     (subclasses::template_declaration("BeforeUnloadEvent")
@@ -977,4 +997,42 @@ fn native_message_and_storage_factories_do_not_read_author_constructors_or_itera
         assert(nativeStorage.key === '\ud800' && nativeStorage.newValue === '\udfff');
         return true;
     })()"#).is_true());
+}
+
+#[test]
+fn standalone_media_query_and_version_events_preserve_dictionary_order_and_utf16() {
+    check(
+        r#"(() => {
+      const reads=[];
+      const init={};for(const name of ['bubbles','cancelable','composed','matches','media'])Object.defineProperty(init,name,{get(){reads.push(name);return name==='media'?'screen\ud800':true;}});
+      const query=new MediaQueryListEvent('change',init);
+      assert(reads.join()==='bubbles,cancelable,composed,matches,media');
+      assert(query.media==='screen\ud800' && query.matches && query.composed && query instanceof Event);
+      const version=new IDBVersionChangeEvent('versionchange',{oldVersion:2,newVersion:3});
+      assert(version.oldVersion===2 && version.newVersion===3 && version.isTrusted===false && version instanceof Event);
+      assert(new IDBVersionChangeEvent('blocked').newVersion===null);
+      const captured=new CapturedMouseEvent('move',{surfaceX:4,surfaceY:5});
+      assert(captured.surfaceX===4 && captured.surfaceY===5 && captured instanceof Event);
+      try{new CapturedMouseEvent('move',{surfaceX:-1,surfaceY:2});throw Error('invalid coordinates accepted');}catch(error){assert(error instanceof RangeError);}
+      return true;
+    })()"#,
+    );
+}
+#[test]
+fn standalone_native_media_query_event_keeps_trust_and_intrinsic_after_global_replacement() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 37.25);
+    eval(
+        scope,
+        "globalThis.NativeQueryEvent=MediaQueryListEvent;globalThis.MediaQueryListEvent=function(){throw 'author constructor'};",
+    );
+    let event =
+        events::media_query_list_event::create_media_query_list_event(scope, "screen", true);
+    publish(scope, "nativeQuery", event);
+    assert!(eval(scope,"nativeQuery instanceof NativeQueryEvent && nativeQuery.media==='screen' && nativeQuery.matches && nativeQuery.type==='change' && nativeQuery.isTrusted && nativeQuery.timeStamp===37.25").is_true());
 }

@@ -1,7 +1,4 @@
-use super::navigator::{
-    build_window_navigator_object_for_owner, navigator_identity_profile,
-    set_navigator_identity_profile, update_window_navigator_identity,
-};
+use super::navigator::{build_window_navigator_object_for_owner, update_window_navigator_identity};
 use crate::{
     context_bootstrap::{
         GlobalCachesAccessorDeclaration, WINDOW_NAVIGATOR_SLOT,
@@ -11,6 +8,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use moli_browser_profile::BrowserIdentityProfile;
+use moli_webapi::navigator_ua_data::{navigator_identity_profile, set_navigator_identity_profile};
 
 const WINDOW_NAVIGATOR_STORAGE_APIS_AVAILABLE_SLOT: &str =
     "__moliWindowNavigatorStorageApisAvailable";

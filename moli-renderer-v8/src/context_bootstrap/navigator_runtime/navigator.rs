@@ -1,8 +1,8 @@
 use super::super::window_runtime::{
-    build_legacy_storage_quota_object, build_navigator_ua_data_object,
-    install_initial_service_worker_ready_promise, navigator_get_battery_callback,
-    navigator_java_enabled_callback, navigator_permissions_query_callback,
-    navigator_send_beacon_callback, navigator_service_worker_controller_getter_callback,
+    build_legacy_storage_quota_object, install_initial_service_worker_ready_promise,
+    navigator_get_battery_callback, navigator_java_enabled_callback,
+    navigator_permissions_query_callback, navigator_send_beacon_callback,
+    navigator_service_worker_controller_getter_callback,
     navigator_service_worker_controllerchange_handler_getter_callback,
     navigator_service_worker_controllerchange_handler_setter_callback,
     navigator_service_worker_get_registration_callback,
@@ -13,8 +13,7 @@ use super::super::window_runtime::{
     navigator_service_worker_messageerror_handler_setter_callback,
     navigator_service_worker_register_callback, navigator_storage_estimate_callback,
     navigator_storage_get_directory_callback, navigator_storage_persist_callback,
-    navigator_storage_persisted_callback, navigator_ua_data_get_high_entropy_values_callback,
-    navigator_ua_data_to_json_callback, navigator_vibrate_callback,
+    navigator_storage_persisted_callback, navigator_vibrate_callback,
     permission_status_name_getter_callback, permission_status_state_getter_callback,
     service_worker_object_set_owner_scope,
 };
@@ -38,6 +37,7 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use moli_browser_profile::{BrowserIdentityProfile, navigator_app_version};
+use moli_webapi::navigator_ua_data::build_navigator_ua_data_object;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const NAVIGATOR_RUNTIME_DATA_KEYS: &[&str] = &[
@@ -88,8 +88,7 @@ const WORKER_NAVIGATOR_BACKING_SLOT: &str = "__moliWorkerNavigatorBacking";
 const NAVIGATOR_STORAGE_OWNER_CHILD_HANDLE_SLOT: &str = "__moliNavigatorStorageOwnerChildHandle";
 const NAVIGATOR_STORAGE_OWNER_POPUP_ID_SLOT: &str = "__moliNavigatorStorageOwnerPopupId";
 const NAVIGATOR_ACCEPT_LANGUAGE_SLOT: &str = "__moliNavigatorAcceptLanguage";
-pub(in crate::context_bootstrap) const NAVIGATOR_IDENTITY_PROFILE_SLOT: &str =
-    "__moliNavigatorIdentityProfile";
+
 pub(in crate::context_bootstrap) const STORAGE_MANAGER_CHILD_HANDLE_SLOT: &str =
     "__moliStorageManagerChildHandle";
 pub(in crate::context_bootstrap) const STORAGE_MANAGER_POPUP_ID_SLOT: &str =
@@ -378,16 +377,6 @@ pub(in crate::context_bootstrap) fn install_storage_manager_constructor_template
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::StorageBucketManager)]
 struct StorageBucketManagerObjectDeclaration {}
-
-#[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::NavigatorUAData, enumerable, receiver)]
-struct NavigatorUaDataPrototypeMethodsDeclaration {
-    #[webapi(method, name = "toJSON", length = 0, callback = navigator_ua_data_to_json_callback)]
-    to_json: (),
-
-    #[webapi(method, length = 1, callback = navigator_ua_data_get_high_entropy_values_callback, returns_promise)]
-    get_high_entropy_values: (),
-}
 
 #[derive(Default, WebApiObject)]
 #[webapi(interface = web_api_interfaces::ServiceWorkerContainer)]
@@ -871,9 +860,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
             PermissionStatusPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         "NavigatorUAData" => {
-            NavigatorUaDataPrototypeMethodsDeclaration::initialize_prototype_template(
-                scope, prototype,
-            );
+            moli_webapi::navigator_ua_data::install(scope, template);
         }
         _ => {}
     }
@@ -1196,29 +1183,7 @@ fn worker_navigator_identity<'s>(
     })
 }
 
-pub(in crate::context_bootstrap) fn set_navigator_identity_profile<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    identity: &BrowserIdentityProfile,
-) {
-    let Ok(serialized) = serde_json::to_string(identity) else {
-        return;
-    };
-    let Some(value) = v8_string(scope, &serialized) else {
-        return;
-    };
-    set_private_value(scope, object, NAVIGATOR_IDENTITY_PROFILE_SLOT, value.into());
-}
-
-pub(in crate::context_bootstrap) fn navigator_identity_profile<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<BrowserIdentityProfile> {
-    let serialized = get_private_value(scope, object, NAVIGATOR_IDENTITY_PROFILE_SLOT)?
-        .to_string(scope)?
-        .to_rust_string_lossy(scope);
-    serde_json::from_str(&serialized).ok()
-}
+use moli_webapi::navigator_ua_data::{navigator_identity_profile, set_navigator_identity_profile};
 
 fn build_window_navigator_backing_for_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,

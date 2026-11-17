@@ -1,9 +1,9 @@
-use super::*;
-use crate::webidl;
 use ::base64::{
     Engine as _, alphabet,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig, general_purpose::STANDARD},
 };
+use moli_v8_util::v8_string;
+use moli_webidl as webidl;
 
 const FORGIVING_BASE64: GeneralPurpose = GeneralPurpose::new(
     &alphabet::STANDARD,
@@ -12,7 +12,7 @@ const FORGIVING_BASE64: GeneralPurpose = GeneralPurpose::new(
         .with_decode_padding_mode(DecodePaddingMode::Indifferent),
 );
 
-pub(in crate::context_bootstrap) fn base64_encode(bytes: &[u8]) -> String {
+pub fn base64_encode(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }
 
@@ -41,7 +41,7 @@ fn base64_decode(s: &str) -> std::result::Result<Vec<u8>, ()> {
     FORGIVING_BASE64.decode(compact).map_err(|_| ())
 }
 
-pub(in crate::context_bootstrap) fn window_btoa_callback<'s>(
+pub fn window_btoa_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -66,7 +66,7 @@ pub(in crate::context_bootstrap) fn window_btoa_callback<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn window_atob_callback<'s>(
+pub fn window_atob_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -91,7 +91,7 @@ pub(in crate::context_bootstrap) fn window_atob_callback<'s>(
 }
 
 fn throw_invalid_character_error(scope: &mut v8::PinScope<'_, '_>, message: &'static str) {
-    crate::context_bootstrap::throw_dom_exception_value(scope, message, "InvalidCharacterError");
+    crate::dom_exception::throw_dom_exception_value(scope, message, "InvalidCharacterError");
 }
 
 #[cfg(test)]

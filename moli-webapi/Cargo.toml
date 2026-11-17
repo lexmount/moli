@@ -5,6 +5,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base64 = "0.22"
+moli-browser-profile = { path = "../moli-browser-profile" }
 moli-time = { path = "../moli-time" }
 moli-web-mime = { path = "../moli-web-mime" }
 http = "1"

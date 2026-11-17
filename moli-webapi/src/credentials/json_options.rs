@@ -7,7 +7,7 @@
 mod encode;
 mod schema;
 
-use crate::webidl;
+use moli_webidl as webidl;
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 use schema::{CreationJson, RequestJson};
@@ -26,7 +26,7 @@ struct RequestArgs {
     options: RequestJson,
 }
 
-pub(super) fn parse_creation<'s>(
+pub fn parse_creation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,
@@ -42,7 +42,7 @@ pub(super) fn parse_creation<'s>(
     }
 }
 
-pub(super) fn parse_request<'s>(
+pub fn parse_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s>,

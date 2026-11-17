@@ -1,12 +1,12 @@
 use moli_webapi_declare::WebApiValue;
 
-use crate::webidl;
+use moli_webidl as webidl;
 
 /// Preserve every DOMString code unit, including lone surrogates in labels and
 /// PRF record keys and signal user details. Base64url values must still be ASCII
 /// when they are decoded.
 #[derive(Clone, PartialEq)]
-pub(super) struct Text(pub(super) webidl::DomString16);
+pub struct Text(pub webidl::DomString16);
 
 impl From<&str> for Text {
     fn from(value: &str) -> Self {

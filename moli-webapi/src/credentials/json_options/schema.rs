@@ -1,6 +1,6 @@
-use crate::webidl;
+use moli_webidl as webidl;
 
-pub(super) use super::super::schema::{Parameters, RelyingParty, Selection};
+pub use super::super::schema::{Parameters, RelyingParty, Selection};
 use super::super::value::Text;
 use webidl::Dictionary;
 
@@ -8,119 +8,119 @@ use webidl::Dictionary;
 // inherited dictionaries such as RelyingParty declare their base explicitly.
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialCreationOptionsJSON", snapshot)]
-pub(super) struct CreationJson {
+pub struct CreationJson {
     #[webidl(converter = "raw", default = Text::from("none"))]
-    pub(super) attestation: Text,
+    pub attestation: Text,
     #[webidl(converter = "raw", default = webidl::Sequence(Vec::new()))]
-    pub(super) attestation_formats: webidl::Sequence<Text>,
+    pub attestation_formats: webidl::Sequence<Text>,
     #[webidl(converter = "raw")]
-    pub(super) authenticator_selection: Option<Dictionary<Selection>>,
+    pub authenticator_selection: Option<Dictionary<Selection>>,
     #[webidl(required, converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) challenge: Text,
+    pub challenge: Text,
     #[webidl(converter = "raw", default = webidl::Sequence(Vec::new()))]
-    pub(super) exclude_credentials: webidl::Sequence<Dictionary<DescriptorJson>>,
+    pub exclude_credentials: webidl::Sequence<Dictionary<DescriptorJson>>,
     #[webidl(converter = "raw")]
-    pub(super) extensions: Option<Dictionary<ExtensionsJson>>,
+    pub extensions: Option<Dictionary<ExtensionsJson>>,
     #[webidl(converter = "raw", default = webidl::Sequence(Vec::new()))]
-    pub(super) hints: webidl::Sequence<Text>,
+    pub hints: webidl::Sequence<Text>,
     #[webidl(required, converter = "raw")]
-    pub(super) pub_key_cred_params: webidl::Sequence<Dictionary<Parameters>>,
+    pub pub_key_cred_params: webidl::Sequence<Dictionary<Parameters>>,
     #[webidl(required, converter = "raw")]
-    pub(super) rp: Dictionary<RelyingParty>,
-    pub(super) timeout: Option<u32>,
+    pub rp: Dictionary<RelyingParty>,
+    pub timeout: Option<u32>,
     #[webidl(required, converter = "raw")]
-    pub(super) user: Dictionary<UserJson>,
+    pub user: Dictionary<UserJson>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialRequestOptionsJSON", snapshot)]
-pub(super) struct RequestJson {
+pub struct RequestJson {
     #[webidl(converter = "raw", default = webidl::Sequence(Vec::new()))]
-    pub(super) allow_credentials: webidl::Sequence<Dictionary<DescriptorJson>>,
+    pub allow_credentials: webidl::Sequence<Dictionary<DescriptorJson>>,
     #[webidl(required, converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) challenge: Text,
+    pub challenge: Text,
     #[webidl(converter = "raw")]
-    pub(super) extensions: Option<Dictionary<ExtensionsJson>>,
+    pub extensions: Option<Dictionary<ExtensionsJson>>,
     #[webidl(converter = "raw", default = webidl::Sequence(Vec::new()))]
-    pub(super) hints: webidl::Sequence<Text>,
+    pub hints: webidl::Sequence<Text>,
     #[webidl(converter = "raw")]
-    pub(super) rp_id: Option<Text>,
-    pub(super) timeout: Option<u32>,
+    pub rp_id: Option<Text>,
+    pub timeout: Option<u32>,
     #[webidl(converter = "raw", default = Text::from("preferred"))]
-    pub(super) user_verification: Text,
+    pub user_verification: Text,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialUserEntityJSON", snapshot)]
-pub(super) struct UserJson {
+pub struct UserJson {
     #[webidl(required, converter = "raw")]
-    pub(super) display_name: Text,
+    pub display_name: Text,
     #[webidl(required, converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) id: Text,
+    pub id: Text,
     #[webidl(required, converter = "raw", snapshot_order = 0)]
-    pub(super) name: Text,
+    pub name: Text,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialDescriptorJSON", snapshot)]
-pub(super) struct DescriptorJson {
+pub struct DescriptorJson {
     #[webidl(required, converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) id: Text,
+    pub id: Text,
     #[webidl(converter = "raw")]
-    pub(super) transports: Option<webidl::Sequence<Text>>,
+    pub transports: Option<webidl::Sequence<Text>>,
     #[webidl(required, name = "type", converter = "raw")]
-    pub(super) credential_type: Text,
+    pub credential_type: Text,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AuthenticationExtensionsClientInputsJSON", snapshot)]
-pub(super) struct ExtensionsJson {
+pub struct ExtensionsJson {
     #[webidl(converter = "raw")]
-    pub(super) appid: Option<Text>,
+    pub appid: Option<Text>,
     #[webidl(converter = "raw")]
-    pub(super) appid_exclude: Option<Text>,
+    pub appid_exclude: Option<Text>,
     #[webidl(converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) cred_blob: Option<Text>,
-    pub(super) cred_props: Option<bool>,
+    pub cred_blob: Option<Text>,
+    pub cred_props: Option<bool>,
     #[webidl(converter = "usv_string")]
-    pub(super) credential_protection_policy: Option<String>,
+    pub credential_protection_policy: Option<String>,
     #[webidl(default = false)]
-    pub(super) enforce_credential_protection_policy: bool,
-    pub(super) get_cred_blob: Option<bool>,
-    pub(super) hmac_create_secret: Option<bool>,
+    pub enforce_credential_protection_policy: bool,
+    pub get_cred_blob: Option<bool>,
+    pub hmac_create_secret: Option<bool>,
     #[webidl(converter = "raw")]
-    pub(super) large_blob: Option<Dictionary<LargeBlobJson>>,
-    pub(super) min_pin_length: Option<bool>,
+    pub large_blob: Option<Dictionary<LargeBlobJson>>,
+    pub min_pin_length: Option<bool>,
     #[webidl(converter = "raw")]
-    pub(super) prf: Option<Dictionary<PrfJson>>,
+    pub prf: Option<Dictionary<PrfJson>>,
     #[webidl(name = "remoteClientDataJSON", converter = "raw")]
-    pub(super) remote_client_data_json: Option<Text>,
+    pub remote_client_data_json: Option<Text>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AuthenticationExtensionsLargeBlobInputsJSON", snapshot)]
-pub(super) struct LargeBlobJson {
-    pub(super) read: Option<bool>,
+pub struct LargeBlobJson {
+    pub read: Option<bool>,
     #[webidl(converter = "raw")]
-    pub(super) support: Option<Text>,
+    pub support: Option<Text>,
     #[webidl(converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) write: Option<Text>,
+    pub write: Option<Text>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AuthenticationExtensionsPRFInputsJSON", snapshot)]
-pub(super) struct PrfJson {
+pub struct PrfJson {
     #[webidl(converter = "raw")]
-    pub(super) eval: Option<Dictionary<PrfValuesJson>>,
+    pub eval: Option<Dictionary<PrfValuesJson>>,
     #[webidl(converter = "raw")]
-    pub(super) eval_by_credential: Option<webidl::Record<Text, Dictionary<PrfValuesJson>>>,
+    pub eval_by_credential: Option<webidl::Record<Text, Dictionary<PrfValuesJson>>>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AuthenticationExtensionsPRFValuesJSON", snapshot)]
-pub(super) struct PrfValuesJson {
+pub struct PrfValuesJson {
     #[webidl(required, converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) first: Text,
+    pub first: Text,
     #[webidl(converter = "raw", snapshot_with = super::encode::decode_buffer, snapshot_kind = webidl::SnapshotKind::BufferSource)]
-    pub(super) second: Option<Text>,
+    pub second: Option<Text>,
 }

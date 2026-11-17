@@ -1,4 +1,4 @@
-pub(crate) mod abort_signal;
+pub(crate) use moli_webapi::abort_signal_values as abort_signal;
 pub(crate) mod abort_signal_events;
 mod animation_runtime;
 mod assets;

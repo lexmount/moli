@@ -1,6 +1,6 @@
 mod evaluation;
-mod event;
 pub(in crate::context_bootstrap) use event::build_media_query_list_event_template;
+use moli_webapi::events::media_query_list_event as event;
 mod events;
 
 pub(crate) use self::evaluation::dispatch_media_query_list_change_events;

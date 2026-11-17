@@ -1,6 +1,6 @@
 use super::*;
 
-mod escape;
+use moli_webapi::css_escape as escape;
 mod highlights;
 mod install;
 mod lazy_state;
