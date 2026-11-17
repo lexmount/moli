@@ -23,7 +23,12 @@ pub(crate) fn xhr_response_headers_for_filter(
             .cloned()
             .collect();
     }
-    crate::network_host::filter_cors_exposed_response_headers(origin, head, credentials, web_security_disabled)
+    crate::network_host::filter_cors_exposed_response_headers(
+        origin,
+        head,
+        credentials,
+        web_security_disabled,
+    )
 }
 
 #[derive(webidl::WebIdlArgs)]

@@ -1488,9 +1488,21 @@ impl DocumentRuntime {
                 let mut entry = match &result {
                     Ok(response) => {
                         let head = response.response.head();
-                        let metadata = crate::network_host::fetch_response_metadata(&request_origin, &head, request_mode, response.response_filter.as_ref(), web_security_disabled);
-                        timing.completed(&url, &head, response.response.body_bytes().len(), &metadata, response.response_filter.as_ref())
-                    },
+                        let metadata = crate::network_host::fetch_response_metadata(
+                            &request_origin,
+                            &head,
+                            request_mode,
+                            response.response_filter.as_ref(),
+                            web_security_disabled,
+                        );
+                        timing.completed(
+                            &url,
+                            &head,
+                            response.response.body_bytes().len(),
+                            &metadata,
+                            response.response_filter.as_ref(),
+                        )
+                    }
                     Err(_) => timing.failed(&url),
                 };
                 if let Ok(response) = &result

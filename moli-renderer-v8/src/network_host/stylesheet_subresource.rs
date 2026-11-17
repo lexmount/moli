@@ -95,6 +95,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
                             options.request_mode,
                             options.credentials_mode,
                             None,
+                            resource_loader.request_client().web_security_disabled(),
                         ),
                     );
                     let _ = host.complete_stylesheet_css_image_response(

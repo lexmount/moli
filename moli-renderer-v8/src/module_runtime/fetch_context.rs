@@ -34,6 +34,7 @@ pub(crate) struct NativeModuleFetchContext {
     source_location: Option<ContentSecurityPolicySourceLocation>,
     service_worker: DynamicScriptServiceWorkerContext,
     request_origin: moli_url::WebOrigin,
+    web_security_disabled: bool,
     destination: ServiceWorkerRequestDestination,
     resource_type: SubresourceResourceType,
     timing: Mutex<FetchResourceTiming>,
@@ -84,6 +85,7 @@ impl NativeModuleFetchContext {
                 document_url: loader.fetch_context().document_url().clone(),
             },
             request_origin: loader.fetch_context().request_origin(),
+            web_security_disabled: loader.request_client().web_security_disabled(),
             destination: match kind {
                 ModuleKind::Css => ServiceWorkerRequestDestination::Style,
                 ModuleKind::Json => ServiceWorkerRequestDestination::Json,
@@ -207,16 +209,18 @@ impl NativeModuleFetchContext {
                 &self.request_origin,
                 &response.head(),
                 request.credentials_mode,
+                self.web_security_disabled,
             )
         });
         let head = response.head();
-        let mut entry = timing.completed(
+        let mut entry = timing.completed_for_request(
             &request.url,
             &self.request_origin,
             request.request_mode,
             &head,
             response.body_bytes().len(),
             Some(&filter),
+            self.web_security_disabled,
         );
         if !from_service_worker {
             initiator.apply(&mut entry, &head, filter.is_readable());

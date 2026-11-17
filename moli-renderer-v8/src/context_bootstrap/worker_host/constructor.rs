@@ -425,20 +425,21 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         } else {
             let cross_origin_http_worker_script = !creator_request_client.web_security_disabled()
                 && is_cross_origin_http_worker_script(&base_url, &resolved_url);
-            let reserved_service_worker_client_id = if cross_origin_http_worker_script || blob_load_failed {
-                None
-            } else {
-                Some(
-                    host.browser_context_runtime()
-                        .register_reserved_service_worker_worker_client(
-                            resolved_url.clone(),
-                            creator_storage_key.serialized_storage_key(),
-                            ServiceWorkerClientType::DedicatedWorker,
-                            WorkerSecureContextPolicy::Inherited(creator_secure_context)
-                                .resolve(&resolved_url),
-                        ),
-                )
-            };
+            let reserved_service_worker_client_id =
+                if cross_origin_http_worker_script || blob_load_failed {
+                    None
+                } else {
+                    Some(
+                        host.browser_context_runtime()
+                            .register_reserved_service_worker_worker_client(
+                                resolved_url.clone(),
+                                creator_storage_key.serialized_storage_key(),
+                                ServiceWorkerClientType::DedicatedWorker,
+                                WorkerSecureContextPolicy::Inherited(creator_secure_context)
+                                    .resolve(&resolved_url),
+                            ),
+                    )
+                };
             let Some(outside_settings_load) =
                 host.register_dedicated_worker_outside_settings_load(dispatch_scope)
             else {
@@ -903,10 +904,13 @@ fn start_nested_worker_script_load(
         let completed = std::time::Instant::now();
         let head = response.as_ref().ok().map(|response| response.head());
         let entry = timing.complete_worker_script_fetch(
-            &worker_script_resource_url(&script_url), &origin,
-            head.as_ref().zip(response.as_ref().ok().map(|response| response.body_bytes().len())),
-            cancel.response_timing(), completed,
-        );
+    &worker_script_resource_url(&script_url),
+    &origin,
+    head.as_ref().zip(response.as_ref().ok().map(|response| response.body_bytes().len())),
+    cancel.response_timing(),
+    completed,
+    request_client.web_security_disabled(),
+);
         let result = response.and_then(|response| loaded_nested_worker_script_from_response(response, &script_url, &context));
         lease.finish();
         let wake_tx = context.wake_tx.clone();
@@ -1263,12 +1267,12 @@ fn loaded_nested_worker_script_from_response(
 ) -> Result<LoadedNestedWorkerScript, String> {
     let head = response.head();
     if !context.loader.request_client().web_security_disabled() {
-    crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        &context.base_url,
-        &head.redirect_chain,
-        &response.final_url,
-    )
-    .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
+        crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            &context.base_url,
+            &head.redirect_chain,
+            &response.final_url,
+        )
+        .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
     }
     moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
         .map_err(|error| error.to_string())?;

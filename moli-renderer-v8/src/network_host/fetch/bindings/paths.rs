@@ -187,6 +187,10 @@ pub(super) fn resolve_local_fetch(
                         &prepared.request_origin,
                         &response.head(),
                         prepared.credentials_mode,
+                        prepared
+                            .resource_loader
+                            .request_client()
+                            .web_security_disabled(),
                     )
                 };
                 validate_fetch_response_integrity(

@@ -30,6 +30,7 @@ impl ScriptVm {
                         &pending.request_origin,
                         &response.head(),
                         pending.credentials_mode,
+                        pending.load.request_client().web_security_disabled(),
                     )
                 });
                 let blocked_by_nosniff = moli_web_mime::should_response_be_blocked_due_to_nosniff(
@@ -39,13 +40,14 @@ impl ScriptVm {
                 let entry = if blocked_by_nosniff {
                     preload.timing.failed(&pending.info.url)
                 } else {
-                    preload.timing.completed(
+                    preload.timing.completed_for_request(
                         &pending.info.url,
                         &pending.request_origin,
                         pending.request_mode,
                         &response.head(),
                         response.body_bytes().len(),
                         Some(&filter),
+                        pending.load.request_client().web_security_disabled(),
                     )
                 };
                 let response = if blocked_by_nosniff {

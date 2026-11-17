@@ -58,9 +58,10 @@ pub(crate) use self::blob_url_entry::{
 };
 
 pub(crate) use self::async_fetch::{
-    ManualCorsRedirectState, collect_image_response_into_parkable, fetch_browser_subresource_with_preflight_headers,
+    ManualCorsRedirectState, collect_image_response_into_parkable,
     fetch_browser_subresource_raw_stream_for_owner,
-    fetch_cors_script_text, observe_async_xhr_upload, spawn_async_subresource_fetch,
+    fetch_browser_subresource_with_preflight_headers, fetch_cors_script_text,
+    observe_async_xhr_upload, spawn_async_subresource_fetch,
 };
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use self::async_fetch::{
@@ -195,13 +196,15 @@ pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::response_metadata;
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
-    build_error_response_object, materialize_cache_response_object_head, MaterializedResponseHead, build_fetch_response_object_for_request_mode,
+    MaterializedResponseHead, build_error_response_object,
+    build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_with_metadata,
     build_fetch_response_object_from_stream_with_metadata, build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_with_metadata,
-    build_null_body_fetch_response_object_with_metadata,
-    check_opaque_response_policy, cors_preflight_request_headers, fetch_response_needs_orb_body_validation, filter_cors_exposed_response_headers,
-    is_cors_policy_failure_message, materialize_response_object_body,
+    build_null_body_fetch_response_object_with_metadata, check_opaque_response_policy,
+    cors_preflight_request_headers, fetch_response_needs_orb_body_validation,
+    filter_cors_exposed_response_headers, is_cors_policy_failure_message,
+    materialize_cache_response_object_head, materialize_response_object_body,
     materialize_response_object_body_preserving_error,
     materialize_response_object_body_with_chunk_callback,
     materialize_response_object_head_for_service_worker_respond_with,
@@ -302,9 +305,6 @@ pub(crate) use response::set_response_metadata;
 pub(crate) use response::build_fetch_response_object_from_stream_for_request_mode;
 
 pub(crate) mod controlled_resource;
-
-#[cfg(test)]
-pub(crate) use response::build_fetch_response_object_for_request_mode;
 
 #[cfg(test)]
 pub(crate) use response::materialize_response_object_head;

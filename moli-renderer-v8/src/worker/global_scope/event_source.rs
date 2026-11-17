@@ -156,6 +156,11 @@ pub(crate) fn start_worker_event_source_request<'s>(
             credentials,
             policy: policy_context,
         },
+        state
+            .borrow()
+            .loader
+            .request_client()
+            .web_security_disabled(),
     );
     let mut fields = vec![("Accept".to_owned(), "text/event-stream".to_owned())];
     let last_id = event_source_last_event_id(scope, source);
@@ -289,17 +294,14 @@ pub(super) fn start_response(
     let error = {
         let state = state.borrow();
         // Reporting a policy violation can run script that closes the source.
-        let Some(pending) = state.pending_fetches.get(&started.fetch_id) else {
+        if !state.pending_fetches.contains_key(&started.fetch_id) {
             return true;
-        };
-        validate_response(
-            pending,
-            &started.head,
-            started.response_filter.as_ref(),
-            started.skip_fetch_security_validation,
-        )
-        .err()
-        .or_else(|| crate::network_host::event_source_response_error(&started.head))
+        }
+        if !started.metadata.response_type.is_readable() {
+            Some("EventSource cannot read an opaque response".to_owned())
+        } else {
+            crate::network_host::event_source_response_error(&started.head)
+        }
     };
     if let Some(error) = error {
         fail_request(
@@ -327,42 +329,12 @@ pub(super) fn start_response(
     true
 }
 
-fn validate_response(
-    pending: &PendingWorkerFetch,
-    head: &ResponseHead,
-    filter: Option<&crate::types::AsyncSubresourceFetchResponseFilter>,
-    skip: bool,
-) -> Result<(), String> {
-    if filter.is_some_and(|filter| !filter.is_readable()) {
-        return Err("EventSource cannot read an opaque response".to_owned());
-    }
-    if !skip {
-        crate::network_host::validate_fetch_response_headers(
-            pending.timing.origin(),
-            head,
-            pending.request_mode,
-            pending.credentials_mode,
-            pending.policy_context,
-        )?;
-    }
-    Ok(())
-}
-
 pub(super) fn complete_response(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     pending: PendingWorkerFetch,
     completion: WorkerFetchCompletion,
 ) {
-    let response_filter = completion
-        .result
-        .as_ref()
-        .ok()
-        .and_then(WorkerFetchResponse::response_filter);
-    let skip_fetch_security_validation = completion
-        .result
-        .as_ref()
-        .is_ok_and(WorkerFetchResponse::skips_fetch_security_validation);
     match completion.result {
         Err(error) => {
             let id = completion.fetch_id;
@@ -375,13 +347,9 @@ pub(super) fn complete_response(
             fail_request(scope, state, id, error, mode);
         }
         Ok(response) => {
-            let head = response.head();
-            if let Err(error) = validate_response(
-                &pending,
-                &head,
-                response_filter.as_ref(),
-                skip_fetch_security_validation,
-            ) {
+            let head = response.head;
+            if !response.metadata.response_type.is_readable() {
+                let error = "EventSource cannot read an opaque response".to_owned();
                 state
                     .borrow_mut()
                     .pending_fetches
@@ -395,10 +363,9 @@ pub(super) fn complete_response(
                 );
                 return;
             }
-            let body = response.subresource_response_body();
-            let bytes = match body.try_bytes() {
-                Ok(bytes) => bytes.into_owned(),
-                Err(error) => {
+            let bytes = match response.body.as_materialized_bytes() {
+                Some(bytes) => bytes.to_vec(),
+                None => {
                     state
                         .borrow_mut()
                         .pending_fetches
@@ -407,7 +374,7 @@ pub(super) fn complete_response(
                         scope,
                         state,
                         completion.fetch_id,
-                        error.to_string(),
+                        "EventSource response body was not materialized".to_owned(),
                         EventSourceTerminalMode::Reconnect,
                     );
                     return;
@@ -425,17 +392,15 @@ pub(super) fn complete_response(
                     fetch_id: completion.fetch_id,
                     body_source_id,
                     head: head.clone(),
-                    response_filter,
-                    skip_fetch_security_validation: true,
+                    metadata: Arc::new(response.metadata),
                 },
             )));
             send_stream_chunk(&tx, &mut parser, completion.fetch_id, body_source_id, bytes);
             let _ = tx.send(WorkerFetchEvent::StreamingFinished(
                 WorkerFetchStreamingFinished {
-                    opaque_response_blocked: false,
                     fetch_id: completion.fetch_id,
                     body_source_id,
-                    result: Ok(body),
+                    result: Ok(()),
                 },
             ));
         }

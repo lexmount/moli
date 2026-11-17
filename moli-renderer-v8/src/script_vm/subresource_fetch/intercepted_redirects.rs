@@ -19,7 +19,9 @@ pub(super) fn follow_intercepted_redirect(
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("location"))
     {
-        if !web_security_disabled { request.validate_cors_response_for_url(&head.final_url, &head.headers)?; }
+        if !web_security_disabled {
+            request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+        }
         return Ok(None);
     }
     let transition = crate::network_host::advance_subresource_response(

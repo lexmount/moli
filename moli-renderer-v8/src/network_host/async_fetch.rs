@@ -338,7 +338,8 @@ impl ManualCorsRedirectState {
         cancel_handle: Option<FetchCancelHandle>,
         preflight_observer: Option<&CorsPreflightNetworkObserver>,
     ) -> Result<(), String> {
-        if self.request.request_mode == RequestMode::SameOrigin
+        if !loader.web_security_disabled()
+            && self.request.request_mode == RequestMode::SameOrigin
             && self.request.has_cross_origin_url(&self.request.url)
         {
             return Err("same-origin request mode blocked a cross-origin URL".to_owned());

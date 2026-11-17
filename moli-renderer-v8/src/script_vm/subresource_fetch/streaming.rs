@@ -16,19 +16,33 @@ pub(super) fn window_streaming_response_timing(
         return None;
     }
     let fetch = pending.continuation.window_fetch();
-    let name = fetch.map_or(&pending.info.url, |fetch| fetch.initial_request_url()).clone();
-    let redirect_mode = fetch.map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| fetch.redirect_mode());
+    let name = fetch
+        .map_or(&pending.info.url, |fetch| fetch.initial_request_url())
+        .clone();
+    let redirect_mode = fetch.map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| {
+        fetch.redirect_mode()
+    });
     let web_security_disabled = pending.load.request_client().web_security_disabled();
     let filter = response_filter.cloned().or_else(|| {
         crate::network_host::network_response_filter(
-            &pending.request_origin, head, pending.request_mode, redirect_mode, web_security_disabled,
+            &pending.request_origin,
+            head,
+            pending.request_mode,
+            redirect_mode,
+            web_security_disabled,
         )
     });
-    let metadata = fetch.and_then(|fetch| fetch.response_metadata.clone()).unwrap_or_else(|| {
-        crate::network_host::fetch_response_metadata(
-            &pending.request_origin, head, pending.request_mode, filter.as_ref(), web_security_disabled,
-        )
-    });
+    let metadata = fetch
+        .and_then(|fetch| fetch.response_metadata.clone())
+        .unwrap_or_else(|| {
+            crate::network_host::fetch_response_metadata(
+                &pending.request_origin,
+                head,
+                pending.request_mode,
+                filter.as_ref(),
+                web_security_disabled,
+            )
+        });
     let timing = pending.continuation.window_resource_timing_mut()?;
     Some(timing.completed(&name, head, body_size, &metadata, filter.as_ref()))
 }
@@ -146,6 +160,7 @@ impl ScriptVm {
                         .borrow_mut()
                         .record_pending_subresource_auth(PendingSubresourceAuthState {
                             body_is_null,
+                            consumed_preload: response.preload_state.is_consumed(),
                             pending,
                             #[cfg(any(test, feature = "devtools"))]
                             response: PendingSubresourceAuthResponse {
@@ -817,7 +832,7 @@ impl ScriptVm {
                     return None;
                 }
                 crate::network_host::validate_fetch_response_headers(
-                    &pending.request_origin(),
+                    &pending.request_origin,
                     &started.head,
                     pending.request_mode,
                     pending.network_credentials_mode(),
@@ -927,7 +942,7 @@ impl ScriptVm {
 
     fn start_streaming_async_subresource_fetch_body_with_reported_redirects(
         &mut self,
-        started: crate::types::AsyncSubresourceStreamingStarted,
+        mut started: crate::types::AsyncSubresourceStreamingStarted,
         reported_redirects: usize,
         native_body: Option<crate::network::ResourceInterceptionBody>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
@@ -955,6 +970,17 @@ impl ScriptVm {
             );
             return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
         };
+        if started.response_filter.is_none()
+            && let Some(fetch) = pending.continuation.window_fetch()
+        {
+            started.response_filter = crate::network_host::network_response_filter(
+                &pending.request_origin,
+                &started.head,
+                pending.request_mode,
+                fetch.redirect_mode(),
+                pending.load.request_client().web_security_disabled(),
+            );
+        }
         if let Some(timing) = pending.continuation.window_resource_timing_mut() {
             if started.skip_fetch_security_validation {
                 timing.clear_initiator();
@@ -1267,7 +1293,7 @@ impl ScriptVm {
             }
 
             let mut observable_head = started.head.clone();
-            if pending.info.resource_type == SubresourceResourceType::Xhr {
+            if matches!(&pending.continuation, PendingSubresourceContinuation::Xhr { .. }) {
                 let filter = window_subresource_response_filter(
                     &pending,
                     &observable_head,
@@ -2409,7 +2435,11 @@ impl ScriptVm {
                                     &observable_head,
                                     &filter,
                                     streaming.pending.credentials_mode,
-                                    streaming.pending.load.request_client().web_security_disabled(),
+                                    streaming
+                                        .pending
+                                        .load
+                                        .request_client()
+                                        .web_security_disabled(),
                                 );
                             // XHR still exposes a complete response at DONE. Keep the
                             // network transfer and CDP record streaming/spooled, and
@@ -2477,16 +2507,16 @@ impl ScriptVm {
                                             streaming.head.negotiated_http_version,
                                         )
                                         .with_network_request_extra_info(
-                                            streaming.network_request_headers.clone().map(|headers| {
-                                                moli_fetch::NetworkRequestExtraInfo {
+                                            streaming.network_request_headers.clone().map(
+                                                |headers| moli_fetch::NetworkRequestExtraInfo {
                                                     headers,
                                                     cookie_report: streaming
                                                         .head
                                                         .request_cookie_report
                                                         .clone()
                                                         .unwrap_or_default(),
-                                                }
-                                            }),
+                                                },
+                                            ),
                                         ),
                                     );
                             }

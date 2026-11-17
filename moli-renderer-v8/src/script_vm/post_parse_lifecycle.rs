@@ -2995,13 +2995,19 @@ impl ScriptVm {
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
         request_handle: Option<SubresourceNetworkRequestHandle>,
     ) {
-        let origin = self
+        let (origin, web_security_disabled) = self
             ._context_host
             .borrow()
             .document_resource_loader_for_dispatch_scope(
                 crate::native_bridge::OwnerDispatchScope::Top,
             )
-            .map(|loader| loader.fetch_context().request_origin());
+            .map(|loader| {
+                (
+                    Some(loader.fetch_context().request_origin()),
+                    loader.request_client().web_security_disabled(),
+                )
+            })
+            .unwrap_or((None, false));
         let head = result.as_ref().ok().map(|response| response.head());
         let readable = match (origin.as_ref(), head.as_ref()) {
             (Some(origin), Some(head)) => {
@@ -3017,10 +3023,11 @@ impl ScriptVm {
                             script.kind,
                             &script.fetch_metadata,
                         ),
+                        web_security_disabled,
                     )
                     .is_ok()
                 } else {
-                    !head.url_list().has_cross_origin_url(origin)
+                    web_security_disabled || !head.url_list().has_cross_origin_url(origin)
                 };
                 cors_readable
                     && head
@@ -3052,7 +3059,7 @@ impl ScriptVm {
                         .or_else(|| {
                             readable.then(|| moli_fetch_types::FetchResponseType::Basic.into())
                         });
-                    timing.completed(
+                    timing.completed_for_request(
                         &request_url,
                         origin,
                         if readable {
@@ -3063,6 +3070,7 @@ impl ScriptVm {
                         head,
                         response.body_bytes().len(),
                         filter.as_ref(),
+                        web_security_disabled,
                     )
                 }
                 _ => timing.failed(&request_url),

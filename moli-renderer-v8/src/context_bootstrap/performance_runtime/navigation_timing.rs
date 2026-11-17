@@ -89,6 +89,9 @@ pub(in crate::context_bootstrap) fn refresh_navigation_timing<'s>(
     else {
         return;
     };
+    let web_security_disabled = host
+        .document_resource_loader_for_dispatch_scope(dispatch)
+        .is_some_and(|loader| loader.request_client().web_security_disabled());
     let origin = moli_url::WebOrigin::from_url(&snapshot.head.final_url);
     let expose_redirects = !snapshot.head.url_list().has_cross_origin_url(&origin);
     // A navigation exposes the final Document's response. Cross-origin hops
@@ -99,13 +102,14 @@ pub(in crate::context_bootstrap) fn refresh_navigation_timing<'s>(
         FetchResourceTiming::from_start("navigation", snapshot.started, snapshot.time_origin);
     timing.response_started_at(Some(snapshot.headers_received));
     timing.observe_native_timing(snapshot.native);
-    let mut data = timing.completed(
+    let mut data = timing.completed_for_request(
         &snapshot.head.final_url,
         &origin,
         moli_fetch::RequestMode::Navigate,
         &final_head,
         snapshot.materialized_body_size.unwrap_or(0),
         Some(&moli_fetch_types::FetchResponseType::Basic.into()),
+        web_security_disabled,
     );
     let epoch = |instant: std::time::Instant| {
         snapshot.time_origin

@@ -2,7 +2,6 @@ use super::*;
 use crate::network_host::ResolveContextUrlError;
 use crate::network_host::controlled_resource::{ControlledXhrContext, start_buffered_xhr};
 use crate::network_host::{CapturedBlobUrl, blob_url_entry, local_url_response_with_blob_entry};
-use crate::network_host::{ResolveContextUrlError, filter_cors_exposed_response_headers};
 use crossbeam_channel::{after, never};
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -711,11 +710,13 @@ fn send_synchronous_worker_xhr(
                     &response.head(),
                     filter,
                     prepared.credentials_mode,
+                    load.request_client().web_security_disabled(),
                 ),
-                None => filter_cors_exposed_response_headers(
+                None => crate::network_host::filter_cors_exposed_response_headers(
                     timing.origin(),
                     &response.head(),
                     prepared.credentials_mode,
+                    load.request_client().web_security_disabled(),
                 ),
             };
             timing.publish(scope);
@@ -896,9 +897,20 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
             let (mut head, body) = response.into_body();
             let web_security_disabled = pending.load.request_client().web_security_disabled();
             let filter = completion.response_filter.unwrap_or_else(|| {
-                head.fetch_response_type_with_web_security(pending.timing.origin(), RequestMode::Cors, web_security_disabled).into()
+                head.fetch_response_type_with_web_security(
+                    pending.timing.origin(),
+                    RequestMode::Cors,
+                    web_security_disabled,
+                )
+                .into()
             });
-            head.headers = crate::network_host::xhr_response_headers_for_filter(pending.timing.origin(), &head, &filter, pending.credentials_mode, web_security_disabled);
+            head.headers = crate::network_host::xhr_response_headers_for_filter(
+                pending.timing.origin(),
+                &head,
+                &filter,
+                pending.credentials_mode,
+                web_security_disabled,
+            );
             pending.timing.publish(scope);
             apply_xhr_response_body_source(scope, xhr, head, body);
         }
@@ -942,6 +954,11 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         WorkerTimingRequest::Xhr {
             credentials: credentials_mode,
         },
+        state
+            .borrow()
+            .loader
+            .request_client()
+            .web_security_disabled(),
     );
     Ok(PreparedWorkerXhrSendRequest {
         timing,

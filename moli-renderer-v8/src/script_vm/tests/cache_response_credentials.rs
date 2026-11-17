@@ -57,6 +57,7 @@ async fn cache_response_credentials_survive_opaque_clones_and_repeated_put() {
                     redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                 },
                 moli_fetch::Response::from_head_and_text_body(head, "body".to_owned()),
+                false,
             );
             values.push(response.into());
         }

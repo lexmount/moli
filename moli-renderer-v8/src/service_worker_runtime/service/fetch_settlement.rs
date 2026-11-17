@@ -413,7 +413,10 @@ impl ServiceWorkerRuntimeService {
                 )
                 .await?
             {
-                match redirects.advance_service_worker_response(response.head())? {
+                match redirects.advance_service_worker_response(
+                    response.head(),
+                    request_client.web_security_disabled(),
+                )? {
                     SubresourceResponseTransition::FollowedRedirect => continue,
                     SubresourceResponseTransition::FinalResponse
                     | SubresourceResponseTransition::ManualResponse { .. } => {
@@ -440,13 +443,10 @@ impl ServiceWorkerRuntimeService {
                 )
                 .await
                 .map_err(|error| error.to_string())?;
-            let network_extra_info_available = observed.request_observation().is_some();
-            let (response, observation) = observed.into_parts();
-            match redirects.advance(
-                response.head(),
-                network_extra_info_available,
-                response.network_request_extra_info(),
-            )? {
+            let (response, journal) = observed.into_parts_with_observation_journal();
+            let head = response.head();
+            let extra_info = crate::network_host::network_response_extra_info(&head, &journal);
+            match redirects.advance(head, extra_info, request_client.web_security_disabled())? {
                 SubresourceResponseTransition::FollowedRedirect => response.discard_unused().await,
                 SubresourceResponseTransition::FinalResponse
                 | SubresourceResponseTransition::ManualResponse { .. } => {
@@ -636,6 +636,7 @@ impl ServiceWorkerRuntimeService {
         completion_tx: crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion,
     ) {
         let request_client = job.request_client.clone();
+        let web_security_disabled = request_client.web_security_disabled();
         let request = service_worker_network_fallback_request_for_job(&job);
         let cancel_handle = job.cancel_handle.clone();
         let request_origin = match request.browser_origin() {
@@ -669,7 +670,7 @@ impl ServiceWorkerRuntimeService {
                             &request_origin,
                             &head,
                             credentials_mode,
-                            request_client.web_security_disabled(),
+                            web_security_disabled,
                         )
                     {
                         let _ =
@@ -681,7 +682,7 @@ impl ServiceWorkerRuntimeService {
                         &head,
                         request_mode,
                         redirect_mode,
-                        request_client.web_security_disabled(),
+                        web_security_disabled,
                     );
                     let body = response.clone_body_bytes();
                     let navigation_response =

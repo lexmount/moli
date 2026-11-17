@@ -59,7 +59,7 @@ pub(crate) fn advance_subresource_response(
     }
     if source == moli_fetch::RedirectSource::Network {
         if !web_security_disabled {
-        request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+            request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
         }
         request
             .validate_authentication_response(&head)

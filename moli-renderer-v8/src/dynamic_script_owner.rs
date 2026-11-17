@@ -1509,6 +1509,7 @@ impl DynamicScriptOwner {
                             &request_origin,
                             &resource,
                             document_character_set.as_deref(),
+                            loader.web_security_disabled(),
                         )
                         .await
                     } else if let Some(context) = service_worker_context {

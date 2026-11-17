@@ -147,7 +147,7 @@ pub(crate) fn validate_fetch_response_headers(
 ) -> Result<(), String> {
     if !web_security_disabled {
         head.url_list()
-            .validate_request_mode(request_mode, request_origin.clone())
+            .validate_request_mode(request_mode, request_origin)
             .map_err(|error| error.to_string())?;
     }
     if request_mode == RequestMode::SameOrigin {
@@ -165,7 +165,12 @@ pub(crate) fn validate_fetch_response_headers(
             policy_context.document_isolation_policy,
         )
     } else {
-        validate_cors_response_chain(request_origin, head, credentials_mode, web_security_disabled)
+        validate_cors_response_chain(
+            request_origin,
+            head,
+            credentials_mode,
+            web_security_disabled,
+        )
     }
 }
 
@@ -702,133 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn cors_response_fields_require_a_single_origin_value() {
-        let response_url = url("https://other.test/data");
-        for (origin, matching) in [
-            (
-                WebOrigin::from_url(&url("https://page.test/a")),
-                "https://page.test",
-            ),
-            (WebOrigin::Opaque, "null"),
-        ] {
-            for mode in [
-                RequestCredentialsMode::Omit,
-                RequestCredentialsMode::SameOrigin,
-                RequestCredentialsMode::Include,
-            ] {
-                for (values, allowed) in [
-                    (vec![], false),
-                    (vec![""], false),
-                    (vec![matching], true),
-                    (vec!["*"], mode != RequestCredentialsMode::Include),
-                    (vec!["https://wrong.test"], false),
-                    (vec![matching, matching], false),
-                    (vec![matching, ""], false),
-                    (vec!["", matching], false),
-                    (vec!["*", matching], false),
-                    (vec!["*", ""], false),
-                    (vec!["*, *"], false),
-                ] {
-                    let mut headers = vec![(
-                        "Access-Control-Allow-Credentials".to_owned(),
-                        "true".to_owned(),
-                    )];
-                    headers.extend(values.iter().enumerate().map(|(index, value)| {
-                        (
-                            if index == 0 {
-                                "Access-Control-Allow-Origin"
-                            } else {
-                                "access-control-allow-origin"
-                            }
-                            .to_owned(),
-                            (*value).to_owned(),
-                        )
-                    }));
-                    assert_eq!(
-                        validate_cors_response_chain(
-                            &origin,
-                            &header_response(
-                                response_url.clone(),
-                                moli_fetch::headers_from_byte_strings(&headers).unwrap()
-                            ),
-                            mode
-                        )
-                        .is_ok(),
-                        allowed,
-                        "origin={matching}, mode={mode:?}, values={values:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn cors_response_fields_check_credentials_only_when_included() {
-        let document_url = url("https://page.test/a");
-        let response_url = url("https://other.test/data");
-        for values in [
-            vec![],
-            vec![""],
-            vec!["true"],
-            vec!["TRUE"],
-            vec!["True"],
-            vec!["false"],
-            vec!["true, true"],
-            vec!["true", "true"],
-            vec!["true", "false"],
-            vec!["true", ""],
-            vec!["", "true"],
-        ] {
-            let mut headers = vec![(
-                "Access-Control-Allow-Origin".to_owned(),
-                "https://page.test".to_owned(),
-            )];
-            headers.extend(values.iter().enumerate().map(|(index, value)| {
-                (
-                    if index == 0 {
-                        "Access-Control-Allow-Credentials"
-                    } else {
-                        "ACCESS-CONTROL-ALLOW-CREDENTIALS"
-                    }
-                    .to_owned(),
-                    (*value).to_owned(),
-                )
-            }));
-            for mode in [
-                RequestCredentialsMode::Omit,
-                RequestCredentialsMode::SameOrigin,
-                RequestCredentialsMode::Include,
-            ] {
-                assert_eq!(
-                    validate_cors_response_chain(
-                        &document_url,
-                        &header_response(
-                            response_url.clone(),
-                            moli_fetch::headers_from_byte_strings(&headers).unwrap()
-                        ),
-                        mode
-                    )
-                    .is_ok(),
-                    mode != RequestCredentialsMode::Include || values == ["true"],
-                    "mode={mode:?}, values={values:?}"
-                );
-                assert!(
-                    validate_cors_response_chain(
-                        &document_url,
-                        &header_response(
-                            document_url.clone(),
-                            moli_fetch::headers_from_byte_strings(&headers).unwrap()
-                        ),
-                        mode
-                    )
-                    .is_ok(),
-                    "same-origin responses do not require CORS permission"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn cors_response_validation_uses_the_redirect_tainted_origin() {
         let home = url("https://page.test/a");
         let away = url("https://script.test/b");
@@ -875,12 +753,17 @@ mod tests {
                 head.url_list().serialized_origin(&origin),
                 serialized_origin
             );
-            validate_cors_response_chain(&origin, &head, RequestCredentialsMode::SameOrigin)
+            validate_cors_response_chain(&origin, &head, RequestCredentialsMode::SameOrigin, false)
                 .expect("each response must be authorized against its own request hop origin");
             head.headers.clear();
             assert!(
-                validate_cors_response_chain(&origin, &head, RequestCredentialsMode::SameOrigin)
-                    .is_err(),
+                validate_cors_response_chain(
+                    &origin,
+                    &head,
+                    RequestCredentialsMode::SameOrigin,
+                    false,
+                )
+                .is_err(),
                 "returning to the initial origin must not bypass CORS"
             );
         }

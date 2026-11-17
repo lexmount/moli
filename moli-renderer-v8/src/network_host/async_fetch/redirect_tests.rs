@@ -190,7 +190,7 @@ fn cors_redirect_referrer_never_recovers_stripped_information() -> Result<()> {
                 negotiated_http_version: None,
             };
             assert_eq!(
-                redirects.advance(head, false, None),
+                redirects.advance(head, None, false,),
                 Ok(SubresourceResponseTransition::FollowedRedirect)
             );
             let request = redirects.request();
@@ -244,7 +244,7 @@ fn cors_redirect_modes_precede_location_parsing() -> Result<()> {
                     preload_state: Default::default(),
                     negotiated_http_version: None,
                 };
-                let result = redirects.advance(head, false, None);
+                let result = redirects.advance(head, None, false);
                 if mode == RequestRedirectMode::Manual {
                     assert_eq!(
                         result,

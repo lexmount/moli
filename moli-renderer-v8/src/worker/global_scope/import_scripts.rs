@@ -494,7 +494,13 @@ fn fetch_worker_import_source_blocking(
         .min(u64::MAX as u128) as u64;
     let head = response.head();
     let web_security_disabled = loader.request_client().web_security_disabled();
-    let metadata = crate::network_host::fetch_response_metadata(&origin, &head, RequestMode::NoCors, response_filter.as_ref(), web_security_disabled);
+    let metadata = crate::network_host::fetch_response_metadata(
+        &origin,
+        &head,
+        RequestMode::NoCors,
+        response_filter.as_ref(),
+        web_security_disabled,
+    );
     let muted_errors = !metadata.response_type.is_readable();
     let security_result = if from_service_worker {
         response_csp.as_ref().map_or(Ok(()), |csp| {
@@ -509,12 +515,19 @@ fn fetch_worker_import_source_blocking(
         })
     } else {
         crate::network_host::validate_fetch_response_security_policy_with_body(
-            &origin, &head, response.body_bytes(), RequestMode::NoCors,
-            RequestCredentialsMode::SameOrigin, policy_context, web_security_disabled,
+            &origin,
+            &head,
+            response.body_bytes(),
+            RequestMode::NoCors,
+            RequestCredentialsMode::SameOrigin,
+            policy_context,
+            web_security_disabled,
         )
     };
     let performance_entry = if security_result.is_ok() {
-        if from_service_worker { timing.lock().clear_initiator(); }
+        if from_service_worker {
+            timing.lock().clear_initiator();
+        }
         timing.lock().completed(
             &request_url,
             &head,

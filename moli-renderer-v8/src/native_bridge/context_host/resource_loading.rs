@@ -2786,15 +2786,17 @@ impl PageScriptHost {
                                 &pending.request_origin,
                                 &streaming.head,
                                 pending.credentials_mode,
+                                pending.load.request_client().web_security_disabled(),
                             )
                         });
-                        request.timing.completed(
+                        request.timing.completed_for_request(
                             &pending.info.url,
                             &pending.request_origin,
                             pending.request_mode,
                             &streaming.head,
                             0,
                             Some(&filter),
+                            pending.load.request_client().web_security_disabled(),
                         )
                     } else {
                         request.timing.failed(&pending.info.url)
@@ -3607,7 +3609,7 @@ impl PageScriptHost {
 
         if let Some(auth) = self.pending_subresource_auths.remove(&internal_id) {
             let pending = auth.pending;
-            let timing = (!auth.response.preload_state.is_consumed())
+            let timing = (!auth.consumed_preload)
                 .then(|| cancelled_fetch_resource_timing(&pending))
                 .flatten();
             self.browser_context_runtime

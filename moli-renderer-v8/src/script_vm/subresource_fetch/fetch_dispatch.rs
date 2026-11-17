@@ -526,18 +526,15 @@ impl ScriptVm {
             }
         };
         let response_filter = response_filter.or_else(|| {
-            (!skip_fetch_security_validation
-                && pending
-                    .continuation
-                    .window_fetch()
-                    .and_then(|fetch| fetch.intercepted_request.as_ref())
-                    .is_some_and(|request| {
-                        request.redirect_mode() == moli_fetch::RequestRedirectMode::Manual
-                    })
-                && result
-                    .as_ref()
-                    .is_ok_and(|response| matches!(response.status, 301 | 302 | 303 | 307 | 308)))
-            .then_some(crate::types::FetchResponseType::OpaqueRedirect.into())
+            let fetch = pending.continuation.window_fetch()?;
+            let response = result.as_ref().ok()?;
+            crate::network_host::network_response_filter(
+                &pending.request_origin,
+                &response.head(),
+                pending.request_mode,
+                fetch.redirect_mode(),
+                pending.load.request_client().web_security_disabled(),
+            )
         });
         // Only intercepted Window requests stop after each network hop. The
         // transport and fulfilled responses share redirect validation, policy,
@@ -867,18 +864,12 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
-                            let redirect_mode = fetch.redirect_mode();
                             let upload = fetch.upload.clone();
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive completion is handled before V8 entry");
                             let resolver = v8::Local::new(scope, &resolver);
                             let (mut head, body) = observable_response.into_body();
-                            let response_request = crate::network_host::FetchResponseRequest {
-                                method: &response_request_method,
-                                mode: pending.request_mode,
-                                redirect_mode,
-                            };
                             if let Some(status_text) = response_status_text {
                                 head.status_text = Some(status_text);
                             }
@@ -913,9 +904,11 @@ impl ScriptVm {
                                     mode: pending.request_mode,
                                     redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                                 }.network_response_filter(
-                                    &pending.request_origin, &head,
-                                    pending.credentials_mode,
-                                )
+    &pending.request_origin,
+    &head,
+    pending.credentials_mode,
+    pending.load.request_client().web_security_disabled(),
+)
                             });
                             if let Some(timing) = timing {
                                 if let Some(native) = pending.load.response_timing() {
@@ -961,13 +954,22 @@ impl ScriptVm {
                             };
                             let filter = response_filter.unwrap_or_else(|| {
                                 response_request.network_response_filter(
-                                    &pending.request_origin, &observable_response.head(),
-                                    pending.credentials_mode,
-                                )
+    &pending.request_origin,
+    &observable_response.head(),
+    pending.credentials_mode,
+    pending.load.request_client().web_security_disabled(),
+)
                             });
                             crate::context_bootstrap::record_resource_performance_entry(scope,
-                                input.timing.completed(&pending.info.url, &pending.request_origin, pending.request_mode,
-                                    &observable_response.head(), body_size, Some(&filter)),
+                                input.timing.completed_for_request(
+    &pending.info.url,
+    &pending.request_origin,
+    pending.request_mode,
+    &observable_response.head(),
+    body_size,
+    Some(&filter),
+    pending.load.request_client().web_security_disabled(),
+),
                             );
                             context_host.borrow_mut().finish_input_image_request(
                                 input.element, input.id, input.target, successful,
@@ -992,9 +994,13 @@ impl ScriptVm {
                                     response: &observable_response,
                                     encoded,
                                     origin_clean: crate::network_host::image_response_origin_clean(
-                                        &observable_response, &pending.request_origin, pending.request_mode,
-                                        pending.credentials_mode, response_filter.as_ref(),
-                                    ),
+    &observable_response,
+    &pending.request_origin,
+    pending.request_mode,
+    pending.credentials_mode,
+    response_filter.as_ref(),
+    pending.load.request_client().web_security_disabled(),
+),
                                 },
                             )
                         }
@@ -1010,9 +1016,13 @@ impl ScriptVm {
                             MediaSubresourceTerminal::Response {
                                 response: &observable_response,
                                 origin_clean: crate::network_host::image_response_origin_clean(
-                                    &observable_response, &pending.request_origin, pending.request_mode,
-                                    pending.credentials_mode, response_filter.as_ref(),
-                                ),
+    &observable_response,
+    &pending.request_origin,
+    pending.request_mode,
+    pending.credentials_mode,
+    response_filter.as_ref(),
+    pending.load.request_client().web_security_disabled(),
+),
                             },
                         ),
                         PendingSubresourceContinuation::TextTrack {
@@ -1059,19 +1069,21 @@ impl ScriptVm {
                                         mode: pending.request_mode,
                                         redirect_mode: moli_fetch::RequestRedirectMode::Follow,
                                     }.network_response_filter(
-                                        &pending.request_origin,
-                                        &observable_response.head(),
-                                        pending.credentials_mode,
-                                    )
+    &pending.request_origin,
+    &observable_response.head(),
+    pending.credentials_mode,
+    pending.load.request_client().web_security_disabled(),
+)
                                 });
-                                let entry = timing.completed(
-                                    &pending.info.url,
-                                    &pending.request_origin,
-                                    pending.request_mode,
-                                    &observable_response.head(),
-                                    observable_response.body_bytes().len(),
-                                    Some(&filter),
-                                );
+                                let entry = timing.completed_for_request(
+    &pending.info.url,
+    &pending.request_origin,
+    pending.request_mode,
+    &observable_response.head(),
+    observable_response.body_bytes().len(),
+    Some(&filter),
+    pending.load.request_client().web_security_disabled(),
+);
                                 let target = crate::native_bridge::WindowDocumentTaskTarget::new(
                                     crate::native_bridge::WindowDocumentOwner::Frame(binding.owner()),
                                     binding.child_handle().map_or(
@@ -1090,10 +1102,13 @@ impl ScriptVm {
                                         let descriptor = crate::network_host::image_response_descriptor_from_parkable(
                                             &observable_response, encoded,
                                             crate::network_host::image_response_origin_clean(
-                                                &observable_response, &pending.request_origin,
-                                                pending.request_mode, pending.credentials_mode,
-                                                response_filter.as_ref(),
-                                            ),
+    &observable_response,
+    &pending.request_origin,
+    pending.request_mode,
+    pending.credentials_mode,
+    response_filter.as_ref(),
+    pending.load.request_client().web_security_disabled(),
+),
                                         );
                                         let _ = context_host
                                             .borrow_mut()

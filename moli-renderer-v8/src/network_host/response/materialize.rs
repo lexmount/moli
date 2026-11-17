@@ -7,7 +7,7 @@ use super::*;
 use crate::network_host::headers::headers_list;
 use crate::types::NetworkBodySourceId;
 use crate::web_api_interfaces;
-use moli_fetch::RequestMode;
+use moli_fetch::{RequestMode, RequestRedirectMode};
 use moli_fetch_types::{FetchResponseMetadata, FetchResponseType as FetchResponseFilter};
 use moli_url::WebOrigin;
 use moli_webapi::fetch_response::{
@@ -20,6 +20,28 @@ pub(crate) struct FetchResponseRequest<'a> {
     pub(crate) method: &'a str,
     pub(crate) mode: RequestMode,
     pub(crate) redirect_mode: RequestRedirectMode,
+}
+
+impl FetchResponseRequest<'_> {
+    pub(crate) fn network_response_filter(
+        self,
+        origin: &WebOrigin,
+        head: &moli_fetch::ResponseHead,
+        _credentials: moli_fetch::RequestCredentialsMode,
+        web_security_disabled: bool,
+    ) -> crate::types::AsyncSubresourceFetchResponseFilter {
+        network_response_filter(
+            origin,
+            head,
+            self.mode,
+            self.redirect_mode,
+            web_security_disabled,
+        )
+        .unwrap_or_else(|| {
+            head.fetch_response_type_with_web_security(origin, self.mode, web_security_disabled)
+                .into()
+        })
+    }
 }
 
 fn has_null_body(method: &str, status: u16) -> bool {
@@ -46,7 +68,9 @@ pub(crate) fn network_response_filter(
         FetchResponseFilter::OpaqueRedirect
     } else {
         head.fetch_response_type_with_web_security(
-            &request_origin.into(), request_mode, web_security_disabled,
+            &request_origin.into(),
+            request_mode,
+            web_security_disabled,
         )
     };
     matches!(
@@ -61,10 +85,6 @@ fn filtered_response_status(head: &moli_fetch::ResponseHead, filter: FetchRespon
 }
 
 fn filtered_response_exposes_body(filter: FetchResponseFilter) -> bool {
-    filter.is_readable()
-}
-
-fn filtered_response_exposes_headers(filter: FetchResponseFilter) -> bool {
     filter.is_readable()
 }
 
@@ -84,6 +104,7 @@ pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
     request_origin: impl Into<WebOrigin>,
     request: FetchResponseRequest<'_>,
     response: Response,
+    web_security_disabled: bool,
 ) -> v8::Local<'s, v8::Object> {
     let request_origin = request_origin.into();
     let (head, body) = response.into_body();
@@ -93,6 +114,7 @@ pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
         request,
         head,
         body,
+        web_security_disabled,
     )
 }
 
@@ -102,8 +124,13 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
     request: FetchResponseRequest<'_>,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
+    web_security_disabled: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let mut metadata = head.fetch_metadata(&request_origin.into(), request.mode);
+    let mut metadata = head.fetch_metadata_with_web_security(
+        &request_origin.into(),
+        request.mode,
+        web_security_disabled,
+    );
     if request.redirect_mode == RequestRedirectMode::Manual
         && matches!(head.status, 301 | 302 | 303 | 307 | 308)
     {
@@ -126,7 +153,7 @@ pub(crate) fn build_null_body_fetch_response_object_with_metadata<'s>(
     metadata: &FetchResponseMetadata,
 ) -> v8::Local<'s, v8::Object> {
     let obj = build_fetch_response_object_head(scope, &head, metadata, None);
-    finish_fetch_response_object_with_body_stream(scope, obj, &head, None, metadata.response_type)
+    finish_fetch_response_object_with_body_stream(scope, obj, &head, None, metadata)
 }
 
 pub(crate) fn build_fetch_response_object_from_body_source_with_metadata<'s>(
@@ -146,7 +173,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_with_metadata<'s>(
         set_filtered_response_internal_body_from_response_body(scope, obj, body);
         None
     };
-    finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream, filter)
+    finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream, metadata)
 }
 
 #[cfg(test)]
@@ -224,14 +251,78 @@ fn build_fetch_response_object_from_stream_with_surface_url<'s>(
         // Fetch nulls the internal body, including for filtered responses. Do
         // not register a body source: subsequent transport chunks and terminal
         // events then have no stream to enqueue into or retain bytes for.
-        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None, filter);
+        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None, metadata);
     }
     if !filtered_response_exposes_body(filter) {
         set_filtered_response_internal_body_from_pending_stream(scope, obj, body_source_id);
-        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None, filter);
+        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None, metadata);
     }
     let stream = pending_network_body_stream(scope, obj, body_source_id);
-    finish_fetch_response_object_with_body_stream(scope, obj, &head, Some(stream), filter)
+    finish_fetch_response_object_with_body_stream(scope, obj, &head, Some(stream), metadata)
+}
+
+fn install_response_internal_head<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    status: u16,
+    status_text: &str,
+    headers: &[(String, Vec<u8>)],
+) {
+    set_response_slot_value(
+        scope,
+        response,
+        RESPONSE_INTERNAL_STATUS_SLOT,
+        v8::Number::new(scope, f64::from(status)).into(),
+    );
+    set_response_slot_string(
+        scope,
+        response,
+        RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
+        status_text,
+    );
+    let headers = build_headers_object_with_state(
+        scope,
+        &moli_fetch::headers_to_byte_strings(headers),
+        HeadersGuard::None,
+        true,
+    );
+    set_response_slot_value(
+        scope,
+        response,
+        RESPONSE_INTERNAL_HEADERS_SLOT,
+        headers.into(),
+    );
+}
+
+pub(crate) fn set_cached_response_head<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    head: &moli_fetch_types::FetchResponseHead,
+) {
+    let mut metadata = head.metadata.clone();
+    // Old cache files predate the independently stored exposed-name snapshot.
+    // Freeze their filter from the restored raw head before public delivery.
+    metadata.capture_cors_exposed_headers(&head.headers);
+    set_response_metadata(scope, response, &metadata);
+    install_response_internal_head(
+        scope,
+        response,
+        head.status,
+        &head.status_text,
+        &head.headers,
+    );
+    let visible = head
+        .headers
+        .iter()
+        .filter(|(name, _)| metadata.exposes_header(&head.headers, name))
+        .cloned()
+        .collect::<Vec<_>>();
+    let visible = filter_headers_for_guard(
+        &moli_fetch::headers_to_byte_strings(&visible),
+        HeadersGuard::Response,
+    );
+    let headers = build_headers_object_with_state(scope, &visible, HeadersGuard::Response, true);
+    set_response_slot_value(scope, response, RESPONSE_HEADERS_SLOT, headers.into());
 }
 
 fn build_fetch_response_object_head<'s>(
@@ -249,31 +340,11 @@ fn build_fetch_response_object_head<'s>(
     if let Some(url) = filtered_surface_url {
         set_response_slot_string(scope, obj, RESPONSE_URL_SLOT, url);
     }
-    if !filter.is_readable() {
-        set_response_slot_value(
-            scope,
-            obj,
-            RESPONSE_INTERNAL_STATUS_SLOT,
-            v8::Number::new(scope, head.status as f64).into(),
-        );
-        set_response_slot_string(
-            scope,
-            obj,
-            RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
-            head.status_text(),
-        );
-        let internal_headers = filter_headers_for_guard(
-            &moli_fetch::headers_to_byte_strings(&head.headers),
-            HeadersGuard::Response,
-        );
-        let internal_headers_obj =
-            build_headers_object_with_state(scope, &internal_headers, HeadersGuard::Response, true);
-        set_response_slot_value(
-            scope,
-            obj,
-            RESPONSE_INTERNAL_HEADERS_SLOT,
-            internal_headers_obj.into(),
-        );
+    if !matches!(
+        metadata.response_type,
+        FetchResponseFilter::Default | FetchResponseFilter::Error
+    ) {
+        install_response_internal_head(scope, obj, head.status, head.status_text(), &head.headers);
     }
     mark_response_object(scope, obj);
     obj
@@ -284,15 +355,19 @@ fn finish_fetch_response_object_with_body_stream<'s>(
     obj: v8::Local<'s, v8::Object>,
     head: &moli_fetch::ResponseHead,
     body_stream: Option<v8::Local<'s, v8::Object>>,
-    filter: FetchResponseFilter,
+    metadata: &FetchResponseMetadata,
 ) -> v8::Local<'s, v8::Object> {
-    let header_entries = if filtered_response_exposes_headers(filter) {
-        head.headers.as_slice()
-    } else {
-        &[][..]
-    };
+    let filter = metadata.response_type;
+    // Keep the raw internal head for Cache/Service Worker consumers, while
+    // projecting public headers from the native immutable exposure decision.
+    let header_entries = head
+        .headers
+        .iter()
+        .filter(|(name, _)| metadata.exposes_header(&head.headers, name))
+        .cloned()
+        .collect::<Vec<_>>();
     let headers = filter_headers_for_guard(
-        &moli_fetch::headers_to_byte_strings(header_entries),
+        &moli_fetch::headers_to_byte_strings(&header_entries),
         HeadersGuard::Response,
     );
     let headers_obj =
@@ -317,11 +392,11 @@ fn finish_fetch_response_object_with_body_stream<'s>(
 
 pub(crate) fn build_filtered_cached_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    metadata: FetchResponseMetadata,
+    head: moli_fetch_types::FetchResponseHead,
     body: Vec<u8>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if !matches!(
-        metadata.response_type,
+        head.metadata.response_type,
         FetchResponseFilter::Opaque | FetchResponseFilter::OpaqueRedirect
     ) {
         return None;
@@ -329,7 +404,8 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     let obj = FetchResponseHeadDeclaration::new(0.0, false)
         .bind(scope)
         .ok()?;
-    set_response_metadata(scope, obj, &metadata);
+    set_response_metadata(scope, obj, &head.metadata);
+    install_response_internal_head(scope, obj, head.status, &head.status_text, &head.headers);
     mark_response_object(scope, obj);
     let headers = filter_headers_for_guard(&[], HeadersGuard::Response);
     let headers_obj =
@@ -490,27 +566,32 @@ fn materialize_response_head_for_purpose<'s>(
     ))
 }
 
+fn capture_response_internal_head<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    head: &mut MaterializedResponseHead,
+) {
+    if let Some(status) = response_slot_number(scope, response, RESPONSE_INTERNAL_STATUS_SLOT) {
+        head.status = status as u16;
+        head.status_text =
+            response_slot_string(scope, response, RESPONSE_INTERNAL_STATUS_TEXT_SLOT)
+                .unwrap_or_default();
+        if let Some(headers) = response_slot_object(scope, response, RESPONSE_INTERNAL_HEADERS_SLOT)
+        {
+            head.headers = moli_fetch::headers_from_byte_strings(&headers_list(scope, headers))
+                .expect("native internal Headers contain ByteStrings");
+        }
+    }
+}
+
 pub(crate) fn materialize_response_object_head_for_service_worker_respond_with<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: &str,
 ) -> Result<(MaterializedResponseHead, v8::Local<'s, v8::Object>), String> {
     let (mut head, response) = materialize_response_object_head(scope, value, context)?;
-    if head.metadata.response_type == FetchResponseFilter::OpaqueRedirect
-        && let Some(internal_status) =
-            response_slot_number(scope, response, RESPONSE_INTERNAL_STATUS_SLOT)
-    {
-        head.status = internal_status as u16;
-        head.status_text =
-            response_slot_string(scope, response, RESPONSE_INTERNAL_STATUS_TEXT_SLOT)
-                .unwrap_or_default();
-        head.headers = response_slot_object(scope, response, RESPONSE_INTERNAL_HEADERS_SLOT)
-            .map(|headers| {
-                moli_fetch::headers_from_byte_strings(&headers_list(scope, headers))
-                    .expect("Headers contain ByteStrings")
-            })
-            .unwrap_or_default();
-    }
+    capture_response_internal_head(scope, response, &mut head);
+    head.metadata.capture_cors_exposed_headers(&head.headers);
     Ok((head, response))
 }
 

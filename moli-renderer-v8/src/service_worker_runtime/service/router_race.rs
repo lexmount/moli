@@ -113,12 +113,23 @@ impl RouterRaceLaunch {
                     let (mut transfer, observation) = observed.into_parts();
                     let head = transfer.head();
                     if let Err(message) = crate::network_host::validate_fetch_response_headers(
-                        &context.request_origin, &head, mode, credentials, context.policy_context,
-                    ) {
+    &context.request_origin,
+    &head,
+    mode,
+    credentials,
+    context.policy_context,
+    loader.web_security_disabled(),
+) {
                         response.finish(Err(message));
                         return;
                     }
-                    let filter = crate::network_host::network_response_filter(&context.request_origin, &head, mode, redirect);
+                    let filter = crate::network_host::network_response_filter(
+    &context.request_origin,
+    &head,
+    mode,
+    redirect,
+    loader.web_security_disabled(),
+);
                     let network_is_eligible = (200..=299).contains(&head.status)
                         && filter.as_ref().is_none_or(|filter| filter.is_readable());
                     let response_head = RouterRaceResponseHead {
@@ -414,6 +425,7 @@ impl ServiceWorkerRuntimeService {
                     job.request.request_mode,
                     job.request.credentials_mode,
                     job.network_context.policy_context,
+                    job.request_client.web_security_disabled(),
                 )
         {
             self.complete_fetch_with_failure(job, message);

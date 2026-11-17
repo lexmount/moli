@@ -164,6 +164,7 @@ pub(crate) fn start_scanned_image_preload(
                 RequestMode::NoCors,
                 RequestCredentialsMode::Include,
                 None,
+                loader.web_security_disabled(),
             )
         });
         load.finish_network_result(
@@ -284,6 +285,9 @@ pub(crate) fn start_image_element_resource_fetch(
             request_mode,
             credentials_mode,
             None,
+            resource_loader
+                .as_ref()
+                .is_some_and(|loader| loader.request_client().web_security_disabled()),
         );
         let descriptor = image_response_descriptor_from_parkable(&response, &encoded, origin_clean);
         let result = Ok(response);
@@ -523,6 +527,7 @@ pub(crate) fn image_response_origin_clean(
     mode: RequestMode,
     credentials: RequestCredentialsMode,
     response_filter: Option<&crate::types::AsyncSubresourceFetchResponseFilter>,
+    web_security_disabled: bool,
 ) -> bool {
     match response_filter {
         Some(filter) => filter.is_readable(),
@@ -531,7 +536,12 @@ pub(crate) fn image_response_origin_clean(
             mode,
             redirect_mode: RequestRedirectMode::Follow,
         }
-        .network_response_filter(request_origin, &response.head(), credentials)
+        .network_response_filter(
+            request_origin,
+            &response.head(),
+            credentials,
+            web_security_disabled,
+        )
         .is_readable(),
     }
 }
@@ -666,6 +676,7 @@ mod tests {
                 mode,
                 RequestCredentialsMode::Include,
                 filter,
+                false,
             )
         };
         assert!(readable(&same, RequestMode::NoCors, None));

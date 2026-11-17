@@ -66,6 +66,7 @@ pub(crate) fn start_media_element_resource_fetch(
                 request_mode,
                 credentials_mode,
                 None,
+                resource_loader.request_client().web_security_disabled(),
             );
             match host.begin_media_resource(
                 scope,

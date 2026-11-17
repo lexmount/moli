@@ -371,6 +371,7 @@ impl PageScriptHost {
                     .zip(response.map(|response| response.body_bytes().len())),
                 cancel_handle.response_timing(),
                 completed,
+                request_client.web_security_disabled(),
             );
             let _ = timing_sender.send_async_subresource_event(
                 crate::types::AsyncSubresourceFetchEvent::ResourceTiming {

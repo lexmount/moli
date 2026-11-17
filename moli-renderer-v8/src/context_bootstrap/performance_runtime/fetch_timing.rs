@@ -182,6 +182,7 @@ impl FetchResourceTiming {
         response: Option<(&ResponseHead, usize)>,
         native: moli_fetch::FetchResponseTiming,
         completed: Instant,
+        web_security_disabled: bool,
     ) -> ResourcePerformanceEntry {
         self.observe_native_timing(native);
         let entry = match response {
@@ -195,19 +196,42 @@ impl FetchResourceTiming {
                     origin,
                     head,
                     moli_fetch::RequestCredentialsMode::SameOrigin,
+                    web_security_disabled,
                 );
-                self.completed(
+                self.completed_for_request(
                     name,
                     origin,
                     moli_fetch::RequestMode::SameOrigin,
                     head,
                     body_size,
                     Some(&filter),
+                    web_security_disabled,
                 )
             }
             None => self.failed(name),
         };
         self.completed_at(entry, native.response_end_at().unwrap_or(completed))
+    }
+
+    /// Native producers without an earlier response snapshot capture it here.
+    pub(crate) fn completed_for_request(
+        &self,
+        url: &Url,
+        origin: &WebOrigin,
+        mode: moli_fetch::RequestMode,
+        head: &ResponseHead,
+        body_size: usize,
+        delivery: Option<&AsyncSubresourceFetchResponseFilter>,
+        web_security_disabled: bool,
+    ) -> ResourcePerformanceEntry {
+        let metadata = crate::network_host::fetch_response_metadata(
+            origin,
+            head,
+            mode,
+            delivery,
+            web_security_disabled,
+        );
+        self.completed(url, head, body_size, &metadata, delivery)
     }
 
     pub(crate) fn completed(
@@ -219,7 +243,8 @@ impl FetchResourceTiming {
         delivery: Option<&AsyncSubresourceFetchResponseFilter>,
     ) -> ResourcePerformanceEntry {
         let readable = metadata.response_type.is_readable();
-        let service_worker_response = delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some());
+        let service_worker_response =
+            delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some());
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
             url.as_str(),
             self.initiator_type,
@@ -532,7 +557,7 @@ impl FetchResourceTiming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moli_fetch::FetchResponseType::{Basic, Opaque};
+    use moli_fetch::FetchResponseType::{Basic, Opaque, OpaqueRedirect};
 
     #[test]
     fn completed_uses_the_response_snapshot_and_keeps_delivery_separate() {
@@ -545,6 +570,7 @@ mod tests {
         };
         let url = Url::parse("https://cross.test/body").unwrap();
         let head = ResponseHead {
+            request_include_credentials: false,
             final_url: url.clone(),
             status: 200,
             status_text: None,
@@ -562,15 +588,22 @@ mod tests {
             negotiated_http_version: None,
         };
         let delivered = AsyncSubresourceFetchResponseFilter::service_worker(Default::default());
+        // Fetch response handover uses the filtered response's body info.
+        // Opaque responses have empty body info; TAO controls timing separately.
+        // https://fetch.spec.whatwg.org/#fetch-finale
         for (kind, tao, service_worker, transfer, size, status) in [
             (Basic, true, false, 309.0, 9.0, 200.0),
-            (Opaque, true, false, 309.0, 9.0, 0.0),
-            (Basic, false, false, 0.0, 0.0, 200.0),
+            (Opaque, true, false, 300.0, 0.0, 0.0),
+            (Basic, false, false, 0.0, 9.0, 200.0),
             (Opaque, false, false, 0.0, 0.0, 0.0),
             (Basic, true, true, 0.0, 9.0, 200.0),
-            (Opaque, true, true, 0.0, 9.0, 0.0),
-            (Basic, false, true, 0.0, 0.0, 200.0),
+            (Opaque, true, true, 0.0, 0.0, 0.0),
+            (Basic, false, true, 0.0, 9.0, 200.0),
             (Opaque, false, true, 0.0, 0.0, 0.0),
+            (OpaqueRedirect, true, false, 300.0, 0.0, 0.0),
+            (OpaqueRedirect, false, false, 0.0, 0.0, 0.0),
+            (OpaqueRedirect, true, true, 0.0, 0.0, 0.0),
+            (OpaqueRedirect, false, true, 0.0, 0.0, 0.0),
         ] {
             let metadata = FetchResponseMetadata {
                 response_type: kind,

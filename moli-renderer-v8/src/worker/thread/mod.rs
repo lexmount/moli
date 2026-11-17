@@ -878,9 +878,7 @@ fn start_worker_module_graph_fetch(
             WorkerModuleGraphFetchCspSource::StaticModuleGraph => {
                 state.module_static_import_request_origin.clone()
             }
-            WorkerModuleGraphFetchCspSource::DynamicImportGraph => {
-                state.request_origin()
-            }
+            WorkerModuleGraphFetchCspSource::DynamicImportGraph => state.request_origin(),
         });
     let mut fetch_request =
         match moli_fetch::Request::new("GET", request.url().as_str(), None, vec![]) {
@@ -1193,7 +1191,9 @@ async fn run_worker_pre_bootstrap_debugger_pause(
     worker_isolate: &mut WorkerIsolateState,
     #[cfg(feature = "devtools")] context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    #[cfg(feature = "devtools")] module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
+    #[cfg(feature = "devtools")] module_graph_fetch_tx: &mpsc::UnboundedSender<
+        WorkerModuleGraphFetchEvent,
+    >,
     script_url: &str,
     rx: &mut mpsc::UnboundedReceiver<WorkerMessage>,
     pending_bootstrap_messages: &mut VecDeque<WorkerMessage>,
