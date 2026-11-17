@@ -532,6 +532,7 @@ impl PageScriptHost {
             child_window_event_listeners: HashMap::new(),
             next_child_window_event_registration_id: 0,
             event_callbacks: Default::default(),
+            active_window_error_report_owners: Default::default(),
             browser_context_runtime,
             window_identity,
             page_script_environment: None,

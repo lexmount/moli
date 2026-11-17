@@ -213,12 +213,37 @@ impl CallbackInvoker {
         callback_name: &str,
         invocation: CallbackInvocation<'s, '_>,
     ) -> CallbackInvocationOutcome {
+        Self::invoke_and_then(
+            scope,
+            callback_kind,
+            log_label,
+            log_level,
+            callback_name,
+            invocation,
+            |_scope, outcome| outcome,
+        )
+    }
+
+    /// Complete event exception reporting before restoring the listener realm's
+    /// current event. A nested error handler may observe that suspended event.
+    pub(crate) fn invoke_and_then<'s, R>(
+        scope: &mut v8::PinScope<'s, '_>,
+        callback_kind: &str,
+        log_label: &str,
+        log_level: CallbackExceptionLogLevel,
+        callback_name: &str,
+        invocation: CallbackInvocation<'s, '_>,
+        complete: impl FnOnce(&mut v8::PinScope<'s, '_>, CallbackInvocationOutcome) -> R,
+    ) -> R {
         if let Some(host_ptr) = invocation.host_ptr {
             unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("callback invocation");
         }
         if invocation.legacy_event_handler && !invocation.is_callable {
             let value: v8::Local<v8::Value> = v8::undefined(scope).into();
-            return CallbackInvocationOutcome::Returned(v8::Global::new(scope, value));
+            return complete(
+                scope,
+                CallbackInvocationOutcome::Returned(v8::Global::new(scope, value)),
+            );
         }
         if let Some(host_ptr) = invocation.host_ptr {
             let host = unsafe { &*host_ptr };
@@ -240,7 +265,7 @@ impl CallbackInvoker {
                     .is_some(),
             };
             if is_retired {
-                return CallbackInvocationOutcome::Retired;
+                return complete(scope, CallbackInvocationOutcome::Retired);
             }
         }
 
@@ -248,7 +273,7 @@ impl CallbackInvoker {
             scope,
             invocation.resource_initiator.as_ref(),
         );
-        let result = with_webidl_callback_contexts(
+        with_webidl_callback_contexts(
             scope,
             invocation.relevant_context,
             invocation.incumbent_context,
@@ -305,18 +330,19 @@ impl CallbackInvoker {
                     },
                 );
 
+                let outcome = match result {
+                    Ok(value) => CallbackInvocationOutcome::Returned(value),
+                    Err(report) => CallbackInvocationOutcome::Threw(report),
+                };
+                let completed = complete(scope, outcome);
+
                 if let Some(previous) = previous_window_event {
                     let global = relevant_context.global(scope);
                     set_private_value(scope, global, WINDOW_EVENT_SLOT, previous);
                 }
-                result
+                completed
             },
-        );
-
-        match result {
-            Ok(value) => CallbackInvocationOutcome::Returned(value),
-            Err(report) => CallbackInvocationOutcome::Threw(report),
-        }
+        )
     }
 }
 
