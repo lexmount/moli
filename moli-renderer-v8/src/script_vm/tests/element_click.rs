@@ -1,6 +1,7 @@
 use super::*;
 use crate::runtime::{RendererElementClickTarget, RendererPointerEventProperties};
 
+#[cfg(feature = "devtools")]
 #[test]
 fn native_element_click_initializes_layout_once() {
     let mut vm = new_parsed_test_vm(
@@ -18,6 +19,7 @@ fn native_element_click_initializes_layout_once() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
     for mutation in [
@@ -102,6 +104,7 @@ fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn native_element_click_mock_preparation_does_not_build_layout() {
     let mut vm = new_parsed_test_vm(
@@ -118,6 +121,7 @@ fn native_element_click_mock_preparation_does_not_build_layout() {
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn native_element_click_does_not_publish_after_scrolling_an_offscreen_target() {
     let mut vm = new_rendered_test_vm(

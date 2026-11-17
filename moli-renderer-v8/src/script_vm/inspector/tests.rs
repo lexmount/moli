@@ -1,6 +1,7 @@
 use super::*;
 use crate::inspector_session::InspectorSessionOutput;
 use crate::runtime::RendererRuntimeInspectorResponseSender;
+use moli_inspector_json::InspectorJson;
 
 fn business_messages(messages: Vec<InspectorJson>) -> Vec<Value> {
     messages
@@ -213,6 +214,7 @@ fn deferred_inspector_response_preserves_protocol_attachment() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn runtime_command_output_only_parks_its_own_response_callback() {
     let outbound = InspectorOutbound::default();
@@ -311,6 +313,7 @@ fn inspector_outbound_deactivation_cancels_callbacks_owned_by_the_old_backend() 
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn internal_dispatch_response_does_not_consume_same_id_deferred_frontend_callback() {
     let outbound = InspectorOutbound::default();
@@ -350,6 +353,7 @@ fn internal_dispatch_response_does_not_consume_same_id_deferred_frontend_callbac
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn internal_dispatch_call_id_avoids_queued_and_active_frontend_ids() {
     let outbound = InspectorOutbound::default();
@@ -448,6 +452,7 @@ fn renderer_inspector_unique_id_capture_depth_recovers_after_panic() {
     assert_eq!(state.capture_depth_for_test(), 0);
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn replacement_document_binding_does_not_adopt_previous_agent_outbound() {
     crate::ensure_v8_for_test();
@@ -494,6 +499,7 @@ fn replacement_document_binding_does_not_adopt_previous_agent_outbound() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dropping_overlapping_peer_binding_does_not_deactivate_current_agent() {
     crate::ensure_v8_for_test();
@@ -572,4 +578,5 @@ fn inspector_response_id_reads_opaque_metadata_and_tracks_explicit_mutation() {
     assert_eq!(message.renderer_call_id(), None);
 }
 
+#[cfg(feature = "devtools")]
 mod native_cleanup;

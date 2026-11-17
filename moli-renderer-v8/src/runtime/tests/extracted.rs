@@ -3,6 +3,7 @@ use super::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+#[cfg(feature = "devtools")]
 mod input_dispatch;
 mod lazy_main_world;
 mod navigation_streaming;

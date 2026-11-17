@@ -95,6 +95,8 @@ impl PageNetworkConditionsState {
 pub struct PageNetworkPolicy {
     state: Arc<Mutex<PageNetworkPolicyState>>,
     network_conditions: Arc<Mutex<PageNetworkConditionsState>>,
+    // Unit-test fixtures also use native pauses to supply synthetic network responses.
+    #[cfg(any(test, feature = "devtools"))]
     subresource_interception: Arc<Mutex<SubresourceInterceptionClasses>>,
 }
 
@@ -103,6 +105,7 @@ impl Default for PageNetworkPolicy {
         Self {
             state: Arc::new(Mutex::new(PageNetworkPolicyState::default())),
             network_conditions: Arc::new(Mutex::new(PageNetworkConditionsState::default())),
+            #[cfg(any(test, feature = "devtools"))]
             subresource_interception: Arc::default(),
         }
     }
@@ -123,6 +126,7 @@ impl PageNetworkPolicy {
         Self {
             state: Arc::new(Mutex::new(state)),
             network_conditions: Arc::new(Mutex::new(PageNetworkConditionsState::default())),
+            #[cfg(any(test, feature = "devtools"))]
             subresource_interception: Arc::default(),
         }
     }
@@ -140,12 +144,14 @@ impl PageNetworkPolicy {
     /// reuse across top-level navigation and protocol interception remain
     /// owned by the stable Page.
     pub fn isolated_same_page_copy(&self) -> Self {
-        let mut copy = Self::from_snapshot_with_memory_cache_partition(
-            self.snapshot(),
-            self.memory_cache_partition_id(),
-        );
-        copy.subresource_interception = Arc::clone(&self.subresource_interception);
-        copy
+        Self {
+            #[cfg(any(test, feature = "devtools"))]
+            subresource_interception: Arc::clone(&self.subresource_interception),
+            ..Self::from_snapshot_with_memory_cache_partition(
+                self.snapshot(),
+                self.memory_cache_partition_id(),
+            )
+        }
     }
 
     pub fn shares_memory_cache_partition_with(&self, other: &Self) -> bool {
@@ -177,6 +183,7 @@ impl PageNetworkPolicy {
                 revision: snapshot.network_conditions_revision,
                 offline: snapshot.network_offline,
             })),
+            #[cfg(any(test, feature = "devtools"))]
             subresource_interception: Arc::default(),
         }
     }
@@ -205,6 +212,7 @@ impl PageNetworkPolicy {
                 cache_disabled: snapshot.cache_disabled,
             })),
             network_conditions: Arc::clone(&self.network_conditions),
+            #[cfg(any(test, feature = "devtools"))]
             subresource_interception: Arc::clone(&self.subresource_interception),
         }
     }
@@ -214,12 +222,15 @@ impl PageNetworkPolicy {
     }
 
     pub fn shares_state_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.state, &other.state)
-            && Arc::ptr_eq(&self.network_conditions, &other.network_conditions)
+        let shares_state = Arc::ptr_eq(&self.state, &other.state)
+            && Arc::ptr_eq(&self.network_conditions, &other.network_conditions);
+        #[cfg(any(test, feature = "devtools"))]
+        let shares_state = shares_state
             && Arc::ptr_eq(
                 &self.subresource_interception,
                 &other.subresource_interception,
-            )
+            );
+        shares_state
     }
 
     /// Captures the current request configuration and network conditions.
@@ -271,7 +282,7 @@ impl PageNetworkPolicy {
         state.advance_revision();
     }
 
-    #[cfg(feature = "devtools")]
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn set_browser_identity_override(
         &self,
         identity: Option<Arc<moli_browser_profile::BrowserIdentityProfile>>,
@@ -318,12 +329,20 @@ impl PageNetworkPolicy {
 
     /// Live target eligibility only. Protocol rules and session ordering stay
     /// with their canonical protocol owner, rather than being copied to XHR.
+    #[cfg(any(test, feature = "devtools"))]
     pub fn set_subresource_interception(&self, classes: SubresourceInterceptionClasses) {
         *self.subresource_interception.lock() = classes;
     }
 
     pub(crate) fn subresource_interception_config(&self) -> SubresourceInterceptionClasses {
-        *self.subresource_interception.lock()
+        #[cfg(any(test, feature = "devtools"))]
+        {
+            *self.subresource_interception.lock()
+        }
+        #[cfg(not(any(test, feature = "devtools")))]
+        {
+            SubresourceInterceptionClasses::NONE
+        }
     }
 
     pub(crate) fn should_intercept_subresource(
@@ -524,6 +543,7 @@ impl PageNetworkPolicySnapshot {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn interception_eligibility_follows_same_target_views_only() {
         let page = PageNetworkPolicy::default();

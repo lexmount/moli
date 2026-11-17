@@ -2753,6 +2753,7 @@ impl PageScriptHost {
             .any(|pattern| moli_fetch::url_pattern_matches(pattern, value))
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn set_fetch_subresource_interception(
         &mut self,
         classes: SubresourceInterceptionClasses,

@@ -116,6 +116,7 @@ fn fresh_paint_publishes_nested_iframe_content_viewports() {
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordinates() {
     let mut vm = new_storage_test_vm("https://iframe-input-coordinates.test/");
@@ -324,6 +325,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
         "800|800"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn iframe_native_drag_preserves_screen_coordinates_with_offset_and_scale() {
     for scale in [1.0, 0.5] {
@@ -565,6 +567,7 @@ fn iframe_scrolling_policy_test_vm(
     vm
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn iframe_scrolling_policy_distinguishes_wheel_input_from_scrollbar_appearance() {
     let positions = "JSON.stringify([child.scrollX,child.scrollY])";
@@ -617,6 +620,7 @@ fn iframe_scrolling_policy_distinguishes_wheel_input_from_scrollbar_appearance()
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn iframe_scrolling_policy_changes_input_permissions_at_next_publication() {
     let mut vm = iframe_scrolling_policy_test_vm("auto", "none");
@@ -650,6 +654,7 @@ fn iframe_scrolling_policy_changes_input_permissions_at_next_publication() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
     let mut vm = new_storage_test_vm("https://iframe-input-snapshot.test/");
@@ -708,6 +713,7 @@ fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
         .expect("stable child input should retain one snapshot");
     assert_eq!(cached.0, vm.document_runtime.document_handle());
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
     let mut vm = new_storage_test_vm("https://iframe-wheel-snapshot.test/");
@@ -797,6 +803,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
         "60|3"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_iframe() {
     let mut vm = new_storage_test_vm("https://iframe-focus-scroll.test/");
@@ -911,6 +918,7 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
         assert!((event["clientY"].as_f64().unwrap() - 40.0).abs() < 0.1);
     }
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coordinates() {
     let mut vm = new_storage_test_vm("https://nested-iframe-input.test/");
@@ -1148,6 +1156,7 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         assert_eq!(event["screenY"], 10.0);
     }
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
     let mut vm = new_storage_test_vm("https://root-classic-scrollbar.test/");
@@ -1257,6 +1266,7 @@ fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
     assert_eq!(result[2], serde_json::json!([]));
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn iframe_native_and_replayed_drag_events_use_the_receiving_window_realm() {
     for native in [false, true] {

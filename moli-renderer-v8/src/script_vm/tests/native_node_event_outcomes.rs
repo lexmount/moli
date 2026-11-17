@@ -1,5 +1,14 @@
-use super::window_node_worlds::child_node_world;
 use super::*;
+
+pub(super) async fn attach_child_target(vm: &mut ScriptVm) {
+    vm.eval(
+        "globalThis.frame=document.createElement('iframe');\
+         frame.srcdoc='<!doctype html><body><span id=childTarget>child</span></body>';\
+         (document.body||document.documentElement||document).appendChild(frame);'ready'",
+    )
+    .unwrap();
+    run_child_navigation_commit_and_host_load_for_test(vm, "child Node target").await;
+}
 
 pub(super) async fn native_outcome_vm(
     policy: moli_page_types::LayoutPolicy,
@@ -7,7 +16,7 @@ pub(super) async fn native_outcome_vm(
     let mut vm = new_storage_test_vm("https://native-node-outcomes.test/");
     vm.set_layout_policy(policy);
     vm.eval("if(!document.body){const root=document.documentElement||document.appendChild(document.createElement('html'));root.appendChild(document.createElement('body'));}'ready'").unwrap();
-    child_node_world(&mut vm, "native-node-outcomes").await;
+    attach_child_target(&mut vm).await;
     vm
 }
 

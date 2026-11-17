@@ -385,6 +385,7 @@ document.body.innerHTML = '<div id=target></div>';
     .expect("screencast layout cache test should run");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn screencast_visual_token_tracks_child_document_styles_without_retaining_paint() {
     run_page_vm_async_test(async move {
@@ -460,6 +461,7 @@ child.adoptedStyleSheets = [globalThis.__childScreencastSheet];
     .expect("child screencast style-generation fixture should run");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn screencast_visual_token_tracks_canvas_and_scroll_while_screenshot_stays_fresh() {
     run_page_vm_async_test(async move {
@@ -560,6 +562,7 @@ context.fillRect(0, 0, 40, 100);
     .expect("screencast visual generations fixture should run");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn async_resource_publication_during_screencast_capture_forces_a_followup_frame() {
     run_page_vm_async_test(async move {

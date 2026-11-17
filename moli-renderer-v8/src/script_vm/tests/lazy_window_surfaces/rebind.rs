@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn initial_about_blank_rebind_keeps_child_window_surfaces_lazy() {
     let mut vm = new_storage_test_vm("https://lazy-window-rebind.test/");

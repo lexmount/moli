@@ -205,18 +205,15 @@ impl std::fmt::Debug for RendererDevToolsTargetHandle {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
-    #[cfg(feature = "devtools")]
     use crate::devtools::command::{
         RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
         RendererInspectorCommandRoute, RendererInspectorIngressTicket,
     };
     use crate::devtools::ingress::io::RendererInspectorIoIngress;
-    #[cfg(feature = "devtools")]
     use crate::devtools::ingress::io::RendererRuntimeInspectorIoCommandClaim;
-    #[cfg(feature = "devtools")]
     use crate::devtools::ingress::main::{
         RendererInspectorMainIngress, RendererRuntimeInspectorMainCommandCompletion,
     };

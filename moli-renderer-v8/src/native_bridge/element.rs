@@ -297,6 +297,8 @@ use event_handlers::{
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use events::construct_keyboard_event;
 use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
@@ -315,9 +317,7 @@ pub(crate) use events::{
     construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
 };
 #[cfg(feature = "devtools")]
-pub(crate) use events::{
-    construct_keyboard_event, construct_pointer_event, construct_pointer_event_with_related_target,
-};
+pub(crate) use events::{construct_pointer_event, construct_pointer_event_with_related_target};
 #[cfg(feature = "devtools")]
 pub(crate) use focus::focus_live_element_for_inspector;
 pub(crate) use focus::is_disabled_form_control;

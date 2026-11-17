@@ -1412,6 +1412,7 @@ fn inline_owner_text_replacement_creates_a_new_sheet_and_detaches_the_old_wrappe
         "true|true|true|true|retained|2|1|#target { color: rgb(4, 5, 6); }|rgb(4, 5, 6)"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn inline_cssom_mutation_keeps_owner_text_as_input_only() {
     let mut vm = new_storage_test_vm("https://inline-sheet-owner-input.test/");

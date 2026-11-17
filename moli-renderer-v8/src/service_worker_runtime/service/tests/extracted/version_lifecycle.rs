@@ -704,6 +704,7 @@ fn stale_worker_start_completion_does_not_advance_version_state() {
     assert_eq!(diagnostics.versions[0].final_script_url, None);
     assert_eq!(diagnostics.versions[0].main_script_status, None);
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_pause_on_start_defers_initial_install_launch_after_target_creation() {
     let service = new_service_worker_runtime_service();
@@ -1151,6 +1152,7 @@ fn imported_script_update_check_change_creates_installing_version() {
     );
     assert!(!completion_queue.has_ready_task());
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_skip_waiting_scope_uses_activation_progress() {
     let service = new_service_worker_runtime_service();

@@ -68,6 +68,7 @@ fn dom_content_loaded_page_task_drains_pending_style_invalidations_after_listene
     assert_eq!(resolved, "rgb(30, 40, 50)");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn style_element_text_mutations_cache_owner_stylesheet_text() {
     let mut vm = new_storage_test_vm("https://style-text-cache.test/");

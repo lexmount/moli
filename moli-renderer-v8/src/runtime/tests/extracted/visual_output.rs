@@ -137,6 +137,7 @@ async fn capture_screenshot_paints_downloaded_raster_image_pixels() {
         [0, 255, 0, 255]
     );
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
     let runtime = initialize_layout_test_runtime();
@@ -660,6 +661,7 @@ async fn capture_screenshot_respects_mock_layout_policy() {
         RendererPageReply::CaptureScreenshot(RendererCaptureScreenshotReply::LayoutDisabled)
     ));
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn screenshot_and_screencast_flush_pending_wheel_actions_before_paint() {
     let runtime = initialize_layout_test_runtime();

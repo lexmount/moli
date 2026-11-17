@@ -117,8 +117,13 @@ jobs:
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Check standalone DevTools feature contracts
-        run: python3 tools/devtools-size-ab.py --check-only --online --jobs 2
+      - name: Check renderer tests without DevTools
+        run: cargo check --locked -p moli-renderer-v8 --no-default-features --tests
+
+      - name: Check standalone DevTools contracts and run runtime smoke
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: python3 tools/devtools-size-ab.py --check-only --runtime-smoke --online --jobs 2
 
   nextest:
     name: Nextest

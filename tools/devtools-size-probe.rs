@@ -1,17 +1,10 @@
-#[allow(dead_code)] // The shared Limo router also supports file entry points.
-mod server;
-
 use anyhow::{Result, ensure};
+use axum::{Router, http::header::CONTENT_TYPE, response::Html, routing::get};
 use moli_core::LayoutPolicy;
 use moli_core::page::{RendererCaptureScreenshotReply, RendererPrintToPdfReply};
 use moli_core::runtime::{Browser, BrowserConfig, RenderedDomWaitUntil};
 use std::time::Duration;
-
-#[derive(Clone, Copy)]
-enum InputType {
-    Script,
-    Module,
-}
+use tokio::net::TcpListener;
 
 fn main() -> Result<()> {
     tokio::runtime::Builder::new_current_thread()
@@ -24,10 +17,10 @@ fn main() -> Result<()> {
 async fn run() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
-    let mode = if std::env::args().any(|arg| arg == "script") {
-        InputType::Script
+    let script_attributes = if std::env::args().any(|arg| arg == "script") {
+        "defer"
     } else {
-        InputType::Module
+        r#"type="module""#
     };
     let source = r#"
 const b = document.createElement('button');
@@ -44,23 +37,48 @@ input.value = 'abc'; input.setSelectionRange(1, 2); input.setRangeText('Z');
 if (input.value !== 'aZc') throw new Error('text selection failed');
 globalThis.__probeDomOK = true;
 "#;
-    let router = server::source_router(source.into(), mode).route(
-        "/probe-sw.js",
-        axum::routing::get(|| async {
-            (
-                [("content-type", "application/javascript")],
-                "self.addEventListener('install', e => e.waitUntil(self.skipWaiting())); self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));",
-            )
-        }),
-    );
-    let router = router.route(
-        "/probe-worker-resource",
-        axum::routing::get(|| async { "native-worker-network" }),
-    );
-    let server = server::LocalServer::start(router, 0).await?;
+    let router = Router::new()
+        .route(
+            "/",
+            get(move || async move {
+                Html(format!(
+                    r#"<!doctype html><script {script_attributes} src="/probe.js"></script><body></body>"#
+                ))
+            }),
+        )
+        .route(
+            "/probe.js",
+            get(move || async move { ([(CONTENT_TYPE, "text/javascript")], source) }),
+        )
+        .route(
+            "/probe-sw.js",
+            get(|| async {
+                (
+                    [(CONTENT_TYPE, "text/javascript")],
+                    "self.addEventListener('install', e => e.waitUntil(self.skipWaiting())); self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));",
+                )
+            }),
+        )
+        .route(
+            "/probe-shared-worker.js",
+            get(|| async {
+                (
+                    [(CONTENT_TYPE, "text/javascript")],
+                    r#"self.onconnect = ({ports: [port]}) => {
+                        port.onmessage = async () => {
+                            port.postMessage(await (await fetch('/probe-worker-resource')).text());
+                        };
+                    };"#,
+                )
+            }),
+        )
+        .route("/probe-worker-resource", get(|| async { "native-worker-network" }));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    tokio::spawn(async move { axum::serve(listener, router).await });
     let mut page = browser
         .fetch_with_wait_until(
-            server.base_url(),
+            &base_url,
             RenderedDomWaitUntil::Idle,
             Duration::from_secs(5),
         )
@@ -93,6 +111,32 @@ globalThis.__probeDomOK = true;
     ensure!(
         value == Some(42),
         "unexpected promise evaluation: {promise}"
+    );
+    let page_and_shared_worker_fetch = page
+        .evaluate_runtime_expression_with_await_async(
+            r#"(() => {
+                    const worker = new SharedWorker('/probe-shared-worker.js');
+                    globalThis.__probeSharedWorker = worker;
+                    globalThis.__probeSharedWorkerFetch = () => new Promise((resolve, reject) => {
+                        worker.onerror = reject;
+                        worker.port.onmessage = event => resolve(event.data);
+                        worker.port.postMessage('network');
+                    });
+                    return Promise.all([
+                        fetch('/probe-worker-resource').then(response => response.text()),
+                        __probeSharedWorkerFetch()
+                    ]).then(results => results.join('|'));
+                })()"#,
+            true,
+        )
+        .await?;
+    ensure!(
+        ["/result/result/value", "/result/value", "/value"]
+            .into_iter()
+            .find_map(|path| page_and_shared_worker_fetch.pointer(path))
+            .and_then(|value| value.as_str())
+            == Some("native-worker-network|native-worker-network"),
+        "unexpected Page or SharedWorker fetch result: {page_and_shared_worker_fetch}"
     );
     let environment = moli_core::ProcessEnvironmentOwner::default();
     page.evaluate_runtime_expression_with_await_async(
@@ -172,6 +216,27 @@ globalThis.__probeDomOK = true;
             == Some(true),
         "service worker registration failed: {registration}"
     );
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "navigator.serviceWorker.controller !== null",
+            Duration::from_secs(5),
+        )
+        .await?;
+    let controlled_worker = page
+        .evaluate_runtime_expression_with_await_async(
+            "__probeSharedWorkerFetch().finally(() => __probeSharedWorker.port.close())",
+            true,
+        )
+        .await?;
+    ensure!(
+        ["/result/result/value", "/result/value", "/value"]
+            .into_iter()
+            .find_map(|path| controlled_worker.pointer(path))
+            .and_then(|value| value.as_str())
+            == Some("native-worker-network"),
+        "SharedWorker fetch failed after ServiceWorker claim: {controlled_worker}"
+    );
     let screenshot = page.start_capture_screenshot()?.wait().await?;
     let screenshot = page.finish_capture_screenshot(screenshot)?;
     match screenshot {
@@ -204,7 +269,7 @@ globalThis.__probeDomOK = true;
             .await?;
     }
     println!(
-        "probe-ok devtools={} host_eval=true promise=true wait=true environment=true worker_environment=true service_worker=true png=true pdf=true",
+        "probe-ok devtools={} host_eval=true promise=true wait=true environment=true page_fetch=true dedicated_worker=true shared_worker=true service_worker=true png=true pdf=true",
         cfg!(feature = "devtools")
     );
     Ok(())

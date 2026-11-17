@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_runs_file_reading_callback_without_retry_command() {
     let runtime = JsRuntime::initialize();
@@ -2860,6 +2861,7 @@ sender.postMessage(0);
         .await
         .expect("blocked-lifecycle fairness page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_scheduler_dispatches_universal_isolated_world_broadcast_channel_to_exact_realm() {
     let runtime = JsRuntime::initialize();
@@ -3813,6 +3815,7 @@ document.close();
         .await
         .expect("synchronous document.close test page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_document_close_completion_parks_lifecycle_until_capability_release() {
     let runtime = JsRuntime::initialize();

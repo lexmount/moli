@@ -182,6 +182,7 @@ fn input_files_accessors_reject_incompatible_receivers() {
     assert_eq!(result, "ok");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn directory_selected_files_keep_relative_paths_in_wrappers_clones_and_file_lists() {
     let mut vm = new_parsed_test_vm(

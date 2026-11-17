@@ -113,6 +113,7 @@ async fn assert_document_retains_window_identity_after_close(replacement: bool) 
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
     let mut vm = new_storage_test_vm("https://strict-window-binding.test/");
@@ -1006,6 +1007,7 @@ fn isolated_window_world_for_test(
     .expect("isolated wrapper-world identity")
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn isolated_window_world_ids_reuse_names_across_frames_but_separate_isolates() {
     for policy in [
@@ -1172,6 +1174,7 @@ fn inherited_isolated_world_identity_does_not_authorize_an_unregistered_context(
     .unwrap();
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world() {
     for policy in [
@@ -1281,6 +1284,7 @@ async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world()
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn implicit_window_world_members_retire_independently_and_release_the_host() {
     for policy in [
@@ -1421,6 +1425,7 @@ fn failed_target_window_world_bootstrap_does_not_publish_a_partial_realm() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn isolated_window_proxies_follow_child_navigation_in_surviving_worlds() {
     for policy in [
@@ -1634,6 +1639,7 @@ async fn isolated_proxy_navigation_rechecks_origin_and_universal_access() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn closed_isolated_session_proxies_are_not_restored_by_navigation() {
     let mut vm = new_storage_test_vm("https://isolated-proxy-session.test/");
@@ -1718,6 +1724,7 @@ fn reused_isolated_proxy_recovers_after_bootstrap_fails_after_attachment() {
     assert!(weak.upgrade().is_none());
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn named_inspector_world_promotes_implicit_members_within_its_session() {
     for policy in [
@@ -1801,6 +1808,7 @@ async fn named_inspector_world_promotes_implicit_members_within_its_session() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn renderer_output_settlement_records_contexts_without_materializing_ordinary_messages() {
     use crate::runtime::{

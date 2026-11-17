@@ -101,9 +101,10 @@ use super::script_preloads::{BufferedDocumentPreloadState, ServiceWorkerScriptPr
 
 fn script_preloads_require_owner_admission(env: &PageVmEnvConfig) -> bool {
     !main_document_parser_scripting_enabled(env)
-        || env
-            .fetch_subresource_interception_classes
-            .intercepts(crate::types::SubresourceResourceType::Script)
+        || (cfg!(feature = "devtools")
+            && env
+                .fetch_subresource_interception_classes
+                .intercepts(crate::types::SubresourceResourceType::Script))
 }
 
 pub(in crate::runtime) fn main_document_parser_scripting_enabled(env: &PageVmEnvConfig) -> bool {

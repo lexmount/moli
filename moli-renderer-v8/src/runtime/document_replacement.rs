@@ -266,5 +266,5 @@ impl RendererDocumentPreparationTarget {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests;

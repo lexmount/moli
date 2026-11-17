@@ -4,7 +4,7 @@
 Uses this checkout's patches and local moli-core. Both variants share a lockfile,
 target directory and release profile; the existing Limo executable is preserved.
 Run from the Moli root: python3 tools/devtools-size-ab.py --limo-root ../limo
-API contracts need no Limo checkout: python3 tools/devtools-size-ab.py --check-only
+Standalone checks need no Limo checkout: python3 tools/devtools-size-ab.py --check-only --runtime-smoke
 """
 
 import argparse
@@ -81,6 +81,8 @@ def main():
     parser.add_argument('--order', choices=('on-first', 'off-first'), default='off-first')
     parser.add_argument('--skip-contracts', action='store_true', help='Reuse previously checked API contracts')
     parser.add_argument('--check-only', action='store_true', help='Check feature/API contracts without linking')
+    parser.add_argument('--runtime-smoke', action='store_true',
+                        help='Also build and run the standalone probe with DevTools disabled in check-only mode')
     args = parser.parse_args()
     if args.limo_root is None and not args.check_only:
         parser.error('--limo-root is required for the release comparison; use --check-only for standalone API checks')
@@ -95,7 +97,6 @@ def main():
     if limo:
         for source in ('main.rs', 'server.rs'):
             shutil.copyfile(limo / 'src' / source, app / 'src' / source)
-        shutil.copyfile(moli / 'tools/devtools-size-probe.rs', app / 'src/devtools_probe.rs')
         manifest = (limo / 'Cargo.toml').read_text().split('[patch.crates-io]')[0]
     else:
         (app / 'src/main.rs').write_text('fn main() {}\n')
@@ -119,12 +120,19 @@ codegen-units = 1
     dependency_end = next(i for i, line in enumerate(lines) if line.startswith('[profile.'))
     lines.insert(dependency_end, f'moli-command-types = {{ path = "{moli / "moli-types/moli-command-types"}", default-features = false }}\n')
     lines.insert(dependency_end, f'moli-renderer-v8 = {{ path = "{moli / "moli-renderer-v8"}", default-features = false }}\n')
+    if not limo and args.runtime_smoke:
+        lines[dependency_end:dependency_end] = [
+            'anyhow = "1"',
+            'axum = "0.8"',
+            'tokio = { version = "1", features = ["net", "rt", "time"] }',
+        ]
     manifest = '\n'.join(lines) + '\n\n[workspace]\n\n[features]\ndefault = []\ndevtools = ["moli-core/devtools", "moli-command-types/devtools"]\ntypes-devtools-only = ["moli-command-types/devtools"]\nrenderer-devtools-only = ["moli-renderer-v8/devtools"]\nace-only = ["moli-core/ace-protocol"]\n\n'
     patches = (moli / 'Cargo.toml').read_text()
     patches = patches[patches.index('[patch.crates-io]'):patches.index('[workspace.lints.clippy]')]
     patches = patches.replace('path = "vendor/', f'path = "{moli}/vendor/')
     manifest += patches
-    if limo:
+    if limo or args.runtime_smoke:
+        shutil.copyfile(moli / 'tools/devtools-size-probe.rs', app / 'src/devtools_probe.rs')
         manifest += '\n[[bin]]\nname = "devtools-probe"\npath = "src/devtools_probe.rs"\n'
     contracts = {
         'runtime-contract': '''fn main() {
@@ -184,6 +192,12 @@ fn main() {
         'page-dispatch': ('moli_core::page::Page::start_runtime_protocol_message', 'start_runtime_protocol_message'),
         'input': ('moli_core::page::Page::start_dispatch_key_event_with_location_outcome', 'start_dispatch_key_event_with_location_outcome'),
         'network': ('moli_core::page::Page::start_set_fetch_subresource_interception', 'start_set_fetch_subresource_interception'),
+        'dedicated-worker-pause': ('moli_core::runtime::RendererBrowserContextRuntime::set_dedicated_worker_pause_on_start_for_devtools', 'set_dedicated_worker_pause_on_start_for_devtools'),
+        'shared-worker-pause': ('moli_core::runtime::RendererBrowserContextRuntime::set_shared_worker_pause_on_start_for_devtools', 'set_shared_worker_pause_on_start_for_devtools'),
+        'navigation-interception': ('moli_core::runtime::NavigationEngine::set_subresource_interception', 'set_subresource_interception'),
+        'commit-interception': ('|config: &moli_core::runtime::PreparedDocumentPageCommitConfiguration| config.fetch_subresource_interception', 'fetch_subresource_interception'),
+        'network-policy-interception': ('moli_renderer_v8::network::PageNetworkPolicy::set_subresource_interception', 'set_subresource_interception'),
+        'worker-policy-interception': ('moli_renderer_v8::network::ResourceInterceptionPolicy::set_interception', 'set_interception'),
     }
     for name, (expression, _) in removed_apis.items():
         contracts[f'devtools-{name}-contract'] = f'fn main() {{ let _ = {expression}; }}'
@@ -231,7 +245,13 @@ fn main() {
             if result.returncode == 0 or expected not in diagnostic:
                 raise RuntimeError(f'{name}: expected an unavailable DevTools API in the off build; see {output}')
     if args.check_only:
-        print('Feature contracts passed: runtime APIs compile; DevTools types/APIs exist only with devtools.')
+        if not args.skip_contracts:
+            print('Feature contracts passed. Runtime APIs compile, and DevTools APIs require the feature.')
+        if args.runtime_smoke:
+            run(['cargo', 'build', *common, '--bin', 'devtools-probe'], 'probe-build-off')
+            probe = 'devtools-probe.exe' if os.name == 'nt' else 'devtools-probe'
+            run([str(target.resolve() / 'debug' / probe)], 'probe-off', timeout=30)
+            print((output / 'probe-off.log').read_text().strip())
         return
     results = {}
     order = ('off', 'on') if args.order == 'off-first' else ('on', 'off')

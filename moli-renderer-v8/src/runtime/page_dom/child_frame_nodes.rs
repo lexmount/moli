@@ -35,10 +35,9 @@ pub(super) fn collect_shadow_including_document_handles(
     handles
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
-    #[cfg(feature = "devtools")]
     use crate::dom::native::DomHost;
     use crate::dom::native::NativeDom;
 

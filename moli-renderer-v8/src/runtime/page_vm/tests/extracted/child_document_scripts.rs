@@ -1748,6 +1748,7 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
     })
     .await;
 }
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn page_vm_input_event_commits_child_navigation_before_document_script_ready() {
     let page_vm = test_page_vm();

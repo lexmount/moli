@@ -1,3 +1,4 @@
+use super::context_shutdown::stop_worker_version_locked;
 use super::*;
 
 impl ServiceWorkerRuntimeService {
@@ -363,24 +364,7 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(crate) fn devtools_stop_all_workers(&self) -> Result<usize, String> {
-        let hosts = {
-            let mut state = self.inner.state.lock();
-            let version_ids = state.versions.keys().copied().collect::<Vec<_>>();
-            let mut hosts = Vec::new();
-            for version_id in version_ids {
-                if let Some(host) =
-                    stop_worker_version_locked(&mut state, version_id, "devtools_stop_all")
-                {
-                    hosts.push(host);
-                }
-            }
-            hosts
-        };
-        let stopped_count = hosts.len();
-        for host in hosts {
-            host.terminate_without_join();
-        }
-        Ok(stopped_count)
+        Ok(self.stop_running_workers("devtools_stop_all"))
     }
 
     pub(crate) fn devtools_skip_waiting_for_scope(&self, scope_url: &Url) -> Result<bool, String> {
@@ -661,19 +645,4 @@ fn active_registration_for_devtools_locked(
         registration.scope_url.clone(),
         registration.storage_key.clone(),
     ))
-}
-
-fn stop_worker_version_locked(
-    state: &mut ServiceWorkerRuntimeState,
-    version_id: ServiceWorkerVersionId,
-    reason: &'static str,
-) -> Option<SharedRendererServiceWorkerHost> {
-    let host = {
-        let version = state.versions.get_mut(&version_id)?;
-        let host = version.running_state.take_host_for_shutdown()?;
-        version.idle_timeout_token = None;
-        host
-    };
-    state.record_target_stopped(version_id, host.run_identity(), reason);
-    Some(host)
 }

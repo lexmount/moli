@@ -12,7 +12,7 @@ use std::sync::{
 pub(crate) struct VisualResourceGeneration(Arc<AtomicU64>);
 
 impl VisualResourceGeneration {
-    #[cfg(feature = "devtools")]
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn current(&self) -> u64 {
         self.0.load(Ordering::Acquire)
     }

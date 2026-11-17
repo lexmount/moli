@@ -425,7 +425,7 @@ impl PageVm {
                     self.vm_mut().snapshot_console_messages_with_context()?,
                 ))
             }
-            #[cfg(feature = "devtools")]
+            #[cfg(any(test, feature = "devtools"))]
             RendererPageCommand::RuntimeHeapUsage => {
                 Ok(RendererPageReply::RuntimeHeapUsage(Box::new(
                     self.vm_mut()

@@ -498,6 +498,7 @@ fn css_rule_css_text_uses_seeded_pdb_block_for_safe_rules_before_style_wrapper()
         "div { display: block; opacity: 0.5; }|0% { opacity: 0.5; }|span { --x: 1; display: block; }|100% { opacity: 1; }||display: block; opacity: 0.5;||opacity: 0.5;"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn css_rule_list_serialization_uses_rule_owned_pdb_block() {
     let mut vm = new_storage_test_vm("https://rule-list-pdb-serialization.test/");
@@ -540,6 +541,7 @@ fn css_rule_list_serialization_uses_rule_owned_pdb_block() {
             })
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn css_rule_mixed_style_serialization_uses_rule_owned_pdb_segment() {
     let mut vm = new_storage_test_vm("https://rule-mixed-pdb-serialization.test/");

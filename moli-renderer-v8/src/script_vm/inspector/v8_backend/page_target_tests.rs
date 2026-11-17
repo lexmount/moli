@@ -190,6 +190,7 @@ fn closing_running_page_leaves_peer_isolate_usable() {
     run_close_during_script(true);
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn closing_peer_preserves_debugger_pause_and_its_resume_route() {
     use crate::runtime::{
@@ -278,6 +279,7 @@ fn closing_peer_preserves_debugger_pause_and_its_resume_route() {
     backend.context_destroyed(v8::Local::new(scope, &context));
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn owner_shutdown_seals_all_page_queues_and_rejects_new_page() {
     #[cfg(feature = "devtools")]

@@ -115,6 +115,7 @@ fn selection_worlds_share_live_ranges_with_local_wrappers() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn selection_worlds_keep_child_documents_independent() {
     let mut vm = new_storage_html_test_vm("https://selection-child-worlds.test/");
@@ -143,6 +144,7 @@ async fn selection_worlds_keep_child_documents_independent() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn selection_worlds_native_input_uses_the_focused_child_document() {
     let mut vm = new_storage_html_test_vm("https://selection-child-input.test/");
@@ -192,6 +194,7 @@ async fn selection_worlds_native_input_uses_the_focused_child_document() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn selection_worlds_rebind_initial_child_document_together() {
     let mut vm = new_storage_html_test_vm("https://selection-worlds-rebind.test/");

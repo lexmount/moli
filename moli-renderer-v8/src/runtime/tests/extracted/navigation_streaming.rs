@@ -1788,6 +1788,7 @@ async fn renderer_owned_navigation_survives_page_creation_observer_detach() {
         .await
         .expect("renderer-owned navigation test page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn replacement_navigation_releases_old_inspector_deferred_response_callbacks() {
     let runtime = JsRuntime::initialize();

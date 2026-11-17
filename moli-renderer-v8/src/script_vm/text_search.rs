@@ -175,7 +175,7 @@ fn resource_urls_match(left: &str, right: &str) -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
 

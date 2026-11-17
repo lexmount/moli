@@ -367,6 +367,7 @@ fn scanned_stylesheet_starts_without_waiting_for_parser_dom_ownership() {
                 }));
     });
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn scanned_stylesheet_admission_respects_media_and_fetch_interception() {
     run_phase_one_large_stack_test("scanned-stylesheet-admission-gates", || {

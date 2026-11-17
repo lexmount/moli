@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(feature = "devtools")]
 use crate::document_runtime::DevToolsDomMutationFact;
 use crate::live_document_parser::LiveDocumentParserStepOutcome;
 
@@ -47,6 +48,8 @@ fn parser_text_batches_before_inspector_and_mutation_observers() {
                                {characterData:true, characterDataOldValue:true});",
                         ).unwrap();
                     }
+                    #[cfg(feature = "devtools")]
+                    {
                     // Publish before the next chunk, just as chromedp's
                     // DOM.getDocument does while a navigation is still streaming.
                     page_vm
@@ -56,6 +59,7 @@ fn parser_text_batches_before_inspector_and_mutation_observers() {
                         .vm_mut()
                         .document_runtime
                         .take_pending_devtools_dom_mutations();
+                    }
                     let input = if raw_text { "x<" } else { "x&amp;" }.repeat(2_048) + "x";
                     let expected =
                         seed.to_owned() + &if raw_text { "x<" } else { "x&" }.repeat(2_048) + "x";
@@ -63,6 +67,8 @@ fn parser_text_batches_before_inspector_and_mutation_observers() {
                         driver.pump_parse_step_with_signals(&mut page_vm, owner, &input),
                         LiveDocumentParserStepOutcome::InputBoundary
                     ));
+                    #[cfg(feature = "devtools")]
+                    {
                     let facts = page_vm
                         .vm_mut()
                         .document_runtime
@@ -94,7 +100,10 @@ fn parser_text_batches_before_inspector_and_mutation_observers() {
                          (realm={with_window_realm}, raw_text={raw_text})",
                         expected.len()
                     );
+                    }
                     if with_window_realm {
+                        let actual = page_vm.vm_mut().eval("document.querySelector('main, script').textContent").unwrap();
+                        assert_eq!(actual, expected);
                         let old_values = page_vm.vm_mut().eval(
                             "JSON.stringify(__tree_buffer_old_values.concat( \
                                __tree_buffer_observer.takeRecords().map(record => record.oldValue)))",

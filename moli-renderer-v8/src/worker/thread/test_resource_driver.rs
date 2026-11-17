@@ -1,5 +1,7 @@
 use super::*;
-use crate::{RendererPageCommand as C, RendererSyntheticResponseBody};
+use crate::RendererSyntheticResponseBody;
+use crate::network::interception_control::{InterceptionPhase, ResourceInterceptionDecision};
+
 impl WorkerTestHandle {
     pub(crate) async fn native_response_body(
         &self,
@@ -16,51 +18,54 @@ impl WorkerTestHandle {
         body.capture(64 * 1024 * 1024).await.unwrap()
     }
 
-    fn decide(&self, id: u64, command: C) {
+    fn decide(&self, id: u64, phase: InterceptionPhase, decision: ResourceInterceptionDecision) {
         self.native_pauses
             .lock()
             .get(&id)
             .expect("a test decision requires its exact native pause")
-            .dispatch(command)
-            .expect("native test decision");
+            .send_test_decision(id, phase, decision);
     }
+
     pub(crate) fn continue_pending_fetch(&self, r: crate::worker::WorkerPendingFetchContinue) {
-        let id = r.fetch_id;
-        let command = match r.auth {
-            Some(auth) => C::ContinuePendingSubresourceAuth {
-                internal_id: id,
-                auth,
-            },
-            None => C::ContinuePendingSubresourceFetch {
-                internal_id: id,
-                url: Some(r.url),
-                method: Some(r.method),
-                body: Some(r.body),
-                headers: Some(r.headers.into()),
-                intercept_response: r.intercept_response,
-                handle_auth_requests: r.handle_auth_requests,
-            },
+        let (phase, decision) = match r.auth {
+            Some(auth) => (
+                InterceptionPhase::Auth,
+                ResourceInterceptionDecision::Auth(auth),
+            ),
+            None => (
+                InterceptionPhase::Request,
+                ResourceInterceptionDecision::ContinueRequest {
+                    url: Some(r.url),
+                    method: Some(r.method),
+                    body: Some(r.body),
+                    headers: Some(r.headers.into()),
+                    intercept_response: r.intercept_response,
+                    handle_auth_requests: r.handle_auth_requests,
+                },
+            ),
         };
-        self.decide(id, command);
+        self.decide(r.fetch_id, phase, decision);
     }
+
     pub(crate) fn continue_pending_xhr(&self, r: crate::worker::WorkerPendingXhrContinue) {
-        let id = r.xhr_id;
-        let command = match r.auth {
-            Some(auth) => C::ContinuePendingSubresourceAuth {
-                internal_id: id,
-                auth,
-            },
-            None => C::ContinuePendingSubresourceFetch {
-                internal_id: id,
-                url: Some(r.url),
-                method: Some(r.method),
-                body: Some(r.body),
-                headers: Some(r.headers.into()),
-                intercept_response: r.intercept_response,
-                handle_auth_requests: r.handle_auth_requests,
-            },
+        let (phase, decision) = match r.auth {
+            Some(auth) => (
+                InterceptionPhase::Auth,
+                ResourceInterceptionDecision::Auth(auth),
+            ),
+            None => (
+                InterceptionPhase::Request,
+                ResourceInterceptionDecision::ContinueRequest {
+                    url: Some(r.url),
+                    method: Some(r.method),
+                    body: Some(r.body),
+                    headers: Some(r.headers.into()),
+                    intercept_response: r.intercept_response,
+                    handle_auth_requests: r.handle_auth_requests,
+                },
+            ),
         };
-        self.decide(id, command);
+        self.decide(r.xhr_id, phase, decision);
     }
     pub(crate) fn fulfill_pending_fetch(
         &self,
@@ -89,12 +94,12 @@ impl WorkerTestHandle {
     ) {
         self.decide(
             id,
-            C::FulfillPendingSubresourceFetch {
-                internal_id: id,
+            InterceptionPhase::Request,
+            ResourceInterceptionDecision::Fulfill {
                 request_overrides: None,
-                response_code: status,
-                response_headers: headers,
-                response_body: body,
+                status,
+                headers,
+                body,
             },
         );
     }
@@ -106,10 +111,8 @@ impl WorkerTestHandle {
     ) {
         self.decide(
             r.xhr_id,
-            C::FailPendingSubresourceFetch {
-                internal_id: r.xhr_id,
-                error_text,
-            },
+            InterceptionPhase::Request,
+            ResourceInterceptionDecision::Fail(error_text),
         );
     }
     pub(crate) fn fail_pending_fetch_auth(
@@ -119,10 +122,8 @@ impl WorkerTestHandle {
     ) {
         self.decide(
             r.fetch_id,
-            C::FailPendingSubresourceAuth {
-                internal_id: r.fetch_id,
-                error_text,
-            },
+            InterceptionPhase::Auth,
+            ResourceInterceptionDecision::Fail(error_text),
         );
     }
     pub(crate) fn fail_pending_xhr_auth(
@@ -132,10 +133,8 @@ impl WorkerTestHandle {
     ) {
         self.decide(
             r.xhr_id,
-            C::FailPendingSubresourceAuth {
-                internal_id: r.xhr_id,
-                error_text,
-            },
+            InterceptionPhase::Auth,
+            ResourceInterceptionDecision::Fail(error_text),
         );
     }
     pub(crate) fn continue_pending_fetch_response(
@@ -146,11 +145,8 @@ impl WorkerTestHandle {
     ) {
         self.decide(
             r.fetch_id,
-            C::ContinuePendingSubresourceResponse {
-                internal_id: r.fetch_id,
-                response_code: status,
-                response_headers: headers,
-            },
+            InterceptionPhase::Response,
+            ResourceInterceptionDecision::ContinueResponse { status, headers },
         );
     }
     pub(crate) fn continue_pending_xhr_response(
@@ -161,11 +157,8 @@ impl WorkerTestHandle {
     ) {
         self.decide(
             r.xhr_id,
-            C::ContinuePendingSubresourceResponse {
-                internal_id: r.xhr_id,
-                response_code: status,
-                response_headers: headers,
-            },
+            InterceptionPhase::Response,
+            ResourceInterceptionDecision::ContinueResponse { status, headers },
         );
     }
 }

@@ -136,6 +136,7 @@ globalThis.slottedStyle=getComputedStyle(document.getElementById('slotted'));
     .expect("flat-tree layout and live shadow style must remain separate");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn computed_size_reads_do_not_invalidate_screencast_tokens() {
     use crate::runtime::{

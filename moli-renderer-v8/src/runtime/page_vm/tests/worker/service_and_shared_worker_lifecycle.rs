@@ -801,6 +801,7 @@ async fn module_shared_worker_credentials_omit_omits_script_cookies() {
     .await;
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn shared_worker_console_flows_through_runtime_observable_source() {
     run_page_vm_async_test(async move {

@@ -57,6 +57,7 @@ async fn recv_timer_console_publication(
     .expect("the timer must autonomously publish its console output")
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn timer_console_output_during_open_stream_does_not_wait_for_load() {
     let mut source = OpenStreamingPage::create(
@@ -97,6 +98,7 @@ async fn timer_console_output_during_open_stream_does_not_wait_for_load() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn timer_console_output_after_load_keeps_source_document_when_callback_replaces_it() {
     let runtime = JsRuntime::initialize();
@@ -434,22 +436,35 @@ setTimeout(() => location.replace(location.href), 0);
     // Owner commands are ordered after the checked-out navigation task. The
     // response reached Prepared, but its fallible commit must return a Live
     // entry with the original context, inspector and parser still resident.
-    let messages = dispatch_runtime_protocol_for_test(
-        &source.page,
-        serde_json::json!({
-            "id": 1,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "window === __sourceWindow && document === __sourceDocument && !document.getElementById('replacement')",
-                "returnByValue": true
-            }
-        }),
-    )
-    .await
-    .expect("commit validation failure must preserve the source Inspector context");
-    let response = runtime_protocol_response_by_id(&messages, 1)
-        .expect("source Inspector evaluation should reply");
-    assert_eq!(response["result"]["result"]["value"], true);
+    let expression = "window === __sourceWindow && document === __sourceDocument && !document.getElementById('replacement')";
+    #[cfg(feature = "devtools")]
+    {
+        let messages = dispatch_runtime_protocol_for_test(
+            &source.page,
+            serde_json::json!({
+                "id": 1,
+                "method": "Runtime.evaluate",
+                "params": { "expression": expression, "returnByValue": true }
+            }),
+        )
+        .await
+        .expect("commit validation failure must preserve the source Inspector context");
+        let response = runtime_protocol_response_by_id(&messages, 1)
+            .expect("source Inspector evaluation should reply");
+        assert_eq!(response["result"]["result"]["value"], true);
+    }
+    #[cfg(not(feature = "devtools"))]
+    {
+        let (reply, _) = source
+            .page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: expression.to_owned(),
+                await_promise: false,
+            })
+            .await
+            .expect("commit validation failure must preserve the source context");
+        assert_eq!(renderer_json_value(reply), Some(serde_json::json!(true)));
+    }
     assert_eq!(
         has_pending_location_navigation_for_test(&source.page).await,
         Some(false)
