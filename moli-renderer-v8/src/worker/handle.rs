@@ -1,8 +1,6 @@
 //! Worker-side message types and parent-facing handle.
 
-use crate::protocol_types::{
-    SubresourceNetworkRecord, WebSocketFrameDirection, WebSocketFrameOpcode,
-};
+use crate::protocol_types::SubresourceNetworkRecord;
 use crate::runtime::WorkerInspectorError;
 use crate::runtime::{
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
@@ -305,13 +303,6 @@ pub(crate) enum WorkerToParentMessage {
     /// Completion signal for a worker-owned fetch/XHR that was continued after interception.
     #[cfg(test)]
     SubresourceContinue(PendingSubresourceContinueEvent),
-    /// Worker-owned WebSocket handshake activity. The embedded socket id is worker-local; the
-    /// parent remaps it before exposing it through page-level CDP state.
-    WebSocketSubresource(SubresourceNetworkRecord),
-    /// Worker-owned WebSocket lifecycle activity.
-    WebSocketLifecycle(WorkerWebSocketLifecycleEvent),
-    /// Worker-owned WebSocket frame activity.
-    WebSocketFrame(WorkerWebSocketFrameEvent),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -507,55 +498,6 @@ pub(crate) struct WorkerPendingXhrContinue {
     pub(crate) intercept_response: bool,
     pub(crate) handle_auth_requests: bool,
     pub(crate) auth: Option<SubresourceAuthCredentials>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum WorkerWebSocketLifecycleEvent {
-    Open {
-        socket_id: u64,
-        document_url: Url,
-        url: Url,
-    },
-    Error {
-        socket_id: u64,
-        document_url: Url,
-        url: Url,
-        error_text: String,
-    },
-    Closing {
-        socket_id: u64,
-        document_url: Url,
-        url: Url,
-    },
-    Close {
-        socket_id: u64,
-        document_url: Url,
-        url: Url,
-        code: u16,
-        reason: String,
-        was_clean: bool,
-    },
-}
-
-impl WorkerWebSocketLifecycleEvent {
-    pub(crate) fn socket_id(&self) -> u64 {
-        match self {
-            Self::Open { socket_id, .. }
-            | Self::Error { socket_id, .. }
-            | Self::Closing { socket_id, .. }
-            | Self::Close { socket_id, .. } => *socket_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct WorkerWebSocketFrameEvent {
-    pub(crate) socket_id: u64,
-    pub(crate) document_url: Url,
-    pub(crate) url: Url,
-    pub(crate) direction: WebSocketFrameDirection,
-    pub(crate) opcode: WebSocketFrameOpcode,
-    pub(crate) payload_length: usize,
 }
 
 #[derive(Debug, Clone, Default)]

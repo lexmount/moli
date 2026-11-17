@@ -149,11 +149,7 @@ impl RendererSharedWorkerHost {
             message if is_worker_host_bridge_message(&message) => {
                 self.send_host_bridge_message(message, script_url);
             }
-            WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
-            | WorkerToParentMessage::Post(_) => {
+            WorkerToParentMessage::SubresourceNetwork(_) | WorkerToParentMessage::Post(_) => {
                 trace!(url = %script_url, ?message, "dropping unsupported shared worker parent message");
             }
         }

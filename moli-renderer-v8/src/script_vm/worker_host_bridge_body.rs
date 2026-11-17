@@ -10,16 +10,12 @@
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{Result, bail};
-use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::ScriptVm;
 use crate::{
     native_bridge::PageScriptHost,
     types::DedicatedWorkerId,
-    worker::{
-        WorkerRuntimeEvent, WorkerToParentMessage, WorkerWebSocketFrameEvent,
-        WorkerWebSocketLifecycleEvent,
-    },
+    worker::{WorkerRuntimeEvent, WorkerToParentMessage},
 };
 
 /// What an authorized Worker host-bridge body actually did.
@@ -42,59 +38,10 @@ pub(crate) enum WorkerHostBridgeBodyEffect {
     ExactTargetUnavailable,
 }
 
-/// Exact Worker namespace used while translating one host/control record.
-///
-/// It is deliberately separate from `WorkerRuntimeEvent`: by the time this
-/// value exists, the caller has already selected the right V8 context. The
-/// common record dispatcher can therefore match each message kind once while
-/// still choosing the owner-specific pending-fetch and WebSocket identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorkerHostRecordOwner {
-    Dedicated(DedicatedWorkerId),
-    Shared(SharedWorkerInstanceId),
-}
-
-impl WorkerHostRecordOwner {
-    fn encoded_websocket_id(self, local_socket_id: u64) -> u64 {
-        match self {
-            Self::Dedicated(worker_id) => {
-                ScriptVm::worker_websocket_socket_id(worker_id, local_socket_id).as_u64()
-            }
-            Self::Shared(instance_id) => {
-                ScriptVm::shared_worker_websocket_socket_id(instance_id, local_socket_id).as_u64()
-            }
-        }
-    }
-
-    fn websocket_lifecycle_event(
-        self,
-        event: &WorkerWebSocketLifecycleEvent,
-    ) -> crate::types::WebSocketLifecycleEvent {
-        match self {
-            Self::Dedicated(worker_id) => {
-                ScriptVm::worker_websocket_lifecycle_event(worker_id, event)
-            }
-            Self::Shared(instance_id) => {
-                ScriptVm::shared_worker_websocket_lifecycle_event(instance_id, event)
-            }
-        }
-    }
-
-    fn websocket_frame_event(
-        self,
-        event: &WorkerWebSocketFrameEvent,
-    ) -> crate::types::WebSocketNetworkEvent {
-        match self {
-            Self::Dedicated(worker_id) => ScriptVm::worker_websocket_frame_event(worker_id, event),
-            Self::Shared(instance_id) => {
-                ScriptVm::shared_worker_websocket_frame_event(instance_id, event)
-            }
-        }
-    }
-
-    fn rejects_client_facing_record(self) -> bool {
-        matches!(self, Self::Dedicated(_))
-    }
+    Dedicated,
+    Shared,
 }
 
 impl ScriptVm {
@@ -165,10 +112,9 @@ impl ScriptVm {
                     WorkerHostBridgeBodyEffect::ExactTargetUnavailable
                 })
             }
-            WorkerRuntimeEvent::SharedWorkerMessage {
-                instance_id,
-                message,
-            } => self.apply_shared_worker_host_bridge_record_body(instance_id, *message),
+            WorkerRuntimeEvent::SharedWorkerMessage { message, .. } => {
+                self.apply_shared_worker_host_bridge_record_body(*message)
+            }
             WorkerRuntimeEvent::Message {
                 message,
                 worker_id: _,
@@ -222,15 +168,13 @@ impl ScriptVm {
 
     fn apply_shared_worker_host_bridge_record_body(
         &mut self,
-        instance_id: SharedWorkerInstanceId,
         message: WorkerToParentMessage,
     ) -> Result<WorkerHostBridgeBodyEffect> {
         let context_host = self._context_host.clone();
-        self.with_default_context_scope(|scope, _host_ptr| {
-            Self::apply_worker_host_bridge_record_in_scope(
-                scope,
+        self.with_default_context_scope(|_scope, _host_ptr| {
+            Self::apply_worker_host_bridge_record(
                 &context_host,
-                WorkerHostRecordOwner::Shared(instance_id),
+                WorkerHostRecordOwner::Shared,
                 message,
             )
         })?;
@@ -266,10 +210,9 @@ impl ScriptVm {
                     return Ok(false);
                 }
 
-                Self::apply_worker_host_bridge_record_in_scope(
-                    scope,
+                Self::apply_worker_host_bridge_record(
                     &context_host,
-                    WorkerHostRecordOwner::Dedicated(worker_id),
+                    WorkerHostRecordOwner::Dedicated,
                     message,
                 )?;
                 Ok(true)
@@ -282,8 +225,7 @@ impl ScriptVm {
         })
     }
 
-    fn apply_worker_host_bridge_record_in_scope(
-        _scope: &mut v8::PinScope<'_, '_>,
+    fn apply_worker_host_bridge_record(
         context_host: &Rc<RefCell<PageScriptHost>>,
         owner: WorkerHostRecordOwner,
         message: WorkerToParentMessage,
@@ -296,26 +238,8 @@ impl ScriptVm {
                 context_host.borrow_mut().record_subresource_network(record);
             }
 
-            WorkerToParentMessage::WebSocketSubresource(record) => {
-                let Some(local_socket_id) = record.websocket_socket_id() else {
-                    return Ok(());
-                };
-                context_host.borrow_mut().record_subresource_network(
-                    record.with_websocket_socket_id(owner.encoded_websocket_id(local_socket_id)),
-                );
-            }
-            WorkerToParentMessage::WebSocketLifecycle(event) => {
-                context_host
-                    .borrow_mut()
-                    .record_websocket_lifecycle_event(owner.websocket_lifecycle_event(&event));
-            }
-            WorkerToParentMessage::WebSocketFrame(event) => {
-                context_host
-                    .borrow_mut()
-                    .record_websocket_network_event(owner.websocket_frame_event(&event));
-            }
             WorkerToParentMessage::Post(_) | WorkerToParentMessage::Error { .. }
-                if owner.rejects_client_facing_record() =>
+                if owner == WorkerHostRecordOwner::Dedicated =>
             {
                 bail!("client-facing DedicatedWorker event entered the host-bridge source");
             }

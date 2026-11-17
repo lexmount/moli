@@ -206,8 +206,6 @@ pub enum RendererOwnerResourceActivitySource {
     WorkerFetchCancellation,
     /// Worker fetch/XHR continue results that can produce response/auth/completion follow-up.
     WorkerContinueEvent,
-    /// Worker WebSocket lifecycle/frame records that bridge back into CDP-visible Network state.
-    WorkerWebSocket,
     ChildDocument,
     ChildClassicScript,
     ChildBlockingStylesheet,

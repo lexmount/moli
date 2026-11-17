@@ -850,7 +850,6 @@ pub(crate) mod web_fonts;
 mod web_mcp;
 pub(crate) mod webcrypto_tasks;
 mod websocket_event_body;
-mod websocket_worker;
 mod window_message;
 mod worker_host_bridge_body;
 

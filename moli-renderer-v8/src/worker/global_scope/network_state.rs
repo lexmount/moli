@@ -86,14 +86,6 @@ pub(super) fn next_xhr_id(state: &mut WorkerGlobalState) -> u32 {
     state.next_xhr_id
 }
 
-pub(super) fn next_websocket_id(state: &mut WorkerGlobalState) -> u64 {
-    state.next_websocket_id = state
-        .next_websocket_id
-        .checked_add(1)
-        .expect("worker WebSocket id space exhausted");
-    state.next_websocket_id
-}
-
 pub(super) fn worker_url_blocked(patterns: &[String], url: &Url) -> bool {
     let value = url.as_str();
     patterns
@@ -115,8 +107,6 @@ pub(in crate::worker) struct WorkerWebSocketState {
     pub(in crate::worker) connection: WebSocketConnectionHandle,
     pub(in crate::worker) document_url: Url,
     pub(in crate::worker) url: Url,
-    pub(in crate::worker) loader: crate::network::context::WorkerResourceLoader,
     pub(in crate::worker) load: Option<ResourceLoadLease>,
-    pub(in crate::worker) opened: bool,
-    pub(in crate::worker) network_recorded: bool,
+    pub(in crate::worker) handshake_recorded: bool,
 }

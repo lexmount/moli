@@ -141,16 +141,6 @@ impl PageScriptHost {
         self.note_subresource_activity();
     }
 
-    pub(crate) fn record_websocket_network_event(&mut self, event: WebSocketNetworkEvent) {
-        self.push_network_output_item(ScriptNetworkOutputItem::WebSocketNetworkEvent(event));
-        self.note_subresource_activity();
-    }
-
-    pub(crate) fn record_websocket_lifecycle_event(&mut self, event: WebSocketLifecycleEvent) {
-        self.push_network_output_item(ScriptNetworkOutputItem::WebSocketLifecycleEvent(event));
-        self.note_subresource_activity();
-    }
-
     fn store_websocket_response_cookies(
         &self,
         socket_id: u64,

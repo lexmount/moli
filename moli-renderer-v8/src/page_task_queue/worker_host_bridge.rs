@@ -1,7 +1,7 @@
 //! Page-owned Worker host/control bridge tasks.
 //!
 //! DedicatedWorker client callbacks use their own typed source. This bridge
-//! carries the remaining host-facing records (Network/Fetch/WebSocket,
+//! carries the remaining host-facing records (Network/Fetch,
 //! console and relay terminal markers) in relay FIFO order. The queue lives
 //! for the Page lifetime, while every task is stamped with the root Document
 //! that supplied the producer so a late old-PageVm record cannot mutate a
@@ -61,11 +61,7 @@ pub(crate) fn is_worker_host_bridge_message(message: &WorkerToParentMessage) -> 
     }
     matches!(
         message,
-        WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
-            | WorkerToParentMessage::Console(_)
+        WorkerToParentMessage::SubresourceNetwork(_) | WorkerToParentMessage::Console(_)
     )
 }
 

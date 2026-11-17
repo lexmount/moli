@@ -1,8 +1,14 @@
 use super::*;
 mod native_load;
+use std::sync::atomic::AtomicU64;
+
+use crate::network::interception_output::ResourceInterceptionContext;
 use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
 use crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata;
-use crate::types::SubresourcePolicyContext;
+use crate::types::{
+    ScriptNetworkOutputItem, SubresourcePolicyContext, WebSocketLifecycleEvent,
+    WebSocketNetworkEvent,
+};
 
 pub(in crate::worker) fn record_worker_subresource_failure(
     state: &WorkerGlobalState,
@@ -76,30 +82,27 @@ fn worker_fetch_script_metadata(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(in crate::worker) fn record_worker_websocket_subresource_failure(
-    state: &WorkerGlobalState,
+fn record_worker_websocket_subresource_failure(
+    output: &ResourceInterceptionContext,
     socket_id: u64,
     document_url: Url,
     url: Url,
     request_headers: moli_fetch::RequestHeaders,
     error_text: String,
 ) {
-    let _ = state
-        .parent_tx
-        .send(WorkerToParentMessage::WebSocketSubresource(
-            SubresourceNetworkRecord::failure(
-                None,
-                document_url,
-                url,
-                "GET".to_owned(),
-                request_headers,
-                None,
-                SubresourceResourceType::WebSocket,
-                error_text,
-            )
-            .with_websocket_socket_id(socket_id),
-        ));
+    output.record_subresource_network(
+        SubresourceNetworkRecord::failure(
+            None,
+            document_url,
+            url,
+            "GET".to_owned(),
+            request_headers,
+            None,
+            SubresourceResourceType::WebSocket,
+            error_text,
+        )
+        .with_websocket_socket_id(socket_id),
+    );
 }
 
 #[must_use = "the caller must stop mixed-content processing when worker CSP blocks the request"]
@@ -164,18 +167,13 @@ pub(crate) fn register_worker_websocket<'s>(
     csp_outcome: WorkerWebSocketCspOutcome,
 ) -> Option<u64> {
     let state = get_worker_state(scope)?;
-    let (
-        socket_id,
-        loader,
-        extra_http_headers,
-        network_offline,
-        blocked_url_patterns,
-        websocket_event_tx,
-    ) = {
-        let mut state = state.borrow_mut();
-        let socket_id = next_websocket_id(&mut state);
+    // Nested workers can publish into the same target's Network agent.
+    static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
+    let socket_id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
+    assert!(socket_id < 1 << 53, "Worker WebSocket id space exhausted");
+    let (loader, extra_http_headers, network_offline, blocked_url_patterns, websocket_event_tx) = {
+        let state = state.borrow();
         (
-            socket_id,
             state.loader.clone(),
             state.extra_http_headers.clone(),
             state.network_offline,
@@ -231,10 +229,14 @@ pub(crate) fn register_worker_websocket<'s>(
             .err()
             .map(|error| format!("failed to build WebSocket cookie header: {error}"))
     };
-    let network_recorded = failure_message.is_some();
+    let handshake_recorded = failure_message.is_some();
     let (connection, load) = if let Some(error_text) = failure_message {
         record_worker_websocket_subresource_failure(
-            &state.borrow(),
+            state
+                .borrow()
+                .interception_context
+                .as_ref()
+                .expect("Worker WebSocket has a network output owner"),
             socket_id,
             document_url.clone(),
             url.clone(),
@@ -273,10 +275,8 @@ pub(crate) fn register_worker_websocket<'s>(
             connection,
             document_url,
             url,
-            loader,
             load,
-            opened: false,
-            network_recorded,
+            handshake_recorded,
         },
     );
     Some(socket_id)
@@ -348,203 +348,141 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
     state: &Rc<RefCell<WorkerGlobalState>>,
     event: WebSocketEvent,
 ) -> bool {
-    let socket_id = match &event {
-        WebSocketEvent::HandshakeResponse { socket_id, .. }
-        | WebSocketEvent::Open { socket_id, .. }
-        | WebSocketEvent::TextMessage { socket_id, .. }
-        | WebSocketEvent::BinaryMessage { socket_id, .. }
-        | WebSocketEvent::SendCompleted { socket_id, .. }
-        | WebSocketEvent::Error { socket_id, .. }
-        | WebSocketEvent::Closing { socket_id }
-        | WebSocketEvent::Close { socket_id, .. } => *socket_id,
-    };
-    let socket_context = {
+    let socket_id = event.socket_id();
+    let (socket, document_url, socket_url, output) = {
         let mut state = state.borrow_mut();
-        let parent_tx = state.parent_tx.clone();
-        let socket_context = state.websockets.get_mut(&socket_id).map(|entry| {
-            let was_opened = entry.opened;
-            let mut should_record_error_failure = false;
-            match &event {
-                WebSocketEvent::Open { .. } => {
-                    entry.opened = true;
-                    entry.network_recorded = true;
-                }
-                WebSocketEvent::Error { .. } if !entry.opened && !entry.network_recorded => {
-                    entry.network_recorded = true;
-                    should_record_error_failure = true;
-                }
-                _ => {}
-            }
-            (
-                v8::Local::new(scope, &entry.wrapper),
-                entry.document_url.clone(),
-                entry.url.clone(),
-                entry.loader.clone(),
-                was_opened,
-                should_record_error_failure,
-                parent_tx,
-            )
-        });
-        if socket_context.is_none() {
-            state.websockets.remove(&socket_id);
-        }
-        socket_context
-    };
-    let Some((
-        socket,
-        document_url,
-        socket_url,
-        loader,
-        was_opened,
-        should_record_error_failure,
-        parent_tx,
-    )) = socket_context
-    else {
-        return false;
-    };
-
-    let mut parent_messages = Vec::new();
-    match &event {
-        WebSocketEvent::Open {
-            request_headers,
-            response_status,
-            response_headers,
+        let WorkerGlobalState {
+            interception_context,
+            loader,
+            websockets,
             ..
-        } => {
-            let cookie_set_reports = store_worker_websocket_response_cookies(
-                socket_id,
-                &socket_url,
-                &loader,
+        } = &mut *state;
+        let Some(entry) = websockets.get_mut(&socket_id) else {
+            return false;
+        };
+        let output = interception_context
+            .clone()
+            .expect("Worker WebSocket has a network output owner");
+        let document_url = &entry.document_url;
+        let socket_url = &entry.url;
+        let item = match &event {
+            WebSocketEvent::Open {
+                request_headers,
+                response_status,
                 response_headers,
-            );
-            parent_messages.push(WorkerToParentMessage::WebSocketLifecycle(
-                WorkerWebSocketLifecycleEvent::Open {
-                    socket_id,
-                    document_url: document_url.clone(),
-                    url: socket_url.clone(),
-                },
-            ));
-            parent_messages.push(WorkerToParentMessage::WebSocketSubresource(
-                SubresourceNetworkRecord::success(
-                    None,
-                    document_url.clone(),
-                    socket_url.clone(),
-                    "GET".to_owned(),
-                    request_headers.clone(),
-                    None,
-                    SubresourceResourceType::WebSocket,
-                    None,
-                    Vec::new(),
-                    socket_url.clone(),
-                    *response_status,
-                    response_headers.to_vec(),
-                    String::new(),
-                    cookie_set_reports,
-                )
-                .with_websocket_socket_id(socket_id),
-            ));
-        }
-        WebSocketEvent::SendCompleted {
-            opcode,
-            payload_length,
-            ..
-        } => {
-            parent_messages.push(WorkerToParentMessage::WebSocketFrame(
-                WorkerWebSocketFrameEvent {
-                    socket_id,
-                    document_url: document_url.clone(),
-                    url: socket_url.clone(),
-                    direction: WebSocketFrameDirection::Sent,
-                    opcode: worker_websocket_frame_opcode(*opcode),
-                    payload_length: *payload_length,
-                },
-            ));
-        }
-        WebSocketEvent::Error { message, .. } => {
-            parent_messages.push(WorkerToParentMessage::WebSocketLifecycle(
-                WorkerWebSocketLifecycleEvent::Error {
-                    socket_id,
-                    document_url: document_url.clone(),
-                    url: socket_url.clone(),
-                    error_text: message.clone(),
-                },
-            ));
-            if !was_opened && should_record_error_failure {
-                parent_messages.push(WorkerToParentMessage::WebSocketSubresource(
-                    SubresourceNetworkRecord::failure(
+                ..
+            } => {
+                let cookie_set_reports =
+                    store_worker_websocket_response_cookies(socket_url, loader, response_headers);
+                entry.handshake_recorded = true;
+                output.record_subresource_network(
+                    SubresourceNetworkRecord::success(
                         None,
                         document_url.clone(),
                         socket_url.clone(),
                         "GET".to_owned(),
-                        Default::default(),
+                        request_headers.clone(),
                         None,
                         SubresourceResourceType::WebSocket,
-                        message.clone(),
+                        None,
+                        Vec::new(),
+                        socket_url.clone(),
+                        *response_status,
+                        response_headers.to_vec(),
+                        String::new(),
+                        cookie_set_reports,
                     )
                     .with_websocket_socket_id(socket_id),
-                ));
+                );
+                None
             }
-        }
-        WebSocketEvent::Closing { .. } => {
-            parent_messages.push(WorkerToParentMessage::WebSocketLifecycle(
-                WorkerWebSocketLifecycleEvent::Closing {
+            WebSocketEvent::SendCompleted {
+                opcode,
+                payload_length,
+                ..
+            } => Some(ScriptNetworkOutputItem::WebSocketNetworkEvent(
+                WebSocketNetworkEvent::new(
                     socket_id,
-                    document_url: document_url.clone(),
-                    url: socket_url.clone(),
-                },
-            ));
-        }
-        WebSocketEvent::Close {
-            code,
-            reason,
-            was_clean,
-            ..
-        } => {
-            parent_messages.push(WorkerToParentMessage::WebSocketLifecycle(
-                WorkerWebSocketLifecycleEvent::Close {
+                    document_url.clone(),
+                    socket_url.clone(),
+                    WebSocketFrameDirection::Sent,
+                    worker_websocket_frame_opcode(*opcode),
+                    *payload_length,
+                ),
+            )),
+            WebSocketEvent::Error { message, .. } => {
+                if !entry.handshake_recorded {
+                    entry.handshake_recorded = true;
+                    record_worker_websocket_subresource_failure(
+                        &output,
+                        socket_id,
+                        document_url.clone(),
+                        socket_url.clone(),
+                        Default::default(),
+                        message.clone(),
+                    );
+                }
+                Some(ScriptNetworkOutputItem::WebSocketLifecycleEvent(
+                    WebSocketLifecycleEvent::error(
+                        socket_id,
+                        document_url.clone(),
+                        socket_url.clone(),
+                        message.clone(),
+                    ),
+                ))
+            }
+            WebSocketEvent::Close {
+                code,
+                reason,
+                was_clean,
+                ..
+            } => Some(ScriptNetworkOutputItem::WebSocketLifecycleEvent(
+                WebSocketLifecycleEvent::close(
                     socket_id,
-                    document_url: document_url.clone(),
-                    url: socket_url.clone(),
-                    code: *code,
-                    reason: reason.clone(),
-                    was_clean: *was_clean,
-                },
-            ));
+                    document_url.clone(),
+                    socket_url.clone(),
+                    *code,
+                    reason.clone(),
+                    *was_clean,
+                ),
+            )),
+            WebSocketEvent::HandshakeResponse { .. }
+            | WebSocketEvent::Closing { .. }
+            | WebSocketEvent::TextMessage { .. }
+            | WebSocketEvent::BinaryMessage { .. } => None,
+        };
+        if let Some(item) = item {
+            output.publish_network(item);
         }
-        WebSocketEvent::HandshakeResponse { .. }
-        | WebSocketEvent::TextMessage { .. }
-        | WebSocketEvent::BinaryMessage { .. } => {}
-    }
-    for message in parent_messages {
-        let _ = parent_tx.send(message);
-    }
-
+        (
+            v8::Local::new(scope, &entry.wrapper),
+            document_url.clone(),
+            socket_url.clone(),
+            output,
+        )
+    };
     let dispatch_result = crate::context_bootstrap::dispatch_websocket_event(scope, socket, &event);
-    if !matches!(
-        dispatch_result,
-        crate::context_bootstrap::WebSocketDispatchResult::Backpressured
-    ) {
-        let frame_event = match &event {
-            WebSocketEvent::TextMessage { data, .. } => Some(WorkerWebSocketFrameEvent {
-                socket_id,
-                document_url: document_url.clone(),
-                url: socket_url.clone(),
-                direction: WebSocketFrameDirection::Received,
-                opcode: WebSocketFrameOpcode::Text,
-                payload_length: data.len(),
-            }),
-            WebSocketEvent::BinaryMessage { data, .. } => Some(WorkerWebSocketFrameEvent {
-                socket_id,
-                document_url,
-                url: socket_url,
-                direction: WebSocketFrameDirection::Received,
-                opcode: WebSocketFrameOpcode::Binary,
-                payload_length: data.len(),
-            }),
+    if dispatch_result != crate::context_bootstrap::WebSocketDispatchResult::Backpressured {
+        let frame = match &event {
+            WebSocketEvent::TextMessage { data, .. } => {
+                Some((WebSocketFrameOpcode::Text, data.len()))
+            }
+            WebSocketEvent::BinaryMessage { data, .. } => {
+                Some((WebSocketFrameOpcode::Binary, data.len()))
+            }
             _ => None,
         };
-        if let Some(frame_event) = frame_event {
-            let _ = parent_tx.send(WorkerToParentMessage::WebSocketFrame(frame_event));
+        if let Some((opcode, payload_length)) = frame {
+            output.publish_network(ScriptNetworkOutputItem::WebSocketNetworkEvent(
+                WebSocketNetworkEvent::new(
+                    socket_id,
+                    document_url,
+                    socket_url,
+                    WebSocketFrameDirection::Received,
+                    opcode,
+                    payload_length,
+                ),
+            ));
         }
     }
     if matches!(event, WebSocketEvent::Close { .. })
@@ -556,17 +494,14 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
     dispatch_result.dispatched()
 }
 
-pub(in crate::worker) fn worker_websocket_frame_opcode(
-    opcode: moli_websocket::FrameOpcode,
-) -> WebSocketFrameOpcode {
+fn worker_websocket_frame_opcode(opcode: moli_websocket::FrameOpcode) -> WebSocketFrameOpcode {
     match opcode {
         moli_websocket::FrameOpcode::Text => WebSocketFrameOpcode::Text,
         moli_websocket::FrameOpcode::Binary => WebSocketFrameOpcode::Binary,
     }
 }
 
-pub(in crate::worker) fn store_worker_websocket_response_cookies(
-    _socket_id: u64,
+fn store_worker_websocket_response_cookies(
     socket_url: &Url,
     request_client: &crate::network::context::WorkerResourceLoader,
     response_headers: &[(String, Vec<u8>)],
@@ -595,7 +530,7 @@ pub(in crate::worker) fn store_worker_websocket_response_cookies(
     store.store_response_headers_with_reports(&response_cookie_url, response_headers)
 }
 
-pub(in crate::worker) fn response_header_name_is(candidate: &str, expected: &HeaderName) -> bool {
+fn response_header_name_is(candidate: &str, expected: &HeaderName) -> bool {
     HeaderName::from_bytes(candidate.as_bytes()).is_ok_and(|candidate| candidate == *expected)
 }
 

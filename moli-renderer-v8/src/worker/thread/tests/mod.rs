@@ -350,10 +350,7 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
             WorkerToParentMessage::Post(payload) => return stringify_payload(&payload),
             WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_) => continue,
+            | WorkerToParentMessage::SubresourceContinue(_) => continue,
             other => panic!("expected Post, got {other:?}"),
         }
     }
@@ -361,8 +358,7 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
 
 fn expect_subresource_network_record(message: WorkerToParentMessage) -> SubresourceNetworkRecord {
     match message {
-        WorkerToParentMessage::SubresourceNetwork(record)
-        | WorkerToParentMessage::WebSocketSubresource(record) => record,
+        WorkerToParentMessage::SubresourceNetwork(record) => record,
         other => panic!("expected worker subresource network record, got {other:?}"),
     }
 }
@@ -412,9 +408,6 @@ async fn dispatch_service_worker_lifecycle_event_for_test(
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerFetchCompleted(_)
@@ -507,9 +500,6 @@ async fn dispatch_service_worker_fetch_event_with_request_for_test(
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -592,9 +582,6 @@ async fn dispatch_service_worker_message_event_object_for_test(
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -654,9 +641,6 @@ async fn dispatch_service_worker_notification_event_for_test(
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -722,9 +706,6 @@ async fn dispatch_service_worker_push_event_for_test(
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -792,9 +773,6 @@ async fn dispatch_service_worker_sync_event_for_test(
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -863,9 +841,6 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
