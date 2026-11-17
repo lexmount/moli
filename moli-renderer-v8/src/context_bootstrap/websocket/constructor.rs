@@ -1,28 +1,17 @@
 use super::helpers::{
-    WebSocketCloseInfo, WebSocketProtocolParseError, normalize_websocket_stream_url,
-    normalize_websocket_url, parse_websocket_protocols, parse_websocket_stream_protocols,
-    throw_websocket_close_error, throw_websocket_dom_exception, websocket_id,
-    websocket_object_slot,
+    WebSocketProtocolParseError, normalize_websocket_stream_url, normalize_websocket_url,
+    parse_websocket_protocols, parse_websocket_stream_protocols, throw_websocket_dom_exception,
+    websocket_id, websocket_object_slot,
 };
 use super::realm::{effective_websocket_document_scope, websocket_constructor_relevant_context};
 use super::stream::reject_websocket_stream_abort;
 use super::*;
-use crate::context_bootstrap::constructors::initialize_websocket_error;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 use moli_websocket::websocket_url_is_potentially_trustworthy;
 
 const WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT: &str = "__moliWebSocketStreamAbortStream";
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "WebSocketError")]
-struct WebSocketErrorConstructorArgs {
-    #[webidl(default = Vec::new(), converter = "dom_string16")]
-    message: Vec<u16>,
-    #[webidl(dictionary)]
-    init: WebSocketCloseInfo,
-}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::WebSocket)]
@@ -170,37 +159,7 @@ pub(in crate::context_bootstrap) fn websocket_stream_constructor_callback<'s>(
     websocket_stream_constructor_callback_inner(scope, args, rv);
 }
 
-pub(in crate::context_bootstrap) fn websocket_error_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'WebSocketError': Please use the 'new' operator.",
-        );
-        return;
-    }
-    let Some(parsed) = webidl::parse_args::<WebSocketErrorConstructorArgs>(scope, &args) else {
-        return;
-    };
-    let close = match parsed.init.normalize() {
-        Ok(close) => close,
-        Err(error) => {
-            throw_websocket_close_error(scope, "construct 'WebSocketError'", error);
-            return;
-        }
-    };
-
-    let Some(message) =
-        v8::String::new_from_two_byte(scope, &parsed.message, v8::NewStringType::Normal)
-    else {
-        return;
-    };
-    initialize_websocket_error(scope, args.this(), message, close.code, &close.reason);
-    rv.set(args.this().into());
-}
+pub(in crate::context_bootstrap) use moli_webapi::websocket_values::websocket_error_constructor_callback;
 
 fn websocket_stream_abort_signal_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

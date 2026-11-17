@@ -139,21 +139,7 @@ pub(crate) fn initialize_event_wrapper<'s>(
     Some(())
 }
 
-pub(crate) fn new_event_wrapper<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let state = event_backing(scope, state);
-    let interface = moli_webapi_declare::web_api_object_type(scope, state)?.name();
-    let prototype =
-        exposed_interfaces::ensure_intrinsic_interface_prototype(scope, interface).ok()?;
-    let wrapper = v8::Object::new(scope);
-    if wrapper.set_prototype(scope, prototype.into()) != Some(true) {
-        return None;
-    }
-    initialize_event_wrapper(scope, wrapper, state)?;
-    Some(wrapper)
-}
+pub(crate) use moli_webapi::events::new_event_wrapper;
 
 /// Project DOM and Window listeners through their existing world caches. The
 /// Window resolver selects the target Window's Context in the listener's

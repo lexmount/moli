@@ -1,0 +1,12 @@
+[package]
+license.workspace = true
+name = "moli-websocket-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+moli-url = { path = "../../moli-url" }
+url = "2.5.7"
+
+[lints]
+workspace = true

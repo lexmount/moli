@@ -1,3 +1,5 @@
+//! Transport-independent WebSocket URL, subprotocol and close validation.
+
 use std::{collections::HashSet, fmt};
 
 use url::Url;

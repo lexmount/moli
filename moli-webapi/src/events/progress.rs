@@ -1,6 +1,9 @@
-use super::*;
-use crate::web_api_interfaces;
-use crate::webidl;
+use super::state::{event_private_value, mark_event_trusted, new_event_state};
+use super::{initialize_event_object, initialize_event_wrapper, new_event_wrapper};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::throw_type_error;
+use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 const PROGRESS_EVENT_LENGTH_COMPUTABLE_SLOT: &str = "__lmProgressEventLengthComputable";
@@ -10,10 +13,8 @@ const PROGRESS_EVENT_TOTAL_SLOT: &str = "__lmProgressEventTotal";
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "ProgressEventInit", snapshot)]
 struct ProgressEventInitArgs {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
+    #[webidl(inherit)]
+    base: super::init::EventInit,
     #[webidl(default = false)]
     #[webidl(snapshot_slot = PROGRESS_EVENT_LENGTH_COMPUTABLE_SLOT)]
     length_computable: bool,
@@ -37,15 +38,15 @@ struct ProgressEventConstructorArgs {
     init: ProgressEventInitArgs,
 }
 
-pub(in crate::network_host::xhr) fn construct_native_progress_event<'s>(
+pub fn construct_native_progress_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
     length_computable: bool,
     loaded: f64,
     total: f64,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let state = crate::context_bootstrap::new_event_state(scope);
-    crate::context_bootstrap::initialize_event_object(scope, state, event_type, false, false);
+    let state = new_event_state(scope);
+    initialize_event_object(scope, state, event_type, false, false);
     ProgressEventInitArgs {
         length_computable,
         loaded,
@@ -56,12 +57,12 @@ pub(in crate::network_host::xhr) fn construct_native_progress_event<'s>(
     web_api_interfaces::ProgressEvent::DESCRIPTOR
         .initialize(scope, state)
         .ok()?;
-    let event = crate::context_bootstrap::new_event_wrapper(scope, state)?;
-    crate::context_bootstrap::mark_event_trusted(scope, event);
+    let event = new_event_wrapper(scope, state)?;
+    mark_event_trusted(scope, event);
     Some(event)
 }
 
-pub(crate) fn progress_event_constructor_callback<'s>(
+pub fn progress_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -74,23 +75,29 @@ pub(crate) fn progress_event_constructor_callback<'s>(
         return;
     }
     let wrapper = args.this();
-    let obj = crate::context_bootstrap::new_event_state(scope);
+    let obj = new_event_state(scope);
     let Some(parsed) = webidl::parse_args::<ProgressEventConstructorArgs>(scope, &args) else {
         return;
     };
-    crate::context_bootstrap::initialize_event_object(
+    initialize_event_object(
         scope,
         obj,
         &parsed.event_type,
-        parsed.init.bubbles,
-        parsed.init.cancelable,
+        parsed.init.base.bubbles,
+        parsed.init.base.cancelable,
+    );
+    super::state::define_event_property(
+        scope,
+        obj,
+        "composed",
+        v8::Boolean::new(scope, parsed.init.base.composed).into(),
     );
     parsed
         .init
         .initialize_snapshot(scope, obj)
         .expect("ProgressEvent state");
     web_api_interfaces::initialize(scope, obj, "ProgressEvent").expect("ProgressEvent brand");
-    if crate::context_bootstrap::initialize_event_wrapper(scope, wrapper, obj).is_some() {
+    if initialize_event_wrapper(scope, wrapper, obj).is_some() {
         rv.set(wrapper.into());
     }
 }
@@ -101,8 +108,8 @@ fn progress_event_slot_getter<'s>(
     slot: &'static str,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = crate::context_bootstrap::event_private_value(scope, receiver, slot)
-        .unwrap_or_else(|| v8::undefined(scope).into());
+    let value =
+        event_private_value(scope, receiver, slot).unwrap_or_else(|| v8::undefined(scope).into());
     if value.is_undefined() {
         throw_type_error(scope, "Illegal invocation");
         return;
@@ -110,7 +117,7 @@ fn progress_event_slot_getter<'s>(
     rv.set(value);
 }
 
-pub(crate) fn progress_event_length_computable_function_getter<'s>(
+pub fn progress_event_length_computable_function_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -123,7 +130,7 @@ pub(crate) fn progress_event_length_computable_function_getter<'s>(
     );
 }
 
-pub(crate) fn progress_event_loaded_function_getter<'s>(
+pub fn progress_event_loaded_function_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
@@ -131,10 +138,38 @@ pub(crate) fn progress_event_loaded_function_getter<'s>(
     progress_event_slot_getter(scope, args.this(), PROGRESS_EVENT_LOADED_SLOT, rv);
 }
 
-pub(crate) fn progress_event_total_function_getter<'s>(
+pub fn progress_event_total_function_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     progress_event_slot_getter(scope, args.this(), PROGRESS_EVENT_TOTAL_SLOT, rv);
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ProgressEvent)]
+struct ProgressEventPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "lengthComputable",
+        getter = progress_event_length_computable_function_getter,
+        enumerable
+    )]
+    _length_computable: (),
+    #[webapi(accessor_property, getter = progress_event_loaded_function_getter, enumerable)]
+    loaded: (),
+    #[webapi(accessor_property, getter = progress_event_total_function_getter, enumerable)]
+    total: (),
+}
+
+pub fn install_progress_event_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+    interface_name: &str,
+) {
+    if interface_name == "ProgressEvent" {
+        ProgressEventPrototypeDeclaration::initialize_prototype_template(
+            scope,
+            template.prototype_template(scope),
+        );
+    }
 }

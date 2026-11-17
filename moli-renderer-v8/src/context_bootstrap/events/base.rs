@@ -1,4 +1,3 @@
-use super::init::read_event_init;
 use super::*;
 use crate::context_bootstrap::{current_performance_time_origin, dom_time_since_origin_millis};
 use crate::util::get_private_value;
@@ -86,40 +85,7 @@ define_event_core_attribute_getter!(event_default_prevented_getter_function, "de
 define_event_core_attribute_getter!(event_composed_getter_function, "composed");
 define_event_core_attribute_getter!(event_src_element_getter_function, "srcElement");
 
-pub(in crate::context_bootstrap) fn event_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'Event': Please use the 'new' operator.",
-        );
-        return;
-    }
-
-    let wrapper = args.this();
-    let Some(event_type) = event_type_argument(scope, &args, "Event") else {
-        return;
-    };
-
-    let Some((bubbles, cancelable, composed)) = read_event_init(scope, &args) else {
-        return;
-    };
-    let event = new_event_state(scope);
-    initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
-    define_event_property(
-        scope,
-        event,
-        "composed",
-        v8::Boolean::new(scope, composed).into(),
-    );
-
-    if initialize_event_wrapper(scope, wrapper, event).is_some() {
-        rv.set(wrapper.into());
-    }
-}
+pub(in crate::context_bootstrap) use moli_webapi::events::event_constructor_callback;
 
 pub(crate) use moli_webapi::events::state::{
     EVENT_BACKING_SLOT, EVENT_COMPOSED_PATH_SLOT, EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT,

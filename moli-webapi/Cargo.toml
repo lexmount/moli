@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+moli-websocket-types = { path = "../moli-types/moli-websocket-types" }
 moli-indexeddb-types = { path = "../moli-types/moli-indexeddb-types" }
 base64 = "0.22"
 moli-browser-profile = { path = "../moli-browser-profile" }

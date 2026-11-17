@@ -1,8 +1,7 @@
 use super::*;
 use crate::webidl;
 use moli_websocket::{
-    WebSocketCloseValidationError, WebSocketSubprotocolError, WebSocketUrlError,
-    close_info_code_from_number, normalize_websocket_url as normalize_socket_url,
+    WebSocketSubprotocolError, WebSocketUrlError, normalize_websocket_url as normalize_socket_url,
     validate_subprotocols,
 };
 
@@ -113,57 +112,7 @@ fn websocket_stream_subprotocol_constructor_error(error: WebSocketSubprotocolErr
     format!("Failed to construct 'WebSocketStream': {error}.")
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "WebSocketCloseInfo")]
-pub(super) struct WebSocketCloseInfo {
-    #[webidl(converter = "unrestricted_double")]
-    close_code: Option<f64>,
-    #[webidl(default = "", converter = "usv_string")]
-    reason: String,
-}
-
-impl WebSocketCloseInfo {
-    pub(super) fn normalize(
-        self,
-    ) -> Result<moli_websocket::WebSocketCloseRequest, WebSocketCloseValidationError> {
-        let code = self
-            .close_code
-            .map(close_info_code_from_number)
-            .transpose()?;
-        moli_websocket::normalize_websocket_close_info(code, self.reason)
-    }
-}
-
-pub(super) fn throw_websocket_close_error(
-    scope: &mut v8::PinScope<'_, '_>,
-    operation: &'static str,
-    error: WebSocketCloseValidationError,
-) {
-    let detail = match error {
-        WebSocketCloseValidationError::InvalidCode => "invalid close code",
-        WebSocketCloseValidationError::ReasonTooLong => "close reason is too long",
-    };
-    throw_websocket_dom_exception(
-        scope,
-        websocket_close_error_name(error),
-        websocket_close_error_code(error),
-        &format!("Failed to {operation}: {detail}."),
-    );
-}
-
-fn websocket_close_error_name(error: WebSocketCloseValidationError) -> &'static str {
-    match error {
-        WebSocketCloseValidationError::InvalidCode => "InvalidAccessError",
-        WebSocketCloseValidationError::ReasonTooLong => "SyntaxError",
-    }
-}
-
-fn websocket_close_error_code(error: WebSocketCloseValidationError) -> i32 {
-    match error {
-        WebSocketCloseValidationError::InvalidCode => 15,
-        WebSocketCloseValidationError::ReasonTooLong => 12,
-    }
-}
+pub(super) use moli_webapi::websocket_values::{WebSocketCloseInfo, throw_websocket_close_error};
 
 pub(super) fn websocket_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,

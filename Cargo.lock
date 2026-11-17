@@ -3822,6 +3822,7 @@ dependencies = [
  "moli-webapi-declare",
  "moli-webidl",
  "moli-webidl-callback",
+ "moli-websocket-types",
  "serde_json",
  "strum",
  "url",
@@ -3915,6 +3916,7 @@ dependencies = [
  "moli-file-api",
  "moli-header-field",
  "moli-url",
+ "moli-websocket-types",
  "openssl",
  "parking_lot",
  "rcgen",
@@ -3924,6 +3926,14 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "urlencoding",
+]
+
+[[package]]
+name = "moli-websocket-types"
+version = "0.1.0"
+dependencies = [
+ "moli-url",
+ "url",
 ]
 
 [[package]]

@@ -11,7 +11,6 @@ use super::*;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::get_private_value;
 use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiFunctionTemplate;
 
 // Generated guards validate the interface. Resolve native aliases before XHR
 // slots, owner realms, Blob capture and async jobs use the backing object.
@@ -24,21 +23,6 @@ fn xhr_receiver_target<'s>(
         .expect("generated XMLHttpRequest receiver validation")
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ProgressEvent)]
-struct ProgressEventPrototypeDeclaration {
-    #[webapi(
-        accessor_property = "lengthComputable",
-        getter = progress_event_length_computable_function_getter,
-        enumerable
-    )]
-    _length_computable: (),
-    #[webapi(accessor_property, getter = progress_event_loaded_function_getter, enumerable)]
-    loaded: (),
-    #[webapi(accessor_property, getter = progress_event_total_function_getter, enumerable)]
-    total: (),
-}
-
 pub(crate) const XHR_ABORTED_SLOT: &str = "__lmXhrAborted";
 pub(crate) const XHR_ASYNC_SLOT: &str = "__lmXhrAsync";
 pub(crate) const XHR_SEND_FLAG_SLOT: &str = "__lmXhrSendFlag";
@@ -49,8 +33,7 @@ pub(crate) const XHR_ACTIVE_INTERNAL_ID_SLOT: &str = "__lmXhrActiveInternalId";
 pub(crate) use self::bindings::{
     install_window_xml_http_request_template_bindings, install_xml_http_request_bindings,
     install_xml_http_request_event_target_bindings, progress_event_constructor_callback,
-    progress_event_length_computable_function_getter, progress_event_loaded_function_getter,
-    progress_event_total_function_getter, xhr_constructor_callback,
+    xhr_constructor_callback,
 };
 pub(crate) use self::delivery::{
     apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
@@ -86,18 +69,7 @@ pub(crate) use self::send::{
     dispatch_xhr_upload_complete, xhr_author_request_headers,
 };
 
-pub(crate) fn install_progress_event_template_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-    interface_name: &str,
-) {
-    if interface_name == "ProgressEvent" {
-        ProgressEventPrototypeDeclaration::initialize_prototype_template(
-            scope,
-            template.prototype_template(scope),
-        );
-    }
-}
+pub(crate) use moli_webapi::events::progress::install_progress_event_template_bindings;
 
 pub(crate) fn xhr_throw_invalid_state(scope: &mut v8::PinScope<'_, '_>, message: &'static str) {
     throw_dom_exception(scope, "InvalidStateError", 11, message);
