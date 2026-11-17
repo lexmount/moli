@@ -18,7 +18,7 @@ use touch_tap::dispatch_touch_tap_activation;
 use super::input_dispatch_outcome;
 use super::input_helpers::{mouse_button_mask, single_changed_mouse_button};
 use super::inspector::{
-    current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
+    current_selection_state, is_space_key, key_target_info, radio_group_members,
 };
 use super::{
     ActiveDragSession, ActiveScrollbarDrag, ActiveTouchPoint, PendingDragGesture, PendingTouchTap,
@@ -2866,7 +2866,11 @@ impl ScriptVm {
                         break;
                     }
                     next_index = candidate;
-                    if !option_is_disabled(runtime, options[next_index as usize]) {
+                    if !runtime
+                        .dom_host()
+                        .dom()
+                        .is_disabled_form_control(options[next_index as usize])
+                    {
                         break;
                     }
                 }

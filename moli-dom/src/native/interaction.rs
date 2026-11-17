@@ -131,7 +131,7 @@ impl NativeDom {
             return FocusSupport::Blocked;
         };
         if (element.is_html_input() && element.input_type() == InputType::Hidden)
-            || self.is_disabled_form_control(node_id)
+            || self.is_actually_disabled(node_id)
         {
             return FocusSupport::Blocked;
         }
@@ -159,17 +159,40 @@ impl NativeDom {
         FocusSupport::LayoutDependent
     }
 
-    /// Native disabled state. Form-associated custom elements use the same
-    /// fieldset rule after the runtime has resolved their definitions.
+    /// Disabledness of the native element itself, including a disabled fieldset
+    /// for form controls and a disabled optgroup for options.
     pub fn is_disabled_form_control(&self, node_id: NativeNodeId) -> bool {
         self.node(node_id)
             .and_then(Node::as_element)
+            .is_some_and(|element| self.native_control_is_disabled(node_id, element))
+    }
+
+    /// HTML's actually disabled state for selector matching and focus support.
+    pub fn is_actually_disabled(&self, node_id: NativeNodeId) -> bool {
+        self.node(node_id)
+            .and_then(Node::as_element)
             .is_some_and(|element| {
-                element.supports_disabled()
-                    && (element.has_attribute_ns("", "disabled")
-                        || (element.is_html_option() && self.option_is_disabled(node_id))
-                        || self.disabled_fieldset_ancestor(node_id).is_some())
+                self.native_control_is_disabled(node_id, element)
+                    || (element.namespace() == HTML_NS
+                        && matches!(element.local_name(), "option" | "optgroup")
+                        && self
+                            .nearest_ancestor_select(node_id)
+                            .is_some_and(|select| self.is_disabled_form_control(select)))
             })
+    }
+
+    fn native_control_is_disabled(&self, node_id: NativeNodeId, element: &Element) -> bool {
+        if !element.supports_disabled() {
+            return false;
+        }
+        match element.local_name() {
+            "option" => self.option_is_disabled(node_id),
+            "optgroup" => element.has_attribute_ns("", "disabled"),
+            _ => {
+                element.has_attribute_ns("", "disabled")
+                    || self.disabled_fieldset_ancestor(node_id).is_some()
+            }
+        }
     }
 
     pub fn disabled_fieldset_ancestor(&self, node_id: NativeNodeId) -> Option<NativeNodeId> {

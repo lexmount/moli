@@ -8,10 +8,10 @@ use moli_dom::forms::{
     input_range_underflow, input_step as form_input_step, input_step_base as form_input_step_base,
     input_type_value_mismatch, normalize_custom_validation_message, number_aligns_to_step,
     number_step_mismatch, parse_input_numeric_value as parse_input_numeric_value_for_type,
-    parse_non_negative_integer_prefix,
     text_control_suffers_too_long as form_text_control_suffers_too_long,
     text_control_suffers_too_short as form_text_control_suffers_too_short,
 };
+use moli_dom::native::select_display_size;
 use moli_webapi_declare::WebApiObject;
 
 use super::super::{
@@ -800,7 +800,7 @@ fn select_placeholder_label_option(
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let select = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    if select.has_attribute("multiple") || select_display_size_for_validation(select) != 1 {
+    if select.has_attribute_ns("", "multiple") || select_display_size(select) != 1 {
         return None;
     }
     let first = runtime
@@ -820,14 +820,6 @@ fn select_placeholder_label_option(
     } else {
         None
     }
-}
-
-fn select_display_size_for_validation(select: &Element) -> i32 {
-    select
-        .attribute("size")
-        .map(parse_non_negative_integer_prefix)
-        .unwrap_or(0)
-        .max(1)
 }
 
 pub(in crate::native_bridge) fn dispatch_invalid_event(
