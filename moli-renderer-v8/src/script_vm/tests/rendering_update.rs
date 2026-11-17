@@ -464,6 +464,9 @@ void frame.contentWindow;
         .map(|realm| realm.context_id)
         .next()
         .expect("child scroll default context should be materialized");
+    vm.finish_initial_document_reveals_for_setup(&loader)
+        .await
+        .expect("initial child rendering opportunity");
 
     vm.eval_in_child_default_context(
         child_context_id,
@@ -674,6 +677,9 @@ async fn environment_media_and_visibility_changes_reach_existing_child_documents
         .next()
         .unwrap()
         .context_id;
+    vm.finish_initial_document_reveals_for_setup(&loader)
+        .await
+        .expect("initial child rendering opportunity");
     vm.eval_in_child_default_context(child_id, r#"
         globalThis.events = [];
         matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => events.push('dark:' + e.matches));

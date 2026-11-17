@@ -224,8 +224,8 @@ pub(crate) use self::events::construct_native_touch_event;
 pub(crate) use self::events::construct_original_text_input_event;
 pub(crate) use self::events::{
     clear_input_event_target_ranges, construct_original_event,
-    construct_original_page_transition_event, construct_original_storage_event_utf16,
-    construct_svg_time_event,
+    construct_original_page_reveal_event, construct_original_page_transition_event,
+    construct_original_storage_event_utf16, construct_svg_time_event,
 };
 #[cfg(any(feature = "devtools", test))]
 pub(crate) use self::touch_runtime::construct_native_touch;
@@ -270,9 +270,9 @@ pub(crate) use navigation_traversal_execution::{
     apply_authorized_history_traversal_task, reject_canceled_history_traversal_results,
     resume_pending_history_traversals,
 };
+pub(crate) use selection::focus_element_selection;
 #[cfg(feature = "devtools")]
 pub(crate) use selection_surface::window_selection_is_collapsed;
-pub(crate) use selection::focus_element_selection;
 pub(crate) use selection_surface::{
     bind_isolated_window_selection_owner, selection_text_for_clipboard, selection_value_for_window,
     sync_selection_owner_document_for_window,
@@ -400,7 +400,8 @@ pub(crate) use self::events::{
     clear_event_composed_path, construct_original_error_event, construct_original_message_event,
     error_event_handler_arguments, event_attribute, event_backing, event_bool_attribute,
     event_callback_values, event_initialized, event_internal_bool_flag, event_is_dispatching,
-    event_is_error_event, event_is_mouse_event, event_private_value, event_source_retargets_on_access, initialize_event_object,
+    event_is_error_event, event_is_mouse_event, event_private_value,
+    event_source_retargets_on_access, initialize_event_object,
     initialize_native_security_policy_violation_event, mark_agent_submit_event, mark_event_trusted,
     new_event_state, new_event_wrapper, node_event_callback_values, set_event_composed_path,
     set_event_internal_flag, set_event_private_value, set_event_source_value, set_event_trusted,
@@ -426,12 +427,15 @@ pub(crate) use self::file_api::{
     protect_native_drag_source_view, read_string_drag_data, replace_drag_data_store_contents,
     update_drag_data_store_operations_mask,
 };
-pub(crate) use self::file_api::{build_clipboard_data_transfer, clipboard_data_transfer_contents, disable_clipboard_data_transfer};
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,
     build_file_object_unpublished, file_clone_metadata, file_list_files_from_object,
     finish_file_reader_read, flush_one_pending_file_reading_task, queue_file_reading_task,
     selected_file_from_object, set_file_relative_path,
+};
+pub(crate) use self::file_api::{
+    build_clipboard_data_transfer, clipboard_data_transfer_contents,
+    disable_clipboard_data_transfer,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{
@@ -486,14 +490,15 @@ pub(crate) use self::media_queries::SimpleObjectEventListenerInspectorSnapshot;
 #[cfg(feature = "devtools")]
 pub(crate) use self::media_queries::simple_event_target_inspector_listener_snapshots;
 pub(crate) use self::media_queries::{
-    ResolvedSimpleEventTarget, clear_simple_event_target_listeners, dispatch_media_query_list_change_events,
-    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    ResolvedSimpleEventTarget, clear_simple_event_target_listeners,
+    dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
+    dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint,
     dispatch_simple_event_target_event_with_original_target, initialize_simple_event_target,
     invoke_simple_event_target_listeners, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback,
-    simple_object_event_activate_uncompiled_handler, simple_object_event_listeners_snapshot, simple_object_event_set_handler,
+    simple_event_target_handler_setter_callback, simple_object_event_activate_uncompiled_handler,
+    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
     simple_object_event_target_register_webidl_listener, simple_object_has_event_listeners,
 };
 use self::message_ports::schedule_scope_callback;

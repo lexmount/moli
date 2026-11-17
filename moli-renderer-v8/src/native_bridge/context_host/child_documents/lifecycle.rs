@@ -812,6 +812,9 @@ impl PageScriptHost {
             .frame_owner_store
             .child_document_task_owner_is_current(child_handle, action.owner())
         {
+            self.queue_document_reveal_for_dispatch_scope(super::super::OwnerDispatchScope::Child(
+                child_handle,
+            ));
             let _ = self.queue_child_document_complete_lifecycle_if_ready_for_owner(
                 child_handle,
                 action.owner(),

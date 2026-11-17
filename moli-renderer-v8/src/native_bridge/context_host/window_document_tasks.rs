@@ -68,6 +68,12 @@ impl<I, K, P, T> Default for WindowTaskLedger<I, K, P, T> {
 }
 
 impl<I: Copy + Eq, K: Copy + Eq, P, T: Copy + Eq> WindowTaskLedger<I, K, P, T> {
+    pub(super) fn contains_target(&self, target: T) -> bool {
+        self.pending
+            .iter()
+            .any(|pending| pending.target() == target)
+    }
+
     pub(super) fn allocate_task_id(&mut self, from_raw: impl FnOnce(u64) -> I) -> I {
         let raw = self.next_task_id;
         self.next_task_id = raw.checked_add(1).expect("Window task id overflow");

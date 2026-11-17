@@ -8,6 +8,7 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PendingRenderingUpdatePayload {
+    DocumentReveal,
     DocumentScrollEvents,
     AnimationStartScan(EventTargetHandle),
     SvgAnimationEvents(crate::document_runtime::DomHandle),
@@ -45,6 +46,43 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
 >;
 
 impl PageScriptHost {
+    /// Request an initial opportunity from a completed Document lifecycle, not
+    /// from Window registration. Native rendering work never acquires a timer.
+    pub(crate) fn queue_document_reveal_for_dispatch_scope(
+        &mut self,
+        dispatch_scope: OwnerDispatchScope,
+    ) -> bool {
+        // Standalone DOM hosts have no Page rendering source.
+        if self.page_task_capabilities.get().is_none() {
+            return false;
+        }
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+        else {
+            return false;
+        };
+        let Some(document) = self.current_rendering_update_document(target) else {
+            return false;
+        };
+        if !self.document_needs_reveal(document) {
+            return false;
+        }
+        if self.rendering_updates.contains_target(target) {
+            return true;
+        }
+        self.queue_rendering_update(
+            target,
+            RendererPageRenderingUpdateTaskKind::DocumentReveal,
+            PendingRenderingUpdatePayload::DocumentReveal,
+        )
+    }
+
+    pub(crate) fn queue_visible_document_reveals(&mut self) {
+        for dispatch_scope in self.rendering_update_document_scopes() {
+            self.queue_document_reveal_for_dispatch_scope(dispatch_scope);
+        }
+    }
+
     pub(crate) fn queue_document_intersection_delivery(
         &mut self,
         target: WindowDocumentTaskTarget,
@@ -85,6 +123,17 @@ impl PageScriptHost {
     ) -> PostParseAutofocusAdmission {
         if !super::super::element::post_parse_autofocus_is_pending(self, document) {
             return PostParseAutofocusAdmission::NotNeeded;
+        }
+        if self
+            .rendering_updates
+            .find_slot_index(
+                target,
+                RendererPageRenderingUpdateTaskKind::DocumentReveal,
+                |_| true,
+            )
+            .is_some()
+        {
+            return PostParseAutofocusAdmission::Published;
         }
         if self.queue_rendering_update(
             target,
@@ -269,7 +318,32 @@ impl PageScriptHost {
             PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) => Some(owner),
             _ => None,
         };
-        let invoked = match payload {
+        // Snapshot the eligible Documents before author code. Reveal all of
+        // them in frame-tree order before flushing autofocus or running any
+        // other rendering phase. Revalidate each captured owner after every
+        // earlier Document's listeners.
+        let documents = self.document_reveal_targets_for_rendering_update(target);
+        let mut invoked = false;
+        for &(document_target, _) in &documents {
+            invoked |= self.reveal_document_for_rendering_update(scope, host_ptr, document_target);
+        }
+        for &(document_target, document) in &documents {
+            if self.current_rendering_update_document(document_target) == Some(document)
+                && self.top_level_document_for_document(document) == Some(document)
+                && !super::super::document::document_is_hidden(self, document)
+                && super::super::element::post_parse_autofocus_is_pending(self, document)
+            {
+                invoked |=
+                    self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, document_target);
+            }
+        }
+        if self.current_rendering_update_document(target).is_none() {
+            self.discard_rendering_update_payload(payload);
+            return Some((invoked, animation_owner));
+        }
+        invoked |= match payload {
+            PendingRenderingUpdatePayload::DocumentReveal
+            | PendingRenderingUpdatePayload::PostParseAutofocus => false,
             PendingRenderingUpdatePayload::DocumentScrollEvents => {
                 self.dispatch_authorized_document_scroll_events(scope, host_ptr, target)
             }
@@ -278,9 +352,6 @@ impl PageScriptHost {
             }
             PendingRenderingUpdatePayload::SvgAnimationEvents(document) => {
                 self.dispatch_authorized_svg_animation_events(scope, host_ptr, target, document)
-            }
-            PendingRenderingUpdatePayload::PostParseAutofocus => {
-                self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
             }
             PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) => {
                 self.dispatch_authorized_animation_frame_callbacks(scope, host_ptr, target, owner)
@@ -312,6 +383,43 @@ impl PageScriptHost {
         Some((invoked, animation_owner))
     }
 
+    pub(crate) fn can_apply_unobserved_document_reveal(
+        &self,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        self.document_reveal_targets_for_rendering_update(target)
+            .into_iter()
+            .all(|(target, document)| {
+                !self.document_reveal_has_observers(target, document)
+                    && !super::super::element::post_parse_autofocus_is_pending(self, document)
+            })
+    }
+
+    pub(crate) fn apply_unobserved_document_reveal(
+        &mut self,
+        task_id: RendererPageRenderingUpdateTaskId,
+        target: WindowDocumentTaskTarget,
+    ) -> Option<bool> {
+        let documents = self.document_reveal_targets_for_rendering_update(target);
+        self.rendering_updates.remove_exact(
+            task_id,
+            target,
+            RendererPageRenderingUpdateTaskKind::DocumentReveal,
+        )?;
+        for (target, document) in documents {
+            if self.current_rendering_update_document(target) == Some(document)
+                && self.document_needs_reveal(document)
+            {
+                self.dom_host_mut()
+                    .node_mut(document)?
+                    .data_mut()
+                    .as_document_mut()?
+                    .mark_revealed();
+            }
+        }
+        Some(false)
+    }
+
     pub(crate) fn discard_pending_rendering_update_task(
         &mut self,
         task_id: RendererPageRenderingUpdateTaskId,
@@ -319,7 +427,12 @@ impl PageScriptHost {
         let Some(pending) = self.rendering_updates.remove(task_id) else {
             return false;
         };
-        match pending.into_payload() {
+        self.discard_rendering_update_payload(pending.into_payload());
+        true
+    }
+
+    fn discard_rendering_update_payload(&mut self, payload: PendingRenderingUpdatePayload) {
+        match payload {
             PendingRenderingUpdatePayload::AnimationFrameCallbacks(owner) => {
                 // document.open() rotates the parser/lifecycle incarnation without
                 // replacing the Window's animation callback map. Retire the stale
@@ -331,7 +444,212 @@ impl PageScriptHost {
             }
             _ => {}
         }
-        true
+    }
+
+    /// Reveal at the beginning of every actual rendering opportunity. The
+    /// intrinsic event's nullable transition is null without an inbound transfer.
+    fn reveal_document_for_rendering_update(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        let Some(document_handle) = self.current_rendering_update_document(target) else {
+            return false;
+        };
+        if !self.document_needs_reveal(document_handle) {
+            return false;
+        }
+        let Some(document) = self
+            .dom_host_mut()
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        document.mark_revealed();
+        if !self.document_reveal_has_observers(target, document_handle) {
+            // A WindowProxy facade alone cannot observe this event. Do not
+            // materialize an otherwise unobserved initial child realm merely
+            // to construct a disposable event wrapper.
+            return false;
+        }
+        let Some((_, context)) = self.resolve_current_rendering_update_context(scope, target)
+        else {
+            return false;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let dispatch_scope = target.dispatch_scope();
+        let previous = dispatch_scope.enter(scope);
+        let watchdog = crate::v8_execution_watchdog::V8ExecutionWatchdog::arm(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::LifecycleEvent,
+            scope.thread_safe_handle(),
+            crate::v8_execution_watchdog::SCRIPT_TURN_WATCHDOG_TIMEOUT,
+        );
+        let dispatched = if let Some(event) =
+            crate::context_bootstrap::construct_original_page_reveal_event(scope)
+        {
+            let event_target = match dispatch_scope {
+                OwnerDispatchScope::Top => Some(EventTargetHandle::Window),
+                OwnerDispatchScope::Child(handle) => self
+                    .current_child_window_event_target(handle)
+                    .map(EventTargetHandle::ChildWindow),
+                OwnerDispatchScope::LightweightPopup(id) => self
+                    .current_popup_window_event_target(id)
+                    .map(EventTargetHandle::PopupWindow),
+            };
+            event_target.is_some_and(|event_target| {
+                self.dispatch_public_event_best_effort(
+                    scope,
+                    host_ptr,
+                    event_target,
+                    event,
+                    "document reveal event",
+                )
+                .is_ok()
+            })
+        } else {
+            false
+        };
+        if watchdog.disarm() == crate::v8_execution_watchdog::V8ExecutionWatchdogOutcome::TimedOut {
+            tracing::warn!("document reveal event exceeded its execution deadline");
+        }
+        dispatch_scope.restore(scope, previous);
+        dispatched
+    }
+
+    fn current_rendering_update_document(
+        &self,
+        target: WindowDocumentTaskTarget,
+    ) -> Option<crate::document_runtime::DomHandle> {
+        if !self.window_document_owner_is_current_for_dispatch_scope(
+            target.owner(),
+            target.dispatch_scope(),
+        ) {
+            return None;
+        }
+        let document = match target.dispatch_scope() {
+            OwnerDispatchScope::Top => Some(self.document_handle()),
+            OwnerDispatchScope::Child(handle) => {
+                self.child_browsing_context_document_handle(handle)
+            }
+            OwnerDispatchScope::LightweightPopup(id) => self.lightweight_popup_document_handle(id),
+        }?;
+        self.document_is_fully_active(document).then_some(document)
+    }
+
+    fn document_needs_reveal(&self, document: crate::document_runtime::DomHandle) -> bool {
+        !super::super::document::document_is_hidden(self, document)
+            && self
+                .dom_host()
+                .node(document)
+                .and_then(|node| node.as_document())
+                .is_some_and(|document| !document.has_been_revealed())
+    }
+
+    fn document_has_page_reveal_content_attribute(
+        &self,
+        document: crate::document_runtime::DomHandle,
+    ) -> bool {
+        self.dom_host()
+            .node(document)
+            .and_then(|node| node.as_document())
+            .and_then(|data| data.body_or_frameset_handle(self.dom_host().dom(), document))
+            .and_then(|body| self.dom_host().node(body))
+            .and_then(|node| node.as_element())
+            .is_some_and(|body| body.attribute("onpagereveal").is_some())
+    }
+
+    fn document_reveal_has_observers(
+        &self,
+        target: WindowDocumentTaskTarget,
+        document: crate::document_runtime::DomHandle,
+    ) -> bool {
+        if self
+            .current_registered_window_execution_context_identity(target.dispatch_scope())
+            .is_some()
+        {
+            // Existing realms may own retained/adopted wrappers in another world.
+            return true;
+        }
+        match target.dispatch_scope() {
+            OwnerDispatchScope::Top => {
+                let event = self.prepare_native_event_dispatch(
+                    EventTargetHandle::Window,
+                    EventTargetHandle::Window,
+                    "pagereveal",
+                );
+                self.native_event_has_observers(&event)
+            }
+            OwnerDispatchScope::Child(handle) => {
+                self.current_child_window_event_target(handle)
+                    .is_some_and(|target| {
+                        self.child_window_event_has_observers(target, "pagereveal")
+                    })
+                    || self.document_has_page_reveal_content_attribute(document)
+            }
+            OwnerDispatchScope::LightweightPopup(_) => true,
+        }
+    }
+
+    fn document_reveal_targets_for_rendering_update(
+        &self,
+        selected: WindowDocumentTaskTarget,
+    ) -> Vec<(WindowDocumentTaskTarget, crate::document_runtime::DomHandle)> {
+        let mut roots = std::collections::HashSet::new();
+        for target in std::iter::once(selected).chain(self.rendering_updates.targets()) {
+            if let Some(document) = self.current_rendering_update_document(target)
+                && let Some(root) = self.top_level_document_for_document(document)
+            {
+                roots.insert(root);
+            }
+        }
+        // A top-level rendering opportunity includes its active descendants,
+        // including new iframes that have not published a payload of their own.
+        let documents = self
+            .rendering_update_document_scopes()
+            .into_iter()
+            .filter_map(|scope| {
+                let target = self.current_window_document_task_target_for_dispatch_scope(scope)?;
+                let document = self.current_rendering_update_document(target)?;
+                let root = self.top_level_document_for_document(document)?;
+                (roots.contains(&root)
+                    && !super::super::document::document_is_hidden(self, document))
+                .then_some((target, document))
+            })
+            .collect::<Vec<_>>();
+        if documents.iter().any(|(_, document)| {
+            self.document_needs_reveal(*document)
+                || super::super::element::post_parse_autofocus_is_pending(self, *document)
+        }) {
+            documents
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn rendering_update_document_scopes(&self) -> Vec<OwnerDispatchScope> {
+        let mut roots = vec![(OwnerDispatchScope::Top, self.document_handle())];
+        let mut popups = self
+            .lightweight_popup_browsing_contexts
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        popups.sort_unstable();
+        roots.extend(popups.into_iter().filter_map(|id| {
+            self.lightweight_popup_document_handle(id)
+                .map(|document| (OwnerDispatchScope::LightweightPopup(id), document))
+        }));
+        let mut scopes = Vec::new();
+        for (root, document) in roots {
+            scopes.push(root);
+            scopes.extend(
+                self.child_browsing_context_handles_in_document_order_for_document(document)
+                    .into_iter()
+                    .map(OwnerDispatchScope::Child),
+            );
+        }
+        scopes
     }
 
     fn dispatch_authorized_animation_start_scan(

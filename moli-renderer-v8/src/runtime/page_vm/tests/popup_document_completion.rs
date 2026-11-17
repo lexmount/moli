@@ -269,6 +269,11 @@ async fn popup_autofocus_respects_its_response_sandbox_and_permissions_policy() 
                     )
                     .await?
             );
+            super::rendering_update::finish_initial_document_reveals_for_rendering_test(
+                &mut page_vm,
+                &loader,
+            )
+            .await?;
             page_vm.vm_mut().eval(
                 "popup.document.body.insertAdjacentHTML('beforeend','<input id=late autofocus>')",
             )?;

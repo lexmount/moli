@@ -372,14 +372,13 @@ impl PageScriptHost {
         self.animation_frames.last_render_opportunity = Some(Instant::now());
         let mut invoked = false;
 
-        // HTML flushes autofocus before taking the animation callback snapshot.
-        // Use its top-level Document's realm, including an independent popup.
-        if let Some(document) = self.top_level_document_for_document(resolved.document_handle)
-            && let Some(endpoint) = self.window_endpoint_for_document(document)
-            && let Some(top) = self
-                .current_window_document_task_target_for_dispatch_scope(endpoint.dispatch_scope())
+        if self
+            .resolve_current_rendering_update_context(scope, target)
+            .is_none()
         {
-            invoked |= self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, top);
+            self.publish_animation_frame_rendering_update(owner);
+            dispatch_scope.restore(scope, previous_scope);
+            return invoked;
         }
 
         let (handles, sample_svg) = self

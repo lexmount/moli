@@ -91,6 +91,11 @@ impl ScriptVm {
                         self.record_document_lifecycle_event_end("DOMContentLoaded");
                     }
                     self.queue_main_document_post_parse_autofocus_best_effort(owner);
+                    self._context_host
+                        .borrow_mut()
+                        .queue_document_reveal_for_dispatch_scope(
+                            crate::native_bridge::OwnerDispatchScope::Top,
+                        );
                 } else {
                     tracing::debug!(
                         ?owner,
@@ -125,6 +130,11 @@ impl ScriptVm {
                             "current main load dispatch did not settle exactly once".to_owned(),
                         );
                     } else {
+                        self._context_host
+                            .borrow_mut()
+                            .queue_document_reveal_for_dispatch_scope(
+                                crate::native_bridge::OwnerDispatchScope::Top,
+                            );
                         self.settle_loaded_document_font_set(
                             self.document_runtime.document_handle(),
                         );

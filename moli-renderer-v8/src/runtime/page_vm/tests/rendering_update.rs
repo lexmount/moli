@@ -55,6 +55,24 @@ pub(super) async fn dispatch_main_document_domcontentloaded_for_rendering_test(
     Ok(owner)
 }
 
+pub(super) async fn finish_initial_document_reveals_for_rendering_test(
+    page_vm: &mut PageVm,
+    loader: &crate::network::ResourceRequestClient,
+) -> anyhow::Result<()> {
+    while let Some(task) = page_vm
+        .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DocumentReveal)
+    {
+        assert_eq!(
+            task.rendering_update_owner_and_kind().unwrap().1,
+            RendererPageRenderingUpdateTaskKind::DocumentReveal
+        );
+        page_vm
+            .run_claimed_selected_page_task_for_test(task, loader)
+            .await?;
+    }
+    Ok(())
+}
+
 mod form_controls;
 mod layout_geometry;
 mod optical_sizing;

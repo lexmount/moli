@@ -388,3 +388,39 @@ fn whole_dom_clones_preserve_arena_relationships_and_copy_on_write() {
     );
     assert!(source.node(fragment).is_none());
 }
+
+#[test]
+fn reveal_state_belongs_to_document_identity() {
+    let mut document = Document::new_html(test_url());
+    assert!(!document.has_been_revealed());
+    document.mark_revealed();
+    assert!(document.clone().has_been_revealed());
+    assert!(!document.clone_metadata_for_new_arena().has_been_revealed());
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    let original = host.document_handle();
+    host.node_mut(original)
+        .unwrap()
+        .data_mut()
+        .as_document_mut()
+        .unwrap()
+        .mark_revealed();
+    for deep in [false, true] {
+        let clone = host.clone_node(original, deep).unwrap();
+        assert!(
+            !host
+                .node(clone)
+                .unwrap()
+                .as_document()
+                .unwrap()
+                .has_been_revealed()
+        );
+    }
+    host.clear_document_contents();
+    assert!(
+        host.node(original)
+            .unwrap()
+            .as_document()
+            .unwrap()
+            .has_been_revealed()
+    );
+}

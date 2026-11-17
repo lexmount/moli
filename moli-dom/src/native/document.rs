@@ -90,6 +90,7 @@ struct DocumentMetadata {
 #[derive(Debug, Clone, Default)]
 struct DocumentArenaState {
     source_response_status: Option<u16>,
+    has_been_revealed: bool,
     // Meta delivery updates policy in time order; removing the element does
     // not undo the policy it delivered to this Document.
     meta_referrer_policy: MetaReferrerPolicy,
@@ -266,6 +267,15 @@ impl Document {
 
     pub fn meta_referrer_policy_source(&self) -> DocumentMetaReferrerPolicySource {
         self.arena_state.meta_referrer_policy.source()
+    }
+
+    pub fn has_been_revealed(&self) -> bool {
+        self.arena_state.has_been_revealed
+    }
+
+    /// Commit before dispatch so reentrant rendering cannot reveal twice.
+    pub fn mark_revealed(&mut self) {
+        self.arena_state.has_been_revealed = true;
     }
 
     pub fn visibility_hidden(&self) -> bool {

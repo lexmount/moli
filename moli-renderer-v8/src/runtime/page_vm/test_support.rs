@@ -404,6 +404,23 @@ impl PageVmTaskExecutorTestHarness {
             .await
     }
 
+    /// Settle only initial Document reveal opportunities at an explicit
+    /// fixture boundary. Keep later scroll, focus, and environment work for
+    /// the test's own exact selected-task assertions.
+    pub(crate) async fn finish_initial_document_reveals_for_setup(
+        &mut self,
+        loader: &ResourceRequestClient,
+    ) -> anyhow::Result<()> {
+        while self
+            .run_one_exact_selected_page_task_executor_turn(
+                PageSelectedTaskTestSelector::DocumentReveal,
+                loader,
+            )
+            .await?
+        {}
+        Ok(())
+    }
+
     /// Return a producer bound to the fixture's current root Document.
     ///
     /// Complete ServiceWorker callback workflows must publish through this
