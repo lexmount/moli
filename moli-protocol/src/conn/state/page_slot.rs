@@ -405,6 +405,11 @@ pub(crate) struct TargetPageSlot {
     root_post_load_observation: Option<RootPostLoadObservation>,
     initial_document_navigation: Option<crate::conn::CommandWaitLifetimeOwner>,
     pending_renderer_page: PendingRendererPageReservation,
+    /// Supervised waits for attachment binding applies parked behind an open
+    /// JavaScript dialog. Several sessions may attach to the same
+    /// dialog-blocked target, so this is a multiset: every deferred apply owns
+    /// its own task.
+    deferred_attachment_binding_tasks: Vec<crate::conn::OwnedProtocolWaitTask>,
 }
 
 impl TargetPageSlot {
@@ -820,6 +825,23 @@ impl TargetPageSlot {
         };
         request.background_task = Some(task);
         true
+    }
+
+    /// Takes over supervision of one deferred attachment binding wait. The
+    /// slot owns the task so target disposal and actor teardown abort it;
+    /// aborting drops the retained dispatch route and cancels the still-queued
+    /// binding apply.
+    pub(crate) fn supervise_deferred_attachment_binding_task(
+        &mut self,
+        task: crate::conn::OwnedProtocolWaitTask,
+    ) {
+        self.deferred_attachment_binding_tasks.push(task);
+    }
+
+    pub(crate) fn take_deferred_attachment_binding_tasks(
+        &mut self,
+    ) -> Vec<crate::conn::OwnedProtocolWaitTask> {
+        std::mem::take(&mut self.deferred_attachment_binding_tasks)
     }
 
     pub(crate) fn has_supervised_background_navigation(&self) -> bool {

@@ -452,6 +452,10 @@ impl ProtocolWorkflowState<'_> {
         self.connection.take_background_navigation_tasks()
     }
 
+    pub fn take_deferred_attachment_binding_tasks(self) -> Vec<OwnedProtocolWaitTask> {
+        self.connection.take_deferred_attachment_binding_tasks()
+    }
+
     pub fn take_scheduler_events(self) -> Vec<CdpSchedulerEvent> {
         self.connection.take_scheduler_events()
     }

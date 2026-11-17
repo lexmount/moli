@@ -160,9 +160,8 @@ impl RendererPageProtocolCommandTarget {
         command: RendererPageCommand,
         session: Option<String>,
     ) -> Result<RendererPageCommandPending> {
-        let javascript_dialog_watch = command
-            .interruptible_by_javascript_dialog()
-            .then(|| self.dialogs.watch());
+        let javascript_dialog_watch =
+            renderer_page_javascript_dialog_watch(&command, || self.dialogs.watch());
         let route = self.target.main_ref().enqueue_protocol_page_command(
             self.token,
             self.agent,
@@ -249,9 +248,23 @@ impl RendererDocumentCommandTarget {
     }
 }
 
+/// How a queued dispatch observes JavaScript dialogs.
+#[derive(Debug)]
+enum RendererPageJavaScriptDialogWatch {
+    /// Observation commands abandon their queued dispatch when a dialog opens:
+    /// a plain [`RendererPageCommandPending::wait`] fail-fasts on the interrupt
+    /// error instead of parking behind the modal.
+    Interruptible(RendererJavaScriptDialogWatch),
+    /// Deferred-settle commands stay queued behind the modal. The watch exists
+    /// so [`RendererPageCommandPending::wait_until_settled_or_dialog_open`] can
+    /// hand the still-queued dispatch back and let a caller settle it once the
+    /// renderer frees up.
+    Deferred(RendererJavaScriptDialogWatch),
+}
+
 pub struct RendererPageCommandPending {
     dispatch: RendererPageCommandPendingDispatch,
-    javascript_dialog_watch: Option<RendererJavaScriptDialogWatch>,
+    javascript_dialog_watch: Option<RendererPageJavaScriptDialogWatch>,
 }
 
 impl RendererPageCommandPending {
@@ -668,9 +681,9 @@ impl RendererPageHandle {
     ) -> anyhow::Result<RendererPageCommandPending> {
         #[cfg(not(feature = "devtools"))]
         let _ = (route_protocol_main_receiver, inspector_session_id);
-        let javascript_dialog_watch = command
-            .interruptible_by_javascript_dialog()
-            .then(|| self.javascript_dialog_broker.watch());
+        let javascript_dialog_watch = renderer_page_javascript_dialog_watch(&command, || {
+            self.javascript_dialog_broker.watch()
+        });
         if moli_trace::cdp_nav_timing_enabled()
             && let Some(command_label) = command.cdp_nav_timing_label()
         {
@@ -857,6 +870,53 @@ impl RendererPageHandle {
     }
 }
 
+/// Creates the dialog watch a queued dispatch carries, if any.
+///
+/// Interruptible observation commands fail fast on dialog observation.
+/// Deferred-settle commands keep their dispatch queued behind the modal and
+/// are only handed back through
+/// [`RendererPageCommandPending::wait_until_settled_or_dialog_open`].
+fn renderer_page_javascript_dialog_watch(
+    command: &RendererPageCommand,
+    watch: impl FnOnce() -> RendererJavaScriptDialogWatch,
+) -> Option<RendererPageJavaScriptDialogWatch> {
+    if command.interruptible_by_javascript_dialog() {
+        return Some(RendererPageJavaScriptDialogWatch::Interruptible(watch()));
+    }
+    command
+        .settles_after_javascript_dialog()
+        .then(|| RendererPageJavaScriptDialogWatch::Deferred(watch()))
+}
+
+fn decode_owner_page_command_reply(
+    reply: Result<Result<RendererOwnerReply>, oneshot::error::RecvError>,
+) -> Result<RendererCommandTurnOutput> {
+    match reply.map_err(|_| anyhow!("render runtime reply channel closed"))?? {
+        RendererOwnerReply::AsyncPageCommandRan(result) => Ok(*result),
+        _ => Err(anyhow!(
+            "renderer owner returned non-async page-command reply for async page command"
+        )),
+    }
+}
+
+fn decode_inspector_main_page_command_completion(
+    completion: anyhow::Result<RendererRuntimeInspectorMainCommandCompletion>,
+) -> Result<RendererCommandTurnOutput> {
+    match completion? {
+        RendererRuntimeInspectorMainCommandCompletion::Owner(output) => Ok(*output),
+        RendererRuntimeInspectorMainCommandCompletion::Page(output) => Ok(*output),
+        RendererRuntimeInspectorMainCommandCompletion::Inspector
+        | RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse { .. } => Err(
+            anyhow!("an owner-only Inspector Main command entered nested dispatch"),
+        ),
+        RendererRuntimeInspectorMainCommandCompletion::OwnerSessionResponse { .. }
+        | RendererRuntimeInspectorMainCommandCompletion::OwnerSessionErrorSettled(_) => Err(
+            anyhow!("an owner-only Page command settled a DevTools session response"),
+        ),
+        RendererRuntimeInspectorMainCommandCompletion::Canceled(message) => Err(anyhow!(message)),
+    }
+}
+
 impl RendererPageCommandPending {
     pub async fn wait(self) -> Result<RendererCommandTurnOutput> {
         let RendererPageCommandPending {
@@ -866,57 +926,114 @@ impl RendererPageCommandPending {
         let wait_for_dispatch = async move {
             match dispatch {
                 RendererPageCommandPendingDispatch::Owner(reply_rx) => {
-                    match reply_rx
-                        .await
-                        .map_err(|_| anyhow!("render runtime reply channel closed"))??
-                    {
-                        RendererOwnerReply::AsyncPageCommandRan(result) => Ok(*result),
-                        _ => Err(anyhow!(
-                            "renderer owner returned non-async page-command reply for async page command"
-                        )),
-                    }
+                    decode_owner_page_command_reply(reply_rx.await)
                 }
                 #[cfg(feature = "devtools")]
                 RendererPageCommandPendingDispatch::InspectorMain(route) => {
-                    match route.wait_for_completion().await? {
-                        RendererRuntimeInspectorMainCommandCompletion::Owner(output) => Ok(*output),
-                        RendererRuntimeInspectorMainCommandCompletion::Page(output) => Ok(*output),
-                        RendererRuntimeInspectorMainCommandCompletion::Inspector
-                        | RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse {
-                            ..
-                        } => Err(anyhow!(
-                            "an owner-only Inspector Main command entered nested dispatch"
-                        )),
-                        RendererRuntimeInspectorMainCommandCompletion::OwnerSessionResponse {
-                            ..
-                        }
-                        | RendererRuntimeInspectorMainCommandCompletion::OwnerSessionErrorSettled(
-                            _,
-                        ) => Err(anyhow!(
-                            "an owner-only Page command settled a DevTools session response"
-                        )),
-                        RendererRuntimeInspectorMainCommandCompletion::Canceled(message) => {
-                            Err(anyhow!(message))
-                        }
-                    }
+                    decode_inspector_main_page_command_completion(route.wait_for_completion().await)
                 }
             }
         };
         tokio::pin!(wait_for_dispatch);
-        let reply = if let Some(javascript_dialog_watch) = javascript_dialog_watch {
-            tokio::select! {
-                biased;
-                reply = &mut wait_for_dispatch => reply?,
-                () = javascript_dialog_watch.wait_until_open() => {
-                    return Err(anyhow!(
-                        "renderer page observation interrupted by an open JavaScript dialog"
-                    ));
+        let reply = match javascript_dialog_watch {
+            Some(RendererPageJavaScriptDialogWatch::Interruptible(javascript_dialog_watch)) => {
+                tokio::select! {
+                    biased;
+                    reply = &mut wait_for_dispatch => reply?,
+                    () = javascript_dialog_watch.wait_until_open() => {
+                        return Err(anyhow!(
+                            "renderer page observation interrupted by an open JavaScript dialog"
+                        ));
+                    }
                 }
             }
-        } else {
-            wait_for_dispatch.await?
+            // Deferred-settle watches are only raced by
+            // `wait_until_settled_or_dialog_open`; a plain wait keeps parking
+            // behind the modal until the dispatch settles.
+            Some(RendererPageJavaScriptDialogWatch::Deferred(_)) | None => {
+                wait_for_dispatch.await?
+            }
         };
         Ok(reply)
+    }
+
+    /// Settles the dispatch, or hands the still-queued dispatch back as soon as
+    /// a JavaScript dialog opens.
+    ///
+    /// Deferred-settle commands (see
+    /// `RendererPageCommand::settles_after_javascript_dialog`) stay queued
+    /// behind an open modal: this consumes the dialog watch and returns the
+    /// pending with the dispatch intact. Dropping that pending cancels the
+    /// queued command, so the caller must keep it alive and settle it with
+    /// [`RendererPageCommandPending::wait`] once the renderer frees up. The
+    /// `Err` arm is observed with biased dispatch priority: a dispatch that is
+    /// already complete always settles here instead of being handed back.
+    pub async fn wait_until_settled_or_dialog_open(
+        self,
+    ) -> Result<Result<RendererCommandTurnOutput>, Self> {
+        let Self {
+            dispatch,
+            javascript_dialog_watch,
+        } = self;
+        let Some(RendererPageJavaScriptDialogWatch::Deferred(watch)) = javascript_dialog_watch
+        else {
+            // Interruptible commands fail fast inside `wait`, and commands
+            // without a dialog watch cannot park behind a modal at all.
+            return Ok(Self {
+                dispatch,
+                javascript_dialog_watch: None,
+            }
+            .wait()
+            .await);
+        };
+        match dispatch {
+            RendererPageCommandPendingDispatch::Owner(reply_rx) => {
+                enum OwnerSettle {
+                    Reply(Result<Result<RendererOwnerReply>, oneshot::error::RecvError>),
+                    DialogOpened,
+                }
+                let mut reply_rx = reply_rx;
+                let raced = {
+                    tokio::select! {
+                        biased;
+                        reply = &mut reply_rx => OwnerSettle::Reply(reply),
+                        () = watch.wait_until_open() => OwnerSettle::DialogOpened,
+                    }
+                };
+                match raced {
+                    OwnerSettle::Reply(reply) => Ok(decode_owner_page_command_reply(reply)),
+                    OwnerSettle::DialogOpened => Err(Self {
+                        dispatch: RendererPageCommandPendingDispatch::Owner(reply_rx),
+                        javascript_dialog_watch: None,
+                    }),
+                }
+            }
+            RendererPageCommandPendingDispatch::InspectorMain(route) => {
+                enum MainSettle {
+                    Completion(anyhow::Result<RendererRuntimeInspectorMainCommandCompletion>),
+                    DialogOpened,
+                }
+                let mut route = route;
+                let raced = {
+                    let completion = route.wait_for_completion_by_ref();
+                    tokio::pin!(completion);
+                    tokio::select! {
+                        biased;
+                        completion = &mut completion => MainSettle::Completion(completion),
+                        () = watch.wait_until_open() => MainSettle::DialogOpened,
+                    }
+                };
+                match raced {
+                    MainSettle::Completion(completion) => {
+                        Ok(decode_inspector_main_page_command_completion(completion))
+                    }
+                    MainSettle::DialogOpened => Err(Self {
+                        dispatch: RendererPageCommandPendingDispatch::InspectorMain(route),
+                        javascript_dialog_watch: None,
+                    }),
+                }
+            }
+        }
     }
 }
 
@@ -1053,5 +1170,178 @@ impl RendererPageTestingHandle {
                 std::mem::discriminant(&other)
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod deferred_settle_tests {
+    use super::*;
+    use crate::runtime::javascript_dialog::{
+        RendererJavaScriptDialogRuntime, RendererModalJavaScriptDialog,
+    };
+
+    const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+    fn pending_dialog(message: &str) -> RendererPendingJavaScriptDialog {
+        let page_id = crate::runtime::PageId::new_for_testing(91);
+        RendererPendingJavaScriptDialog::new(
+            crate::runtime::RendererJavaScriptDialogId::new(1),
+            crate::runtime::RendererDocumentLifecycleIdentity {
+                frame: crate::runtime::RendererFrameToken { page_id },
+                document: crate::runtime::RendererDocumentToken::new_for_testing(page_id, 1),
+                epoch: crate::runtime::RendererLifecycleEpoch(1),
+            },
+            crate::runtime::RendererJavaScriptDialogSource::RootFrame,
+            "https://example.test/dialog".to_owned(),
+            "confirm".to_owned(),
+            message.to_owned(),
+            String::new(),
+            // `begin_modal` installs the modal completion itself.
+            None,
+        )
+    }
+
+    /// A broker with an open modal, its runtime (the only `begin_modal`
+    /// authority), and the modal handle used to close it at test end.
+    fn broker_with_open_modal(
+        message: &str,
+    ) -> (
+        RendererJavaScriptDialogRuntime,
+        RendererModalJavaScriptDialog,
+    ) {
+        let runtime = RendererJavaScriptDialogRuntime::default();
+        let (_dialog, modal) = runtime.begin_modal(pending_dialog(message));
+        (runtime, modal)
+    }
+
+    fn deferred_settle_pending(
+        reply_rx: oneshot::Receiver<anyhow::Result<RendererOwnerReply>>,
+        broker: &RendererJavaScriptDialogBroker,
+    ) -> RendererPageCommandPending {
+        RendererPageCommandPending {
+            dispatch: RendererPageCommandPendingDispatch::Owner(reply_rx),
+            javascript_dialog_watch: Some(RendererPageJavaScriptDialogWatch::Deferred(
+                broker.watch(),
+            )),
+        }
+    }
+
+    fn test_reply_error() -> anyhow::Error {
+        anyhow!("binding state apply failed for the test")
+    }
+
+    fn send_test_reply(reply_tx: oneshot::Sender<anyhow::Result<RendererOwnerReply>>) {
+        assert!(
+            reply_tx.send(Err(test_reply_error())).is_ok(),
+            "the test reply channel must stay open"
+        );
+    }
+
+    fn assert_settled_with_test_error(
+        settled: Result<Result<RendererCommandTurnOutput>, RendererPageCommandPending>,
+    ) {
+        let settled = match settled {
+            Ok(settled) => settled,
+            Err(_) => panic!("the dispatch must settle instead of being handed back"),
+        };
+        match settled {
+            Err(error) => assert!(
+                error.to_string().contains("binding state apply failed"),
+                "unexpected settle error: {error:#}"
+            ),
+            Ok(_) => panic!("the test reply carries an apply error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dialog_open_at_entry_hands_the_dispatch_back_alive() {
+        let (runtime, modal) = broker_with_open_modal("open at entry");
+        let broker = runtime.broker();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let pending = deferred_settle_pending(reply_rx, &broker);
+
+        let handed_back =
+            match tokio::time::timeout(SETTLE_TIMEOUT, pending.wait_until_settled_or_dialog_open())
+                .await
+                .expect("an open modal must hand the dispatch back instead of parking")
+            {
+                Err(handed_back) => handed_back,
+                Ok(_) => panic!("the dispatch must be handed back while the modal is open"),
+            };
+
+        // The handed-back dispatch stays alive: a plain wait settles once the
+        // renderer reply arrives even though the modal is still open.
+        send_test_reply(reply_tx);
+        let settled = tokio::time::timeout(SETTLE_TIMEOUT, handed_back.wait())
+            .await
+            .expect("handed-back dispatch must still settle");
+        assert_settled_with_test_error(Ok(settled));
+        modal.cancel();
+    }
+
+    #[tokio::test]
+    async fn dialog_opening_mid_wait_hands_the_dispatch_back_alive() {
+        let runtime = RendererJavaScriptDialogRuntime::default();
+        let broker = runtime.broker();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let pending = deferred_settle_pending(reply_rx, &broker);
+
+        let (modal_tx, modal_rx) = oneshot::channel::<RendererModalJavaScriptDialog>();
+        // The pending watched this runtime's broker; opening the modal through
+        // the same runtime signals that watch mid-wait.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            let (_dialog, modal) = runtime.begin_modal(pending_dialog("opens mid wait"));
+            let _ = modal_tx.send(modal);
+        });
+
+        let handed_back =
+            match tokio::time::timeout(SETTLE_TIMEOUT, pending.wait_until_settled_or_dialog_open())
+                .await
+                .expect("a dialog opening mid-wait must hand the dispatch back")
+            {
+                Err(handed_back) => handed_back,
+                Ok(_) => panic!("the dispatch must be handed back while the modal is open"),
+            };
+
+        send_test_reply(reply_tx);
+        let settled = tokio::time::timeout(SETTLE_TIMEOUT, handed_back.wait())
+            .await
+            .expect("handed-back dispatch must still settle");
+        assert_settled_with_test_error(Ok(settled));
+        let modal = modal_rx.await.expect("dialog opener task result");
+        modal.cancel();
+    }
+
+    #[tokio::test]
+    async fn without_a_dialog_the_dispatch_settles_normally() {
+        let runtime = RendererJavaScriptDialogRuntime::default();
+        let broker = runtime.broker();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let pending = deferred_settle_pending(reply_rx, &broker);
+
+        send_test_reply(reply_tx);
+
+        let settled =
+            tokio::time::timeout(SETTLE_TIMEOUT, pending.wait_until_settled_or_dialog_open())
+                .await
+                .expect("dispatch must settle without a dialog");
+        assert_settled_with_test_error(settled);
+    }
+
+    #[tokio::test]
+    async fn completed_dispatch_wins_over_dialog_observation() {
+        let (runtime, modal) = broker_with_open_modal("open before settling");
+        let broker = runtime.broker();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let pending = deferred_settle_pending(reply_rx, &broker);
+        send_test_reply(reply_tx);
+
+        let settled =
+            tokio::time::timeout(SETTLE_TIMEOUT, pending.wait_until_settled_or_dialog_open())
+                .await
+                .expect("dispatch must settle");
+        assert_settled_with_test_error(settled);
+        modal.cancel();
     }
 }

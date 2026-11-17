@@ -92,6 +92,7 @@ fn empty_scheduler_inputs() -> SchedulerInputReceivers {
         document_activity_completion_rx,
         background_event_rx,
         background_navigation_completion_rx,
+        deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         renderer_publication_rx,
     })
 }
