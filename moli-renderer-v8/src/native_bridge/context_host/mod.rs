@@ -871,9 +871,7 @@ impl PendingImageLoadEvent {
     }
 
     pub(crate) fn resource_timing_initiator_type(&self) -> &'static str {
-        self.request_key()
-            .and_then(ImageRequestKey::navigation_destination)
-            .map_or(self.resource_timing_initiator_type, |destination| destination.as_str())
+        self.resource_timing_initiator_type
     }
 
     pub(crate) fn request_key(&self) -> Option<&ImageRequestKey> {
