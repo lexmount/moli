@@ -110,12 +110,7 @@ impl ResponseHead {
         origin: &moli_url::WebOrigin,
         mode: crate::RequestMode,
     ) -> crate::FetchResponseMetadata {
-        crate::FetchResponseMetadata {
-            response_type: self.fetch_response_type(origin, mode),
-            url_list: self.url_list().to_vec(),
-            timing_allow_passed: self.timing_allow_passed(origin),
-            redirected: self.redirected,
-        }
+        self.fetch_metadata_with_web_security(origin, mode, false)
     }
 
     /// Classify using the associated client's startup policy without changing
@@ -126,17 +121,20 @@ impl ResponseHead {
         mode: crate::RequestMode,
         disabled: bool,
     ) -> crate::FetchResponseMetadata {
-        let mut metadata = self.fetch_metadata(origin, mode);
-        if disabled && metadata.response_type != crate::FetchResponseType::OpaqueRedirect {
-            metadata.response_type = crate::FetchResponseType::Basic;
+        crate::FetchResponseMetadata {
+            response_type: self.fetch_response_type(origin, mode, disabled),
+            url_list: self.url_list().to_vec(),
+            timing_allow_passed: self.timing_allow_passed(origin),
+            redirected: self.redirected,
         }
-        metadata
     }
 
+    /// Classify without allocating response metadata or evaluating TAO.
     pub fn fetch_response_type(
         &self,
         origin: &moli_url::WebOrigin,
         mode: crate::RequestMode,
+        web_security_disabled: bool,
     ) -> crate::FetchResponseType {
         use crate::FetchResponseType;
         if matches!(self.status, 301 | 302 | 303 | 307 | 308)
@@ -146,7 +144,9 @@ impl ResponseHead {
                 .any(|(name, _)| name.eq_ignore_ascii_case("location"))
         {
             FetchResponseType::OpaqueRedirect
-        } else if self.final_url.scheme() == "data" || !self.url_list().has_cross_origin_url(origin)
+        } else if web_security_disabled
+            || self.final_url.scheme() == "data"
+            || !self.url_list().has_cross_origin_url(origin)
         {
             FetchResponseType::Basic
         } else if mode == crate::RequestMode::NoCors {
