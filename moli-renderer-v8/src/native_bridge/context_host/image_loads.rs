@@ -4,7 +4,6 @@ use super::{
 };
 use crate::{
     document_runtime::DomHandle,
-    dom::native::Node,
     frame_owner_model::{
         FrameDocumentImageLoadEventBinding, FrameDocumentTaskOwner,
         MainDocumentImageLoadDelayBinding,
@@ -32,14 +31,16 @@ impl PageScriptHost {
         target: WindowDocumentTaskTarget,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     ) -> Option<PendingImageLoadEvent> {
-        let owner_document_handle = self
-            .dom_host()
-            .node(image_handle)
-            .filter(|node| {
-                node.as_element()
-                    .is_some_and(|element| element.is_image_resource_element())
-            })
-            .and_then(Node::owner_document)?;
+        let node = self.dom_host().node(image_handle)?;
+        let element = node
+            .as_element()
+            .filter(|element| element.is_image_resource_element())?;
+        let owner_document_handle = node.owner_document()?;
+        let resource_timing_initiator_type = if element.is_svg_element("image") {
+            "image"
+        } else {
+            "img"
+        };
         let is_main_document = owner_document_handle == self.document_handle();
         if let Some(previous) = self.pending_image_load_event(image_handle) {
             let same_owner_document = previous.owner_document_handle() == owner_document_handle;
@@ -94,6 +95,7 @@ impl PageScriptHost {
             target,
             owner,
             request_initiator_type,
+            resource_timing_initiator_type,
         );
         if !self.insert_pending_image_load_event(image_handle, pending) {
             let _ = self.settle_pending_image_load_event(pending, true);

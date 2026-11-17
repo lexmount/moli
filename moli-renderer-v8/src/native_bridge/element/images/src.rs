@@ -541,10 +541,11 @@ pub(crate) fn mark_image_load_dispatched(runtime: &mut PageScriptHost, handle: D
     }
 }
 
-pub(crate) fn record_image_resource_performance_entry_for_handle(
+fn record_local_image_resource_performance_entry(
     scope: &mut v8::PinScope<'_, '_>,
     runtime: &PageScriptHost,
     handle: DomHandle,
+    initiator_type: &'static str,
 ) {
     let url = image_selected_source_url(runtime, handle);
     if url.is_empty() {
@@ -553,7 +554,9 @@ pub(crate) fn record_image_resource_performance_entry_for_handle(
     crate::context_bootstrap::record_resource_performance_entry(
         scope,
         crate::context_bootstrap::ResourcePerformanceEntry::without_network_result(
-            url, "img", None,
+            url,
+            initiator_type,
+            None,
         ),
     );
 }
@@ -610,7 +613,12 @@ fn dispatch_queued_image_load_event(
         && pending.terminal_source()
             == Some(crate::native_bridge::PendingImageLoadTerminalSource::Local)
     {
-        record_image_resource_performance_entry_for_handle(scope, runtime, handle);
+        record_local_image_resource_performance_entry(
+            scope,
+            runtime,
+            handle,
+            pending.resource_timing_initiator_type(),
+        );
     }
     let _ = runtime.process_pending_image_decode_requests(scope);
     let already_dispatched = runtime
