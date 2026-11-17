@@ -679,3 +679,59 @@ fn media_volume_assignments_compare_the_initial_playback_volume() {
         assert_eq!(media.media_volume(), 0.0);
     }
 }
+
+#[test]
+fn heading_reflections_parse_range_and_modal_state() {
+    let mut heading = Element::new_html("h1");
+    let mut namespaced = Element::new_html("h1");
+    namespaced.set_attribute_ns(
+        "headingoffset".into(),
+        "urn:custom".into(),
+        None,
+        "8".into(),
+    );
+    namespaced.set_attribute_ns(
+        "headingreset".into(),
+        "urn:custom".into(),
+        None,
+        String::new(),
+    );
+    assert_eq!(namespaced.heading_offset(), 0);
+    assert!(!namespaced.heading_reset());
+    assert_eq!(heading.heading_offset(), 0);
+    assert!(!heading.heading_reset());
+
+    for (raw, expected) in [
+        ("3", 3),
+        (" +7tail", 7),
+        ("20", 8),
+        ("429496729600", 8),
+        ("-0", 0),
+        ("-3", 0),
+        ("invalid", 0),
+        ("\u{000b}7", 0),
+    ] {
+        assert!(heading.set_attribute(
+            "headingoffset".to_owned(),
+            String::new(),
+            None,
+            raw.to_owned(),
+        ));
+        assert_eq!(heading.heading_offset(), expected, "{raw:?}");
+    }
+
+    assert!(heading.set_attribute(
+        "headingreset".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert!(heading.heading_reset());
+
+    let mut dialog = Element::new_html("dialog");
+    assert!(!dialog.heading_reset());
+    assert!(dialog.set_dialog_modal(true));
+    assert!(dialog.heading_reset());
+    assert!(dialog.set_dialog_modal(false));
+    assert!(!dialog.heading_reset());
+}
