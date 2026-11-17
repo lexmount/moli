@@ -12,9 +12,9 @@ The direct binding migration includes these groups:
 | --- | --- |
 | URLs and platform values | URL, URLSearchParams and its iterator, WorkerLocation, External, PictureInPictureWindow, resize entries, video configuration queries, WebGL value records |
 | Network values | Headers and its iterator; transport-independent header policy lives in `moli-fetch-types` and is re-exported by `moli-fetch` |
-| Collections and records | FileList, Touch/TouchList, native WebIDL collection iterators, CryptoKey, IDBKeyRange/IDBRecord, MutationRecord, IntersectionObserverEntry and IdleDeadline |
+| Collections and records | FileList, Touch/TouchList, native WebIDL collection iterators, CryptoKey, IDBKeyRange/IDBRecord, MutationRecord, IntersectionObserverEntry, IdleDeadline, EventCounts, Highlight/HighlightRegistry and their live iterators |
 | Canvas and media values | WebGL binding state and methods, ImageBitmap value lifetime, TextMetrics, CanvasGradient validation, MediaCapabilities and MediaSource capability queries |
-| Standalone constructors and conversions | TextEncoder, value-event dictionaries and constructors, TrustedHTML/TrustedScript/TrustedScriptURL, credential values and JSON conversions, NavigatorUAData, AbortSignal value/argument shapes, base64 and CSS identifier escaping |
+| Standalone constructors and conversions | TextEncoder, value-event dictionaries and constructors, TrustedHTML/TrustedScript/TrustedScriptURL, credential values and JSON conversions, NavigatorUAData, AbortSignal value/argument shapes, base64, CSS identifier escaping, PushMessageData and PushSubscriptionOptions |
 
 The remaining Renderer bindings were checked for actual host dependencies, including dependencies hidden behind parent-module imports. These groups still require their current native owners:
 
@@ -23,9 +23,10 @@ The remaining Renderer bindings were checked for actual host dependencies, inclu
 | Window, navigation, DOM, CSSOM and SVG | Document identity, wrapper projection, live nodes and collections, layout/style state, mutation and navigation lifecycle |
 | UI, pointer, keyboard, InputEvent and TouchEvent construction | Window authorization, native target/range conversion and dispatch; independent Touch values and lists are shared |
 | TextDecoder, streams and compression | The context-owned codec store, native finalizers and execution queues |
-| Fetch, Request/Response, Blob/File, WebSocket, service workers, storage and IndexedDB | Request/body ownership, backend handles, asynchronous execution and lifecycle checks; IDB version-event payloads are shared |
+| Fetch, Request/Response, Blob/File, WebSocket, service workers, storage and IndexedDB | Request/body ownership, backend handles, asynchronous execution and lifecycle checks; IDBKeyRange/IDBRecord, key conversions and version-event payloads are shared |
 | WebCrypto execution | Backend work and owner-bound completion; CryptoKey values are shared |
 | Screen, viewport, permissions, media devices, battery and network information | Live host state, active-document checks, overrides or handler ownership |
+| TextTrackCue/VTTCue | Native track ordering, DOM fragment creation and event-handler ownership |
 | MediaSession and credential signals | Traced callbacks retain resource initiators; signals validate the effective RP domain; independent credential values and JSON rules are shared |
 | Trusted Types policies | CSP enforcement, default-policy callbacks, violations and realm materialization; trusted value objects are shared |
 | Canvas 2D, OffscreenCanvas and image sources | Pixel/backing-store ownership, source conversion and layout-dependent measurement; already-resolved values and WebGL state are shared |

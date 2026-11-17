@@ -41,9 +41,7 @@ use crate::runtime::{
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{BroadcastChannelId, MessagePortId, NetworkBodySourceId};
-use crate::util::{
-    get_private_value, serialize_v8_array, set_private_value, throw_type_error, v8str,
-};
+use crate::util::{get_private_value, serialize_v8_array, throw_type_error, v8str};
 use crate::webidl::v8_string;
 use crate::worker::abort::{
     abort_worker_signal_by_id, worker_abort_error_value, worker_abort_signal_id,
@@ -70,7 +68,6 @@ const SERVICE_WORKER_FETCH_EVENT_ID_SLOT: &str = "__lmServiceWorkerFetchEventId"
 const SERVICE_WORKER_MESSAGE_EVENT_ID_SLOT: &str = "__lmServiceWorkerMessageEventId";
 const SERVICE_WORKER_NOTIFICATION_EVENT_ID_SLOT: &str = "__lmServiceWorkerNotificationEventId";
 const SERVICE_WORKER_PUSH_EVENT_ID_SLOT: &str = "__lmServiceWorkerPushEventId";
-const SERVICE_WORKER_PUSH_MESSAGE_DATA_BYTES_SLOT: &str = "__lmServiceWorkerPushMessageDataBytes";
 const SERVICE_WORKER_SYNC_EVENT_ID_SLOT: &str = "__lmServiceWorkerSyncEventId";
 const SERVICE_WORKER_PERIODIC_SYNC_EVENT_ID_SLOT: &str = "__lmServiceWorkerPeriodicSyncEventId";
 // Retain enough reported rejections to populate `rejectionhandled.reason`
@@ -229,19 +226,6 @@ struct ServiceWorkerPushEventDeclaration<'scope> {
     prevent_default: (),
     #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushMessageData)]
-struct ServiceWorkerPushMessageDataDeclaration {
-    #[webapi(method = "arrayBuffer", length = 0, callback = push_message_data_array_buffer_callback)]
-    array_buffer: (),
-    #[webapi(method = "bytes", length = 0, callback = push_message_data_bytes_callback)]
-    bytes: (),
-    #[webapi(method = "text", length = 0, callback = push_message_data_text_callback)]
-    text: (),
-    #[webapi(method = "json", length = 0, callback = push_message_data_json_callback)]
-    json: (),
 }
 
 #[derive(WebApiObject)]
@@ -1533,7 +1517,9 @@ fn new_service_worker_push_event<'s>(
     let data = event
         .data
         .as_deref()
-        .map(|bytes| new_service_worker_push_message_data(scope, bytes).map(v8::Local::into))
+        .map(|bytes| {
+            moli_webapi::push_values::new_push_message_data(scope, bytes).map(v8::Local::into)
+        })
         .unwrap_or_else(|| Some(v8::null(scope).into()))?;
     ServiceWorkerPushEventDeclaration {
         r#type: v8str(scope, "push"),
@@ -1544,123 +1530,6 @@ fn new_service_worker_push_event<'s>(
     }
     .bind(scope)
     .ok()
-}
-
-fn new_service_worker_push_message_data<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    bytes: &[u8],
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = ServiceWorkerPushMessageDataDeclaration {
-        array_buffer: (),
-        bytes: (),
-        text: (),
-        json: (),
-    }
-    .bind(scope)
-    .ok()?;
-    let buffer = array_buffer_from_bytes(scope, bytes.to_vec());
-    set_private_value(
-        scope,
-        object,
-        SERVICE_WORKER_PUSH_MESSAGE_DATA_BYTES_SLOT,
-        buffer.into(),
-    );
-    Some(object)
-}
-
-fn push_message_data_bytes_from_this<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    this: v8::Local<'s, v8::Object>,
-) -> Option<Vec<u8>> {
-    let value = get_private_value(scope, this, SERVICE_WORKER_PUSH_MESSAGE_DATA_BYTES_SLOT)?;
-    let buffer = v8::Local::<v8::ArrayBuffer>::try_from(value).ok()?;
-    let view = v8::Uint8Array::new(scope, buffer, 0, buffer.byte_length())?;
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    Some(bytes)
-}
-
-fn array_buffer_from_bytes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    bytes: Vec<u8>,
-) -> v8::Local<'s, v8::ArrayBuffer> {
-    let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-    v8::ArrayBuffer::with_backing_store(scope, &backing_store)
-}
-
-fn uint8_array_from_bytes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    bytes: Vec<u8>,
-) -> Option<v8::Local<'s, v8::Uint8Array>> {
-    let len = bytes.len();
-    let buffer = array_buffer_from_bytes(scope, bytes);
-    v8::Uint8Array::new(scope, buffer, 0, len)
-}
-
-fn push_message_data_array_buffer_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(bytes) = push_message_data_bytes_from_this(scope, args.this()) else {
-        return;
-    };
-    let buffer = array_buffer_from_bytes(scope, bytes);
-    rv.set(buffer.into());
-}
-
-fn push_message_data_bytes_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(bytes) = push_message_data_bytes_from_this(scope, args.this()) else {
-        return;
-    };
-    let Some(array) = uint8_array_from_bytes(scope, bytes) else {
-        return;
-    };
-    rv.set(array.into());
-}
-
-fn push_message_data_text_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(bytes) = push_message_data_bytes_from_this(scope, args.this()) else {
-        return;
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    let Some(value) = v8_string(scope, text.as_ref()) else {
-        return;
-    };
-    rv.set(value.into());
-}
-
-fn push_message_data_json_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(bytes) = push_message_data_bytes_from_this(scope, args.this()) else {
-        return;
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    let Some(source) = v8_string(scope, text.as_ref()) else {
-        return;
-    };
-    let Some(value) = v8::json::parse(scope, source) else {
-        let message = v8str(
-            scope,
-            "PushMessageData.json() could not parse the payload as JSON.",
-        );
-        let exception = v8::Exception::syntax_error(scope, message);
-        scope.throw_exception(exception);
-        return;
-    };
-    rv.set(value);
 }
 
 fn new_service_worker_sync_event<'s>(

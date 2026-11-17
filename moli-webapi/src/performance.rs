@@ -12,3 +12,5 @@ pub use entries::{
 };
 pub use name::PerformanceEntryName;
 pub use slots::*;
+
+pub mod event_counts;

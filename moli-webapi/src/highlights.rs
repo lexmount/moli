@@ -1,93 +1,17 @@
-use super::*;
-use crate::util::{
-    call_script_visible_function, get_private_object,
-    materialize_hidden_function_template_prototype,
-};
-use crate::web_api_interfaces;
+//! Highlight values and their V8-traced live registry; style projection remains with the embedder.
+use crate::interfaces as web_api_interfaces;
 use crate::webidl_iterator::webidl_collection_reflect_apply_intrinsic;
-
-const HIGHLIGHT_ITERATOR_RECORDS_SLOT: &str = "__moliHighlightIteratorRecords";
-const HIGHLIGHT_ITERATOR_MAPPER_SLOT: &str = "__moliHighlightIteratorMapper";
-const HIGHLIGHT_ITERATOR_INDEX_SLOT: &str = "__moliHighlightIteratorIndex";
-const HIGHLIGHT_ITERATOR_PROTOTYPE_SLOT: &str = "__moliHighlightIteratorPrototype";
-const HIGHLIGHT_REGISTRY_ITERATOR_PROTOTYPE_SLOT: &str = "__moliHighlightRegistryIteratorPrototype";
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct HighlightIteratorObjectDeclaration<'s> {
-    #[webapi(slot = HIGHLIGHT_ITERATOR_RECORDS_SLOT)]
-    records: v8::Local<'s, v8::Array>,
-    #[webapi(slot = HIGHLIGHT_ITERATOR_MAPPER_SLOT)]
-    mapper: v8::Local<'s, v8::Function>,
-    #[webapi(slot = HIGHLIGHT_ITERATOR_INDEX_SLOT)]
-    index: i32,
+use anyhow::{Result, anyhow};
+use moli_v8_util::{throw_type_error, v8_string, v8str};
+mod iterators;
+use iterators::highlight_iterator_factory_callback;
+pub struct HighlightRuntimeState<'s> {
+    pub registry: v8::Local<'s, v8::Object>,
+    pub highlight_constructor: v8::Local<'s, v8::Value>,
+    pub registry_constructor: v8::Local<'s, v8::Value>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct HighlightIteratorResultDeclaration<'s> {
-    value: v8::Local<'s, v8::Value>,
-    done: bool,
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(
-    interface = web_api_interfaces::HighlightIterator,
-    intrinsic_prototype_parent = v8::Intrinsic::SetIteratorPrototype,
-    prototype_to_string_tag = "Highlight Iterator",
-    readonly_prototype,
-    enumerable
-)]
-struct HighlightIteratorPrototypeDeclaration {
-    #[webapi(method, length = 0, callback = highlight_iterator_next_callback)]
-    next: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(
-    interface = web_api_interfaces::HighlightRegistryIterator,
-    intrinsic_prototype_parent = v8::Intrinsic::MapIteratorPrototype,
-    prototype_to_string_tag = "HighlightRegistry Iterator",
-    readonly_prototype,
-    enumerable
-)]
-struct HighlightRegistryIteratorPrototypeDeclaration {
-    #[webapi(method, length = 0, callback = highlight_iterator_next_callback)]
-    next: (),
-}
-
-#[derive(Clone, Copy)]
-enum HighlightIteratorKind {
-    Highlight,
-    Registry,
-}
-
-impl HighlightIteratorKind {
-    const fn prototype_slot(self) -> &'static str {
-        match self {
-            Self::Highlight => HIGHLIGHT_ITERATOR_PROTOTYPE_SLOT,
-            Self::Registry => HIGHLIGHT_REGISTRY_ITERATOR_PROTOTYPE_SLOT,
-        }
-    }
-
-    fn build_template<'s>(
-        self,
-        scope: &mut v8::PinScope<'s, '_, ()>,
-    ) -> v8::Local<'s, v8::FunctionTemplate> {
-        match self {
-            Self::Highlight => HighlightIteratorPrototypeDeclaration::build(scope),
-            Self::Registry => HighlightRegistryIteratorPrototypeDeclaration::build(scope),
-        }
-    }
-}
-
-pub(super) struct HighlightRuntimeState<'s> {
-    pub(super) registry: v8::Local<'s, v8::Object>,
-    pub(super) highlight_constructor: v8::Local<'s, v8::Value>,
-    pub(super) registry_constructor: v8::Local<'s, v8::Value>,
-}
-
-pub(super) fn build_highlight_runtime_state<'s>(
+pub fn build_highlight_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Result<HighlightRuntimeState<'s>> {
     let Some(source) = v8_string(scope, HIGHLIGHT_RUNTIME_SOURCE) else {
@@ -96,7 +20,7 @@ pub(super) fn build_highlight_runtime_state<'s>(
     let Some(script) = v8::Script::compile(scope, source, None) else {
         return Err(anyhow!("failed to compile Highlight runtime source"));
     };
-    let Some(initializer) = crate::script_execution::execute_compiled_script(scope, script)
+    let Some(initializer) = moli_v8_util::with_microtasks_scope(scope, |scope| script.run(scope))
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     else {
         return Err(anyhow!("failed to run Highlight runtime source"));
@@ -159,50 +83,6 @@ fn initialize_highlight_identity_callback<'s>(
     }
 }
 
-fn highlight_iterator_factory_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let kind = match args.get(0).uint32_value(scope) {
-        Some(0) => HighlightIteratorKind::Highlight,
-        Some(1) => HighlightIteratorKind::Registry,
-        _ => {
-            throw_type_error(scope, "Invalid Highlight iterator kind");
-            return;
-        }
-    };
-    let Ok(records) = v8::Local::<v8::Array>::try_from(args.get(1)) else {
-        throw_type_error(scope, "Invalid Highlight iterator records");
-        return;
-    };
-    let Ok(mapper) = v8::Local::<v8::Function>::try_from(args.get(2)) else {
-        throw_type_error(scope, "Invalid Highlight iterator mapper");
-        return;
-    };
-    let Ok(iterator) = HighlightIteratorObjectDeclaration::new(records, mapper, 0).bind(scope)
-    else {
-        throw_type_error(scope, "Failed to create Highlight iterator");
-        return;
-    };
-    let Some(prototype) = highlight_iterator_prototype(scope, kind) else {
-        throw_type_error(scope, "Failed to create Highlight iterator prototype");
-        return;
-    };
-    if iterator.set_prototype(scope, prototype.into()) != Some(true) {
-        throw_type_error(scope, "Failed to bind Highlight iterator prototype");
-        return;
-    }
-    let interface = match kind {
-        HighlightIteratorKind::Highlight => "Highlight Iterator",
-        HighlightIteratorKind::Registry => "HighlightRegistry Iterator",
-    };
-    if web_api_interfaces::initialize(scope, iterator, interface).is_err() {
-        return;
-    }
-    rv.set(iterator.into());
-}
-
 fn highlight_callback_is_callable_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -211,90 +91,6 @@ fn highlight_callback_is_callable_callback<'s>(
     let callable =
         v8::Local::<v8::Object>::try_from(args.get(0)).is_ok_and(|callback| callback.is_callable());
     rv.set(v8::Boolean::new(scope, callable).into());
-}
-
-fn highlight_iterator_prototype<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    kind: HighlightIteratorKind,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(prototype) = get_private_object(scope, global, kind.prototype_slot()) {
-        return Some(prototype);
-    }
-    let template = kind.build_template(scope);
-    let prototype = materialize_hidden_function_template_prototype(scope, template)?;
-    set_private_value(scope, global, kind.prototype_slot(), prototype.into());
-    Some(prototype)
-}
-
-fn highlight_iterator_next_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let iterator = args.this();
-    let Some(records) = get_private_object(scope, iterator, HIGHLIGHT_ITERATOR_RECORDS_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-    else {
-        throw_type_error(
-            scope,
-            "Highlight iterator next called on an incompatible receiver.",
-        );
-        return;
-    };
-    let Some(mapper) = get_private_value(scope, iterator, HIGHLIGHT_ITERATOR_MAPPER_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        throw_type_error(scope, "Highlight iterator mapper is unavailable.");
-        return;
-    };
-    let Some(mut index) = get_private_value(scope, iterator, HIGHLIGHT_ITERATOR_INDEX_SLOT)
-        .and_then(|value| value.integer_value(scope))
-        .and_then(|value| u32::try_from(value).ok())
-    else {
-        throw_type_error(scope, "Highlight iterator state is unavailable.");
-        return;
-    };
-    while index < records.length() {
-        let record_index = index;
-        index = index.saturating_add(1);
-        set_private_value(
-            scope,
-            iterator,
-            HIGHLIGHT_ITERATOR_INDEX_SLOT,
-            v8::Integer::new_from_unsigned(scope, index).into(),
-        );
-        let Some(record) = records
-            .get_index(scope, record_index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            continue;
-        };
-        let deleted = record
-            .get(scope, v8str(scope, "deleted").into())
-            .is_some_and(|value| value.boolean_value(scope));
-        if deleted {
-            continue;
-        }
-        let Some(value) = call_script_visible_function(
-            scope,
-            mapper,
-            v8::undefined(scope).into(),
-            &[record.into()],
-            "Highlight iterator mapper",
-        ) else {
-            return;
-        };
-        let result = HighlightIteratorResultDeclaration::new(value, false)
-            .bind(scope)
-            .expect("Highlight iterator result declaration should bind");
-        rv.set(result.into());
-        return;
-    }
-    let result = HighlightIteratorResultDeclaration::new(v8::undefined(scope).into(), true)
-        .bind(scope)
-        .expect("Highlight iterator result declaration should bind");
-    rv.set(result.into());
 }
 
 fn highlight_constructor<'s>(
