@@ -5,10 +5,9 @@ use crate::{
         abort::dom_exception_value, node_runtime_and_handle_from_object,
         node_runtime_and_handle_from_object_or_detached,
     },
-    text_codec::TextCodecStore,
     util::{
         call_global_bridge_method, context_host_ptr_from_global_bridge, global_bridge_method,
-        throw_range_error, throw_type_error, v8_string, v8str,
+        throw_type_error, v8_string, v8str,
     },
 };
 use moli_webapi::dom_exception;
