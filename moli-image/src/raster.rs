@@ -3,15 +3,17 @@ use std::io::{BufReader, Cursor};
 use image::{ImageFormat, ImageReader, Limits};
 
 use crate::{
-    JpegDecodeError, MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES, PngDecodeError, RgbaImage,
-    RgbaImageError, decode_jpeg, decode_png, jpeg::jpeg_dimensions, png::png_dimensions,
+    AvifDecodeError, JpegDecodeError, MAX_DECODED_RGBA_BYTES, MAX_ENCODED_IMAGE_BYTES,
+    PngDecodeError, RgbaImage, RgbaImageError, avif::avif_dimensions, decode_avif, decode_jpeg,
+    decode_png, jpeg::jpeg_dimensions, png::png_dimensions,
 };
 
 /// Static raster formats admitted by the HTML image pipeline.
 ///
 /// GIF and WebP are decoded to their first composited frame. Moli has no
 /// animation timeline/compositor, so later frames deliberately remain outside
-/// this codec contract.
+/// this codec contract. AVIF is limited to still images; see the `avif`
+/// module for the admitted container features.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RasterImageFormat {
     Png,
@@ -19,6 +21,7 @@ pub enum RasterImageFormat {
     Gif,
     WebP,
     Bmp,
+    Avif,
 }
 
 impl RasterImageFormat {
@@ -29,6 +32,7 @@ impl RasterImageFormat {
             ImageFormat::Gif => Some(Self::Gif),
             ImageFormat::WebP => Some(Self::WebP),
             ImageFormat::Bmp => Some(Self::Bmp),
+            ImageFormat::Avif => Some(Self::Avif),
             _ => None,
         }
     }
@@ -69,6 +73,8 @@ pub enum RasterDecodeError {
     Png(#[from] PngDecodeError),
     #[error("JPEG image could not be decoded: {0}")]
     Jpeg(#[from] JpegDecodeError),
+    #[error("AVIF image could not be decoded: {0}")]
+    Avif(#[from] AvifDecodeError),
     #[error("{format:?} image could not be decoded: {source}")]
     Image {
         format: RasterImageFormat,
@@ -96,6 +102,7 @@ pub fn probe_raster_image(bytes: &[u8]) -> Result<RasterImageMetadata, RasterDec
     let (width, height) = match admitted {
         RasterImageFormat::Png => png_dimensions(bytes)?,
         RasterImageFormat::Jpeg => jpeg_dimensions(bytes)?,
+        RasterImageFormat::Avif => avif_dimensions(bytes)?,
         RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp => {
             let mut reader = ImageReader::with_format(BufReader::new(Cursor::new(bytes)), format);
             reader.limits(decode_limits());
@@ -138,21 +145,15 @@ pub fn decode_raster_image_with_metadata(
     let image = match metadata.format {
         RasterImageFormat::Png => decode_png(bytes)?,
         RasterImageFormat::Jpeg => decode_jpeg(bytes)?,
-        format @ (RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp) => {
-            let image_format = match format {
-                RasterImageFormat::Gif => ImageFormat::Gif,
-                RasterImageFormat::WebP => ImageFormat::WebP,
-                RasterImageFormat::Bmp => ImageFormat::Bmp,
-                RasterImageFormat::Png | RasterImageFormat::Jpeg => unreachable!(),
-            };
-            let mut reader =
-                ImageReader::with_format(BufReader::new(Cursor::new(bytes)), image_format);
-            reader.limits(decode_limits());
-            let decoded = reader
-                .decode()
-                .map_err(|source| RasterDecodeError::Image { format, source })?;
-            let rgba = decoded.into_rgba8();
-            RgbaImage::try_new(rgba.width(), rgba.height(), rgba.into_raw())?
+        RasterImageFormat::Avif => decode_avif(bytes)?,
+        RasterImageFormat::Gif => {
+            decode_with_image_crate(bytes, metadata.format, ImageFormat::Gif)?
+        }
+        RasterImageFormat::WebP => {
+            decode_with_image_crate(bytes, metadata.format, ImageFormat::WebP)?
+        }
+        RasterImageFormat::Bmp => {
+            decode_with_image_crate(bytes, metadata.format, ImageFormat::Bmp)?
         }
     };
     if (image.width, image.height) != (metadata.width, metadata.height) {
@@ -164,6 +165,24 @@ pub fn decode_raster_image_with_metadata(
         });
     }
     Ok(DecodedRasterImage { metadata, image })
+}
+
+fn decode_with_image_crate(
+    bytes: &[u8],
+    format: RasterImageFormat,
+    image_format: ImageFormat,
+) -> Result<RgbaImage, RasterDecodeError> {
+    let mut reader = ImageReader::with_format(BufReader::new(Cursor::new(bytes)), image_format);
+    reader.limits(decode_limits());
+    let decoded = reader
+        .decode()
+        .map_err(|source| RasterDecodeError::Image { format, source })?;
+    let rgba = decoded.into_rgba8();
+    Ok(RgbaImage::try_new(
+        rgba.width(),
+        rgba.height(),
+        rgba.into_raw(),
+    )?)
 }
 
 fn check_encoded_budget(bytes: &[u8]) -> Result<(), RasterDecodeError> {
@@ -405,5 +424,36 @@ mod tests {
             }
         );
         assert_eq!(decode_raster_image(&webp).unwrap().image, sample());
+    }
+
+    #[test]
+    fn common_contract_admits_still_avif_pixels() {
+        let avif = include_bytes!("../tests/fixtures/avif/alpha-yuv444.avif");
+        let metadata = probe_raster_image(avif).unwrap();
+        assert_eq!(
+            metadata,
+            RasterImageMetadata {
+                format: RasterImageFormat::Avif,
+                width: 8,
+                height: 8,
+            }
+        );
+        assert_eq!(raster_image_dimensions(avif).unwrap(), (8, 8));
+        let decoded = decode_raster_image_with_metadata(avif, metadata).unwrap();
+        assert_eq!((decoded.image.width, decoded.image.height), (8, 8));
+        // Bottom-right pixel of the fixture is half-transparent white.
+        assert_eq!(decoded.image.rgba[(7 * 8 + 7) * 4 + 3], 128);
+
+        // Animated AVIF uses the `avis` brand, which image format detection
+        // does not classify as AVIF; it stays outside the admitted set.
+        let mut animated = avif.to_vec();
+        animated[8..12].copy_from_slice(b"avis");
+        assert!(probe_raster_image(&animated).is_err());
+
+        // A container whose payload is cut off fails during metadata probing.
+        assert!(matches!(
+            probe_raster_image(&avif[..64]),
+            Err(RasterDecodeError::Avif(_))
+        ));
     }
 }
