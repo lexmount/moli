@@ -289,6 +289,7 @@ async fn semantic_dump_preserves_protocol_json_bytes_and_text_fields() -> Result
           <input aria-label="Text field" value="field value">
           <input type="range" aria-label="Numeric field" value="42">
           <button disabled>Disabled action</button>
+          <a href="docs/start.html#top">Docs</a>
           <div aria-hidden="true"><span>Ignored text</span></div>
           <div hidden>Not rendered</div>
         </body></html>"#,
@@ -338,6 +339,8 @@ async fn semantic_dump_preserves_protocol_json_bytes_and_text_fields() -> Result
     let text = super::semantic::render_text(&mut page, false).await?;
     assert!(text.contains("textbox: Text field = field value [backendNodeId="));
     assert!(text.contains("textbox: Numeric field = 42 [backendNodeId="));
+    let link_url = page.final_url().join("docs/start.html#top")?;
+    assert!(text.contains(&format!("link: Docs → {link_url} [backendNodeId=")));
     assert!(
         !text.contains("ListMarker"),
         "markers have no child reference in the protocol tree"
