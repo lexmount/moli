@@ -6589,6 +6589,8 @@ html/browsers/browsing-the-web/history-traversal/hashchange-same-fragment-does-n
 html/browsers/browsing-the-web/history-traversal/hashchange_event.html
 html/browsers/browsing-the-web/history-traversal/history-traversal-navigate-parent-while-child-loading.html
 html/browsers/browsing-the-web/history-traversal/history-traversal-navigates-multiple-frames.html
+html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation-iframe.html
+html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/resume-timer-on-history-back.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-basic.html
 html/browsers/browsing-the-web/history-traversal/popstate_event.html
@@ -8240,7 +8242,6 @@ html/semantics/tabular-data/historical.html
 html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
-html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
 html/semantics/tabular-data/the-table-element/createTBody.html

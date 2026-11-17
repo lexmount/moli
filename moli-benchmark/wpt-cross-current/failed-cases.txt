@@ -2248,8 +2248,6 @@ html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_ori
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin_3.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-bfcache-restore-iframe.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-bfcache-restore.html
-html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation-iframe.html
-html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
