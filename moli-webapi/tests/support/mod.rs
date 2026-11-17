@@ -2,6 +2,7 @@ use moli_v8_util::{register_ecmascript_intrinsic, throw_type_error, v8_string, v
 use moli_webapi::{dom_exception, interfaces};
 use moli_webapi_declare::WebApiInterfaceDescriptor;
 
+#[allow(dead_code)] // Each integration-test binary uses its own subset of this fixture.
 pub fn illegal_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _: v8::FunctionCallbackArguments<'s>,
@@ -52,7 +53,10 @@ pub fn install_errors(scope: &mut v8::PinScope<'_, '_>) {
         scope,
         dom_exception::quota_exceeded_error_constructor_callback,
     );
-    let socket = v8::FunctionTemplate::new(scope, illegal_constructor);
+    let socket = v8::FunctionTemplate::new(
+        scope,
+        moli_webapi::websocket_values::websocket_error_constructor_callback,
+    );
     let rtc = v8::FunctionTemplate::new(scope, dom_exception::rtc_error_constructor_callback);
     let transport = v8::FunctionTemplate::new(
         scope,

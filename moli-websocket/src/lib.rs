@@ -8,7 +8,7 @@ mod handshake;
 mod headers;
 mod limits;
 mod payload;
-mod protocol;
+use moli_websocket_types as protocol;
 mod proxy;
 mod request;
 mod runtime;

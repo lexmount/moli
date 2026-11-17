@@ -68,6 +68,7 @@ pub mod web_audio;
 pub mod webgl;
 pub mod webgl_values;
 pub mod webidl_iterator;
+pub mod websocket_values;
 pub mod worker_location;
 
 pub use embedding::{RealmCallbacks, install_realm_callbacks};

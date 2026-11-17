@@ -103,7 +103,7 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         },
     );
     install_errors(scope);
-    let event = v8::FunctionTemplate::new(scope, illegal_constructor);
+    let event = v8::FunctionTemplate::new(scope, events::event_constructor_callback);
     let prototype = event.prototype_template(scope);
     for key in ["type", "bubbles", "cancelable", "composed", "timeStamp"] {
         let getter = v8::FunctionTemplate::builder(core_getter)
@@ -117,6 +117,12 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         );
     }
     finish_template(scope, interfaces::Event::DESCRIPTOR, event);
+
+    let progress =
+        v8::FunctionTemplate::new(scope, events::progress::progress_event_constructor_callback);
+    progress.inherit(event);
+    events::progress::install_progress_event_template_bindings(scope, progress, "ProgressEvent");
+    finish_template(scope, interfaces::ProgressEvent::DESCRIPTOR, progress);
 
     for kind in [
         EventSubclassKind::CustomEvent,
@@ -1035,4 +1041,40 @@ fn standalone_native_media_query_event_keeps_trust_and_intrinsic_after_global_re
         events::media_query_list_event::create_media_query_list_event(scope, "screen", true);
     publish(scope, "nativeQuery", event);
     assert!(eval(scope,"nativeQuery instanceof NativeQueryEvent && nativeQuery.media==='screen' && nativeQuery.matches && nativeQuery.type==='change' && nativeQuery.isTrusted && nativeQuery.timeStamp===37.25").is_true());
+}
+
+#[test]
+fn standalone_event_and_progress_constructors_share_realm_clock_and_native_projection() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 81.5);
+    eval(
+        scope,
+        r#"(() => {
+      const assert = (ok) => { if (!ok) throw new Error('event construction'); };
+      const event = new Event('basic', {bubbles: true, composed: true});
+      assert(event.type === 'basic' && event.bubbles && event.composed && !event.isTrusted);
+      assert(event.timeStamp === 81.5);
+      const order = [], init = {};
+      for (const key of ['bubbles', 'cancelable', 'composed', 'lengthComputable', 'loaded', 'total']) {
+        Object.defineProperty(init, key, {get() { order.push(key); return key === 'loaded' ? 4 : key === 'total' ? 10 : true; }});
+      }
+      const progress = new ProgressEvent('progress', init);
+      assert(order.join() === 'bubbles,cancelable,composed,lengthComputable,loaded,total');
+      assert(progress instanceof Event && progress instanceof ProgressEvent);
+      assert(progress.lengthComputable && progress.loaded === 4 && progress.total === 10);
+      assert(progress.timeStamp === 81.5 && !progress.isTrusted);
+      globalThis.NativeProgress = ProgressEvent;
+      globalThis.ProgressEvent = function() { throw new Error('author constructor'); };
+      return true;
+    })()"#,
+    );
+    let event =
+        events::progress::construct_native_progress_event(scope, "load", true, 3.0, 7.0).unwrap();
+    publish(scope, "nativeProgress", event);
+    assert!(eval(scope, "nativeProgress instanceof NativeProgress && nativeProgress.isTrusted && nativeProgress.timeStamp === 81.5 && nativeProgress.loaded === 3 && nativeProgress.total === 7").is_true());
 }

@@ -4,6 +4,35 @@ use moli_v8_util::{set_private_value, v8str};
 use moli_webapi::{credentials, interfaces, navigator_ua_data, text_encoder, trusted_values};
 use std::pin::pin;
 use support::{eval, finish_template, illegal_constructor, install_errors, publish};
+
+#[test]
+fn websocket_error_values_validate_close_info_without_a_transport_host() {
+    with_constructors(|scope| {
+        eval(
+            scope,
+            r#"(() => {
+          const assert = (ok) => { if (!ok) throw new Error('WebSocketError'); };
+          const error = new WebSocketError('message\ud800', {reason: 'done'});
+          assert(error instanceof DOMException && error instanceof WebSocketError);
+          assert(error.message === 'message\ud800' && error.closeCode === 1000 && error.reason === 'done');
+          const empty = new WebSocketError();
+          assert(empty.closeCode === null && empty.reason === '');
+          for (const [options, name] of [[{closeCode: 1001}, 'InvalidAccessError'], [{reason: '€'.repeat(42)}, 'SyntaxError']]) {
+            try { new WebSocketError('', options); throw new Error('accepted'); }
+            catch (error) { assert(error instanceof DOMException && error.name === name); }
+          }
+          const order = [];
+          new WebSocketError({toString() { order.push('message'); return ''; }}, {
+            get closeCode() { order.push('code'); return 3001; },
+            get reason() { order.push('reason'); return 'done'; }
+          });
+          assert(order.join() === 'message,code,reason');
+          return true;
+        })()"#,
+        );
+    });
+}
+
 fn with_constructors(test: impl FnOnce(&mut v8::PinScope<'_, '_>)) {
     ensure_v8();
     let mut isolate = v8::Isolate::new(Default::default());
