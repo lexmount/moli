@@ -43,7 +43,9 @@
     const callback = deadline => {
       row.calls++;
       row.didTimeout = deadline.didTimeout;
-      row.timeCorrect = deadline.didTimeout ? deadline.timeRemaining() === 0 : deadline.timeRemaining() > 0;
+      const remaining = deadline.timeRemaining();
+      // Other already-due work may exhaust the idle period before dispatch.
+      row.timeCorrect = deadline.didTimeout ? remaining === 0 : remaining >= 0 && remaining <= 50;
     };
     try {
       const handle = omitted ? requestIdleCallback(callback) : requestIdleCallback(callback, makeOptions(row));
