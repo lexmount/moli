@@ -114,6 +114,57 @@ fn small_static_nodelist_array_indexof_remains_fast_after_length_tamper() {
     assert_eq!(result, "50|-1");
 }
 #[test]
+fn static_nodelist_length_preserves_brand_live_queries_and_author_overrides() {
+    let mut vm = new_parsed_test_vm(
+        "https://nodelist-length.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const getLength = Object.getOwnPropertyDescriptor(NodeList.prototype, 'length').get;
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const rejects = receiver => {
+    try { getLength.call(receiver); } catch (error) { return error instanceof TypeError; }
+    return false;
+  };
+  const readLength = nodes => {
+    let sum = 0;
+    for (let i = 0; i < 1000; ++i) sum += nodes.length;
+    return sum;
+  };
+  for (const size of [0, 100, 1100]) {
+    const root = document.createElement('div');
+    root.innerHTML = '<span></span>'.repeat(size);
+    document.body.append(root);
+    const nodes = root.querySelectorAll('span');
+    const live = root.childNodes;
+    check(!Object.hasOwn(nodes, 'length') && readLength(nodes) === size * 1000, 'static length');
+    root.replaceChildren();
+    check(getLength.call(nodes) === size && getLength.call(live) === 0, 'snapshot and live length');
+    check(rejects({}) && rejects(Object.create(nodes)), 'forged receiver');
+    let traps = 0;
+    check(rejects(new Proxy(nodes, {get() { ++traps; }})) && traps === 0, 'author proxy');
+    check(rejects(root.children), 'unrelated collection');
+    Object.defineProperty(nodes, 'length', {get() { return 10; }, configurable: true});
+    check(readLength(nodes) === 10000 && getLength.call(nodes) === size, 'own length override');
+    delete nodes.length;
+    Object.setPrototypeOf(nodes, {get length() { return 7; }});
+    check(readLength(nodes) === 7000 && getLength.call(nodes) === size, 'prototype override');
+    root.remove();
+  }
+  const nodes = document.querySelectorAll('span');
+  Object.defineProperty(NodeList.prototype, 'length', {get() { return 23; }, configurable: true});
+  check(readLength(nodes) === 23000 && getLength.call(nodes) === 0, 'interface prototype override');
+  return 'ok';
+})()
+"#,
+        )
+        .expect("NodeList length keeps its Web IDL behavior across native storage paths");
+    assert_eq!(result, "ok");
+}
+#[test]
 fn main_document_static_nodelist_reads_preserve_wrapper_identity() {
     let markup = format!(
         "<!doctype html><html><body>{}</body></html>",
