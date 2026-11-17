@@ -15,15 +15,16 @@ The direct binding migration includes these groups:
 | Collections and records | FileList, Touch/TouchList, native WebIDL collection iterators, CryptoKey, IDBKeyRange/IDBRecord, MutationRecord, IntersectionObserverEntry, IdleDeadline, EventCounts, Highlight/HighlightRegistry and their live iterators |
 | Canvas and media values | WebGL binding state and methods, ImageBitmap value lifetime, TextMetrics, CanvasGradient validation, MediaCapabilities and MediaSource capability queries |
 | Standalone constructors and conversions | TextEncoder, value-event dictionaries and constructors, TrustedHTML/TrustedScript/TrustedScriptURL, credential values and JSON conversions, NavigatorUAData, AbortSignal value/argument shapes, base64, CSS identifier escaping, PushMessageData and PushSubscriptionOptions |
-| Constructor and owner separation | Event/ProgressEvent, UIEvent/FocusEvent/CompositionEvent dictionaries and construction, navigation event values, ExtendableEvent/ExtendableMessageEvent/FetchEvent values, WebSocketError and close dictionaries, TextDecoder with a weakly bound codec component, Animation/KeyframeEffect values, DOMParser creation-realm state, XMLSerializer/FileReaderSync shells, IdleDetector/VTTCue initial state, and initial OffscreenCanvas/2D context values |
+| UI event construction | UIEvent, FocusEvent, CompositionEvent, MouseEvent, WheelEvent, PointerEvent, DragEvent, KeyboardEvent and TouchEvent; inherited dictionaries, modifier state, pointer angle conversion and payload sequences |
+| Constructor and owner separation | Event/ProgressEvent, navigation event values, ExtendableEvent/ExtendableMessageEvent/FetchEvent values, WebSocketError and close dictionaries, TextDecoder with a weakly bound codec component, Animation/KeyframeEffect values, DOMParser creation-realm state, XMLSerializer/FileReaderSync shells, IdleDetector/VTTCue initial state, and initial OffscreenCanvas/2D context values |
 
 The remaining Renderer bindings were checked for actual host dependencies, including dependencies hidden behind parent-module imports. These groups still require their current native owners:
 
 | Binding family | Owner-dependent work |
 | --- | --- |
 | Window, navigation, DOM, CSSOM and SVG | Document identity, wrapper projection, live nodes and collections, layout/style state, mutation and navigation lifecycle |
-| UI events | The existing EventRuntime supplies the exact native Window predicate, including retained detached globals; target/world projection and dispatch stay with the host. UIEventInit and modifier state are shared |
-| Pointer, keyboard, InputEvent and TouchEvent construction | Native target/range conversion and dispatch; these constructors reuse shared UIEventInit and modifier state, and independent Touch values and lists are shared |
+| UI events | The existing EventRuntime supplies the exact native Window predicate, including retained detached globals; target/world projection, secure-context exposure and dispatch stay with the host |
+| InputEvent construction | Live Range snapshot conversion and dispatch-time cleanup require native Node/Document ownership; its dictionary reuses shared UIEventInit |
 | Streams and compression | Stream/controller ownership, callback residence and execution queues; TextDecoder and its codec store are shared, with the host explicitly retiring the component at teardown |
 | Fetch, Request/Response, Blob/File, WebSocket, service workers, storage and IndexedDB | Request/body ownership, backend handles, asynchronous execution and lifecycle checks; IDBKeyRange/IDBRecord, key conversions and version-event payloads are shared |
 | WebCrypto execution | Backend work and owner-bound completion; CryptoKey values are shared |
