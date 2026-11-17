@@ -31,6 +31,22 @@ pub(super) struct PreparedWindowFetchRequest {
 }
 
 impl PreparedWindowFetchRequest {
+    pub(super) fn requires_initial_preflight(&self) -> bool {
+        !self
+            .resource_loader
+            .request_client()
+            .web_security_disabled()
+            && self.request_mode == moli_fetch::RequestMode::Cors
+            && crate::network_host::cors_preflight_request_headers(
+                !self.request_origin.same_origin_url(&self.resolved_url),
+                &self.resolved_url,
+                &self.method,
+                &self.cors_preflight_request_headers,
+                false,
+            )
+            .is_some()
+    }
+
     pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
         self.cache.parse().unwrap_or_default()
     }
