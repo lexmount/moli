@@ -7043,6 +7043,7 @@ html/dom/partial-updates/tentative/template-for-parsing-only.html
 html/dom/partial-updates/tentative/template-for-reverse.html
 html/dom/partial-updates/tentative/template-for-scripting-nested.html
 html/dom/partial-updates/tentative/template-for-superseded-by-shadowrootmode.html
+html/dom/reflection-embedded.html
 html/dom/reflection-forms-weekmonth.html
 html/dom/reflection-forms.html
 html/dom/reflection-grouping.html
@@ -8242,7 +8243,6 @@ html/semantics/tabular-data/historical.html
 html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
-html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
 html/semantics/tabular-data/the-table-element/createTBody.html
@@ -8266,7 +8266,6 @@ html/semantics/tabular-data/the-tr-element/deleteCell.html
 html/semantics/tabular-data/the-tr-element/insertCell.html
 html/semantics/tabular-data/the-tr-element/rowIndex.html
 html/semantics/tabular-data/the-tr-element/sectionRowIndex.html
-html/semantics/text-level-semantics/historical.html
 html/semantics/text-level-semantics/the-a-element/a-click-handler-with-null-browsing-context-crash.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-404.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-redirect-to-javascript.html

@@ -2348,7 +2348,6 @@ html/dom/partial-updates/tentative/template-for-style-in-head.html
 html/dom/partial-updates/tentative/template-for-style.html
 html/dom/partial-updates/tentative/template-for-supersedes-invalid-shadowrootmode.html
 html/dom/partial-updates/tentative/template-for-title.html
-html/dom/reflection-embedded.html
 html/editing/dnd/target-origin/202.html
 html/editing/dnd/the-dropzone-attribute/dropzone_attribute.html
 html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
@@ -2436,6 +2435,7 @@ html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/selectors/pseudo-classes/autofill.html
+html/semantics/text-level-semantics/historical.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-detached-iframe.html
