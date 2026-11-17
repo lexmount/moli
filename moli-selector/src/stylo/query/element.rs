@@ -676,8 +676,7 @@ impl SelectorsElement for QueryElement<'_> {
     fn apply_selector_flags(&self, _: ElementSelectorFlags) {}
 
     fn is_link(&self) -> bool {
-        matches!(self.element().local_name(), "a" | "area")
-            && self.element().attribute("href").is_some()
+        self.element().hyperlink_href().is_some()
     }
 
     fn is_html_slot_element(&self) -> bool {

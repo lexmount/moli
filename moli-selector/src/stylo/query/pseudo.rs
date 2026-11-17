@@ -17,12 +17,13 @@ impl<'a> QueryElement<'a> {
     pub(in crate::stylo) fn computed_state(self) -> ElementState {
         let element = self.element();
         let mut state = ElementState::empty();
-        let local_name = element.local_name();
 
         if self.matches_defined_pseudo() {
             state |= ElementState::DEFINED;
         }
-        if matches!(local_name, "a" | "area" | "link") && element.attribute("href").is_some() {
+        if element.hyperlink_href().is_some()
+            || (element.is_html_element("link") && element.has_attribute_ns("", "href"))
+        {
             state |= ElementState::UNVISITED;
         }
         if self.matches_checked_pseudo() {
@@ -238,53 +239,14 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn is_disableable_element(self) -> bool {
-        matches!(
-            self.element().local_name(),
-            "button" | "input" | "select" | "textarea" | "fieldset" | "optgroup" | "option"
-        )
+        self.element().supports_disabled()
     }
 
     pub(super) fn matches_disabled_pseudo(self) -> bool {
-        if !self.is_disableable_element() {
-            return false;
-        }
-        if self.element().has_attribute("disabled") {
-            return true;
-        }
-        if self.element().local_name() == "option"
-            && self.parent_element().is_some_and(|(_, parent)| {
-                parent.local_name() == "optgroup" && parent.has_attribute("disabled")
-            })
-        {
-            return true;
-        }
-        if matches!(self.element().local_name(), "option" | "optgroup")
-            && self.disabled_select_ancestor().is_some()
-        {
-            return true;
-        }
-        self.disabled_fieldset_ancestor().is_some()
-    }
-
-    pub(super) fn parent_element(self) -> Option<(NodeId, &'a Element)> {
-        let parent = self.node().parent_node()?;
-        let element = self.host.node(parent)?.as_element()?;
-        Some((parent, element))
-    }
-
-    pub(super) fn disabled_fieldset_ancestor(self) -> Option<NodeId> {
-        let mut current = self.node().parent_node();
-        while let Some(parent) = current {
-            if let Some(element) = self.host.node(parent).and_then(Node::as_element)
-                && element.local_name() == "fieldset"
-                && element.has_attribute("disabled")
-                && !self.is_inside_first_legend_child(parent)
-            {
-                return Some(parent);
-            }
-            current = self.host.node(parent).and_then(Node::parent_node);
-        }
-        None
+        self.is_disableable_element()
+            && (self.host.dom().is_disabled_form_control(self.handle)
+                || (matches!(self.element().local_name(), "option" | "optgroup")
+                    && self.disabled_select_ancestor().is_some()))
     }
 
     pub(super) fn disabled_select_ancestor(self) -> Option<NodeId> {
@@ -303,29 +265,6 @@ impl<'a> QueryElement<'a> {
             current = self.host.node(parent).and_then(Node::parent_node);
         }
         None
-    }
-
-    pub(super) fn is_inside_first_legend_child(self, fieldset: NodeId) -> bool {
-        let Some(legend) = self.host.child_handles(fieldset).find(|child| {
-            self.host
-                .node(*child)
-                .and_then(Node::as_element)
-                .is_some_and(|element| element.local_name() == "legend")
-        }) else {
-            return false;
-        };
-        self.handle == legend || self.is_descendant_of(legend)
-    }
-
-    pub(super) fn is_descendant_of(self, ancestor: NodeId) -> bool {
-        let mut current = self.node().parent_node();
-        while let Some(parent) = current {
-            if parent == ancestor {
-                return true;
-            }
-            current = self.host.node(parent).and_then(Node::parent_node);
-        }
-        false
     }
 
     pub(super) fn can_match_required_pseudo(self) -> bool {
@@ -369,23 +308,7 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn is_editable(self) -> bool {
-        let mut current = Some(self.handle);
-        while let Some(handle) = current {
-            let Some(node) = self.host.node(handle) else {
-                return false;
-            };
-            if let Some(document) = node.as_document() {
-                return document.design_mode_enabled();
-            }
-            if let Some(element) = node.as_element()
-                && let Some(value) = element.attribute("contenteditable")
-                && let Some(is_editable) = contenteditable_value_is_editable(value)
-            {
-                return is_editable;
-            }
-            current = node.parent_node();
-        }
-        false
+        self.host.dom().is_content_editable(self.handle)
     }
 
     pub(super) fn matches_placeholder_shown_pseudo(self) -> bool {
@@ -701,13 +624,5 @@ fn default_submit_button_element(element: &Element) -> bool {
         }
         "input" => element.input_type().is_submit_button(),
         _ => false,
-    }
-}
-
-fn contenteditable_value_is_editable(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "" | "true" | "plaintext-only" => Some(true),
-        "false" => Some(false),
-        _ => None,
     }
 }

@@ -5,6 +5,7 @@ mod document;
 mod element;
 mod host;
 mod html_serialization;
+mod interaction;
 mod markdown;
 mod node;
 mod parser_construction;
@@ -42,11 +43,13 @@ pub use html_serialization::{
     HtmlSerializationInsertion, HtmlSerializationLimitExceeded, HtmlSerializationPolicy,
     escape_html_attribute_into_string,
 };
+pub use interaction::{ContentEditableState, FocusSupport};
 pub use node::{
     CDataSection, Comment, LiveDomNodeMetadata, NativeNodeId, Node, NodeData, NodeFlags, NodeType,
     ProcessingInstruction, Text,
 };
 pub use parser_construction::ParserConstruction;
+pub(crate) use queries::select_display_size;
 
 // Node IDs remain dense indexes, while immutable page snapshots share complete
 // chunks. A mutation detaches only its 256-node chunk, bounding copy-on-write

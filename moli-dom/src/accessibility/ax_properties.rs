@@ -1,15 +1,15 @@
 use crate::{
     NodeData, NodeId,
     forms::InputType,
-    native::{DomHost, Element, NativeDom, Node},
+    native::{DomHost, Element, FocusSupport, NativeDom, Node},
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use url::Url;
 
-use super::ax_dom::{ax_child_ids, ax_control_is_disabled, ax_link_href};
+use super::ax_dom::ax_child_ids;
 use super::ax_projection::{AxTreeProjection, AxUnavailable};
-use super::ax_roles::{ax_role, heading_level, is_image, is_link};
+use super::ax_roles::{heading_level, is_image, is_link};
 
 const MAX_AX_NAME_VISITED_OBJECTS: usize = 100;
 
@@ -210,12 +210,14 @@ fn ax_element_name(
 
     // Recursive descendants contribute text alternatives even when their own
     // role does not take a name from contents.
-    let content =
-        if traversal.includes_contents() || ax_name_comes_from_contents(document, node, element) {
-            ax_content_text(document, projection, node_id, traversal, visited)?
-        } else {
-            String::new()
-        };
+    let role = projection.role_for_name(node);
+    let content = if traversal.includes_contents()
+        || ax_name_comes_from_contents(projection, node, element, role)
+    {
+        ax_content_text(document, projection, node_id, traversal, visited)?
+    } else {
+        String::new()
+    };
     if content.bytes().any(|byte| !byte.is_ascii_whitespace()) {
         return Ok(AxName::contents(content));
     }
@@ -224,7 +226,7 @@ fn ax_element_name(
     if matches!(
         traversal,
         AxNameTraversal::Contents | AxNameTraversal::NativeLabel
-    ) && ax_role(document, node, None) == "generic"
+    ) && role == "generic"
     {
         return Ok(AxName::contents(content));
     }
@@ -433,10 +435,14 @@ fn ax_is_text_control(element: &Element) -> bool {
             ))
 }
 
-fn ax_name_comes_from_contents(document: &NativeDom, node: &Node, element: &Element) -> bool {
-    let role = ax_role(document, node, None);
+fn ax_name_comes_from_contents(
+    projection: &AxTreeProjection<'_, '_>,
+    node: &Node,
+    element: &Element,
+    role: &str,
+) -> bool {
     if role == "row" {
-        return ax_row_name_comes_from_contents(document, node);
+        return ax_row_name_comes_from_contents(projection, node);
     }
 
     is_link(role)
@@ -462,13 +468,13 @@ fn ax_name_comes_from_contents(document: &NativeDom, node: &Node, element: &Elem
         || matches!(element.local_name(), "caption" | "figcaption" | "legend")
 }
 
-fn ax_row_name_comes_from_contents(document: &NativeDom, node: &Node) -> bool {
+fn ax_row_name_comes_from_contents(projection: &AxTreeProjection<'_, '_>, node: &Node) -> bool {
     let mut ancestor = node.parent_node_id();
     while let Some(ancestor_id) = ancestor {
-        let Some(ancestor_node) = document.node(ancestor_id) else {
+        let Some(ancestor_node) = projection.document.node(ancestor_id) else {
             return false;
         };
-        match ax_role(document, ancestor_node, None) {
+        match projection.role_for_name(ancestor_node) {
             "grid" | "treegrid" => return true,
             "generic" | "none" | "group" | "rowgroup" => {
                 ancestor = ancestor_node.parent_node_id();
@@ -599,7 +605,7 @@ pub(super) fn ax_properties(
         NodeData::Element(element) => {
             if role == "status" {
                 let live = element
-                    .attribute("aria-live")
+                    .attribute_ns("", "aria-live")
                     .map(str::trim)
                     .filter(|value| {
                         matches_ignore_ascii_case(value, &["off", "polite", "assertive"])
@@ -608,7 +614,7 @@ pub(super) fn ax_properties(
                 properties.push(ax_token_property("live", live));
 
                 let atomic = element
-                    .attribute("aria-atomic")
+                    .attribute_ns("", "aria-atomic")
                     .map(str::trim)
                     .and_then(|value| {
                         if value.eq_ignore_ascii_case("true") {
@@ -623,34 +629,35 @@ pub(super) fn ax_properties(
                 properties.push(ax_bool_property("atomic", "boolean", atomic));
 
                 let relevant = element
-                    .attribute("aria-relevant")
+                    .attribute_ns("", "aria-relevant")
                     .map(normalize_ax_token_list)
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| "additions text".to_owned());
                 properties.push(ax_token_list_property("relevant", &relevant));
             }
-            if let Some(level) = heading_level(element.local_name()) {
+            if role == "heading"
+                && let Some(level) = heading_level(element.local_name())
+            {
                 properties.push(ax_integer_property("level", level));
             }
             if element.is_html_element("li") {
                 use super::ax_roles::listitem_level;
                 properties.push(ax_integer_property("level", listitem_level(document, node)));
             }
-            if let Some(url) = ax_element_url(document, element, role) {
+            if let Some(url) = ax_element_url(document, node, element, role) {
                 properties.push(ax_string_property("url", url.as_str()));
             }
-            if element.is_html_element("a") && ax_link_href(element).is_some() {
+            let focus_support = document.focus_support(node_id);
+            let disabled = focus_support == FocusSupport::Blocked
+                && document.is_disabled_form_control(node_id);
+            if disabled {
+                properties.push(ax_bool_property("disabled", "boolean", true));
+            } else if focus_support == FocusSupport::Supported || element.is_html_element("option")
+            {
                 properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
             }
             if element.is_html_element("button") {
-                let disabled = ax_control_is_disabled(document, node_id, element);
-                if disabled {
-                    properties.push(ax_bool_property("disabled", "boolean", true));
-                }
                 properties.push(ax_token_property("invalid", "false"));
-                if !disabled {
-                    properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
-                }
             }
             if element.is_html_element("hr") {
                 properties.push(ax_bool_property("settable", "booleanOrUndefined", true));
@@ -666,18 +673,7 @@ pub(super) fn ax_properties(
                     | InputType::Search
                     | InputType::Password
                     | InputType::Number => {
-                        let disabled = ax_control_is_disabled(document, node_id, element);
-                        if disabled {
-                            properties.push(ax_bool_property("disabled", "boolean", true));
-                        }
                         properties.push(ax_token_property("invalid", "false"));
-                        if !disabled {
-                            properties.push(ax_bool_property(
-                                "focusable",
-                                "booleanOrUndefined",
-                                true,
-                            ));
-                        }
                         properties.push(ax_token_property("editable", "plaintext"));
                         if !disabled {
                             properties.push(ax_bool_property(
@@ -699,18 +695,7 @@ pub(super) fn ax_properties(
                         ));
                     }
                     InputType::Checkbox | InputType::Radio => {
-                        let disabled = ax_control_is_disabled(document, node_id, element);
-                        if disabled {
-                            properties.push(ax_bool_property("disabled", "boolean", true));
-                        }
                         properties.push(ax_token_property("invalid", "false"));
-                        if !disabled {
-                            properties.push(ax_bool_property(
-                                "focusable",
-                                "booleanOrUndefined",
-                                true,
-                            ));
-                        }
                         properties.push(ax_tristate_property(
                             "checked",
                             if input_type == InputType::Checkbox && element.indeterminate() {
@@ -723,31 +708,13 @@ pub(super) fn ax_properties(
                         ));
                     }
                     InputType::Button | InputType::Submit | InputType::Reset | InputType::Image => {
-                        let disabled = ax_control_is_disabled(document, node_id, element);
-                        if disabled {
-                            properties.push(ax_bool_property("disabled", "boolean", true));
-                        }
                         properties.push(ax_token_property("invalid", "false"));
-                        if !disabled {
-                            properties.push(ax_bool_property(
-                                "focusable",
-                                "booleanOrUndefined",
-                                true,
-                            ));
-                        }
                     }
                     _ => {}
                 }
             }
             if element.is_html_element("textarea") {
-                let disabled = ax_control_is_disabled(document, node_id, element);
-                if disabled {
-                    properties.push(ax_bool_property("disabled", "boolean", true));
-                }
                 properties.push(ax_token_property("invalid", "false"));
-                if !disabled {
-                    properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
-                }
                 properties.push(ax_token_property("editable", "plaintext"));
                 if !disabled {
                     properties.push(ax_bool_property("settable", "booleanOrUndefined", true));
@@ -765,22 +732,12 @@ pub(super) fn ax_properties(
                 ));
             }
             if element.is_html_element("select") {
-                let disabled = ax_control_is_disabled(document, node_id, element);
-                if disabled {
-                    properties.push(ax_bool_property("disabled", "boolean", true));
-                }
                 properties.push(ax_token_property("invalid", "false"));
-                if !disabled {
-                    properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
-                }
                 properties.push(ax_token_property("hasPopup", "menu"));
                 properties.push(ax_bool_property("expanded", "booleanOrUndefined", false));
             }
-            if element.is_html_element("option") {
-                properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
-                if ax_option_is_selected(document, node_id) {
-                    properties.push(ax_bool_property("selected", "booleanOrUndefined", true));
-                }
+            if element.is_html_element("option") && ax_option_is_selected(document, node_id) {
+                properties.push(ax_bool_property("selected", "booleanOrUndefined", true));
             }
         }
         NodeData::DocumentType(_)
@@ -923,36 +880,36 @@ pub(super) fn ax_integer_property(name: &str, value: usize) -> Value {
     })
 }
 
-fn ax_element_url(document: &NativeDom, element: &Element, role: &str) -> Option<Url> {
+fn ax_element_url(document: &NativeDom, node: &Node, element: &Element, role: &str) -> Option<Url> {
     // Follow Blink's AXNodeObject::Url: the computed role selects the kind of
     // URL, and the native element must provide that kind of address.
-    if is_link(role) {
-        return ax_link_href(element).and_then(|href| ax_resolve_element_url(document, href));
-    }
-    if is_image(role) && element.is_html_element("img") {
-        return element
+    let value = if is_link(role) {
+        element.hyperlink_href()
+    } else if is_image(role) && element.is_html_element("img") {
+        element
             .attribute_ns("", "src")
             .filter(|src| !trim_html_spaces(src).is_empty())
-            .and_then(|src| ax_resolve_element_url(document, src));
-    }
-    if role == "button" && element.is_html_input() && element.input_type() == InputType::Image {
-        return element
-            .attribute_ns("", "src")
-            .and_then(|src| ax_resolve_element_url(document, src));
-    }
-    None
+    } else if role == "button"
+        && element.is_html_input()
+        && element.input_type() == InputType::Image
+    {
+        element.attribute_ns("", "src")
+    } else {
+        None
+    }?;
+    let base = node
+        .owner_document()
+        .and_then(|owner| document.node(owner))
+        .and_then(Node::as_document)
+        .map(|document| document.base_url());
+    Url::options()
+        .base_url(base)
+        .parse(trim_html_spaces(value))
+        .ok()
 }
 
 fn trim_html_spaces(value: &str) -> &str {
     value.trim_matches(|character: char| character.is_ascii_whitespace())
-}
-
-fn ax_resolve_element_url(document: &NativeDom, value: &str) -> Option<Url> {
-    let value = trim_html_spaces(value);
-    let base = document.document().map(|doc| doc.base_url().clone());
-    base.as_ref()
-        .and_then(|base| Url::options().base_url(Some(base)).parse(value).ok())
-        .or_else(|| Url::parse(value).ok())
 }
 
 #[cfg(test)]
@@ -979,9 +936,10 @@ mod tests {
         assert!(document.append_child(root, image));
         for source in ["", " ", "\t", "\n", "\r", "\u{c}", " \t\n\r\u{c}"] {
             assert!(document.set_attribute(image, "src", source));
-            let element = document.node(image).unwrap().as_element().unwrap();
+            let node = document.node(image).unwrap();
+            let element = node.as_element().unwrap();
             assert_eq!(
-                ax_element_url(&document, element, "image"),
+                ax_element_url(&document, node, element, "image"),
                 None,
                 "src={source:?}"
             );
@@ -989,13 +947,30 @@ mod tests {
         for source in ["\u{b}", " \t\u{b}\r "] {
             assert!(!trim_html_spaces(source).is_empty());
             assert!(document.set_attribute(image, "src", source));
-            let element = document.node(image).unwrap().as_element().unwrap();
+            let node = document.node(image).unwrap();
+            let element = node.as_element().unwrap();
             assert_eq!(
-                ax_element_url(&document, element, "image"),
+                ax_element_url(&document, node, element, "image"),
                 Some(Url::parse("https://example.test/").unwrap()),
                 "src={source:?}"
             );
         }
+    }
+
+    #[test]
+    fn hyperlink_url_uses_the_owner_documents_base() {
+        let (mut document, _) = document_with_root();
+        let owner =
+            document.create_document(Url::parse("https://example.test/frame/page").unwrap());
+        let anchor = document.create_element("a");
+        assert!(document.append_child(owner, anchor));
+        assert!(document.set_attribute(anchor, "href", "next"));
+        let node = document.node(anchor).unwrap();
+        let element = node.as_element().unwrap();
+        assert_eq!(
+            ax_element_url(&document, node, element, "link"),
+            Some(Url::parse("https://example.test/frame/next").unwrap())
+        );
     }
 
     fn node_name(document: &NativeDom, node_id: NodeId) -> String {

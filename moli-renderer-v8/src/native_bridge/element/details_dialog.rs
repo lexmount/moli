@@ -102,20 +102,7 @@ pub(super) fn main_summary_child(
     runtime: &PageScriptHost,
     details: DomHandle,
 ) -> Option<DomHandle> {
-    let details_element = runtime
-        .dom_host()
-        .node(details)
-        .and_then(|node| node.as_element())?;
-    if !details_element.is_html_element("details") {
-        return None;
-    }
-    runtime.dom_host().child_handles(details).find(|handle| {
-        runtime
-            .dom_host()
-            .node(*handle)
-            .and_then(|node| node.as_element())
-            .is_some_and(|element| element.is_html_element("summary"))
-    })
+    runtime.dom_host().dom().main_summary_child(details)
 }
 
 pub(super) fn closed_details_child_participates(

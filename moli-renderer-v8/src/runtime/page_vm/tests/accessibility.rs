@@ -96,6 +96,10 @@ async fn presentational_role_conflicts_limit_contenteditable_to_html() {
                 .expect("fixture element");
             let node = page.accessibility_node_payload_for_live_handle(handle).expect("local AX node");
             assert_eq!(node["role"]["value"], role, "{id}");
+            assert_eq!(node["ignored"], role == "none", "{id}");
+            if role == "none" {
+                assert_eq!(node["ignoredReasons"][0]["name"], "presentationalRole", "{id}");
+            }
             if id == "link" {
                 assert!(node["properties"].as_array().unwrap().iter().any(|property|
                     property["name"] == "url" && property["value"]["value"] == "https://example.test/go"
@@ -104,6 +108,129 @@ async fn presentational_role_conflicts_limit_contenteditable_to_html() {
         }
         Ok::<_, anyhow::Error>(())
     }).await.expect("only HTML contenteditable affects presentational role conflicts");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dom_focus_and_ax_use_the_same_native_element_rules() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.test/focus.html")?,
+        );
+        page.vm_mut().eval(
+            r##"
+            document.body.innerHTML = `
+                <h2 id="invalid" role="none" aria-level="3" tabindex="&#11;0">Kept text</h2>
+                <h2 id="valid" role="none" tabindex="&#9;-1">Focusable heading</h2>
+                <h2 id="spaced" role="none" contenteditable=" true ">Invalid editing keyword</h2>
+                <fieldset disabled>
+                    <legend><button id="legend">Legend control</button></legend>
+                    <button id="disabled">Disabled control</button>
+                    <a id="link" role="none" href="#link">Link in fieldset</a>
+                </fieldset>`;
+        "##,
+        )?;
+        for (id, role, focusable, disabled) in [
+            ("invalid", "none", false, false),
+            ("valid", "heading", true, false),
+            ("spaced", "none", false, false),
+            ("legend", "button", true, false),
+            ("disabled", "button", false, true),
+            ("link", "link", true, false),
+        ] {
+            let state = page.vm_mut().eval(&format!(
+                r#"
+                (() => {{
+                    document.activeElement.blur();
+                    const element = document.getElementById('{id}');
+                    element.focus();
+                    return JSON.stringify([document.activeElement === element,
+                        element.matches(':disabled')]);
+                }})()
+            "#
+            ))?;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&state)?,
+                serde_json::json!([focusable, disabled]),
+                "{id}"
+            );
+            let dom = page.vm().document_runtime.dom_host();
+            let handle = dom.element_handle_by_id(id).expect("fixture element");
+            let node = page
+                .accessibility_node_payload_for_live_handle(handle)
+                .expect("AX node");
+            assert_eq!(node["role"]["value"], role, "{id}");
+            assert_eq!(node["ignored"], role == "none", "{id}");
+            let property_is_true = |name| {
+                node["properties"].as_array().is_some_and(|properties| {
+                    properties.iter().any(|property| {
+                        property["name"] == name && property["value"]["value"] == true
+                    })
+                })
+            };
+            assert_eq!(property_is_true("focusable"), focusable, "{id}");
+            assert_eq!(property_is_true("disabled"), disabled, "{id}");
+        }
+        let nodes = page
+            .accessibility_tree_payloads_for_document(None)
+            .expect("full AX tree");
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node["role"]["value"] == "StaticText"
+                    && node["name"]["value"] == "Kept text"
+                    && node["ignored"] == false)
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("DOM focus and AX properties follow native control semantics");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ax_link_urls_match_html_area_and_svg_activation() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.test/links.html")?,
+        );
+        page.vm_mut().eval(r##"
+            document.body.innerHTML = `
+                <img usemap="#map" width="40" height="40" alt="Map">
+                <map name="map"><area id="area" href="#area" shape="rect" coords="0,0,40,40" alt="Area" role="none"></map>
+                <svg xmlns:xlink="http://www.w3.org/1999/xlink">
+                    <a id="svg" xlink:href="#svg" role="none"><text>SVG</text></a>
+                    <a id="foreign" role="link"><text>Foreign</text></a>
+                </svg>`;
+            document.getElementById('svg').setAttributeNS('urn:test', 'src:href', '#wrong');
+            document.getElementById('foreign').setAttributeNS('urn:test', 'src:href', '#wrong');
+        "##)?;
+        for (id, name, url) in [
+            ("area", "Area", Some("https://example.test/links.html#area")),
+            ("svg", "SVG", Some("https://example.test/links.html#svg")),
+            ("foreign", "Foreign", None),
+        ] {
+            let handle = page.vm().document_runtime.dom_host().element_handle_by_id(id)
+                .expect("fixture element");
+            let node = page.accessibility_node_payload_for_live_handle(handle).expect("AX node");
+            assert_eq!(node["role"]["value"], "link", "{id}");
+            assert_eq!(node["name"]["value"], name, "{id}");
+            let properties = node["properties"].as_array().expect("AX link properties");
+            let actual_url = properties.iter().find(|property| property["name"] == "url")
+                .and_then(|property| property["value"]["value"].as_str());
+            assert_eq!(actual_url, url, "{id}");
+        }
+        assert_eq!(page.vm_mut().eval("document.getElementById('area').click(); location.hash")?, "#area");
+        for (id, hash) in [("svg", "#svg"), ("foreign", "#svg")] {
+            assert_eq!(page.vm_mut().eval(&format!(r#"
+                document.getElementById('{id}').dispatchEvent(new MouseEvent('click', {{bubbles: true}}));
+                location.hash
+            "#))?, hash, "{id}");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("AX link destinations agree with click activation");
 }
 
 #[tokio::test(flavor = "current_thread")]

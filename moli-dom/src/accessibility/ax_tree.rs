@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 
 use super::ax_projection::{AxIgnoredReason, AxTreeProjection};
 use super::ax_properties::{ax_name, ax_properties, ax_value};
-use super::ax_roles::{ax_role, ordered_list_item_index};
+use super::ax_roles::ordered_list_item_index;
 use super::{AccessibilityInput, AccessibilityNode, AccessibilityNodeId};
 
 /// The semantic traversal requested by one synchronous AX command.
@@ -260,7 +260,7 @@ fn ax_node_payload(
         ("none", String::new())
     } else {
         let name = ax_name(document, projection, node).ok()?;
-        (ax_role(document, node, Some(&name)), name)
+        (projected.role.with_name(&name), name)
     };
     let value = if ignored {
         None
@@ -309,6 +309,7 @@ fn ax_ignored_reasons_payload(
 ) -> Value {
     match reason {
         AxIgnoredReason::Uninteresting
+        | AxIgnoredReason::PresentationalRole
         | AxIgnoredReason::NotRendered
         | AxIgnoredReason::InertFrame
         | AxIgnoredReason::NotVisible => json!([{
@@ -316,6 +317,7 @@ fn ax_ignored_reasons_payload(
                 AxIgnoredReason::NotRendered => "notRendered",
                 AxIgnoredReason::InertFrame => "inertSubtree",
                 AxIgnoredReason::NotVisible => "notVisible",
+                AxIgnoredReason::PresentationalRole => "presentationalRole",
                 _ => "uninteresting",
             },
             "value": {

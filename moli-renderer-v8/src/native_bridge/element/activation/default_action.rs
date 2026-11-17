@@ -25,6 +25,7 @@ use super::super::super::PageScriptHost;
 use super::super::forms::{
     FormAssociatedResetCallbackTiming, dispatch_form_reset_event, reset_form_default_action,
 };
+use super::super::url_attributes::parsed_hyperlink_url;
 use super::super::{
     ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     cache_input_files_from_selected_files, closed_details_ancestors_to_reveal,
@@ -34,10 +35,9 @@ use super::super::{
     element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
     is_valid_submit_button, label_activation_control_handle,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
-    replace_text_control_selection, resolve_url_like_attribute,
-    resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
-    set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
-    update_focus_preserving_selection,
+    replace_text_control_selection, resolved_reflected_element_attribute_handle,
+    scroll_node_into_view_at_start, set_reflected_boolean_attribute, submit_form_with_submit_event,
+    update_focus, update_focus_preserving_selection,
 };
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
@@ -1167,7 +1167,7 @@ fn element_has_activation_behavior(runtime: &PageScriptHost, handle: DomHandle) 
         || element.is_html_label()
         || element.is_html_element("summary")
         || element_is_anchor_with_href(runtime, handle)
-        || (element.is_html_element("link") && element_has_attribute(runtime, handle, "href"))
+        || (element.is_html_element("link") && element.has_attribute_ns("", "href"))
 }
 
 pub(crate) fn dispatched_click_activation_target(
@@ -1694,16 +1694,12 @@ fn is_html_option_element(runtime: &PageScriptHost, handle: DomHandle) -> bool {
 }
 
 fn element_is_anchor_with_href(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    if !element_has_attribute(runtime, handle, "href") {
-        return false;
-    }
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return false;
-    };
-    matches!(
-        (element.namespace(), element.local_name()),
-        ("http://www.w3.org/1999/xhtml", "a" | "area") | ("http://www.w3.org/2000/svg", "a")
-    )
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(Element::hyperlink_href)
+        .is_some()
 }
 
 fn dispatch_button_command_event_if_needed(
@@ -1942,10 +1938,7 @@ fn anchor_click_default_action(
     user_initiated: bool,
     pending_child_navigations_before_default: &[(DomHandle, ChildBrowsingContextBootstrap)],
 ) -> Option<RendererPendingDownloadActivation> {
-    let resolved = resolve_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href");
-    if resolved.is_empty() || url::Url::parse(&resolved).is_err() {
-        return None;
-    }
+    let resolved = parsed_hyperlink_url(unsafe { &*runtime_ptr }, handle)?.to_string();
     send_anchor_ping_requests(runtime_ptr, handle, &resolved);
     let runtime = unsafe { &*runtime_ptr };
     if element_has_attribute(runtime, handle, "download") {

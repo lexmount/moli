@@ -114,7 +114,7 @@ fn integer_prefix_digits(value: &str) -> &str {
     &value[..end]
 }
 
-pub(crate) fn parse_html_integer_prefix(value: &str) -> Option<i32> {
+pub fn parse_html_integer_prefix(value: &str) -> Option<i32> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let mut chars = value.chars();
     let (sign, rest) = match chars.next() {

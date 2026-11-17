@@ -47,6 +47,19 @@ pub(in crate::native_bridge::element) fn parsed_url_like_attribute(
     parse_url_with_document_query_encoding(runtime, handle, &base, &value).ok()
 }
 
+pub(in crate::native_bridge::element) fn parsed_hyperlink_url(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> Option<Url> {
+    let href = runtime
+        .dom_host()
+        .node(handle)?
+        .as_element()?
+        .hyperlink_href()?;
+    let base = url_base_for_handle(runtime, handle);
+    parse_url_with_document_query_encoding(runtime, handle, &base, href).ok()
+}
+
 /// Reconstructs Chromium's URL-parser flag after `url::Url` has removed raw
 /// URL whitespace and percent-encoded the `<` in its serialized result.
 pub(in crate::native_bridge::element) fn should_block_dangling_markup_subresource(

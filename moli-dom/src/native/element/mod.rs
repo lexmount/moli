@@ -495,7 +495,7 @@ impl Element {
     }
 
     pub fn input_type(&self) -> InputType {
-        InputType::from_attribute_value(self.attribute("type"))
+        InputType::from_attribute_value(self.attribute_ns("", "type"))
     }
 
     pub fn button_type_state(&self) -> ButtonTypeState {

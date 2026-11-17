@@ -1,6 +1,8 @@
-pub(super) use self::parse_html_integer_prefix as parse_tab_index_attribute;
 use crate::document_runtime::DomHandle;
-use crate::dom::{forms::InputType, native::Node};
+use crate::dom::{
+    forms::{InputType, parse_html_integer_prefix},
+    native::{Element, Node},
+};
 use crate::util::v8_string;
 use crate::webidl;
 
@@ -870,50 +872,6 @@ pub(in crate::native_bridge) fn node_enter_key_hint_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn canonical_content_editable_value(raw: &str) -> &'static str {
-    let normalized = raw.trim().to_ascii_lowercase();
-    if normalized.is_empty() || normalized == "true" {
-        "true"
-    } else if normalized == "false" {
-        "false"
-    } else if normalized == "plaintext-only" {
-        "plaintext-only"
-    } else {
-        "inherit"
-    }
-}
-
-fn content_editable_state_from_attr(raw: &str) -> Option<bool> {
-    match canonical_content_editable_value(raw) {
-        "true" | "plaintext-only" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
-fn element_content_editable_state(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    let mut current = Some(handle);
-    while let Some(candidate) = current {
-        let Some(node) = runtime.dom_host().node(candidate) else {
-            return false;
-        };
-        if node.is_document() {
-            return runtime.document_design_mode_enabled(candidate);
-        }
-        let Some(element) = node.as_element() else {
-            return false;
-        };
-        if let Some(value) = element
-            .attribute_ns("", "contenteditable")
-            .and_then(content_editable_state_from_attr)
-        {
-            return value;
-        }
-        current = runtime.dom_host().parent_node(candidate);
-    }
-    false
-}
-
 pub(in crate::native_bridge) fn node_content_editable_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -934,10 +892,7 @@ pub(in crate::native_bridge) fn node_content_editable_getter_function<'s>(
         throw_incompatible_getter_receiver(scope, "HTMLElement", "contentEditable");
         return;
     };
-    let value = element
-        .attribute_ns("", "contenteditable")
-        .map(canonical_content_editable_value)
-        .unwrap_or("inherit");
+    let value = element.content_editable_state().keyword();
     let Some(out) = v8_string(scope, value) else {
         rv.set_null();
         return;
@@ -1004,7 +959,7 @@ pub(in crate::native_bridge) fn node_is_content_editable_getter_function<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
     rv.set_bool(
-        node_is_element(runtime, handle) && element_content_editable_state(runtime, handle),
+        node_is_element(runtime, handle) && runtime.dom_host().dom().is_content_editable(handle),
     );
 }
 
@@ -1456,7 +1411,7 @@ pub(in crate::native_bridge) fn pre_width_getter_function<'s>(
         return;
     };
     let value = element_attribute(unsafe { &*runtime_ptr }, handle, "width")
-        .and_then(|value| parse_tab_index_attribute(&value))
+        .and_then(|value| parse_html_integer_prefix(&value))
         .unwrap_or(0);
     rv.set_int32(value);
 }
@@ -2659,8 +2614,11 @@ pub(in crate::native_bridge) fn node_tab_index_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let value = element_attribute(runtime, handle, "tabindex")
-        .and_then(|value| parse_tab_index_attribute(&value))
+    let value = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(Element::explicit_tab_index)
         .unwrap_or_else(|| default_tab_index_for(runtime, handle));
     rv.set_int32(value);
 }
@@ -2690,47 +2648,27 @@ pub(in crate::native_bridge) fn node_tab_index_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(super) fn parse_html_integer_prefix(value: &str) -> Option<i32> {
-    let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
-    let mut chars = value.chars();
-    let (sign, rest) = match chars.next() {
-        Some('+') => (1_i64, chars.as_str()),
-        Some('-') => (-1_i64, chars.as_str()),
-        Some(_) => (1_i64, value),
-        None => return None,
-    };
-    let digits = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    let magnitude = digits.parse::<i64>().ok()?;
-    i32::try_from(sign * magnitude).ok()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{canonical_dir_value, parse_tab_index_attribute};
+    use super::{canonical_dir_value, parse_html_integer_prefix};
 
     #[test]
     fn parses_tab_index_attribute_like_html_signed_integer() {
-        assert_eq!(parse_tab_index_attribute(""), None);
-        assert_eq!(parse_tab_index_attribute("invalid"), None);
-        assert_eq!(parse_tab_index_attribute("\u{b}0"), None);
-        assert_eq!(parse_tab_index_attribute("\u{a0}0"), None);
-        assert_eq!(parse_tab_index_attribute(" \t\n\r\u{c}+0tail"), Some(0));
-        assert_eq!(parse_tab_index_attribute(" 5abc"), Some(5));
-        assert_eq!(parse_tab_index_attribute("+5"), Some(5));
-        assert_eq!(parse_tab_index_attribute("-5"), Some(-5));
-        assert_eq!(parse_tab_index_attribute("2147483647"), Some(2_147_483_647));
-        assert_eq!(parse_tab_index_attribute("2147483648"), None);
+        assert_eq!(parse_html_integer_prefix(""), None);
+        assert_eq!(parse_html_integer_prefix("invalid"), None);
+        assert_eq!(parse_html_integer_prefix("\u{b}0"), None);
+        assert_eq!(parse_html_integer_prefix("\u{a0}0"), None);
+        assert_eq!(parse_html_integer_prefix(" \t\n\r\u{c}+0tail"), Some(0));
+        assert_eq!(parse_html_integer_prefix(" 5abc"), Some(5));
+        assert_eq!(parse_html_integer_prefix("+5"), Some(5));
+        assert_eq!(parse_html_integer_prefix("-5"), Some(-5));
+        assert_eq!(parse_html_integer_prefix("2147483647"), Some(2_147_483_647));
+        assert_eq!(parse_html_integer_prefix("2147483648"), None);
         assert_eq!(
-            parse_tab_index_attribute("-2147483648"),
+            parse_html_integer_prefix("-2147483648"),
             Some(-2_147_483_648)
         );
-        assert_eq!(parse_tab_index_attribute("-2147483649"), None);
+        assert_eq!(parse_html_integer_prefix("-2147483649"), None);
     }
 
     #[test]
