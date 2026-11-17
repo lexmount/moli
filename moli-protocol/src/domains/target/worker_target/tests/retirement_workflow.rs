@@ -69,6 +69,32 @@ fn start(
     conn.start_parsed_command_dispatch_with_context(&command, context)
 }
 
+// These tests exercise the protocol-neutral retirement workflow. CDP itself
+// rejects DedicatedWorker closeTarget, as Chromium does.
+fn start_worker_retirement(
+    conn: &mut CdpConnection,
+    id: u64,
+    target_id: &str,
+    context: &mut CommandDispatchContext,
+) -> CdpCommandTaskStep {
+    use crate::automation::{
+        AutomationCommand, AutomationContext, DevToolsCloseTargetCommand, FrontendProtocol,
+    };
+    conn.start_automation_target_dispatch(
+        AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
+                session_id: None,
+                target_id: Some(target_id.into()),
+                browser_context_id: None,
+            },
+            target_id: target_id.into(),
+        }),
+        id,
+        context,
+    )
+}
+
 async fn drive(
     ctx: &mut crate::testing::TestContext,
     pending: PendingCdpCommandDispatch,
@@ -116,13 +142,7 @@ async fn worker_close_joins_original_detachment_and_recovers_its_admitted_workfl
         };
         let mut close_context = CommandDispatchContext::default();
         let CdpCommandTaskStep::Pending(closing) = ctx.with_fixture(|conn| {
-            start(
-                conn,
-                202,
-                "Target.closeTarget",
-                json!({"targetId":"TID-retiring-worker"}),
-                &mut close_context,
-            )
+            start_worker_retirement(conn, 202, "TID-retiring-worker", &mut close_context)
         }) else {
             panic!("worker close is an owned workflow")
         };
@@ -154,11 +174,10 @@ async fn worker_close_joins_original_detachment_and_recovers_its_admitted_workfl
             )
         });
         let duplicate = ctx.with_fixture(|conn| {
-            start(
+            start_worker_retirement(
                 conn,
                 204,
-                "Target.closeTarget",
-                json!({"targetId":"TID-retiring-worker"}),
+                "TID-retiring-worker",
                 &mut CommandDispatchContext::default(),
             )
         });
@@ -259,13 +278,7 @@ async fn old_worker_retirement_cannot_remove_reused_target_instance_and_binding(
     let ctx = crate::testing::TestContext::from_conn(conn);
     let mut context = CommandDispatchContext::default();
     let CdpCommandTaskStep::Pending(pending) = ctx.with_fixture(|conn| {
-        start(
-            conn,
-            205,
-            "Target.closeTarget",
-            json!({"targetId":"TID-retiring-worker"}),
-            &mut context,
-        )
+        start_worker_retirement(conn, 205, "TID-retiring-worker", &mut context)
     }) else {
         panic!("worker close joins the original binding")
     };
@@ -340,13 +353,7 @@ async fn worker_close_finishes_all_original_sessions_after_completed_workflow_is
     let mut ctx = crate::testing::TestContext::from_conn(conn);
     let mut context = CommandDispatchContext::default();
     let CdpCommandTaskStep::Pending(pending) = ctx.with_fixture(|conn| {
-        start(
-            conn,
-            206,
-            "Target.closeTarget",
-            json!({"targetId":"TID-retiring-worker"}),
-            &mut context,
-        )
+        start_worker_retirement(conn, 206, "TID-retiring-worker", &mut context)
     }) else {
         panic!("worker close owns its cleanup")
     };
@@ -454,13 +461,7 @@ async fn worker_close_settles_original_calls_at_admission_before_cleanup_is_poll
         let mut ctx = crate::testing::TestContext::from_conn(conn);
         let mut context = CommandDispatchContext::default();
         let CdpCommandTaskStep::Pending(mut pending) = ctx.with_fixture(|conn| {
-            start(
-                conn,
-                303,
-                "Target.closeTarget",
-                json!({"targetId":"TID-retiring-worker"}),
-                &mut context,
-            )
+            start_worker_retirement(conn, 303, "TID-retiring-worker", &mut context)
         }) else {
             panic!("worker close remains outside state")
         };
@@ -570,15 +571,9 @@ async fn captured_worker_attach_remains_ordered_and_cannot_leave_a_late_binding_
         });
 
         let mut context = CommandDispatchContext::default();
-        let CdpCommandTaskStep::Pending(mut pending) = ctx.with_fixture(|conn| {
-            start(
-                conn,
-                304,
-                "Target.closeTarget",
-                json!({"targetId":target_id}),
-                &mut context,
-            )
-        }) else {
+        let CdpCommandTaskStep::Pending(mut pending) =
+            ctx.with_fixture(|conn| start_worker_retirement(conn, 304, &target_id, &mut context))
+        else {
             panic!("retirement retains its original Native attachment snapshot")
         };
         let messages =

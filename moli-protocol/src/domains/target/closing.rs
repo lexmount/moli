@@ -25,6 +25,14 @@ pub(super) fn start_close_target_command(
     if !conn.target_handler_may_close_target(cmd.session_id, &params.target_id) {
         return super::target_command_error(-32000, "Not allowed");
     }
+    if matches!(
+        conn.target_session_route_for_target_id(&params.target_id),
+        Some(crate::conn::CdpSessionRoute::DedicatedWorkerTarget { .. })
+    ) {
+        // DedicatedWorker termination belongs to its owner, not the CDP
+        // TargetHandler. Internal automation/retirement retains that ability.
+        return super::target_command_error(-32602, "Specified target doesn't support closing");
+    }
     let command = build_cdp_close_target_command(cmd, params);
     super::start_devtools_target_command(
         conn,
