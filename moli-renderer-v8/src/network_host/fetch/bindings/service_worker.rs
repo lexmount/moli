@@ -39,21 +39,7 @@ pub(super) fn dispatch_service_worker_fetch(
         resource_type: SubresourceResourceType::Fetch,
         policy_context: prepared.policy_context,
     };
-    let requires_preflight = !prepared
-        .resource_loader
-        .request_client()
-        .web_security_disabled()
-        && prepared.request_mode == moli_fetch::RequestMode::Cors
-        && crate::network_host::cors_preflight_request_headers(
-            !prepared
-                .request_origin
-                .same_origin(&(&prepared.resolved_url).into()),
-            &prepared.resolved_url,
-            &prepared.method,
-            &prepared.cors_preflight_request_headers,
-            false,
-        )
-        .is_some();
+    let requires_preflight = prepared.requires_initial_preflight();
     let request_body_text = request_body_text(&prepared.body);
     let internal_id = host.record_async_subresource_fetch(
         prepared.fetch_context.duplicate(scope),
