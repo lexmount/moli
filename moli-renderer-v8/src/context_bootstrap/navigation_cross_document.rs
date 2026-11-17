@@ -84,6 +84,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         };
         unsafe { &mut *host_ptr }
             .record_pending_location_navigation(next_url.clone(), Some(entry_seed));
+        unsafe { &mut *host_ptr }.set_pending_location_navigation_document_initiator(None);
         return navigation_signal
             .map(|(navigation, signal)| {
                 navigation_cross_document_pending_result(
