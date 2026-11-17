@@ -2,7 +2,7 @@ use crate::module_runtime::import_attributes_key;
 use std::cell::Cell;
 use std::ptr;
 
-use super::NativeDocumentModulator;
+use super::{ModuleEvaluationRecord, NativeDocumentModulator};
 use crate::util::v8_string;
 
 thread_local! {
@@ -94,6 +94,35 @@ pub(crate) fn resolve_static_source_callback<'s>(
         };
         Some(source.into())
     })
+}
+
+pub(crate) fn resolve_evaluation_module_callback<'s>(
+    context: v8::Local<'s, v8::Context>,
+    specifier: v8::Local<'s, v8::String>,
+    import_attributes: v8::Local<'s, v8::FixedArray>,
+    referrer: v8::Local<'s, v8::Module>,
+) -> Option<v8::Local<'s, v8::Module>> {
+    v8::callback_scope!(unsafe scope, context);
+    let record = ModuleEvaluationRecord::for_module(context, referrer)?;
+    let attributes = import_attributes_key(scope, import_attributes);
+    let dependency = record.dependency(&specifier.to_rust_string_lossy(scope), &attributes)?;
+    Some(v8::Local::new(scope, &dependency))
+}
+
+pub(crate) fn resolve_evaluation_source_callback<'s>(
+    context: v8::Local<'s, v8::Context>,
+    specifier: v8::Local<'s, v8::String>,
+    import_attributes: v8::Local<'s, v8::FixedArray>,
+    referrer: v8::Local<'s, v8::Module>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    v8::callback_scope!(unsafe scope, context);
+    let record = ModuleEvaluationRecord::for_module(context, referrer)?;
+    let attributes = import_attributes_key(scope, import_attributes);
+    let dependency = record.dependency(&specifier.to_rust_string_lossy(scope), &attributes)?;
+    let dependency = v8::Local::new(scope, &dependency);
+    let record = ModuleEvaluationRecord::for_module(context, dependency)?;
+    let wasm = record.wasm()?;
+    Some(wasm.source_module(scope)?.into())
 }
 
 fn throw_source_phase_syntax_error<'s>(

@@ -319,9 +319,13 @@ impl ScriptVm {
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let try_catch = pin!(v8::TryCatch::new(scope));
-                let scope = try_catch.init();
+                let mut scope = try_catch.init();
 
                 let root_module = v8::Local::new(&scope, &root_module);
+                if has_wasm_entry {
+                    unsafe { &*document_modulator }
+                        .register_wasm_evaluation_graph(&mut scope, graph);
+                }
                 let _resolver_scope = ResolverScopeGuard::new(document_modulator);
                 match root_module.instantiate_module2(
                     &scope,

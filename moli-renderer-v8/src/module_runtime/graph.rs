@@ -514,6 +514,8 @@ impl NativeModuleGraphFetchRequest {
                             .message()
                             .to_owned());
                     }
+                    let is_wasm = matches!(kind, ModuleKind::JavaScript | ModuleKind::WebAssembly)
+                        && crate::planning::response_has_webassembly_module_mime(&response);
                     let response_referrer_policy =
                         crate::referrer_policy::response_referrer_policy_from_headers(
                             &response.headers,
@@ -544,21 +546,13 @@ impl NativeModuleGraphFetchRequest {
                         .message()
                         .to_owned());
                     }
-                    Ok(match kind {
-                        ModuleKind::WebAssembly => ModuleGraphFetchedSource::new(
-                            head.final_url,
-                            ModuleSource::binary(body_bytes),
-                        )
-                        .with_response_referrer_policy(response_referrer_policy),
-                        ModuleKind::JavaScript
-                        | ModuleKind::Json
-                        | ModuleKind::Css
-                        | ModuleKind::Text => ModuleGraphFetchedSource::new(
-                            head.final_url,
-                            ModuleSource::text(moli_encoding::decode_utf8(&body_bytes)),
-                        )
-                        .with_response_referrer_policy(response_referrer_policy),
-                    })
+                    let source = if is_wasm {
+                        ModuleSource::binary(body_bytes)
+                    } else {
+                        ModuleSource::text(moli_encoding::decode_utf8(&body_bytes))
+                    };
+                    Ok(ModuleGraphFetchedSource::new(head.final_url, source)
+                        .with_response_referrer_policy(response_referrer_policy))
                 });
             if network_result.is_none()
                 && let Err(error) = &result

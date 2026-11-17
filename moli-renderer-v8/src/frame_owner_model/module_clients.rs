@@ -289,7 +289,7 @@ impl FrameDocumentParserModuleRootStartTask {
         let kind = match &script.source {
             crate::planning::ScriptSource::External => {
                 FrameDocumentParserModuleRootStartKind::ExternalFetch {
-                    key: ModuleMapKey::java_script(script.url.clone()),
+                    key: ModuleMapKey::from_script_url(script.url.clone()),
                 }
             }
             crate::planning::ScriptSource::Loaded(source)

@@ -46,10 +46,13 @@ impl ModuleGraphFetchedSource {
 
     pub(crate) fn effective_key_for_request(&self, request_key: &ModuleMapKey) -> ModuleMapKey {
         match request_key.kind() {
-            ModuleKind::JavaScript => ModuleMapKey::java_script_with_attributes(
-                self.final_url.clone(),
-                request_key.attributes().clone(),
-            ),
+            ModuleKind::JavaScript | ModuleKind::WebAssembly => match &self.source {
+                ModuleSource::Binary(_) => ModuleMapKey::webassembly(self.final_url.clone()),
+                ModuleSource::Text(_) => ModuleMapKey::java_script_with_attributes(
+                    self.final_url.clone(),
+                    request_key.attributes().clone(),
+                ),
+            },
             ModuleKind::Json => ModuleMapKey::json_with_attributes(
                 self.final_url.clone(),
                 request_key.attributes().clone(),
@@ -62,7 +65,6 @@ impl ModuleGraphFetchedSource {
                 self.final_url.clone(),
                 request_key.attributes().clone(),
             ),
-            ModuleKind::WebAssembly => ModuleMapKey::webassembly(self.final_url.clone()),
         }
     }
 
