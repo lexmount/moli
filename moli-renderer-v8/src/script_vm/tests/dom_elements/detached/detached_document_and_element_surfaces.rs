@@ -1460,40 +1460,30 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   accessor(HTMLAnchorElement.prototype, "hreflang");
   accessor(HTMLAreaElement.prototype, "download");
   accessor(HTMLAreaElement.prototype, "ping");
+  accessor(HTMLAreaElement.prototype, "hreflang");
+  accessor(HTMLAreaElement.prototype, "type");
   accessor(HTMLLinkElement.prototype, "hreflang");
-  assert(!own(HTMLAreaElement.prototype, "hreflang"), "area hreflang should be removed");
-  assert(!own(HTMLAreaElement.prototype, "type"), "area type should be removed");
-  for (const name of ["download", "ping", "hreflang"]) {
+  for (const name of ["download", "ping", "hreflang", "type"]) {
     assert(!own(HTMLElement.prototype, name), `HTMLElement should not own ${name}`);
   }
   const div = document.createElement("div");
   assert(!("download" in div), "div should not expose download");
   assert(!("ping" in div), "div should not expose ping");
   assert(!("hreflang" in div), "div should not expose hreflang");
+  assert(!("type" in div), "div should not expose type");
   assert(!("download" in document.createElement("link")), "link should not expose download");
   assert(!("ping" in document.createElement("link")), "link should not expose ping");
-  for (const property of ["hreflang", "type"]) {
-    const area = document.createElement("area");
-    area.setAttribute(property, "retained attribute");
-    assert(!(property in area), `area should not expose ${property}`);
-    assert(area.getAttribute(property) === "retained attribute", `${property} remains an attribute`);
-  }
-
   const parsed = new DOMParser().parseFromString(
     "<html><head><link></head><body><a></a><area></area></body></html>",
     "text/html"
   );
   const cases = [
     [document.createElement("a"), parsed.querySelector("a"), ["download", "ping", "hreflang"], "anchor"],
-    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping"], "area"],
+    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping", "hreflang", "type"], "area"],
     [document.createElement("link"), parsed.querySelector("link"), ["hreflang"], "link"]
   ];
   for (const [live, detached, names, label] of cases) {
     for (const element of [live, detached]) {
-      if (label === "area") {
-        assert(!("hreflang" in element), "area instance should not expose hreflang");
-        assert(!("type" in element), "area instance should not expose type");
-      }
       for (const name of names) {
         assert(!own(element, name), `${label}.${name} should not be own before set`);
       }
@@ -1516,14 +1506,15 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
         assert(delete element.ping, `${label}.ping delete`);
         assert(!own(element, "ping"), `${label}.ping should stay inherited`);
       }
-      if (names.includes("hreflang")) {
-        element.hreflang = `${label}-lang`;
-        assert(!own(element, "hreflang"), `${label}.hreflang should not be own after set`);
-        assert(element.hreflang === `${label}-lang`, `${label}.hreflang value`);
-        assert(element.getAttribute("hreflang") === `${label}-lang`, `${label}.hreflang attr`);
-        assert(delete element.hreflang, `${label}.hreflang delete`);
-        assert(!own(element, "hreflang"), `${label}.hreflang should stay inherited`);
-        assert(element.hreflang === `${label}-lang`, `${label}.hreflang after delete`);
+      for (const name of ["hreflang", "type"]) {
+        if (!names.includes(name)) continue;
+        element[name] = `${label}-${name}`;
+        assert(!own(element, name), `${label}.${name} should not be own after set`);
+        assert(element[name] === `${label}-${name}`, `${label}.${name} value`);
+        assert(element.getAttribute(name) === `${label}-${name}`, `${label}.${name} attr`);
+        assert(delete element[name], `${label}.${name} delete`);
+        assert(!own(element, name), `${label}.${name} should stay inherited`);
+        assert(element[name] === `${label}-${name}`, `${label}.${name} after delete`);
       }
     }
   }
