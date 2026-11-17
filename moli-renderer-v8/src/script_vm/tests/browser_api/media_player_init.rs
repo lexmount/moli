@@ -376,6 +376,7 @@ fn media_session_releases_isolated_worlds_and_unregistered_handlers() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn media_session_state_belongs_to_each_window_and_resets_on_navigation() {
     let mut vm = new_storage_html_test_vm("https://media-session-navigation.test/");

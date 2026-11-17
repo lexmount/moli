@@ -260,7 +260,7 @@ fn url_without_fragment(value: &str) -> Option<Url> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
 

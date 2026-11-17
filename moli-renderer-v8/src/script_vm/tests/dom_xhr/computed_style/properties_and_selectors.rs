@@ -111,6 +111,7 @@ fn held_computed_style_count_cache_tracks_custom_property_mutations() {
     assert_eq!(result["afterValue"], serde_json::json!("two"));
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn inspector_computed_style_bulk_read_prepares_dirty_world_once_and_reuses_clean_world() {
     let mut vm = new_storage_test_vm("https://computed-style-inspector-bulk.test/");
@@ -232,6 +233,7 @@ unrelatedHost.attachShadow({ mode: 'open' }).innerHTML =
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn inspector_computed_style_bulk_read_handles_large_inherited_custom_property_sets() {
     const CUSTOM_PROPERTY_COUNT: usize = 512;
@@ -293,6 +295,7 @@ target.id = 'target';
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn inspector_computed_style_bulk_read_uses_child_document_scope_and_viewport() {
     let mut vm = new_storage_test_vm("https://computed-style-inspector-child.test/");
@@ -351,6 +354,7 @@ childDocument.close();
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn inspector_computed_style_bulk_read_reuses_clean_shadow_world() {
     let mut vm = new_storage_test_vm("https://computed-style-inspector-shadow.test/");

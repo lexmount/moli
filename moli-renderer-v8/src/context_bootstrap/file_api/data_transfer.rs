@@ -2130,6 +2130,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn event_views_share_records_without_reviving_closed_view_permissions() {
         with_transfer_scope(|scope| {

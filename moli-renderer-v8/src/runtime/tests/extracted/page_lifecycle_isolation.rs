@@ -711,6 +711,7 @@ async fn per_page_isolate_policy_keeps_domparser_detached_docs_cleanup_neutral()
         .await
         .expect("second shared DOMParser page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_keeps_isolated_worlds_page_owned() {
     let runtime = JsRuntime::initialize();
@@ -1115,6 +1116,7 @@ async fn per_page_isolate_policy_keeps_child_default_contexts_page_owned() {
         .await
         .expect("second shared child-frame page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_keeps_child_isolated_worlds_page_owned() {
     let runtime = JsRuntime::initialize();
@@ -1330,6 +1332,7 @@ crate::RendererDocumentOptions { ..Default::default() },
         .await
         .expect("second shared child-isolated-world page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_reuses_navigation_isolate_and_replaces_contexts() {
     let runtime = JsRuntime::initialize();
@@ -1634,6 +1637,7 @@ async fn per_page_isolate_policy_reuses_navigation_isolate_and_replaces_contexts
         .await
         .expect("peer shared page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_parser_blocking_navigation_restores_replacement_inspector_session() {
     let runtime = JsRuntime::initialize();
@@ -2472,6 +2476,7 @@ async fn per_page_isolate_policy_routes_dynamic_import_to_originating_page() {
         .await
         .expect("second shared page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_replays_runtime_contexts_per_page() {
     let runtime = JsRuntime::initialize();
@@ -2611,6 +2616,7 @@ async fn per_page_isolate_policy_replays_runtime_contexts_per_page() {
         .await
         .expect("second runtime-replay page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_scopes_document_start_scripts_to_page_worlds() {
     let runtime = JsRuntime::initialize();
@@ -2734,6 +2740,7 @@ async fn per_page_isolate_policy_scopes_document_start_scripts_to_page_worlds() 
         .await
         .expect("second document-start page should close");
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_keeps_stored_document_start_scripts_page_local() {
     let runtime = JsRuntime::initialize();

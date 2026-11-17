@@ -54,6 +54,7 @@ globalThis.__frameElementResult = null;
     assert_eq!(server.finish_targets().await, vec!["/child.html"; 6]);
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn frame_element_uses_the_isolated_world_access_policy() {
     for cross_origin in [false, true] {

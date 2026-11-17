@@ -27,6 +27,7 @@ fn element_scroll_into_view_surface_is_available() {
         r#"{"instanceType":"function","protoType":"function","inElement":true,"ownProperty":false,"callResult":"undefined","protoEnumerable":false}"#
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn wheel_default_action_scrolls_unless_canceled() {
     let mut vm = new_storage_test_vm("https://wheel-default-scroll.test/");
@@ -190,6 +191,7 @@ fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
         previous = expected;
     }
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root() {
     let mut vm = new_storage_test_vm("https://wheel-scroll-chain.test/");
@@ -238,6 +240,7 @@ fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root(
         "[25,40]"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_events() {
     let mut vm = new_storage_test_vm("https://classic-scrollbar-input.test/");
@@ -373,6 +376,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
     assert!(result["top"].as_f64().is_some_and(|value| value > 100.0));
     assert_eq!(result["events"], serde_json::json!([]));
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
     let mut vm = new_storage_test_vm("https://painted-scrollbar-surface.test/");
@@ -532,6 +536,7 @@ fn document_client_size_initializes_layout_once_and_reuses_it_until_capture() {
     publish_layout_for_test(&mut vm);
     assert_eq!(vm.eval(query).unwrap(), "[0,0,0,0,0,0,0]");
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
     let mut vm = new_storage_test_vm("https://viewport-overflow-policy.test/");
@@ -772,6 +777,7 @@ fn physical_scrollbar_insets_cover_box_intrinsic_ratio_and_vertical_writing_layo
         "[[200,100,160,75,20,5,30,15,140,55],[230,130,190,105,20,5,30,15,170,85],[200,80,170,65,15,0,15,0,400,20],[200,105,170,90,15,0,15,0,400,90],[200,120,170,105,15,0,15,0,400,150],[200,100,170,85,15,0,15,0,170,85],[200,100,185,70,0,15,0,15,185,70]]"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     let mut vm = new_storage_test_vm("https://nested-classic-scrollbar-input.test/");
@@ -935,6 +941,7 @@ fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     assert!(result[7].as_f64().is_some_and(|value| value > 130.0));
     assert_eq!(result[8], serde_json::json!([]));
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_loss() {
     let mut vm = new_storage_test_vm("https://transformed-classic-scrollbar-input.test/");
@@ -1063,6 +1070,7 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
         "post-cancel moves should return to the DOM: {cancelled}"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn document_replacement_cancels_old_scrollbar_capture_and_allows_a_new_drag() {
     let mut vm = new_storage_test_vm("https://replacement-classic-scrollbar-input.test/");

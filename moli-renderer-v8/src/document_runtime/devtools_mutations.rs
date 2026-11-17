@@ -250,7 +250,7 @@ fn collect_light_tree_subtree_handles(dom_host: &DomHost, root: DomHandle) -> Ve
     handles
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
 

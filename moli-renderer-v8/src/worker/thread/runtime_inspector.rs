@@ -33,13 +33,13 @@ use crate::worker::inspector_task_runner::{
 };
 use tokio::sync::mpsc;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 use super::dispatch::perform_worker_microtask_checkpoint_and_report_pending_promise_rejections;
 
 const WORKER_INSPECTOR_CONTEXT_GROUP_ID: i32 = 1;
 const DEFAULT_WORKER_INSPECTOR_SESSION_KEY: &str = "";
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod pause_detach_tests;
 
 #[derive(Default)]
@@ -1124,7 +1124,7 @@ fn worker_runtime_inspector_message_batch(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
     use crate::worker::inspector_task_runner::WorkerInspectorTaskMode;

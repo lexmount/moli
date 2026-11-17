@@ -283,8 +283,10 @@ impl Page {
             "set inline stylesheet text page command",
         )
     }
+}
 
-    #[cfg(feature = "devtools")]
+#[cfg(feature = "devtools")]
+impl Page {
     pub fn start_style_sheet_payload_for_style_sheet_id(
         &self,
         style_sheet_id: &str,
@@ -295,7 +297,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_style_sheet_payload_for_style_sheet_id_and_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -307,7 +308,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_style_sheet_payload(
         &mut self,
         completion: CompletedPageCommand,
@@ -321,12 +321,10 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_style_sheet_inventory_for_document(&self) -> Result<PendingPageCommand> {
         self.start_style_sheet_inventory_for_document_and_inspector_session(None)
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_style_sheet_inventory_for_document_and_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -336,7 +334,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_style_sheet_inventory_for_document(
         &mut self,
         completion: CompletedPageCommand,
@@ -350,7 +347,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_reset_css_agent_session(
         &self,
         inspector_session_id: Option<String>,
@@ -359,7 +355,9 @@ impl Page {
             inspector_session_id,
         })
     }
+}
 
+impl Page {
     pub fn finish_reset_css_agent_session(
         &mut self,
         completion: CompletedPageCommand,
@@ -421,8 +419,10 @@ impl Page {
     pub fn document_title(&self) -> String {
         self.page_state.document_title().to_owned()
     }
+}
 
-    #[cfg(feature = "devtools")]
+#[cfg(feature = "devtools")]
+impl Page {
     pub fn start_node_has_geometry_for_object_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -434,7 +434,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_scroll_node_into_view_if_needed_for_object_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -448,7 +447,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_scroll_node_into_view_if_needed(
         &self,
         reference: RendererDomNodeReference,
@@ -457,7 +455,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::ScrollNodeIntoViewIfNeeded { reference, rect })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_scroll_backend_node_into_view_if_needed(
         &self,
         backend_node_id: u32,
@@ -469,7 +466,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_node_has_geometry_for_object_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -483,7 +479,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_node_has_geometry_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -493,7 +488,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_node_has_geometry_for_backend_node_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -507,7 +501,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_scroll_node_into_view_if_needed(
         &mut self,
         completion: CompletedPageCommand,
@@ -521,7 +514,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_client_rect_for_object_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -533,7 +525,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_client_rect_for_object_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -557,7 +548,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_client_rect_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -565,7 +555,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::ClientRectForBackendNodeId { backend_node_id })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_client_rect_for_backend_node_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -589,7 +578,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_geometry_for_object_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -601,7 +589,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_geometry_for_object_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -609,7 +596,6 @@ impl Page {
         self.finish_document_geometry(completion, "document geometry object id page command")
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_geometry_for_node(
         &self,
         reference: RendererDomNodeReference,
@@ -617,7 +603,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::DocumentGeometryForNode { reference })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_geometry_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -627,7 +612,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_geometry_for_backend_node_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -635,7 +619,6 @@ impl Page {
         self.finish_document_geometry_for_node(completion)
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_geometry_for_node(
         &mut self,
         completion: CompletedPageCommand,
@@ -643,7 +626,6 @@ impl Page {
         self.finish_document_geometry(completion, "document geometry node page command")
     }
 
-    #[cfg(feature = "devtools")]
     fn finish_document_geometry(
         &mut self,
         completion: CompletedPageCommand,
@@ -658,7 +640,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_hit_test(
         &self,
         inspector_session_id: Option<String>,
@@ -676,7 +657,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_hit_test(
         &mut self,
         completion: CompletedPageCommand,
@@ -690,7 +670,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_remove_document_node(
         &self,
         reference: RendererDomNodeReference,
@@ -698,7 +677,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::RemoveDocumentNode { reference })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_remove_document_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -706,7 +684,6 @@ impl Page {
         self.start_remove_document_node(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_remove_document_node(
         &mut self,
         completion: CompletedPageCommand,
@@ -715,7 +692,6 @@ impl Page {
             .map(|removed| removed.unwrap_or(false))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_remove_document_node_reference(
         &mut self,
         completion: CompletedPageCommand,
@@ -729,7 +705,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_mutate_document_node_attribute(
         &self,
         reference: RendererDomNodeReference,
@@ -741,7 +716,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_mutate_document_backend_node_attribute(
         &self,
         backend_node_id: u32,
@@ -753,7 +727,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_mutate_document_node_attribute(
         &mut self,
         completion: CompletedPageCommand,
@@ -767,7 +740,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_edit_document_node(
         &self,
         inspector_session_id: Option<String>,
@@ -779,7 +751,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_edit_document_node(
         &mut self,
         completion: CompletedPageCommand,
@@ -793,7 +764,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_focus_document_node(
         &self,
         reference: RendererDomNodeReference,
@@ -801,7 +771,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::FocusDocumentNode { reference })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_focus_document_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -809,7 +778,6 @@ impl Page {
         self.start_focus_document_node(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_focus_document_node_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -823,7 +791,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_focus_document_node_for_object_id(
         &self,
         inspector_session_id: Option<String>,
@@ -835,7 +802,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_autofill_trigger(
         &self,
         request: RendererAutofillTriggerRequest,
@@ -843,7 +809,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::TriggerAutofill(request))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_autofill_trigger(
         &mut self,
         completion: CompletedPageCommand,
@@ -857,7 +822,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_set_file_input_files_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -871,7 +835,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_set_file_input_files(
         &mut self,
         completion: CompletedPageCommand,
@@ -885,7 +848,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_set_file_input_files_for_object_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -901,7 +863,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_set_file_input_files_for_object_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -915,7 +876,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_snapshot_for_object_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -935,7 +895,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_request_document_node_for_object_id(
         &self,
         inspector_session_id: Option<String>,
@@ -948,7 +907,9 @@ impl Page {
             object_id,
         ))
     }
+}
 
+impl Page {
     pub fn finish_request_document_node_for_object_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -1187,8 +1148,10 @@ impl Page {
             RendererPageReply::OptionalDocumentChildNodeSnapshotEvents(events) => Ok(events),
         )
     }
+}
 
-    #[cfg(feature = "devtools")]
+#[cfg(feature = "devtools")]
+impl Page {
     pub fn start_document_query_selector_for_document(
         &self,
         selector: String,
@@ -1199,7 +1162,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_query_selector_for_document_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -1215,7 +1177,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_query_selector_for_backend_node_id(
         &self,
         root_backend_node_id: u32,
@@ -1231,7 +1192,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_query_selector_for_node_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -1249,7 +1209,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_query_selector_for_backend_node_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -1267,7 +1226,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_child_frame_document_query_selector_for_node(
         &self,
         inspector_session_id: Option<String>,
@@ -1289,7 +1247,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_child_frame_document_query_selector_for_backend_node_id(
         &self,
         inspector_session_id: Option<String>,
@@ -1309,7 +1266,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_query_selector(
         &mut self,
         completion: CompletedPageCommand,
@@ -1323,7 +1279,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_query_selector_with_child_node_snapshot_events_for_node(
         &self,
         inspector_session_id: Option<String>,
@@ -1343,7 +1298,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_query_selector_with_child_node_snapshot_events_for_backend_node_id(
         &self,
         inspector_session_id: Option<String>,
@@ -1361,7 +1315,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_query_selector_with_child_node_snapshot_events(
         &mut self,
         completion: CompletedPageCommand,
@@ -1375,7 +1328,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_perform_search(
         &self,
         inspector_session_id: Option<String>,
@@ -1391,7 +1343,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_perform_search(
         &mut self,
         completion: CompletedPageCommand,
@@ -1405,7 +1356,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_search_results(
         &self,
         inspector_session_id: Option<String>,
@@ -1421,7 +1371,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_search_results(
         &mut self,
         completion: CompletedPageCommand,
@@ -1440,7 +1389,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_discard_document_search_results(
         &self,
         inspector_session_id: Option<String>,
@@ -1452,7 +1400,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_discard_document_search_results(
         &mut self,
         completion: CompletedPageCommand,
@@ -1466,7 +1413,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_set_document_node_stack_traces_enabled(
         &self,
         inspector_session_id: Option<String>,
@@ -1478,7 +1424,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_set_document_node_stack_traces_enabled(
         &mut self,
         completion: CompletedPageCommand,
@@ -1492,7 +1437,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_stack_trace(
         &self,
         inspector_session_id: Option<String>,
@@ -1504,7 +1448,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_node_stack_trace(
         &mut self,
         completion: CompletedPageCommand,
@@ -1518,7 +1461,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_frontend_node_binding(
         &self,
         inspector_session_id: Option<String>,
@@ -1533,7 +1475,6 @@ impl Page {
     }
 
     /// Resolve an internal automation binding without treating it as a CDP input.
-    #[cfg(feature = "devtools")]
     pub fn start_document_internal_frontend_node_binding(
         &self,
         inspector_session_id: Option<String>,
@@ -1547,7 +1488,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_frontend_node_binding(
         &mut self,
         completion: CompletedPageCommand,
@@ -1561,7 +1501,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_register_document_bidi_node_binding(
         &self,
         inspector_session_id: Option<String>,
@@ -1575,7 +1514,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_register_document_bidi_node_binding(
         &mut self,
         completion: CompletedPageCommand,
@@ -1589,7 +1527,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_bidi_node_binding(
         &self,
         inspector_session_id: Option<String>,
@@ -1601,7 +1538,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_bidi_node_binding(
         &mut self,
         completion: CompletedPageCommand,
@@ -1615,7 +1551,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_bidi_node_shared_id_for_backend_node_id(
         &self,
         inspector_session_id: Option<String>,
@@ -1629,7 +1564,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_bidi_node_shared_id_for_backend_node_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -1644,7 +1578,6 @@ impl Page {
     }
 
     /// Resolve the native reference and read attributes in one renderer turn.
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_attributes(
         &self,
         reference: RendererDomNodeReference,
@@ -1652,7 +1585,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::DocumentNodeAttributes { reference })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_attributes_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -1662,7 +1594,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_node_attributes(
         &mut self,
         completion: CompletedPageCommand,
@@ -1676,7 +1607,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_text(
         &self,
         reference: RendererDomNodeReference,
@@ -1684,7 +1614,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::DocumentNodeText { reference })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_text_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -1692,7 +1621,6 @@ impl Page {
         self.start_document_node_text(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_node_text(
         &mut self,
         completion: CompletedPageCommand,
@@ -1706,7 +1634,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_property(
         &self,
         reference: RendererDomNodeReference,
@@ -1718,7 +1645,6 @@ impl Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_document_node_property_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -1730,7 +1656,6 @@ impl Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub fn finish_document_node_property(
         &mut self,
         completion: CompletedPageCommand,
@@ -1743,7 +1668,9 @@ impl Page {
             RendererPageReply::DocumentNodePropertyResolution(resolution) => Ok(resolution),
         )
     }
+}
 
+impl Page {
     pub fn start_outer_html_for_document(
         &self,
         include_shadow_dom: bool,

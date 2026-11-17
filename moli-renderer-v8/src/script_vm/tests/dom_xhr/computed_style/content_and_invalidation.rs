@@ -746,6 +746,7 @@ fn style_observation_reuses_current_world_without_materializing_an_update() {
     assert_eq!(host.style_world_full_snapshots_for_test(), full_snapshots);
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn accessibility_requests_reuse_the_retained_style_world() {
     let mut vm = new_parsed_test_vm(
@@ -1654,6 +1655,7 @@ document.getElementById('isolated-runtime-exec-drain-target').className = 'activ
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn document_start_run_immediately_drains_pending_style_invalidations_without_computed_style_read() {
     let mut vm = new_storage_test_vm("https://document-start-run-immediately-style-drain.test/");

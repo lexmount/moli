@@ -1202,6 +1202,7 @@ async fn history_worlds_share_mutations_but_keep_wrappers_and_state_caches_separ
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -1363,6 +1364,7 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn history_worlds_preserve_the_shared_backing_when_initial_child_window_is_reused() {
     let mut vm = new_storage_test_vm("https://example.com/base");

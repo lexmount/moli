@@ -49,6 +49,7 @@ async fn pointer_capture_arguments_use_native_receiver_and_webidl_conversion() {
         vm.eval("JSON.stringify({errors:__captureResults.errors,failures:__captureResults.rows.filter(row=>Object.values(row.checks).some(value=>value!==true))})").unwrap());
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn pointer_capture_queries_pending_target_before_native_dispatch() {
     let mut vm = new_rendered_test_vm(

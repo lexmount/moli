@@ -1442,6 +1442,7 @@ fn runtime_binding_calls_freeze_the_invoking_realm_generation() {
     );
     assert_ne!(calls[0].execution_context_id, calls[1].execution_context_id);
 }
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn opaque_child_isolated_world_projects_only_its_own_document() {
     let mut vm = new_storage_test_vm("https://opaque-child-isolated-world.test/");
@@ -1558,6 +1559,7 @@ async fn opaque_child_isolated_world_projects_only_its_own_document() {
         "isolated child navigator.storage must use the child opaque storage owner"
     );
 }
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn initial_empty_child_isolated_world_rebinds_committed_document() {
     let mut vm = new_storage_test_vm("https://initial-empty-isolated-world.test/");
@@ -3149,6 +3151,7 @@ fn inspector_context_created_matches_same_name_child_isolated_world_by_frame_id(
     );
     assert_eq!(vm.page_isolated_world_contexts.len(), 2);
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn same_name_isolated_worlds_are_scoped_to_devtools_session_and_detach() {
     let mut vm = new_storage_test_vm("https://isolated-world-session.test/");
@@ -3348,6 +3351,7 @@ async fn commit_opaque_child_for_test(vm: &mut StandaloneScriptVmHarness, elemen
         .unwrap_or_else(|| panic!("{element_id}: opaque child realm should exist"))
 }
 
+#[cfg(feature = "devtools")]
 fn child_context_weak_for_test(
     vm: &mut StandaloneScriptVmHarness,
     context_id: i64,
@@ -3378,6 +3382,7 @@ fn context_weak_was_collected_for_test(
     .expect("parent context should remain usable")
 }
 
+#[cfg(feature = "devtools")]
 fn expose_real_top_window_for_test(vm: &mut StandaloneScriptVmHarness, context_id: i64) {
     // Exercise the native access-check handlers on the actual top WindowProxy.
     vm.with_child_frame_realm_context_scope(context_id, |scope, host_ptr| {
@@ -3397,6 +3402,7 @@ fn expose_real_top_window_for_test(vm: &mut StandaloneScriptVmHarness, context_i
     .expect("real top Window should be reachable from the opaque child");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn borrowed_cross_origin_window_accessors_follow_the_receiver() {
     let mut vm = new_storage_test_vm("https://cross-origin-window-receiver.test/");
@@ -3446,6 +3452,7 @@ async fn borrowed_cross_origin_window_accessors_follow_the_receiver() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn native_cross_origin_bindings_release_removed_accessor_realm() {
     let mut vm = new_storage_test_vm("https://cross-origin-surface-cache.test/");
@@ -3509,6 +3516,7 @@ document.getElementById("accessor-frame").remove();
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn native_cross_origin_bindings_ignore_author_weak_map_overrides() {
     let mut vm = new_storage_test_vm("https://cross-origin-cache-intrinsics.test/");
@@ -3567,6 +3575,7 @@ Object.getPrototypeOf(savedPostMessage) === Function.prototype
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn cross_origin_window_keys_follow_frame_removal() {
     let mut vm = new_storage_test_vm("https://cross-origin-window-keys.test/");

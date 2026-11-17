@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 fn install_transfer_view_for_test(
     vm: &mut StandaloneScriptVmHarness,
     store: &crate::context_bootstrap::NativeDragDataStore,
@@ -26,6 +27,7 @@ fn install_transfer_view_for_test(
     .unwrap();
 }
 
+#[cfg(feature = "devtools")]
 fn finish_transfer_view_for_test(vm: &mut StandaloneScriptVmHarness, name: &str) -> String {
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
         let global = scope.get_current_context().global(scope);
@@ -39,6 +41,7 @@ fn finish_transfer_view_for_test(vm: &mut StandaloneScriptVmHarness, name: &str)
     .unwrap()
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn native_drag_store_initialization_is_distinct_from_external_all_mask() {
     use crate::context_bootstrap::DragDataStoreMode;
@@ -86,6 +89,7 @@ fn native_drag_store_initialization_is_distinct_from_external_all_mask() {
         r#"["uninitialized","none","all","none"]"#);
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn native_drag_store_views_gate_access_without_reviving_retained_items() {
     use crate::context_bootstrap::DragDataStoreMode;
@@ -192,6 +196,7 @@ fn native_drag_store_views_gate_access_without_reviving_retained_items() {
     finish_transfer_view_for_test(&mut vm, "nextTransfer");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn native_drag_payload_replacement_preserves_store_and_isolates_event_views() {
     use crate::context_bootstrap::DragDataStoreMode;
@@ -290,6 +295,7 @@ fn native_drag_payload_replacement_preserves_store_and_isolates_event_views() {
     finish_transfer_view_for_test(&mut vm, "emptyTransfer");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn drop_default_actions_do_not_expose_private_views_to_author_readers() {
     use crate::runtime::{RendererDragData, RendererDragDataItem, RendererDraggedFile};
@@ -637,6 +643,7 @@ fn input_files_nullable_setter_preserves_current_file_list() {
     assert_eq!(result, "note.txt|note.txt|TypeError|TypeError");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn input_file_list_cache_refreshes_after_external_file_selection_replacement() {
     let mut vm = new_storage_test_vm("https://input-files-external-replace.test/");
@@ -1000,6 +1007,7 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn data_transfer_directory_entries_use_private_slots_for_reflection_and_spoofing() {
     use crate::runtime::{RendererDragData, RendererDraggedDirectory, RendererDraggedFile};
@@ -1442,6 +1450,7 @@ fn data_transfer_file_list_reference_tracks_item_mutations() {
     assert_eq!(result, "true:2:true:true|true:1:true:true:true");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn mouse_dragstart_bubbles_to_window_once() {
     let mut vm = new_rendered_test_vm(

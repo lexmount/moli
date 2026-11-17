@@ -132,6 +132,7 @@ async fn blob_download_authorizes_the_initiating_document_storage_key_and_partit
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn keyboard_blob_download_retains_the_backing_before_revocation() {
     let mut vm = new_parsed_test_vm(

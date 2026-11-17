@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 #[test]
 fn inspector_runtime_evaluate_uses_child_context_window_surface() {
     let mut vm = new_storage_test_vm("https://inspector-child-window-viewport.test/");
@@ -85,6 +86,7 @@ fn inspector_runtime_evaluate_uses_child_context_window_surface() {
     assert_eq!(top_result, "1920|1080");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn inspector_default_runtime_evaluate_masks_ambient_child_owner_scope() {
     let mut vm = new_storage_test_vm("https://inspector-top-window-viewport.test/");

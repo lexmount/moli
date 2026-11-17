@@ -175,7 +175,7 @@ impl TextEditInputType {
     }
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 fn keyboard_event_legacy_codes(event_type: &str, key: &str, code: &str) -> (u32, u32, u32) {
     let char_code = keyboard_event_char_code(event_type, key);
     let mut key_code = keyboard_event_key_code(key, code);
@@ -190,7 +190,7 @@ fn keyboard_event_legacy_codes(event_type: &str, key: &str, code: &str) -> (u32,
     (char_code, key_code, which)
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 fn keyboard_event_char_code(event_type: &str, key: &str) -> u32 {
     if event_type != "keypress" {
         return 0;
@@ -208,7 +208,7 @@ fn keyboard_event_char_code(event_type: &str, key: &str) -> u32 {
     ch as u32
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 fn keyboard_event_key_code(key: &str, code: &str) -> u32 {
     match key {
         "Backspace" => 8,
@@ -243,7 +243,7 @@ fn keyboard_event_key_code(key: &str, code: &str) -> u32 {
     }
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 fn keyboard_event_key_code_for_code(code: &str) -> Option<u32> {
     if let Some(suffix) = code.strip_prefix("Key")
         && suffix.len() == 1
@@ -316,7 +316,7 @@ fn keyboard_event_key_code_for_code(code: &str) -> Option<u32> {
     })
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 fn single_ascii_digit(value: &str) -> Option<u8> {
     if value.len() != 1 {
         return None;
@@ -325,7 +325,7 @@ fn single_ascii_digit(value: &str) -> Option<u8> {
     digit.is_ascii_digit().then_some(digit - b'0')
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 fn keyboard_event_key_code_for_printable_key(key: &str) -> Option<u32> {
     let mut chars = key.chars();
     let ch = chars.next()?;
@@ -824,7 +824,7 @@ fn construct_touches<'s>(
         .collect()
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) fn construct_keyboard_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

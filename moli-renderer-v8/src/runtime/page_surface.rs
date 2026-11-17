@@ -3806,6 +3806,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         .into()
     }
 
+    #[cfg(feature = "devtools")]
     fn assert_raw_session_sink_settlement(raw: &str, expected_success: bool) {
         let payload = InspectorJson::from_slice(raw.as_bytes()).unwrap();
         assert!(!payload.is_materialized());
@@ -3878,6 +3879,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert_eq!(response.payload().to_string(), raw);
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn raw_session_sink_large_success_stays_opaque() {
         let raw = format!(
@@ -3887,6 +3889,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert_raw_session_sink_settlement(&raw, true);
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn raw_session_sink_deep_success_uses_wire_status() {
         let raw = format!(
@@ -3900,6 +3903,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert_raw_session_sink_settlement(&raw, true);
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn raw_session_sink_error_stays_opaque() {
         assert_raw_session_sink_settlement(
@@ -3952,6 +3956,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(rx.await.is_err());
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn revoking_session_lease_leaves_terminal_settlement_to_protocol_owner() {
         let attachment = RendererAgentAttachmentId::allocate();
@@ -4050,6 +4055,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         );
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn late_response_waits_for_page_owner_publication() {
         let page_id = PageId::new_for_testing(1);
@@ -4099,6 +4105,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         );
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn session_output_changes_the_sink_without_bypassing_the_page_owner_boundary() {
         let page_id = PageId::new_for_testing(1);
@@ -4184,6 +4191,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         channel.cancel();
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn session_terminal_response_uses_essential_reserve_after_observation_saturation() {
         let page_id = PageId::new_for_testing(2);
@@ -4282,6 +4290,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         drop(fence);
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn rejected_session_terminal_response_does_not_settle_the_frontend_call() {
         let page_id = PageId::new_for_testing(3);
@@ -4333,6 +4342,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert_eq!(transport_rx.recv().await, None);
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn unbound_session_terminal_response_is_not_deferred_or_settled() {
         let page_id = PageId::new_for_testing(4);
@@ -4364,6 +4374,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert_eq!(journal.pending_len(), 0);
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn rotating_session_lease_rejects_stale_bound_sender_and_publishes_once() {
         let old_stream =
@@ -4452,6 +4463,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         }
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn owner_failure_replaces_parked_session_result_with_exactly_one_error() {
         let page_id = PageId::new_for_testing(21);
@@ -4524,6 +4536,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         }
     }
 
+    #[cfg(feature = "devtools")]
     #[tokio::test]
     async fn page_settlement_keeps_nonresponse_output_beside_session_response() {
         let page_id = PageId::new_for_testing(22);
@@ -4586,6 +4599,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     #[should_panic(expected = "one Page command cannot settle multiple terminal session responses")]
     fn page_settlement_rejects_two_terminal_session_responses() {
@@ -5133,7 +5147,7 @@ pub enum RendererPageCommand {
     ChildFrameIdForDefaultExecutionContextId(i64),
     ChildDefaultExecutionContextIdForFrameId(String),
     RuntimeConsoleMessagesWithContext,
-    #[cfg(feature = "devtools")]
+    #[cfg(any(test, feature = "devtools"))]
     RuntimeHeapUsage,
     #[cfg(feature = "devtools")]
     PerformanceMetricSnapshot,
@@ -6183,7 +6197,7 @@ impl RendererPageCommand {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod renderer_inspector_command_envelope_tests {
     use super::*;
 
@@ -6454,7 +6468,7 @@ pub enum RendererPageReply {
     RuntimeEvaluationResult(RendererRuntimeEvaluationResult),
     RuntimeInspectorProtocolMessages(RendererRuntimeCommandOutput),
     RuntimeConsoleMessageSnapshots(Vec<RuntimeConsoleMessageSnapshot>),
-    #[cfg(feature = "devtools")]
+    #[cfg(any(test, feature = "devtools"))]
     RuntimeHeapUsage(Box<RendererRuntimeHeapUsage>),
     #[cfg(feature = "devtools")]
     PerformanceMetricSnapshot(Box<RendererPerformanceMetricSnapshot>),

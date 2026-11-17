@@ -23,6 +23,7 @@ use crate::{
 use serde_json::Value;
 use std::sync::Arc;
 
+#[cfg(feature = "devtools")]
 #[test]
 fn stale_domcontentloaded_barrier_preserves_current_document_frontend_bindings() {
     let mut page_vm = test_page_vm();
@@ -54,6 +55,7 @@ fn stale_domcontentloaded_barrier_preserves_current_document_frontend_bindings()
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn history_keeps_action_window_but_document_open_cancels_it() {
     run_page_vm_async_test(async move {
@@ -787,6 +789,7 @@ fn page_diagnostics_snapshot_includes_runtime_observable_lifecycle_payload() {
     ));
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn page_diagnostics_snapshot_uses_cached_runtime_observable_console_source_items() {
     let mut page_vm = test_page_vm();
@@ -2767,6 +2770,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn runtime_document_close_response_does_not_wait_for_replacement_lifecycle() {
     run_page_vm_async_test(async move {
@@ -3693,6 +3697,7 @@ fn top_level_http_location_navigation_without_registrations_keeps_service_worker
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn runtime_evaluate_without_enable_uses_inspector_default_context() {
     let mut page_vm = test_page_vm();
@@ -3718,6 +3723,7 @@ fn runtime_evaluate_without_enable_uses_inspector_default_context() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn page_native_inspector_owns_object_namespaces_and_groups() {
     let mut page_vm = test_page_vm();
@@ -3734,6 +3740,7 @@ fn page_native_inspector_owns_object_namespaces_and_groups() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn runtime_stack_capture_follows_session_lifecycle() {
     let mut page_vm = test_page_vm();
@@ -3745,6 +3752,7 @@ fn runtime_stack_capture_follows_session_lifecycle() {
     });
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn runtime_stack_capture_preserves_independent_session_limits() {
     let mut page_vm = test_page_vm();
@@ -3759,6 +3767,7 @@ fn runtime_stack_capture_preserves_independent_session_limits() {
     });
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn runtime_enable_hides_the_internal_stack_capture_limit_response() {
     let mut page_vm = test_page_vm();
@@ -3797,6 +3806,7 @@ fn runtime_enable_hides_the_internal_stack_capture_limit_response() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn page_diagnostics_snapshot_uses_rust_runtime_observable_console_source_queue() {
     let mut page_vm = test_page_vm();
@@ -3832,6 +3842,7 @@ globalThis.__moliConsoleDetails = [];
     ));
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn runtime_console_message_snapshot_ignores_user_tampered_console_buffers() {
     let mut page_vm = test_page_vm();

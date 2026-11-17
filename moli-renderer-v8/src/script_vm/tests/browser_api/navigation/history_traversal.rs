@@ -44,6 +44,7 @@ JSON.stringify({
     );
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn reset_navigation_history_updates_all_live_window_realms() {
     let mut vm = new_storage_test_vm("https://reset-history-realms.test/page.html");

@@ -662,7 +662,7 @@ impl InspectorOutbound {
             .collect()
     }
 
-    #[cfg(feature = "devtools")]
+    #[cfg(any(test, feature = "devtools"))]
     pub(in crate::script_vm) fn take_pending_messages(&self) -> Vec<InspectorJson> {
         let state = self.state();
         let mut guard = state.borrow_mut();
@@ -833,7 +833,7 @@ impl Drop for InspectorInternalDispatchResponseCapture {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
     use crate::devtools::pause::RendererInspectorPauseBridge;

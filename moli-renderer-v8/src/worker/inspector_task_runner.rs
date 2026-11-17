@@ -166,6 +166,7 @@ impl WorkerInspectorSessionLifetime {
         self.0.retirement.lock().complete(result);
     }
 
+    #[cfg(feature = "devtools")]
     #[cfg(test)]
     pub(crate) fn retirement(&self) -> oneshot::Receiver<Result<()>> {
         self.0.retirement.lock().subscribe()
@@ -740,8 +741,51 @@ impl std::fmt::Debug for WorkerInspectorTaskRunner {
 }
 
 #[cfg(test)]
+#[test]
+fn environment_bursts_and_interrupt_consumption_keep_the_owner_wake_bounded() {
+    use moli_v8_platform::ProcessEnvironmentInvalidation::{DateTime, LocaleAndDateTime};
+
+    let (wake_tx, mut wake_rx) = mpsc::unbounded_channel();
+    let runner = WorkerInspectorTaskRunner::new(wake_tx, Arc::new(Mutex::new(None)));
+    let notifier = runner.environment_notifier();
+    for _ in 0..10_000 {
+        notifier.notify(DateTime);
+        notifier.notify(LocaleAndDateTime);
+    }
+    assert!(matches!(
+        wake_rx.try_recv(),
+        Ok(super::WorkerMessage::RunEnvironmentNotification)
+    ));
+    assert!(wake_rx.try_recv().is_err());
+    assert!(runner.shared.state.lock().interrupting_tasks.is_empty());
+
+    // Simulate JS repeatedly accepting V8 interrupts while the ordinary
+    // owner loop has not handled the already-posted fallback wake.
+    for _ in 0..1_000 {
+        notifier.notify(LocaleAndDateTime);
+        assert!(matches!(
+            runner.claim_interrupt_task(),
+            Some(WorkerInspectorTask::EnvironmentInvalidation(
+                LocaleAndDateTime
+            ))
+        ));
+    }
+    assert!(wake_rx.try_recv().is_err());
+    assert!(runner.claim_environment_for_owner().is_none());
+    notifier.notify(DateTime);
+    assert!(matches!(
+        wake_rx.try_recv(),
+        Ok(super::WorkerMessage::RunEnvironmentNotification)
+    ));
+    assert!(matches!(
+        runner.claim_environment_for_owner(),
+        Some(DateTime)
+    ));
+    assert!(wake_rx.try_recv().is_err());
+}
+
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
-    #[cfg(feature = "devtools")]
     use super::WorkerInspectorProtocolTask;
     use crate::runtime::WorkerInspectorError;
     use anyhow::Result;
@@ -907,48 +951,6 @@ mod tests {
             WorkerInspectorTask::Devtools(WorkerInspectorProtocolTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Debugger.resume")
         ));
-    }
-
-    #[test]
-    fn environment_bursts_and_interrupt_consumption_keep_the_owner_wake_bounded() {
-        use moli_v8_platform::ProcessEnvironmentInvalidation::{DateTime, LocaleAndDateTime};
-
-        let (runner, mut wake_rx) = runner();
-        let notifier = runner.environment_notifier();
-        for _ in 0..10_000 {
-            notifier.notify(DateTime);
-            notifier.notify(LocaleAndDateTime);
-        }
-        assert!(matches!(
-            wake_rx.try_recv(),
-            Ok(super::WorkerMessage::RunEnvironmentNotification)
-        ));
-        assert!(wake_rx.try_recv().is_err());
-        assert!(runner.shared.state.lock().interrupting_tasks.is_empty());
-
-        // Simulate JS repeatedly accepting V8 interrupts while the ordinary
-        // owner loop has not handled the already-posted fallback wake.
-        for _ in 0..1_000 {
-            notifier.notify(LocaleAndDateTime);
-            assert!(matches!(
-                runner.claim_interrupt_task(),
-                Some(WorkerInspectorTask::EnvironmentInvalidation(
-                    LocaleAndDateTime
-                ))
-            ));
-        }
-        assert!(wake_rx.try_recv().is_err());
-        assert!(runner.claim_environment_for_owner().is_none());
-        notifier.notify(DateTime);
-        assert!(matches!(
-            wake_rx.try_recv(),
-            Ok(super::WorkerMessage::RunEnvironmentNotification)
-        ));
-        assert!(matches!(
-            runner.claim_environment_for_owner(),
-            Some(DateTime)
-        ));
-        assert!(wake_rx.try_recv().is_err());
     }
 
     #[test]

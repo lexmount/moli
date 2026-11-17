@@ -2542,6 +2542,7 @@ fn fetch_completion_schedules_idle_timeout_for_running_active_worker() {
     assert_eq!(completion.internal_id, 77);
     assert_eq!(completion.result.err().as_deref(), Some("handled"));
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_force_update_on_page_load_enqueues_update_for_controlled_page_load() {
     let service = new_service_worker_runtime_service();

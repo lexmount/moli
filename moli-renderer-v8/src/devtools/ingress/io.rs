@@ -884,6 +884,19 @@ fn fail_io_command(mut command: RendererInspectorIoCommand, message: &str) {
 }
 
 #[cfg(test)]
+#[test]
+fn closed_isolate_discards_queued_and_late_environment_notifications() {
+    let pause_bridge = crate::devtools::pause::RendererInspectorPauseBridge::default();
+    let ingress = RendererInspectorIoIngress::new(pause_bridge.pause_loop_wake(), None);
+    let notifier = ingress.environment_notifier();
+    notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
+    ingress.close("isolate disposed");
+    notifier.notify(ProcessEnvironmentInvalidation::DateTime);
+    assert_eq!(ingress.claim_environment_invalidation(), None);
+    assert!(!ingress.shared.state.lock().has_ready());
+}
+
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
     use crate::devtools::pause::RendererInspectorPauseBridge;
@@ -893,7 +906,6 @@ mod tests {
         RendererRuntimeInspectorResponseChannel, RendererTurnOutputJournal,
         renderer_output_transport_channel,
     };
-    #[cfg(feature = "devtools")]
     use crate::runtime::{RendererInspectorCommandEnvelope, RendererInspectorIngressTicket};
 
     fn ingress() -> RendererInspectorIoIngress {
@@ -901,7 +913,6 @@ mod tests {
         RendererInspectorIoIngress::new(pause_bridge.pause_loop_wake(), None)
     }
 
-    #[cfg(feature = "devtools")]
     fn enqueue(
         ingress: &RendererInspectorIoIngress,
         agent_token: RendererDevToolsAgentToken,
@@ -922,7 +933,6 @@ mod tests {
         )
     }
 
-    #[cfg(feature = "devtools")]
     fn io_ticket(session: &str) -> RendererInspectorIngressTicket {
         RendererInspectorIngressTicket::new(
             None,
@@ -954,17 +964,6 @@ mod tests {
         assert_eq!(ingress.claim_environment_invalidation(), None);
         drop(guard);
         ingress.finish_session_detach(agent, command.ticket().session());
-    }
-
-    #[test]
-    fn closed_isolate_discards_queued_and_late_environment_notifications() {
-        let ingress = ingress();
-        let notifier = ingress.environment_notifier();
-        notifier.notify(ProcessEnvironmentInvalidation::LocaleAndDateTime);
-        ingress.close("isolate disposed");
-        notifier.notify(ProcessEnvironmentInvalidation::DateTime);
-        assert_eq!(ingress.claim_environment_invalidation(), None);
-        assert!(!ingress.shared.state.lock().has_ready());
     }
 
     fn session_response_output(

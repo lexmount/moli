@@ -418,7 +418,7 @@ impl RendererDevToolsAgent {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
     use crate::script_vm::inspector::context_registry::DocumentInspectorContextRegistrationId;

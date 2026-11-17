@@ -16,6 +16,9 @@ instrumentation, frontend node/session state, synthetic input, Fetch interceptio
 commands, network-resource loading for DevTools and ServiceWorker debugger controls.
 Command variants, constructors and corresponding dispatch branches use `#[cfg]`.
 A disabled build cannot construct or call these frontend operations.
+Worker startup pause settings and Fetch interception settings follow the same
+feature gate as the commands that resume them. Shared document load parameters
+apply interception only when DevTools is enabled.
 
 The disabled build does not create a default frontend Inspector session. Page
 and Worker frontend session tables, frontend response sinks, DOM subscriptions
@@ -46,23 +49,26 @@ A workspace build can enable DevTools through another member or a development
 dependency. Check a standalone consumer as well as the full workspace:
 
 ```sh
-python3 tools/devtools-size-ab.py --check-only
+python3 tools/devtools-size-ab.py --check-only --runtime-smoke
+cargo check -p moli-renderer-v8 --no-default-features --tests
 python3 tools/devtools-size-ab.py --limo-root ../limo --jobs 1
 ```
 
 The script generates an independent workspace under the output directory and
-uses the local checkout. API checks are self-contained and do not require Limo;
-the release size and runtime comparison additionally uses a Limo checkout.
+uses the local checkout. The runtime probe starts a local HTTP fixture.
+The release size comparison also uses a Limo checkout.
 Positive checks preserve evaluation, capture and PDF
 and selector/script wait APIs. The two asymmetric combinations (types enabled
 with the renderer disabled, and renderer enabled with the core facade disabled)
 also have to compile. Negative checks require the DevTools command types, facade entry points
 and protocol-only DOM commands to fail compilation without the feature; the
-same fixtures must compile with it enabled.
+same fixtures must compile with it enabled. The negative checks also cover
+Worker startup pause settings and navigation interception configuration.
 
 The runtime probe checks DOM activation and selection, host evaluation and
-Promise results, selector waits, Worker fetch/XHR, process/Worker timezone notifications,
-ServiceWorker registration, PNG capture and PDF output. The smoke runner compares
+Promise results, selector waits, Page fetch, Dedicated Worker fetch/XHR,
+SharedWorker startup and fetch, process and Worker timezone notifications,
+ServiceWorker registration, PNG capture and PDF output. The release smoke runner compares
 both variants on the same cases, recording existing failures separately from
 behavior differences introduced by the feature.
 

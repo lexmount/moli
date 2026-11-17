@@ -238,6 +238,7 @@ impl PageVm {
         self.capture_screencast_frame_with_before_layout(request, || {})
     }
 
+    #[cfg(feature = "devtools")]
     #[cfg(test)]
     pub(super) fn capture_screencast_frame_with_before_layout_hook(
         &mut self,

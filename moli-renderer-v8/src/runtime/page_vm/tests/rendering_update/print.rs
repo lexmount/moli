@@ -220,6 +220,7 @@ child.contentDocument.body.innerHTML = '<p>Iframe text</p>';
     }).await.expect("native printing preserves media and interactive state");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn print_to_pdf_preserves_published_geometry_frame_viewports_and_mouse_targets() {
     run_page_vm_async_test(async move {

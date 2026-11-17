@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 const GRID: &str = r#"<div id=target class=sized style="display:grid;grid-template-columns:30px 1fr;grid-template-rows:20px 1fr"></div>"#;
 
+#[cfg(feature = "devtools")]
 fn inspector_properties(host: &PageScriptHost, target: DomHandle) -> BTreeMap<String, String> {
     crate::native_bridge::element::computed_style_properties_for_inspector_handle(host, target)
         .unwrap()
@@ -13,6 +14,7 @@ fn inspector_properties(host: &PageScriptHost, target: DomHandle) -> BTreeMap<St
         .collect()
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn computed_size_inspector_enumeration_waits_for_explicit_publication() {
     for real in [false, true] {
@@ -120,6 +122,7 @@ fn computed_size_observation_stays_cold_regardless_of_grid_read_order() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn computed_size_document_batch_never_publishes_layout_regardless_of_grid_order() {
     for grid_first in [false, true] {

@@ -209,6 +209,7 @@ impl ResourceInterceptionContext {
 /// The interception configuration of a Worker target, independent of clients.
 #[derive(Clone, Debug)]
 pub struct ResourceInterceptionPolicy(pub(crate) crate::network::PageNetworkPolicy);
+#[cfg(feature = "devtools")]
 impl ResourceInterceptionPolicy {
     pub fn set_interception(&self, classes: crate::types::SubresourceInterceptionClasses) {
         self.0.set_subresource_interception(classes);

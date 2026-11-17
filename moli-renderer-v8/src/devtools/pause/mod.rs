@@ -11,7 +11,7 @@ use moli_page_types::V8InspectorSessionState;
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use parking_lot::{Condvar, Mutex};
 use serde_json::Value;
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 use serde_json::json;
 
 use crate::devtools::target::RendererDevToolsTargetHandle;
@@ -19,7 +19,7 @@ use crate::devtools::target::RendererDevToolsTargetHandle;
 use crate::runtime::RendererInspectorIngressTicket;
 #[cfg(feature = "devtools")]
 use crate::runtime::RendererInspectorPauseCommandEffect;
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::runtime::{
     PageId, RendererOutputResidenceIdentity, RendererRuntimeCommandCausalIdentity,
@@ -691,5 +691,5 @@ impl Drop for RendererInspectorPauseCommandDispatchGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests;

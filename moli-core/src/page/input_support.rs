@@ -6,7 +6,6 @@ use super::{
     RendererPointerEventProperties, RendererTouchPoint,
 };
 
-#[cfg(feature = "devtools")]
 fn decode_input_dispatch_outcome_reply(
     reply: RendererPageReply,
     operation: &str,
@@ -39,7 +38,6 @@ fn settled_input_reply(completion: RendererCommandTurnCompletion) -> Result<Rend
 
 /// Decodes a completed renderer turn shared by mouse, touch, drag, and key dispatches.
 #[doc(hidden)]
-#[cfg(feature = "devtools")]
 pub fn decode_input_dispatch_outcome_completion(
     completion: RendererCommandTurnCompletion,
     operation: &str,
@@ -212,7 +210,6 @@ pub trait PageInputExt {
 }
 
 impl PageInputExt for Page {
-    #[cfg(feature = "devtools")]
     async fn dispatch_mouse_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -229,7 +226,6 @@ impl PageInputExt for Page {
         .await
     }
 
-    #[cfg(feature = "devtools")]
     async fn dispatch_mouse_event_at_point_async(
         &mut self,
         x: f64,
@@ -246,7 +242,6 @@ impl PageInputExt for Page {
         .await
     }
 
-    #[cfg(feature = "devtools")]
     fn start_dispatch_mouse_event_at_point_with_outcome(
         &self,
         x: f64,
@@ -272,7 +267,6 @@ impl PageInputExt for Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     fn start_dispatch_mouse_event_at_point_with_pointer_outcome(
         &self,
         x: f64,
@@ -302,7 +296,6 @@ impl PageInputExt for Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     fn finish_dispatch_mouse_event_at_point_with_outcome(
         &mut self,
         completion: CompletedPageCommand,
@@ -311,7 +304,6 @@ impl PageInputExt for Page {
         decode_input_dispatch_outcome_reply(reply, "mouse event page command")
     }
 
-    #[cfg(feature = "devtools")]
     async fn dispatch_touch_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -323,7 +315,6 @@ impl PageInputExt for Page {
             .await
     }
 
-    #[cfg(feature = "devtools")]
     async fn dispatch_touch_event_at_point_async(
         &mut self,
         x: f64,
@@ -334,7 +325,6 @@ impl PageInputExt for Page {
         Page::dispatch_touch_event_at_point_async(self, x, y, event_name, activate).await
     }
 
-    #[cfg(feature = "devtools")]
     fn start_dispatch_touch_event_at_point_with_outcome(
         &self,
         x: f64,
@@ -349,7 +339,6 @@ impl PageInputExt for Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     fn start_dispatch_touch_event_at_points_with_outcome(
         &self,
         points: Vec<RendererTouchPoint>,
@@ -363,7 +352,6 @@ impl PageInputExt for Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     fn finish_dispatch_touch_event_at_point_with_outcome(
         &mut self,
         completion: CompletedPageCommand,
@@ -372,7 +360,6 @@ impl PageInputExt for Page {
         decode_input_dispatch_outcome_reply(reply, "touch event page command")
     }
 
-    #[cfg(feature = "devtools")]
     async fn dispatch_drag_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -387,7 +374,6 @@ impl PageInputExt for Page {
         .await
     }
 
-    #[cfg(feature = "devtools")]
     async fn dispatch_drag_event_at_point_async(
         &mut self,
         x: f64,
@@ -399,7 +385,6 @@ impl PageInputExt for Page {
         Page::dispatch_drag_event_at_point_async(self, x, y, event_name, data, modifiers).await
     }
 
-    #[cfg(feature = "devtools")]
     fn start_dispatch_drag_event_at_point_with_outcome(
         &self,
         x: f64,
@@ -417,7 +402,6 @@ impl PageInputExt for Page {
         })
     }
 
-    #[cfg(feature = "devtools")]
     fn finish_dispatch_drag_event_at_point_with_outcome(
         &mut self,
         completion: CompletedPageCommand,
@@ -426,17 +410,14 @@ impl PageInputExt for Page {
         decode_input_dispatch_outcome_reply(reply, "drag event page command")
     }
 
-    #[cfg(feature = "devtools")]
     async fn clear_active_drag_data_transfer_async(&mut self) -> Result<()> {
         Page::clear_active_drag_data_transfer_async(self).await
     }
 
-    #[cfg(feature = "devtools")]
     fn start_clear_active_drag_data_transfer(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::ClearActiveDragDataTransfer)
     }
 
-    #[cfg(feature = "devtools")]
     fn start_cancel_dragging(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::CancelDragging)
     }
@@ -454,12 +435,10 @@ impl PageInputExt for Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     async fn insert_text_into_active_control_async(&mut self, text: &str) -> Result<bool> {
         Page::insert_text_into_active_control_async(self, text).await
     }
 
-    #[cfg(feature = "devtools")]
     fn start_insert_text_into_active_control(&self, text: &str) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::InsertTextIntoActiveControl(
             text.to_owned(),
@@ -474,7 +453,6 @@ impl PageInputExt for Page {
         decode_insert_text_reply(reply)
     }
 
-    #[cfg(feature = "devtools")]
     async fn dispatch_key_event_with_outcome_async(
         &mut self,
         event_name: &str,
@@ -498,7 +476,6 @@ impl PageInputExt for Page {
         .await
     }
 
-    #[cfg(feature = "devtools")]
     fn start_dispatch_key_event_with_outcome(
         &self,
         event_name: &str,
@@ -521,7 +498,6 @@ impl PageInputExt for Page {
         )
     }
 
-    #[cfg(feature = "devtools")]
     fn finish_dispatch_key_event_with_outcome(
         &mut self,
         completion: CompletedPageCommand,
@@ -530,7 +506,6 @@ impl PageInputExt for Page {
         decode_input_dispatch_outcome_reply(reply, "key event page command")
     }
 
-    #[cfg(feature = "devtools")]
     async fn dispatch_key_event_async(
         &mut self,
         event_name: &str,
@@ -556,7 +531,6 @@ impl PageInputExt for Page {
 }
 
 impl Page {
-    #[cfg(feature = "devtools")]
     pub fn start_prepare_element_click(
         &self,
         inspector_session_id: Option<String>,
@@ -568,7 +542,6 @@ impl Page {
         ))
     }
 
-    #[cfg(feature = "devtools")]
     pub fn start_dispatch_prepared_element_click(
         &self,
         click: super::RendererPreparedPointerClick,
@@ -586,7 +559,6 @@ pub fn decode_element_click_preparation_completion(
 }
 
 #[doc(hidden)]
-#[cfg(feature = "devtools")]
 pub fn decode_element_click_dispatch_completion(
     completion: RendererCommandTurnCompletion,
 ) -> Result<Result<RendererInputDispatchOutcome, super::RendererElementClickError>> {
@@ -597,7 +569,6 @@ pub fn decode_element_click_dispatch_completion(
 impl Page {
     /// Starts key dispatch with an explicit DOM KeyboardEvent location.
     /// The legacy PageInputExt entry point continues to use location 0.
-    #[cfg(feature = "devtools")]
     pub fn start_dispatch_key_event_with_location_outcome(
         &self,
         event_name: &str,

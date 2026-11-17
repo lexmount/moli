@@ -1,6 +1,7 @@
 use super::*;
 use crate::RendererInputDispatchOutcome;
 
+#[cfg(feature = "devtools")]
 fn mouse(
     vm: &mut StandaloneScriptVmHarness,
     event: &str,
@@ -158,6 +159,7 @@ fn mouse_handler_geometry_reads_reuse_the_published_snapshot() {
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn mouse_wheel_updates_scroll_without_refreshing_the_rendered_world() {
     let mut vm = new_parsed_test_vm(

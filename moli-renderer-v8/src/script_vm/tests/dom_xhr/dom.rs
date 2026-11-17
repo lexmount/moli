@@ -19,7 +19,9 @@ mod dom_parser;
 mod element_construction;
 mod elements_and_events;
 mod files_and_transfer;
+#[cfg(feature = "devtools")]
 mod mouse_click_target;
+#[cfg(feature = "devtools")]
 mod pointer_and_mouse;
 mod ranges;
 mod rendered_text;

@@ -159,6 +159,7 @@ fn microtask_checkpoint_watchdog_terminates_runaway_queue_and_recovers_isolate()
         "4"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn runtime_await_promise_sync_result_survives_queued_allocation_gc() {
     let mut vm = new_parsed_test_vm(

@@ -1341,7 +1341,7 @@ impl ScriptVm {
             });
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(super) fn dispatch_inspector_protocol_message(
         &mut self,
         raw_json: &str,

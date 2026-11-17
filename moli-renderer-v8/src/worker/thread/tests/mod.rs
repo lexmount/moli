@@ -2,6 +2,7 @@ mod abort_signal_events;
 mod callback_execution;
 mod error_reporting_guard;
 mod geometry_matrix_constructor_union;
+#[cfg(feature = "devtools")]
 mod indexed_db_gc;
 
 mod exception_constructor_strings;

@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 #[test]
 fn script_control_click_preserves_focus_and_pending_text_commit() {
     for dispatch in [false, true] {
@@ -113,6 +114,7 @@ return JSON.stringify({{active:document.activeElement.id, checked:check.checked,
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn pointer_release_does_not_reapply_canceled_mouse_focus() {
     for canceled_event in ["none", "mousedown", "pointerdown"] {

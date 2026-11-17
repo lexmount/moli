@@ -359,6 +359,7 @@ async fn worker_bootstrap_can_be_released_without_an_inspector_command() {
     handle.terminate_and_join();
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap() {
     ensure_v8();
@@ -471,6 +472,7 @@ async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap
     handle.terminate_and_join();
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn worker_attach_before_runtime_enable_preserves_script_loaded_after_resume() {
     ensure_v8();
@@ -532,6 +534,7 @@ async fn worker_attach_before_runtime_enable_preserves_script_loaded_after_resum
     handle.terminate_and_join();
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_javascript() {
     ensure_v8();

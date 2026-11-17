@@ -211,6 +211,7 @@ async fn parser_details_group_exclusivity_is_independent_of_realm_activation() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn native_input_activates_the_live_document_and_its_inline_handler_once() {
     let runtime = initialize_layout_test_runtime();
@@ -251,6 +252,7 @@ async fn native_input_activates_the_live_document_and_its_inline_handler_once() 
     page.close_async().await.unwrap();
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn cold_runtime_binding_install_initializes_main_world() {
     for execution_context_id in [None, Some(0)] {
@@ -289,6 +291,7 @@ async fn cold_runtime_binding_install_initializes_main_world() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn cold_runtime_binding_removal_keeps_main_world_deferred() {
     for command in [
@@ -316,6 +319,7 @@ async fn cold_runtime_binding_removal_keeps_main_world_deferred() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn cold_runtime_binding_protocol_removal_clears_pending_world_registration() {
     for remove in [false, true] {
