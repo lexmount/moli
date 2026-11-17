@@ -170,8 +170,18 @@ fn flush_promise_rejection_state(
                 if !promise.has_handler() {
                     remember_reported_promise_rejection(&state.reported, rejection.clone());
                 }
-                if matches!(outcome, Ok(true)) {
-                    log_unhandled_promise_rejection(scope, reason);
+                if let Ok(allows_default) = outcome {
+                    unsafe { &*host_ptr }.emit_diagnostic(|source| {
+                        Some(crate::exception_reporting::diagnostic_from_exception(
+                            scope,
+                            source,
+                            reason,
+                            !allows_default,
+                        ))
+                    });
+                    if allows_default {
+                        log_unhandled_promise_rejection(scope, reason);
+                    }
                 }
             });
     }

@@ -445,6 +445,11 @@ impl WorkerSpawnOptions {
         self
     }
 
+    pub(crate) fn with_diagnostic_source(mut self, source: crate::DiagnosticSource) -> Self {
+        self.worker_context_runtime = self.worker_context_runtime.with_diagnostic_source(source);
+        self
+    }
+
     pub(crate) fn with_global_kind(mut self, global_kind: WorkerGlobalKind) -> Self {
         self.global_kind = global_kind;
         self

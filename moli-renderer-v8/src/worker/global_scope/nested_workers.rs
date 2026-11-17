@@ -47,7 +47,7 @@ pub(crate) fn reserve_nested_worker_context(
         worker_id,
         base_url,
         loader: state.loader.clone(),
-        worker_context_runtime: state.worker_context_runtime.clone(),
+        worker_context_runtime: state.worker_context_runtime.clone().for_nested_dedicated_worker(),
         service_worker_runtime: state.service_worker_runtime.clone(),
         service_worker_client_id: state.service_worker_client_id,
         storage_key_top_level_site: state.storage_key.top_level_site().to_owned(),

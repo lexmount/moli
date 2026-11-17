@@ -165,7 +165,8 @@ pub(super) use console::{
 };
 pub(super) use error::window_report_error_callback;
 pub(crate) use error::{
-    dispatch_window_error_event_with_details, dispatch_window_report_error_message,
+    dispatch_window_error_event, dispatch_window_error_event_with_details,
+    dispatch_window_report_error_message,
 };
 pub(crate) use install::event_handler_property_is_exposed;
 pub(super) use install::install_window_global_accessors;

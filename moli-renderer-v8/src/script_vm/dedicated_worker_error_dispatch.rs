@@ -58,7 +58,7 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     // `error` event at the Worker object. Runtime script errors additionally
     // propagate to the owning Window when that Worker event is not canceled.
     if unhandled && error.phase == crate::worker::WorkerErrorPhase::Runtime {
-        crate::context_bootstrap::dispatch_window_error_event_with_details(
+        crate::context_bootstrap::dispatch_window_error_event(
             scope,
             host_ptr,
             error.message,

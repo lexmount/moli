@@ -3903,6 +3903,10 @@ async fn parser_owned_module_tla_exotic_rejection_reports_window_error_payload_w
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
+        diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorIdentityMatches"),
+        Some(&JsValueSnapshot::Bool(true))
+    );
+    assert_eq!(
         diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorMessageMatches"),
         Some(&JsValueSnapshot::Bool(true))
     );

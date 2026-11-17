@@ -117,6 +117,49 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
     colno: u32,
     error_value: Option<v8::Local<'s, v8::Value>>,
 ) -> std::result::Result<(), String> {
+    let event = dispatch_window_error_event(
+        scope,
+        host_ptr,
+        message,
+        filename,
+        lineno,
+        colno,
+        error_value,
+    )?;
+    if let Some(event) = event {
+        unsafe { &*host_ptr }.emit_diagnostic(|source| {
+            let handled =
+                crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
+            let stack = if handled {
+                None
+            } else {
+                error_value.and_then(|value| {
+                    crate::exception_reporting::captured_exception_stack(scope, value)
+                })
+            };
+            Some(crate::DiagnosticEvent::runtime_exception(
+                source,
+                message,
+                filename,
+                lineno,
+                colno,
+                stack.as_deref(),
+                handled,
+            ))
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn dispatch_window_error_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut PageScriptHost,
+    message: &str,
+    filename: &str,
+    lineno: u32,
+    colno: u32,
+    error_value: Option<v8::Local<'s, v8::Value>>,
+) -> std::result::Result<Option<v8::Local<'s, v8::Object>>, String> {
     ensure_window_reflecting_body_onerror_handler(scope);
     let error_value = error_value.unwrap_or_else(|| v8::null(scope).into());
 
@@ -146,7 +189,7 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
     .ok()
     .and_then(|ctor| ctor.new_instance(scope, &[event_type.into(), init.into()]));
     let Some(event) = event else {
-        return Ok(());
+        return Ok(None);
     };
     mark_event_trusted(scope, event);
 
@@ -155,7 +198,7 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
         crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope)
     {
         runtime.dispatch_child_window_event(scope, child_handle, "error", event);
-        return Ok(());
+        return Ok(Some(event));
     }
     runtime.dispatch_public_event(scope, host_ptr, EventTargetHandle::Window, event)?;
 
@@ -171,7 +214,7 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
         v8str(scope, "currentTarget").into(),
         global_value,
     );
-    Ok(())
+    Ok(Some(event))
 }
 
 pub(in crate::context_bootstrap) fn window_report_error_callback<'s>(

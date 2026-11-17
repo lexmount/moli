@@ -9,6 +9,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
+use crate::diagnostics::{DiagnosticEmitter, DiagnosticEvent, DiagnosticSource};
 use crate::planning::{
     PreparedScript, SharedScriptSourceLoadCompleter,
     external_script_source_load_outcome_from_result,
@@ -162,6 +163,9 @@ impl RendererProducerRegistrar {
 /// the SharedWorker constructor on Window.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerContextRuntime {
+    diagnostics: DiagnosticEmitter,
+    diagnostic_source: Option<DiagnosticSource>,
+    next_dedicated_worker_instance_id: Arc<AtomicU64>,
     debugger_enabled: bool,
     #[cfg(feature = "devtools")]
     shared_worker_pause_on_start: Arc<AtomicBool>,
@@ -180,6 +184,7 @@ pub(crate) struct RendererStoragePartitionIdentity {
 
 #[derive(Debug)]
 struct RendererBrowserContextRuntimeInner {
+    diagnostics: DiagnosticEmitter,
     debugger_enabled: bool,
     id: super::RendererBrowserContextRuntimeId,
     // Commit style and representations together, independently of any page's
@@ -194,7 +199,7 @@ struct RendererBrowserContextRuntimeInner {
     storage_partition_identity: RendererStoragePartitionIdentity,
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
-    next_dedicated_worker_instance_id: AtomicU64,
+    next_dedicated_worker_instance_id: Arc<AtomicU64>,
     dedicated_worker_targets: Mutex<HashMap<u64, DedicatedWorkerTarget>>,
     #[cfg(feature = "devtools")]
     dedicated_worker_pause_on_start_for_devtools: AtomicBool,
@@ -592,6 +597,7 @@ impl RendererBrowserContextRuntime {
         );
         Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
+                diagnostics: DiagnosticEmitter::default(),
                 debugger_enabled,
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
@@ -604,7 +610,7 @@ impl RendererBrowserContextRuntime {
                 storage_partition_identity,
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
-                next_dedicated_worker_instance_id: AtomicU64::default(),
+                next_dedicated_worker_instance_id: Arc::default(),
                 dedicated_worker_targets: Mutex::new(HashMap::new()),
                 #[cfg(feature = "devtools")]
                 dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
@@ -774,8 +780,19 @@ impl RendererBrowserContextRuntime {
         self.inner.broadcast_channel_registry.clone()
     }
 
+    pub fn subscribe_diagnostics(&self) -> crate::DiagnosticsSubscription {
+        self.inner.diagnostics.subscribe()
+    }
+
+    pub(crate) fn diagnostics(&self) -> &DiagnosticEmitter {
+        &self.inner.diagnostics
+    }
+
     pub(crate) fn worker_context_runtime(&self) -> RendererWorkerContextRuntime {
         RendererWorkerContextRuntime {
+            diagnostics: self.inner.diagnostics.clone(),
+            diagnostic_source: None,
+            next_dedicated_worker_instance_id: self.inner.next_dedicated_worker_instance_id.clone(),
             debugger_enabled: self.inner.debugger_enabled,
             #[cfg(feature = "devtools")]
             shared_worker_pause_on_start: self
@@ -1044,6 +1061,9 @@ impl RendererWorkerContextRuntime {
         debugger_enabled: bool,
     ) -> Self {
         Self {
+            diagnostics: DiagnosticEmitter::default(),
+            diagnostic_source: None,
+            next_dedicated_worker_instance_id: Arc::default(),
             debugger_enabled,
             #[cfg(feature = "devtools")]
             shared_worker_pause_on_start: Arc::new(AtomicBool::new(false)),
@@ -1051,6 +1071,23 @@ impl RendererWorkerContextRuntime {
             broadcast_channel_registry,
             storage_partition_identity,
         }
+    }
+
+    pub(crate) fn with_diagnostic_source(mut self, source: DiagnosticSource) -> Self {
+        self.diagnostic_source = Some(source);
+        self
+    }
+
+    pub(crate) fn for_nested_dedicated_worker(self) -> Self {
+        let instance_id = self
+            .next_dedicated_worker_instance_id
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.with_diagnostic_source(DiagnosticSource::DedicatedWorker { instance_id })
+    }
+
+    pub(crate) fn emit_diagnostic(&self, build: impl FnOnce(DiagnosticSource) -> DiagnosticEvent) {
+        self.diagnostics.emit(|| self.diagnostic_source.map(build));
     }
 
     pub(crate) fn message_port_registry(

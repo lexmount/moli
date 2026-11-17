@@ -172,6 +172,9 @@ impl PageScriptHost {
         let mut worker_handle = spawn_worker_with_options(
             options
                 .with_interception_context(context)
+                .with_diagnostic_source(crate::DiagnosticSource::DedicatedWorker {
+                    instance_id: renderer_instance_id,
+                })
                 .with_pause_evaluation_until_debugger(true),
         );
         self.browser_context_runtime()
@@ -593,12 +596,16 @@ impl PageScriptHost {
         if let Some(client_id) = reserved_service_worker_client_id {
             spawn_options = spawn_options.with_reserved_service_worker_client_id(client_id);
         }
-        let mut worker_handle = spawn_worker_with_options(spawn_options);
         let renderer_instance_id = self
             .workers
             .get(&worker_id)
             .map(|state| state.renderer_instance_id)
             .expect("loading DedicatedWorker must retain its renderer instance identity");
+        let mut worker_handle = spawn_worker_with_options(spawn_options.with_diagnostic_source(
+            crate::DiagnosticSource::DedicatedWorker {
+                instance_id: renderer_instance_id,
+            },
+        ));
         self.browser_context_runtime()
             .attach_dedicated_worker_control(
                 renderer_instance_id,
@@ -761,10 +768,17 @@ impl PageScriptHost {
         let Some(state) = self.workers.get(&worker_id) else {
             return false;
         };
+        let instance_id = state.renderer_instance_id;
+        self.browser_context_runtime.diagnostics().emit(|| {
+            Some(crate::DiagnosticEvent::script_load_failure(
+                crate::DiagnosticSource::DedicatedWorker { instance_id },
+                &script_url,
+                &error_message,
+            ))
+        });
         if !state.target_created {
             return true;
         }
-        let instance_id = state.renderer_instance_id;
         self.append_dedicated_worker_target_lifecycle(
             crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
                 instance_id,

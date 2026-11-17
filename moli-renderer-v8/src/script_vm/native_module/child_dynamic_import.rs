@@ -1082,6 +1082,12 @@ impl ScriptVm {
                         }
                     }
                 }
+                // A script element owns this internal evaluation promise. Its
+                // failure is reported through Window's ErrorEvent, rather than
+                // as an independently unhandled user promise.
+                if let Some(promise) = promise {
+                    promise.mark_as_handled();
+                }
                 if let Err(error) = Self::perform_microtask_checkpoints(&mut scope, None) {
                     return Ok(Err(ModuleLoadError::new(
                         ModuleLoadStage::Evaluate,

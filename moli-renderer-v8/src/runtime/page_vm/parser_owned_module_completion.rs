@@ -206,9 +206,10 @@ impl PageVm {
                 let (error, prepared_activity) = failure.into_parts();
                 let message = error.message().to_owned();
                 let failure_classification =
-                    PageOwnedScriptFailureClassification::from_module_load_error(
+                    PageOwnedScriptFailureClassification::from_module_error_with_entry(
                         &script_continuation.script,
                         &error,
+                        Some(graph.root_entry),
                     );
                 self.complete_module_script_failure_for_terminal_disposition(
                     script_continuation,
@@ -442,6 +443,7 @@ impl PageVm {
                             &message,
                             Some(evaluation.script_continuation.script.url.as_str()),
                             error_constructor,
+                            Some(evaluation.root_entry),
                         );
                         MainParserContinuationTaskEffect::applied(
                             owner,
@@ -450,6 +452,7 @@ impl PageVm {
                     } else {
                         self.vm_mut()
                             .report_module_tla_rejection_and_finish_reaction_best_effort(
+                                evaluation.root_entry,
                                 &message,
                                 Some(evaluation.script_continuation.script.url.as_str()),
                                 error_constructor,
@@ -501,6 +504,7 @@ impl PageVm {
                             crate::host::ModuleFailurePolicy::EvaluationFailure,
                         ),
                         error_constructor,
+                        failed_module: Some(evaluation.root_entry),
                     },
                     PreparedScriptBodyActivity::NotEntered,
                     terminal_disposition,

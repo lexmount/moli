@@ -1592,6 +1592,8 @@ impl DocumentRuntime {
                 }
             }
             Err(error_message) => {
+                unsafe { &*host_ptr }
+                    .emit_script_load_failure(start.script.url.as_str(), &error_message);
                 tracing::debug!(
                     host_script_handle = start.host_script_handle.as_str(),
                     url = %start.script.url,

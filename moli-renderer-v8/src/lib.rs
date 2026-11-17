@@ -50,6 +50,7 @@ mod detached_css_style;
 mod detached_dom_surface;
 mod detached_event_target;
 mod devtools;
+mod diagnostics;
 mod document_color_scheme;
 mod document_cookie_owner;
 mod document_language;
@@ -222,6 +223,7 @@ pub(crate) use context_bootstrap::{
     form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
     snapshot_form_data_value,
 };
+pub use diagnostics::{DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription};
 pub use document_cookie_owner::{
     DocumentCookieBackendConnectionState, DocumentCookieBrowserContextSnapshot,
     DocumentCookieGetFreshnessStatus, DocumentCookieOwnerSnapshot,

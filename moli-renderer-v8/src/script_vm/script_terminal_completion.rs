@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 
 use super::{ScriptTerminalBodyActivity, ScriptVm};
 use crate::host::ScriptEventTask;
+use crate::module_runtime::ModuleEntryId;
 use crate::page_task_queue::{PostParseLifecycleWork, WindowScriptFailureReportTask};
 use crate::planning::PreparedScript;
 
@@ -30,9 +31,10 @@ impl ScriptVm {
         message: &str,
         filename: Option<&str>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        failed_module: Option<ModuleEntryId>,
         boundary: &'static str,
     ) -> Result<()> {
-        self.report_window_error_body(message, filename, error_constructor)?;
+        self.report_window_error_body(message, filename, error_constructor, failed_module)?;
         self.perform_owner_lane_task_microtask_checkpoints()
             .with_context(|| format!("{boundary} checkpoint failed"))
     }
@@ -43,9 +45,10 @@ impl ScriptVm {
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        failed_module: Option<ModuleEntryId>,
         boundary: &'static str,
     ) {
-        let planned_failure_work = self.document_runtime.plan_script_failure_lifecycle_work(
+        let planned_failure_work = self.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
@@ -61,6 +64,7 @@ impl ScriptVm {
                         &task.message,
                         task.filename.as_deref(),
                         task.error_constructor,
+                        failed_module,
                         boundary,
                     ),
                 _ => continue,
@@ -85,6 +89,7 @@ impl ScriptVm {
             message,
             filename,
             None,
+            None,
             "parser import-map failure reporting",
         ) {
             self.record_runtime_warning(format_args!(
@@ -102,12 +107,14 @@ impl ScriptVm {
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        failed_module: Option<ModuleEntryId>,
     ) {
         self.dispatch_planned_script_failure_and_finish_each_synchronous_checkpoint(
             script,
             message,
             module_failure_policy,
             error_constructor,
+            failed_module,
             "parser-owned module failure settlement",
         );
     }
@@ -127,6 +134,7 @@ impl ScriptVm {
             message,
             module_failure_policy,
             error_constructor,
+            None,
             "unclaimed runtime-script terminal",
         );
     }
@@ -135,6 +143,7 @@ impl ScriptVm {
     /// checkpoint. Selected parser continuations use the body-only branch.
     pub(crate) fn report_module_tla_rejection_and_finish_reaction_best_effort(
         &mut self,
+        root_entry: ModuleEntryId,
         message: &str,
         filename: Option<&str>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
@@ -143,6 +152,7 @@ impl ScriptVm {
             message,
             filename,
             error_constructor,
+            Some(root_entry),
             "module TLA rejection reaction",
         ) {
             self.record_runtime_warning(format_args!(
@@ -180,6 +190,7 @@ impl ScriptVm {
             &task.message,
             task.filename.as_deref(),
             task.error_constructor,
+            None,
             "runtime script failure terminal",
         ) {
             self.record_runtime_warning(format_args!(
@@ -196,8 +207,9 @@ impl ScriptVm {
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        failed_module: Option<ModuleEntryId>,
     ) -> ScriptTerminalBodyActivity {
-        let planned_failure_work = self.document_runtime.plan_script_failure_lifecycle_work(
+        let planned_failure_work = self.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
@@ -215,6 +227,7 @@ impl ScriptVm {
                         &task.message,
                         task.filename.as_deref(),
                         task.error_constructor,
+                        failed_module,
                     );
                     activity = ScriptTerminalBodyActivity::EventDispatchAttempted;
                 }
@@ -260,6 +273,7 @@ impl ScriptVm {
             message,
             filename,
             error_constructor,
+            None,
             "test-only Window error",
         ) {
             self.record_runtime_warning(format_args!(

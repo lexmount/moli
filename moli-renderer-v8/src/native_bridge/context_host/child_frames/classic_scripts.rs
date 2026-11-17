@@ -1928,7 +1928,7 @@ impl PageScriptHost {
         &mut self,
         failed: FrameDocumentClassicSourceFailureWork,
     ) -> FrameDocumentClassicSourceFailureReportApplication {
-        let (target, _failure, script_element_event) = failed.into_parts();
+        let (target, failure, script_element_event) = failed.into_parts();
         let child_handle = target.child_handle();
         let owner = target.task_owner().document_owner();
         let runner_owner_current = self.frame_parser_classic_scripts.has_runner(owner);
@@ -1967,6 +1967,7 @@ impl PageScriptHost {
                 FrameDocumentClassicSourceFailureReportSkipReason::StaleRealm,
             );
         }
+        self.emit_script_load_failure(failure.script_url().as_str(), failure.error());
         FrameDocumentClassicSourceFailureReportApplication::completed(
             FrameDocumentClassicScriptCompletionAction::new(
                 FrameDocumentClassicScriptCompletionTarget::new(

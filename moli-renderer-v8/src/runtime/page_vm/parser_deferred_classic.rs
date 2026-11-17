@@ -356,6 +356,10 @@ impl ParserClassicDocumentScriptExecutionHooks
             ));
         }
         owner.record_network_result(&failure.script, failure.source_network_result.as_ref());
+        owner
+            .page_vm
+            .vm()
+            .emit_script_load_failure(failure.script.url.as_str(), &failure.error);
         let _ = owner
             .page_vm
             .vm_mut()

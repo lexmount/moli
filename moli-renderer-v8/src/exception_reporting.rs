@@ -116,6 +116,77 @@ fn exception_stack_property<'s>(
     local_value_to_string(scope, stack).filter(|stack| !stack.is_empty())
 }
 
+/// Format V8-captured frames without reading the JavaScript stack property.
+pub(crate) fn captured_exception_stack<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    exception: v8::Local<'s, v8::Value>,
+) -> Option<String> {
+    if !exception.is_native_error() {
+        return None;
+    }
+    let stack = v8::Exception::get_stack_trace(scope, exception)?;
+    let frames = (0..stack.get_frame_count().min(32))
+        .filter_map(|index| stack.get_frame(scope, index))
+        .map(|frame| {
+            // Source locations come from Message. Some rejection paths do
+            // not expose a valid Script for their captured frames.
+            let name = frame
+                .get_function_name(scope)
+                .map(|name| name.to_rust_string_lossy(scope))
+                .unwrap_or_else(|| "<anonymous>".to_owned());
+            format!("at {}", bounded_log_field(&name, LOG_SOURCE_LINE_MAX_BYTES))
+        })
+        .collect::<Vec<_>>();
+    (!frames.is_empty()).then(|| frames.join("\n"))
+}
+
+pub(crate) fn exception_message_details<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> (String, String, u32, u32) {
+    let description = v8::Exception::create_message(scope, value);
+    let message = description.get(scope).to_rust_string_lossy(scope);
+    let filename = description
+        .get_script_resource_name(scope)
+        .filter(|value| value.is_string())
+        .map(|value| value.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let lineno = description
+        .get_line_number(scope)
+        .and_then(|line| u32::try_from(line).ok())
+        .unwrap_or(0);
+    let colno = description
+        .get_start_column()
+        .checked_add(1)
+        .and_then(|column| u32::try_from(column).ok())
+        .unwrap_or(0);
+    (message, filename, lineno, colno)
+}
+
+pub(crate) fn diagnostic_from_exception<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: crate::DiagnosticSource,
+    value: Option<v8::Local<'s, v8::Value>>,
+    handled: bool,
+) -> crate::DiagnosticEvent {
+    let value = value.unwrap_or_else(|| v8::undefined(scope).into());
+    let (message, filename, lineno, colno) = exception_message_details(scope, value);
+    let stack = if handled {
+        None
+    } else {
+        captured_exception_stack(scope, value)
+    };
+    crate::DiagnosticEvent::runtime_exception(
+        source,
+        &message,
+        &filename,
+        lineno,
+        colno,
+        stack.as_deref(),
+        handled,
+    )
+}
+
 /// Module creation must not eagerly read Error.stack or call an author's
 /// Error.prepareStackTrace hook while retaining a parse exception.
 pub(super) fn build_exception_report_without_stack<'s>(
