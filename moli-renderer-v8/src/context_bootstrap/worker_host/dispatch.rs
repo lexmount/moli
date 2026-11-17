@@ -42,9 +42,6 @@ pub(crate) fn dispatch_worker_event<'s>(
         WorkerToParentMessage::PendingSubresourceFetch(_)
         | WorkerToParentMessage::SubresourceContinue(_) => false,
         WorkerToParentMessage::SubresourceNetwork(_)
-        | WorkerToParentMessage::WebSocketSubresource(_)
-        | WorkerToParentMessage::WebSocketLifecycle(_)
-        | WorkerToParentMessage::WebSocketFrame(_)
         | WorkerToParentMessage::Console(_)
         | WorkerToParentMessage::RuntimeInspectorMessages(_)
         | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)

@@ -1,7 +1,36 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn worker_websocket_runtime_activity_emits_cdp_websocket_events_without_payload() {
+async fn dedicated_worker_websocket_network_events_belong_to_worker_target() {
+    assert_worker_websocket_network_events(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_worker_websocket_network_events_belong_to_worker_target() {
+    assert_worker_websocket_network_events(true).await;
+}
+
+async fn assert_worker_websocket_network_events(shared: bool) {
+    const SCRIPT: &str = r#"
+        function openSocket({ url, nested }) {
+            if (nested) {
+                const child = new Worker(location.href);
+                child.postMessage({ url });
+                return;
+            }
+            const socket = new WebSocket(url);
+            socket.onopen = () => socket.send("worker-cdp");
+            socket.onmessage = event => {
+                if (event.data === "worker-cdp") socket.close(1000, "done");
+            };
+        }
+        onmessage = event => openSocket(event.data);
+        onconnect = event => {
+            const port = event.ports[0];
+            port.onmessage = event => openSocket(event.data);
+            port.start();
+        };
+    "#;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -9,6 +38,10 @@ async fn worker_websocket_runtime_activity_emits_cdp_websocket_events_without_pa
             listener,
             Router::new()
                 .route("/page", get(plain_page))
+                .route(
+                    "/worker.js",
+                    get(|| async { ([(CONTENT_TYPE, "text/javascript")], SCRIPT) }),
+                )
                 .route("/socket", get(websocket_echo_handler)),
         )
         .await
@@ -17,98 +50,128 @@ async fn worker_websocket_runtime_activity_emits_cdp_websocket_events_without_pa
 
     let page_url = format!("http://{addr}/page");
     let socket_url = format!("ws://{addr}/socket");
-    let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id("TID-1".to_owned());
-    bc.attach_active_session("SID-1".to_owned());
-    ctx.with_fixture(|conn| conn.insert_browser_context(bc));
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
-    ctx.with_fixture(|conn| {
-        conn.runtime_session_owner_slot_mut(Some("SID-1"))
-            .expect("worker websocket fixture target")
-            .enable_primary_network_events()
-    });
+    ctx.observe_worker_network_for_test(None).await;
+    ctx.process_async(json!({
+        "id": 7_010,
+        "method": "Network.enable",
+        "sessionId": "SID-1",
+    }))
+    .await;
+    ctx.expect_result(7_010, json!({}), Some("SID-1"));
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    let (worker, script, port, origin, target_type) = if shared {
+        (
+            "SharedWorker",
+            json!("/worker.js").to_string(),
+            "worker.port",
+            format!("http://{addr}"),
+            "shared_worker",
+        )
+    } else {
+        (
+            "Worker",
+            format!(
+                "'data:text/javascript,' + encodeURIComponent({})",
+                json!(SCRIPT)
+            ),
+            "worker",
+            "null".to_owned(),
+            "worker",
+        )
+    };
+    ctx.process_and_wait_for_response_async(json!({
         "id": 7_011,
         "method": "Runtime.evaluate",
         "sessionId": "SID-1",
         "params": {
             "expression": format!(r#"(() => {{
-                globalThis.__lm_worker_ws_done = false;
-                const source = `
-                    const socket = new WebSocket({socket_literal});
-                    socket.addEventListener('open', () => socket.send('worker-cdp'));
-                    socket.addEventListener('message', () => {{
-                        socket.close(1000, 'done');
-                    }});
-                    socket.addEventListener('close', () => postMessage('done'));
-                `;
-                const worker = new Worker("data:text/javascript," + encodeURIComponent(source));
-                worker.onmessage = () => {{
-                    globalThis.__lm_worker_ws_done = true;
-                }};
-                return 'scheduled';
+                globalThis.socketWorker = new {worker}({script});
+                const worker = socketWorker;
+                const port = {port};
+                port.postMessage({{url: {socket_url:?}}});
+                if (!{shared}) port.postMessage({{url: {socket_url:?} + "?nested", nested: true}});
             }})()"#)
-        }
+        },
     }))
     .await;
-    let _ = ctx.take_response_by_id(7_011);
+    let response = ctx.take_response_by_id(7_011);
+    assert!(
+        response
+            .get("result")
+            .is_some_and(|result| { result.get("exceptionDetails").is_none() }),
+        "{response}"
+    );
+    let worker_session = worker_target_session(&mut ctx, target_type).await;
 
-    wait_until_messages(
-        &mut ctx,
-        "SID-1",
-        "worker websocket CDP frame events",
-        |messages| {
-            messages.iter().any(|message| {
-                message["method"] == json!("Network.webSocketFrameReceived")
-                    && message["params"]["response"]["payloadLength"] == json!(10)
-            })
-        },
-    )
-    .await;
+    let mut request_ids = std::collections::HashSet::new();
+    let mut urls = vec![socket_url.clone()];
+    // A nested worker uses the same Network target as its owning worker.
+    if !shared {
+        urls.push(format!("{socket_url}?nested"));
+    }
+    for url in urls {
+        let is_created = |message: &serde_json::Value| {
+            message["method"] == "Network.webSocketCreated" && message["params"]["url"] == url
+        };
+        wait_until_scheduler_message(&mut ctx, "Worker WebSocket created", is_created).await;
+        let created = ctx.sent.iter().find(|message| is_created(message)).unwrap();
+        assert_eq!(created["sessionId"], worker_session);
+        let request_id = created["params"]["requestId"].as_str().unwrap().to_owned();
+        assert!(
+            request_ids.insert(request_id.clone()),
+            "socket request IDs must be distinct"
+        );
 
-    let created = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.webSocketCreated"))
-        .expect("worker webSocketCreated event");
-    assert_eq!(created["params"]["url"], socket_url);
-    let request_id = created["params"]["requestId"]
-        .as_str()
-        .expect("worker websocket request id")
-        .to_owned();
-
-    assert!(ctx.sent.iter().any(|message| {
-        message["method"] == json!("Network.webSocketWillSendHandshakeRequest")
-            && message["params"]["requestId"] == json!(request_id)
-            && message["params"]["request"]["headers"]["origin"] == json!("null")
-    }));
-    assert!(ctx.sent.iter().any(|message| {
-        message["method"] == json!("Network.webSocketHandshakeResponseReceived")
-            && message["params"]["requestId"] == json!(request_id)
-            && message["params"]["response"]["status"] == json!(101)
-    }));
-    assert!(ctx.sent.iter().any(|message| {
-        message["method"] == json!("Network.webSocketFrameSent")
-            && message["params"]["requestId"] == json!(request_id)
-            && message["params"]["response"]["opcode"] == json!(1)
-            && message["params"]["response"]["payloadData"] == json!("")
-            && message["params"]["response"]["payloadLength"] == json!(10)
-    }));
-    assert!(ctx.sent.iter().any(|message| {
-        message["method"] == json!("Network.webSocketFrameReceived")
-            && message["params"]["requestId"] == json!(request_id)
-            && message["params"]["response"]["opcode"] == json!(1)
-            && message["params"]["response"]["payloadData"] == json!("")
-            && message["params"]["response"]["payloadLength"] == json!(10)
+        wait_until_scheduler_message(&mut ctx, "Worker WebSocket closed", |message| {
+            message["method"] == "Network.webSocketClosed"
+                && message["params"]["requestId"] == request_id
+        })
+        .await;
+        let events = ctx
+            .sent
+            .iter()
+            .filter(|message| message["params"]["requestId"] == request_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events
+                .iter()
+                .map(|m| m["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "Network.webSocketCreated",
+                "Network.webSocketWillSendHandshakeRequest",
+                "Network.webSocketHandshakeResponseReceived",
+                "Network.webSocketFrameSent",
+                "Network.webSocketFrameReceived",
+                "Network.webSocketClosed",
+            ]
+        );
+        assert_eq!(events[1]["params"]["request"]["headers"]["origin"], origin);
+        assert_eq!(events[2]["params"]["response"]["status"], 101);
+        for frame in &events[3..5] {
+            assert_eq!(frame["params"]["response"]["opcode"], 1);
+            assert_eq!(frame["params"]["response"]["payloadData"], "");
+            assert_eq!(frame["params"]["response"]["payloadLength"], 10);
+        }
+    }
+    assert!(ctx.sent.iter().all(|message| {
+        !message["method"]
+            .as_str()
+            .is_some_and(|method| method.starts_with("Network.webSocket"))
+            || message["sessionId"] == worker_session
     }));
 
     server.abort();
 }
+
 #[tokio::test(flavor = "multi_thread")]
 async fn page_fetch_applies_extra_http_headers() {
     async fn page() -> impl IntoResponse {

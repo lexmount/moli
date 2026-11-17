@@ -413,227 +413,85 @@ async fn busy_worker_terminate_interrupts_execution_and_drops_queued_messages() 
 }
 
 #[tokio::test]
-async fn worker_websocket_open_and_frames_record_page_network_trace_entries() {
-    run_page_vm_async_test(async move {
-            let (url, server) = spawn_text_echo_websocket_server().await;
-            let url_literal = serde_json::to_string(&url).expect("serialize websocket url");
-            let mut page_vm = test_page_vm();
-            let local_executor = page_vm.local_executor.clone();
-            let drain_url = url.clone();
-
-            let network_output = local_executor
-                .run(async move {
-                    page_vm.vm_mut().eval(&format!(
-                        r#"
-                    (() => {{
-                        globalThis.__workerWsDone = false;
-                        const source = `
-                            const socket = new WebSocket({url_literal});
-                            socket.addEventListener('open', () => {{
-                                socket.send('worker-trace-frame');
-                            }});
-                            socket.addEventListener('message', () => {{
-                                socket.close(1000, 'worker-trace');
-                            }});
-                            socket.addEventListener('close', () => {{
-                                postMessage('done');
-                            }});
-                        `;
-                        const worker = new Worker("data:text/javascript," + encodeURIComponent(source));
-                        worker.onmessage = () => {{
-                            globalThis.__workerWsDone = true;
-                        }};
-                    }})()
-                    "#
-                    ))?;
-
-                    drive_websocket_until_done(
-                        &mut page_vm,
-                        "String(globalThis.__workerWsDone === true)",
-                        "worker websocket trace event should arrive",
-                    )
-                    .await?;
-                    drain_until_websocket_trace_output(&mut page_vm, &drain_url).await
-            })
-                .await
-                .expect("worker websocket trace test should run on owner lane");
-            server.await.expect("worker websocket trace server should finish");
-            let (records, frame_events, lifecycle_events) = split_network_output_items(network_output);
-
-            assert_eq!(records.len(), 1);
-            let record = &records[0];
-            assert_eq!(record.resource_type(), SubresourceResourceType::WebSocket);
-            assert_eq!(record.method(), "GET");
-            assert_eq!(record.url().as_str(), url);
-            let socket_id = record
-                .websocket_socket_id()
-                .expect("worker websocket record should carry socket id");
-            assert_ne!(socket_id & (1_u64 << 63), 0);
-            match record.outcome() {
-                SubresourceNetworkOutcome::Success {
-                    status,
-                    response_headers,
-                    response_body,
-                    ..
-                } => {
-                    assert_eq!(*status, 101);
-                    assert!(response_body.is_empty());
-                    assert!(
-                        response_headers
-                            .iter()
-                            .any(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-accept"))
-                    );
-                }
-                outcome => panic!("expected worker websocket success record, got {outcome:?}"),
-            }
-
-            assert_eq!(frame_events.len(), 2);
-            assert!(frame_events.iter().all(|event| event.socket_id() == socket_id));
-            assert_eq!(
-                frame_events[0].direction(),
-                crate::types::WebSocketFrameDirection::Sent
-            );
-            assert_eq!(
-                frame_events[0].opcode(),
-                crate::types::WebSocketFrameOpcode::Text
-            );
-            assert_eq!(frame_events[0].payload_length(), "worker-trace-frame".len());
-            assert_eq!(
-                frame_events[1].direction(),
-                crate::types::WebSocketFrameDirection::Received
-            );
-            assert_eq!(
-                frame_events[1].opcode(),
-                crate::types::WebSocketFrameOpcode::Text
-            );
-            assert_eq!(frame_events[1].payload_length(), "worker-trace-frame".len());
-
-            assert_eq!(lifecycle_events.len(), 3);
-            assert!(
-                lifecycle_events
-                    .iter()
-                    .all(|event| event.socket_id() == socket_id)
-            );
-            assert_eq!(
-                lifecycle_events[0].kind(),
-                crate::types::WebSocketLifecycleKind::Open
-            );
-            assert_eq!(
-                lifecycle_events[1].kind(),
-                crate::types::WebSocketLifecycleKind::Closing
-            );
-            assert_eq!(
-                lifecycle_events[2].kind(),
-                crate::types::WebSocketLifecycleKind::Close
-            );
-            assert_eq!(lifecycle_events[2].close_code(), Some(1000));
-            assert_eq!(lifecycle_events[2].close_reason(), Some("worker-trace"));
-            assert_eq!(lifecycle_events[2].was_clean(), Some(true));
-        })
-        .await;
+async fn dedicated_worker_websocket_stays_off_page_network_output() {
+    assert_worker_websocket_stays_off_page_network_output(false).await;
 }
 
 #[tokio::test]
-async fn shared_worker_websocket_records_page_network_trace_entries() {
+async fn shared_worker_websocket_stays_off_page_network_output() {
+    assert_worker_websocket_stays_off_page_network_output(true).await;
+}
+
+async fn assert_worker_websocket_stays_off_page_network_output(shared: bool) {
     run_page_vm_async_test(async move {
         let (url, server) = spawn_text_echo_websocket_server().await;
-        let url_literal = serde_json::to_string(&url).expect("serialize websocket url");
+        let url_literal = serde_json::to_string(&url).expect("serialize WebSocket URL");
         let mut page_vm = test_page_vm();
         let local_executor = page_vm.local_executor.clone();
-        let drain_url = url.clone();
 
-        let network_output = local_executor
+        local_executor
             .run(async move {
+                let constructor = if shared { "SharedWorker" } else { "Worker" };
+                let port = if shared { "worker.port" } else { "worker" };
                 page_vm.vm_mut().eval(&format!(
                     r#"
                     (() => {{
-                        globalThis.__sharedWorkerWsDone = false;
-                        globalThis.__sharedWorkerWsResult = null;
+                        globalThis.workerSocketResult = null;
                         const source = `
-                            onconnect = (event) => {{
-                                const port = event.ports[0];
+                            function roundTrip(reply) {{
                                 const socket = new WebSocket({url_literal});
-                                socket.addEventListener("open", () => {{
-                                    socket.send("shared-worker-trace-frame");
+                                let echo;
+                                socket.onopen = () => socket.send("worker-frame");
+                                socket.onmessage = (event) => {{
+                                    echo = event.data;
+                                    socket.close(1000, "done");
+                                }};
+                                socket.onclose = (event) => reply({{
+                                    echo, code: event.code, reason: event.reason, wasClean: event.wasClean
                                 }});
-                                socket.addEventListener("message", () => {{
-                                    socket.close(1000, "shared-worker-trace");
-                                }});
-                                socket.addEventListener("close", () => {{
-                                    port.postMessage("done");
-                                }});
-                                socket.addEventListener("error", (error) => {{
-                                    port.postMessage("error:" + error.message);
-                                }});
-                            }};
+                                socket.onerror = () => reply("socket error");
+                            }}
+                            if ({shared}) {{
+                                onconnect = (event) => roundTrip((data) => event.ports[0].postMessage(data));
+                            }} else {{
+                                roundTrip((data) => postMessage(data));
+                            }}
                         `;
-                        const worker = new SharedWorker(
-                            "data:text/javascript," + encodeURIComponent(source),
-                            "shared-worker-websocket-resource-bridge",
-                        );
-                        worker.port.onmessage = (event) => {{
-                            globalThis.__sharedWorkerWsResult = event.data;
-                            globalThis.__sharedWorkerWsDone = true;
-                        }};
-                        worker.port.start();
+                        const worker = new {constructor}("data:text/javascript," + encodeURIComponent(source));
+                        const port = {port};
+                        port.onmessage = (event) => {{ globalThis.workerSocketResult = event.data; }};
+                        if ({shared}) port.start();
                     }})()
                     "#
                 ))?;
 
-                drive_shared_worker_until_done(
-                    &mut page_vm,
-                    "String(globalThis.__sharedWorkerWsDone === true)",
-                    "shared worker websocket trace event should arrive",
-                )
-                .await?;
+                let done = "String(globalThis.workerSocketResult !== null)";
+                let context = "Worker WebSocket round trip should complete";
+                if shared {
+                    drive_shared_worker_until_done(&mut page_vm, done, context).await?;
+                } else {
+                    drive_websocket_until_done(&mut page_vm, done, context).await?;
+                }
                 assert_eq!(
-                    page_vm.vm_mut().eval("globalThis.__sharedWorkerWsResult")?,
-                    "done"
+                    page_vm.vm_mut().eval("JSON.stringify(workerSocketResult)")?,
+                    r#"{"echo":"worker-frame","code":1000,"reason":"done","wasClean":true}"#
                 );
-                drain_until_websocket_trace_output(&mut page_vm, &drain_url).await
+
+                let loader = page_vm.main_document_resource_loader();
+                while page_vm
+                    .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+                    .await?
+                {}
+                let (records, frames, lifecycle) =
+                    split_network_output_items(page_vm.vm_mut().take_network_output());
+                assert!(records.iter().all(|record| record.resource_type() != SubresourceResourceType::WebSocket));
+                assert!(frames.is_empty());
+                assert!(lifecycle.is_empty());
+                anyhow::Ok(())
             })
             .await
-            .expect("shared worker websocket trace test should run on owner lane");
-
-        server
-            .await
-            .expect("shared worker websocket trace server should finish");
-
-        let (records, frame_events, lifecycle_events) = split_network_output_items(network_output);
-        let record = records
-            .iter()
-            .find(|record| record.url().as_str() == url)
-            .unwrap_or_else(|| {
-                panic!(
-                    "shared worker websocket should emit a page network record; records={records:?}"
-                )
-            });
-        assert_eq!(record.resource_type(), SubresourceResourceType::WebSocket);
-        assert_eq!(record.method(), "GET");
-        let socket_id = record
-            .websocket_socket_id()
-            .expect("shared worker websocket record should carry socket id");
-        assert_eq!(socket_id >> 62, 0b11);
-        let SubresourceNetworkOutcome::Success { status, .. } = record.outcome() else {
-            panic!(
-                "expected shared worker websocket network success, got {:?}",
-                record.outcome()
-            );
-        };
-        assert_eq!(*status, 101);
-
-        assert_eq!(frame_events.len(), 2);
-        assert!(
-            frame_events
-                .iter()
-                .all(|event| event.socket_id() == socket_id)
-        );
-        assert_eq!(lifecycle_events.len(), 3);
-        assert!(
-            lifecycle_events
-                .iter()
-                .all(|event| event.socket_id() == socket_id)
-        );
+            .expect("Worker WebSocket test should run on owner lane");
+        server.await.expect("Worker WebSocket server should finish");
     })
     .await;
 }

@@ -41,10 +41,7 @@ use url::Url;
 
 use super::{
     decode_data_url_script_source,
-    handle::{
-        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerToParentMessage,
-        WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
-    },
+    handle::{WorkerConsoleMessage, WorkerFetchHandlerType, WorkerToParentMessage},
 };
 use crate::context_bootstrap::WebCryptoTaskResult;
 use crate::context_bootstrap::{
@@ -194,9 +191,7 @@ pub(crate) use network_state::{
     WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse, WorkerFetchStreamingChunk,
     WorkerFetchStreamingFinished, WorkerFetchStreamingStarted,
 };
-use network_state::{
-    merge_worker_request_headers, next_fetch_id, next_websocket_id, next_xhr_id, worker_url_blocked,
-};
+use network_state::{merge_worker_request_headers, next_fetch_id, next_xhr_id, worker_url_blocked};
 pub(crate) use origin::worker_global_origin;
 use origin::{WorkerGlobalOriginDeclaration, WorkerGlobalOriginPrototypeDeclaration};
 use performance::monotonic_unix_epoch_millis;

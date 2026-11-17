@@ -261,10 +261,7 @@ async fn service_worker_fetch_handler_throw_without_respond_with_still_falls_bac
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_) => {}
+            | WorkerToParentMessage::SubresourceContinue(_) => {}
             other => panic!("unexpected message while waiting for fetch completion: {other:?}"),
         }
     };
@@ -440,9 +437,6 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -1205,10 +1199,7 @@ async fn service_worker_fetch_event_request_signal_aborts_with_parent_reason() {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_) => {}
+            | WorkerToParentMessage::SubresourceContinue(_) => {}
             other => {
                 panic!("unexpected message while waiting for fetch abort signal: {other:?}");
             }
@@ -1423,10 +1414,7 @@ async fn service_worker_fetch_respond_with_keeps_response_when_handler_throws_af
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
-            | WorkerToParentMessage::WebSocketLifecycle(_)
-            | WorkerToParentMessage::WebSocketFrame(_) => {}
+            | WorkerToParentMessage::SubresourceContinue(_) => {}
             other => panic!("unexpected message while waiting for fetch completion: {other:?}"),
         }
     };

@@ -159,8 +159,6 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) websocket_event_tx: tokio::sync::mpsc::Sender<WebSocketEvent>,
     /// Worker-owned classic WebSocket connections keyed by socket id.
     pub(in crate::worker) websockets: HashMap<u64, WorkerWebSocketState>,
-    /// Worker-local WebSocket id counter.
-    pub(in crate::worker) next_websocket_id: u64,
     /// Worker-local dedicated workers created through `new Worker(...)`.
     pub(in crate::worker) next_nested_worker_id: u64,
     pub(in crate::worker) nested_worker_wrappers:

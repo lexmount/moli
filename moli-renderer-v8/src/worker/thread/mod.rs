@@ -1747,7 +1747,6 @@ async fn worker_main(
         storage_bucket_store: worker_storage_bucket_store,
         websocket_event_tx,
         websockets: std::collections::HashMap::new(),
-        next_websocket_id: 0,
         next_nested_worker_id: 1,
         nested_worker_wrappers: std::collections::HashMap::new(),
         webcrypto_completion_tx,

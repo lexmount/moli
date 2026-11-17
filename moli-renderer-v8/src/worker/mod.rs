@@ -63,7 +63,6 @@ pub(crate) use handle::{
     WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
     WorkerParentErrorEventKind, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
     WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
-    WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
 };
 pub(crate) use handle::{
     WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy, WorkerSecureContextPolicy,

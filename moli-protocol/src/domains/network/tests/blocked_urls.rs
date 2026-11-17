@@ -9,23 +9,22 @@ async fn enable_network_domain(ctx: &mut TestContext, id: u64, session_id: Optio
     ctx.expect_result(id, json!({}), session_id);
 }
 
-async fn assert_blocked_websocket_events(ctx: &mut TestContext, url: &str) -> serde_json::Value {
-    wait_until_messages(
-        ctx,
-        Some("SID-1"),
-        "blocked WebSocket terminal",
-        |messages| {
-            let Some(created) = messages.iter().find(|message| {
-                message["method"] == "Network.webSocketCreated" && message["params"]["url"] == url
-            }) else {
-                return false;
-            };
-            messages.iter().any(|message| {
-                message["method"] == "Network.webSocketClosed"
-                    && message["params"]["requestId"] == created["params"]["requestId"]
-            })
-        },
-    )
+async fn assert_blocked_websocket_events(
+    ctx: &mut TestContext,
+    url: &str,
+    session_id: &str,
+) -> serde_json::Value {
+    wait_until_messages(ctx, session_id, "blocked WebSocket terminal", |messages| {
+        let Some(created) = messages.iter().find(|message| {
+            message["method"] == "Network.webSocketCreated" && message["params"]["url"] == url
+        }) else {
+            return false;
+        };
+        messages.iter().any(|message| {
+            message["method"] == "Network.webSocketClosed"
+                && message["params"]["requestId"] == created["params"]["requestId"]
+        })
+    })
     .await;
     let created = ctx
         .sent
@@ -53,7 +52,11 @@ async fn assert_blocked_websocket_events(ctx: &mut TestContext, url: &str) -> se
             "Network.webSocketClosed"
         ]
     );
-    assert!(events.iter().all(|message| message["sessionId"] == "SID-1"));
+    assert!(
+        events
+            .iter()
+            .all(|message| message["sessionId"] == session_id)
+    );
     assert_eq!(
         events[2]["params"]["errorMessage"],
         "net::ERR_BLOCKED_BY_CLIENT"
@@ -780,7 +783,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     assert_eq!(result["result"]["result"]["value"], "failed:0");
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn set_blocked_urls_worker_websocket_emits_dedicated_failure_events() {
+async fn set_blocked_urls_worker_websocket_emits_failure_on_worker_target() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
@@ -868,8 +871,13 @@ async fn set_blocked_urls_worker_websocket_emits_dedicated_failure_events() {
         .find(|message| message["id"] == json!(2826))
         .cloned()
         .expect("runtime evaluate result");
-    let request =
-        assert_blocked_websocket_events(&mut ctx, "ws://example.test/blocked/worker-ws").await;
+    let worker_session = worker_target_session(&mut ctx, "worker").await;
+    let request = assert_blocked_websocket_events(
+        &mut ctx,
+        "ws://example.test/blocked/worker-ws",
+        &worker_session,
+    )
+    .await;
     assert_eq!(request["headers"]["x-cdp-test"], "works-worker-ws");
 
     ctx.process_and_wait_for_response_async(json!({
@@ -1292,7 +1300,7 @@ async fn set_blocked_urls_runtime_websocket_emits_dedicated_failure_events() {
         .find(|message| message["id"] == json!(2819))
         .cloned()
         .expect("runtime evaluate result");
-    assert_blocked_websocket_events(&mut ctx, "ws://example.test/blocked/socket").await;
+    assert_blocked_websocket_events(&mut ctx, "ws://example.test/blocked/socket", "SID-1").await;
 
     ctx.process_async(json!({
         "id": 2820,

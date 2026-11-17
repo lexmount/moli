@@ -167,4 +167,27 @@ impl ScriptVm {
             })
         })
     }
+
+    pub(crate) fn receive_synthetic_websocket_text(&self, socket_id: u64, data: String) -> bool {
+        self._context_host
+            .borrow()
+            .receive_synthetic_websocket_text(socket_id, data)
+    }
+
+    pub(crate) fn receive_synthetic_websocket_binary(&self, socket_id: u64, data: Vec<u8>) -> bool {
+        self._context_host
+            .borrow()
+            .receive_synthetic_websocket_binary(socket_id, data)
+    }
+
+    pub(crate) fn close_synthetic_websocket_from_server(
+        &self,
+        socket_id: u64,
+        code: Option<u16>,
+        reason: String,
+    ) -> bool {
+        self._context_host
+            .borrow()
+            .close_synthetic_websocket_from_server(socket_id, code, reason)
+    }
 }

@@ -1,13 +1,25 @@
 use super::WorkerToParentMessage;
 use crate::{
     network::{ResourceInterceptionEvent, interception_output::ResourceInterceptionContext},
-    types::{ScriptExecutionReport, ScriptNetworkOutput},
+    types::{
+        ScriptExecutionReport, ScriptNetworkOutput, ScriptNetworkOutputItem,
+        SubresourceNetworkRecord, SubresourceResourceType,
+    },
 };
 
 pub(crate) fn record_output(
     report: &mut ScriptExecutionReport,
-    item: crate::types::ScriptNetworkOutputItem,
-) -> Vec<crate::types::SubresourceNetworkRecord> {
+    item: ScriptNetworkOutputItem,
+) -> Vec<SubresourceNetworkRecord> {
+    // This adapter only forwards request records. There is no consumer for
+    // WebSocket frames or lifecycle events in its diagnostic report.
+    if matches!(
+        item,
+        ScriptNetworkOutputItem::WebSocketNetworkEvent(_)
+            | ScriptNetworkOutputItem::WebSocketLifecycleEvent(_)
+    ) {
+        return Vec::new();
+    }
     let mut output = ScriptNetworkOutput::default();
     output.push_item(item);
     report.extend_network_output(output);
@@ -23,7 +35,9 @@ pub(crate) fn unobserved(
         match event {
             E::Network(item) => {
                 for record in record_output(&mut report.lock(), *item) {
-                    let _ = parent.send(WorkerToParentMessage::SubresourceNetwork(record));
+                    if record.resource_type() != SubresourceResourceType::WebSocket {
+                        let _ = parent.send(WorkerToParentMessage::SubresourceNetwork(record));
+                    }
                 }
             }
             E::Request { info, pause } => {

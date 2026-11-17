@@ -880,10 +880,7 @@ fn spawn_parent_message_pump(
                     | WorkerToParentMessage::SubresourceContinue(_) => {}
                     WorkerToParentMessage::Post(_)
                     | WorkerToParentMessage::SharedWorkerClosed
-                    | WorkerToParentMessage::SubresourceNetwork(_)
-                    | WorkerToParentMessage::WebSocketSubresource(_)
-                    | WorkerToParentMessage::WebSocketLifecycle(_)
-                    | WorkerToParentMessage::WebSocketFrame(_) => {}
+                    | WorkerToParentMessage::SubresourceNetwork(_) => {}
                 }
             }
         });

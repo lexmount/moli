@@ -17,7 +17,7 @@ use axum::{
 
 use crate::testing::{
     TestContext, spawn_connection_drop_server, wait_until_messages,
-    wait_until_renderer_document_load,
+    wait_until_renderer_document_load, wait_until_scheduler_message,
 };
 use crate::{
     conn::{
@@ -39,6 +39,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::{Duration, sleep};
 use url::Url;
+
+async fn worker_target_session(ctx: &mut TestContext, target_type: &str) -> String {
+    let is_worker = |message: &serde_json::Value| {
+        message["method"] == "Target.attachedToTarget"
+            && message["params"]["targetInfo"]["type"] == target_type
+    };
+    wait_until_scheduler_message(ctx, "Worker target attachment", is_worker).await;
+    ctx.sent
+        .iter()
+        .find(|message| is_worker(message))
+        .and_then(|message| message["params"]["sessionId"].as_str())
+        .expect("Worker attachment has a session")
+        .to_owned()
+}
 
 fn consume_main_document_navigation_start(ctx: &mut TestContext) {
     assert_eq!(ctx.take_one()["method"], "Page.frameStartedNavigating");
