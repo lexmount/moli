@@ -503,6 +503,47 @@ pub fn keyframe_selector_texts_match_with_stylo(
     style::moli_rule_tree::keyframe_selector_texts_match(existing_selector_text, selector_text)
 }
 
+/// One native container condition exposed as a CSSOM dictionary snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CssContainerConditionView {
+    pub name: String,
+    pub query: String,
+}
+
+pub fn container_conditions_from_native(
+    conditions: &style::stylesheets::container_rule::ContainerConditions,
+) -> Vec<CssContainerConditionView> {
+    conditions
+        .0
+        .iter()
+        .map(|condition| CssContainerConditionView {
+            name: if condition.name().is_none() {
+                String::new()
+            } else {
+                style_traits::ToCss::to_css_string(condition.name())
+            },
+            query: condition
+                .query_condition()
+                .map(style_traits::ToCss::to_css_string)
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Detached CSSOM wrappers retain text snapshots, rather than a live rule lease.
+/// Parse those snapshots with the same native grammar as attached rules.
+pub fn parse_container_conditions_with_stylo(
+    css_text: &str,
+) -> Option<Vec<CssContainerConditionView>> {
+    let tree = style::moli_rule_tree::parse_stylesheet_rule_tree(css_text);
+    let guard = tree.shared_lock.read();
+    let rules = tree.contents.read_with(&guard).rules.read_with(&guard);
+    let [style::stylesheets::CssRule::Container(rule)] = rules.0.as_slice() else {
+        return None;
+    };
+    Some(container_conditions_from_native(&rule.conditions))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

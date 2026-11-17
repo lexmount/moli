@@ -127,6 +127,11 @@ pub use util::style_sheet_text_end_position;
 
 pub use util::functional_pseudo_name;
 
+pub use stylo_stylesheet::{
+    CssContainerConditionView, container_conditions_from_native,
+    parse_container_conditions_with_stylo,
+};
+
 #[cfg(test)]
 mod property_surface_tests {
     use super::{
