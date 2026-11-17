@@ -12,8 +12,7 @@ pub(super) fn start<'s>(
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     let cancel = FetchCancelHandle::new();
-    let loader = state.borrow().loader.clone();
-    let Some(load) = loader.register_load(
+    let load = state.borrow().loader.register_load(
         ResourceLoadKind::Fetch,
         if metadata.keepalive {
             ResourceLoadDisposition::Keepalive
@@ -21,7 +20,8 @@ pub(super) fn start<'s>(
             ResourceLoadDisposition::Ordinary
         },
         Some(cancel.clone()),
-    ) else {
+    );
+    let Some(load) = load else {
         return Some(make_rejected_promise(
             scope,
             "fetch: worker global is shutting down",
@@ -37,7 +37,7 @@ pub(super) fn start<'s>(
         request_body: request_body_text(&request.body),
 
         frame_id: None,
-        document_url: document_url.clone(),
+        document_url,
         url: request.url.clone(),
         websocket_socket_id: None,
         method: request.method.clone(),
@@ -64,22 +64,10 @@ pub(super) fn start<'s>(
                 streaming_body_source_id: None,
             },
         );
-        let control = crate::network_host::controlled_xhr::ControlledXhrContext {
-            interception: state
-                .interception_context
-                .clone()
-                .expect("native Worker fetch has an output owner"),
-            connect_policy:
-                crate::document_runtime::DocumentConnectPolicySnapshot::from_worker_policies(
-                    state.content_security_policies.clone(),
-                    state.content_security_report_only_policies.clone(),
-                    state.content_security_reporting_endpoints.clone(),
-                ),
-        };
         (
             fetch_id,
             state.fetch_completion_tx.clone(),
-            control,
+            state.resource_load_control(),
             resource_timing,
         )
     };

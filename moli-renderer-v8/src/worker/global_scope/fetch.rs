@@ -825,13 +825,11 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
     };
 
     let (
-        loader,
+        web_security_disabled,
         request_origin,
         document_url,
         extra_http_headers,
-        _network_offline,
         blocked_url_patterns,
-        _fetch_subresource_interception_classes,
         policy_context,
     ) = {
         let state = state.borrow();
@@ -840,18 +838,14 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         };
         (
-            state.loader.clone(),
+            state.loader.request_client().web_security_disabled(),
             state.request_origin(),
             document_url,
             state.extra_http_headers.clone(),
-            state.network_offline,
             state.blocked_url_patterns.clone(),
-            state.subresource_interception_config(),
             state.policy_context,
         )
     };
-
-    let web_security_disabled = loader.request_client().web_security_disabled();
 
     let ResolvedWorkerFetchInput {
         resolved_url,
@@ -1003,21 +997,15 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
     {
         let metadata =
             worker_fetch_script_metadata(state.borrow().referrer_policy.clone(), &request_metadata);
-        let request = Request::new_browser(
-            &method,
-            resolved_url.clone(),
-            body.clone(),
-            headers.clone(),
-            request_origin,
-        )
-        .with_initiator_url(&document_url)
-        .with_request_mode(request_mode)
-        .with_credentials_mode(credentials_mode)
-        .with_redirect_mode(redirect_mode)
-        .with_cache_mode(request_metadata.cache.parse().unwrap_or_default())
-        .with_network_partition_key(state.borrow().network_partition_key.clone())
-        .with_fetch_priority_hint(priority)
-        .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+        let request = Request::new_browser(&method, resolved_url, body, headers, request_origin)
+            .with_initiator_url(&document_url)
+            .with_request_mode(request_mode)
+            .with_credentials_mode(credentials_mode)
+            .with_redirect_mode(redirect_mode)
+            .with_cache_mode(request_metadata.cache.parse().unwrap_or_default())
+            .with_network_partition_key(state.borrow().network_partition_key.clone())
+            .with_fetch_priority_hint(priority)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let request = match request.with_fetch_referrer(&request_metadata.referrer) {
             Ok(mut request) => {
                 if let Some(metadata) = metadata {
