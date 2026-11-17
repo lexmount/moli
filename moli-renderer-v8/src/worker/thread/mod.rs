@@ -1338,112 +1338,150 @@ pub(crate) fn spawn_test_worker_with_options(mut options: WorkerSpawnOptions) ->
     }
 }
 
-pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHandle {
-    #[cfg(test)]
-    assert!(
-        options.test_request_client_owner.is_none(),
-        "test-owned request clients must use spawn_test_worker_with_options"
-    );
-    let WorkerSpawnOptions {
-        script_source,
-        script_url,
-        request_client,
-        interception_context,
-        script_kind,
-        module_static_import_initiator_url,
-        module_credentials_mode,
-        referrer_policy,
-        module_static_import_content_security_policies,
-        content_security_policies,
-        content_security_report_only_policies,
-        content_security_reporting_endpoints,
-        network_policy,
-        policy_context,
-        worker_context_runtime,
-        global_kind,
-        api_storage_key,
-        broadcast_channel_top_level_site,
-        creator_storage_key,
-        creator_message_security,
-        service_worker_runtime,
-        reserved_service_worker_client_id,
-        indexed_db_manager,
-        storage_bucket_store,
-        bootstrap_completion_tx,
-        pause_evaluation_until_debugger,
+/// A Worker communication endpoint can exist before its script or V8 isolate.
+/// Inspector attachments and queued commands retain their original lifetimes
+/// when this endpoint is connected to the thread.
+#[derive(Debug)]
+pub(crate) struct WorkerStartup {
+    sender: mpsc::UnboundedSender<WorkerMessage>,
+    receiver: mpsc::UnboundedReceiver<WorkerMessage>,
+    isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
+    devtools: WorkerDevToolsHandle,
+}
+
+impl WorkerStartup {
+    pub(crate) fn new() -> Self {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let isolate_handle = Arc::new(Mutex::new(None));
+        let devtools = WorkerDevToolsHandle::new(sender.clone(), Arc::clone(&isolate_handle));
+        Self {
+            sender,
+            receiver,
+            isolate_handle,
+            devtools,
+        }
+    }
+
+    pub(crate) fn devtools_handle(&self) -> WorkerDevToolsHandle {
+        self.devtools.clone()
+    }
+
+    pub(crate) fn spawn(self, options: WorkerSpawnOptions) -> WorkerHandle {
         #[cfg(test)]
-            test_request_client_owner: _,
-    } = options;
-    let (parent_to_worker_tx, parent_to_worker_rx) = mpsc::unbounded_channel::<WorkerMessage>();
-    let (worker_to_parent_tx, worker_to_parent_rx) =
-        mpsc::unbounded_channel::<WorkerToParentMessage>();
-    let worker_wake_tx = parent_to_worker_tx.clone();
-    let isolate_handle = Arc::new(Mutex::new(None));
-    let worker_isolate_handle = Arc::clone(&isolate_handle);
-    let devtools =
-        WorkerDevToolsHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
-    let worker_inspector_tasks = devtools.inspector_tasks().clone();
-    let network_cancel = devtools.network_cancel_handle();
-    let termination_requested = Arc::new(AtomicBool::new(false));
-    let worker_termination_requested = Arc::clone(&termination_requested);
+        assert!(
+            options.test_request_client_owner.is_none(),
+            "test-owned request clients must use spawn_test_worker_with_options"
+        );
+        let WorkerSpawnOptions {
+            script_source,
+            script_url,
+            request_client,
+            interception_context,
+            script_kind,
+            module_static_import_initiator_url,
+            module_credentials_mode,
+            referrer_policy,
+            module_static_import_content_security_policies,
+            content_security_policies,
+            content_security_report_only_policies,
+            content_security_reporting_endpoints,
+            network_policy,
+            policy_context,
+            worker_context_runtime,
+            global_kind,
+            api_storage_key,
+            broadcast_channel_top_level_site,
+            creator_storage_key,
+            creator_message_security,
+            service_worker_runtime,
+            reserved_service_worker_client_id,
+            indexed_db_manager,
+            storage_bucket_store,
+            bootstrap_completion_tx,
+            pause_evaluation_until_debugger,
+            #[cfg(test)]
+                test_request_client_owner: _,
+        } = options;
+        let Self {
+            sender: parent_to_worker_tx,
+            receiver: parent_to_worker_rx,
+            isolate_handle,
+            devtools,
+        } = self;
+        let (worker_to_parent_tx, worker_to_parent_rx) =
+            mpsc::unbounded_channel::<WorkerToParentMessage>();
+        let worker_wake_tx = parent_to_worker_tx.clone();
+        let worker_isolate_handle = Arc::clone(&isolate_handle);
+        let worker_inspector_tasks = devtools.inspector_tasks().clone();
+        worker_inspector_tasks.start();
+        let network_cancel = devtools.network_cancel_handle();
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let worker_termination_requested = Arc::clone(&termination_requested);
 
-    let join_handle = std::thread::Builder::new()
-        .name(format!("worker:{script_url}"))
-        .stack_size(WORKER_STACK_SIZE)
-        .spawn(move || {
-            let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
-            runtime_builder
-                .max_blocking_threads(crate::tokio_blocking_budget::tokio_blocking_thread_budget())
-                .enable_all();
-            let runtime = runtime_builder
-                .build_local(tokio::runtime::LocalOptions::default())
-                .expect("failed to build worker runtime");
-            runtime.block_on(worker_main(
-                script_source,
-                script_url,
-                request_client,
-                interception_context,
-                network_cancel,
-                script_kind,
-                module_static_import_initiator_url,
-                module_credentials_mode,
-                referrer_policy,
-                module_static_import_content_security_policies,
-                content_security_policies,
-                content_security_report_only_policies,
-                content_security_reporting_endpoints,
-                network_policy,
-                policy_context,
-                worker_context_runtime,
-                global_kind,
-                api_storage_key,
-                broadcast_channel_top_level_site,
-                creator_storage_key,
-                creator_message_security,
-                service_worker_runtime,
-                reserved_service_worker_client_id,
-                indexed_db_manager,
-                storage_bucket_store,
-                bootstrap_completion_tx,
-                pause_evaluation_until_debugger,
-                worker_wake_tx,
-                parent_to_worker_rx,
-                worker_to_parent_tx,
-                worker_isolate_handle,
-                worker_termination_requested,
-                worker_inspector_tasks,
-            ));
-        })
-        .expect("failed to spawn worker thread");
+        let join_handle = std::thread::Builder::new()
+            .name(format!("worker:{script_url}"))
+            .stack_size(WORKER_STACK_SIZE)
+            .spawn(move || {
+                let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+                runtime_builder
+                    .max_blocking_threads(
+                        crate::tokio_blocking_budget::tokio_blocking_thread_budget(),
+                    )
+                    .enable_all();
+                let runtime = runtime_builder
+                    .build_local(tokio::runtime::LocalOptions::default())
+                    .expect("failed to build worker runtime");
+                runtime.block_on(worker_main(
+                    script_source,
+                    script_url,
+                    request_client,
+                    interception_context,
+                    network_cancel,
+                    script_kind,
+                    module_static_import_initiator_url,
+                    module_credentials_mode,
+                    referrer_policy,
+                    module_static_import_content_security_policies,
+                    content_security_policies,
+                    content_security_report_only_policies,
+                    content_security_reporting_endpoints,
+                    network_policy,
+                    policy_context,
+                    worker_context_runtime,
+                    global_kind,
+                    api_storage_key,
+                    broadcast_channel_top_level_site,
+                    creator_storage_key,
+                    creator_message_security,
+                    service_worker_runtime,
+                    reserved_service_worker_client_id,
+                    indexed_db_manager,
+                    storage_bucket_store,
+                    bootstrap_completion_tx,
+                    pause_evaluation_until_debugger,
+                    worker_wake_tx,
+                    parent_to_worker_rx,
+                    worker_to_parent_tx,
+                    worker_isolate_handle,
+                    worker_termination_requested,
+                    worker_inspector_tasks,
+                ));
+            })
+            .expect("failed to spawn worker thread");
 
-    WorkerHandle::new_with_termination_requested_and_devtools(
-        parent_to_worker_tx,
-        worker_to_parent_rx,
-        join_handle,
-        isolate_handle,
-        termination_requested,
-        devtools,
-    )
+        WorkerHandle::new_with_termination_requested_and_devtools(
+            parent_to_worker_tx,
+            worker_to_parent_rx,
+            join_handle,
+            isolate_handle,
+            termination_requested,
+            devtools,
+        )
+    }
+}
+
+pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHandle {
+    WorkerStartup::new().spawn(options)
 }
 
 fn worker_broadcast_channel_storage_key(

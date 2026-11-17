@@ -44,7 +44,7 @@ impl CdpConnection {
                         .renderer_runtime()
                         .detach_dedicated_worker_runtime_inspector_session(
                             target.renderer_instance_id,
-                            Some(session_id.to_owned()),
+                            session_id.to_owned(),
                         )
                 }),
             Some(CdpSessionRoute::ServiceWorkerTarget {

@@ -539,6 +539,7 @@ impl WorkerRuntimeInspector {
         let isolate_handle =
             std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle())));
         let task_runner = WorkerInspectorTaskRunner::new(wake_tx, isolate_handle);
+        task_runner.start();
         Self::new(isolate, task_runner, parent_tx, false, debugger_enabled)
     }
 
@@ -864,8 +865,10 @@ impl WorkerRuntimeInspector {
             } => {
                 self.detach_session_incarnation(inspector_session_id.as_deref(), &lifetime);
             }
-            WorkerInspectorTask::RunIfWaitingForDebugger => {
-                self.task_runner.request_resume();
+            WorkerInspectorTask::RunIfWaitingForDebugger { lifetime } => {
+                if lifetime.is_active() {
+                    self.task_runner.request_resume();
+                }
             }
         }
         self.forward_pending_messages();
@@ -1101,6 +1104,7 @@ mod tests {
             wake_tx,
             std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle()))),
         );
+        task_runner.start();
         let inspector =
             WorkerRuntimeInspector::new(&mut isolate, task_runner.clone(), parent_tx, false, false);
         let registration = moli_v8_platform::V8PlatformIsolateRegistration::register(

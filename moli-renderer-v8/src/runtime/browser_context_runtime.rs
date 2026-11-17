@@ -216,15 +216,11 @@ struct RendererBrowserContextRuntimeInner {
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
 }
 
-#[derive(Clone, Debug)]
-enum DedicatedWorkerDevToolsTarget {
-    Loading {
-        inspector_sessions: Vec<Option<String>>,
-    },
-    Running {
-        handle: crate::worker::WorkerDevToolsHandle,
-        output_journal: Option<super::RendererTurnOutputJournal>,
-    },
+#[derive(Debug)]
+struct DedicatedWorkerDevToolsTarget {
+    handle: crate::worker::WorkerDevToolsHandle,
+    output_journal: Option<super::RendererTurnOutputJournal>,
+    startup: Option<crate::worker::WorkerStartup>,
 }
 
 #[derive(Debug)]
@@ -362,9 +358,7 @@ fn terminate_browser_context_resource_producers(inner: &RendererBrowserContextRu
     let dedicated_worker_targets =
         std::mem::take(&mut *inner.dedicated_worker_devtools_targets.lock());
     for target in dedicated_worker_targets.into_values() {
-        if let DedicatedWorkerDevToolsTarget::Running { handle, .. } = target {
-            let _ = handle.terminate_for_devtools();
-        }
+        let _ = target.handle.terminate_for_devtools();
     }
     if let Some(shared_worker_runtime) = inner.shared_worker_runtime.get() {
         shared_worker_runtime.terminate_all_for_context_shutdown();

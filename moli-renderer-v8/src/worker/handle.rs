@@ -658,8 +658,9 @@ impl WorkerDevToolsHandle {
         self.inspector_tasks.append_detach(inspector_session_id)
     }
 
-    pub(crate) fn run_if_waiting_for_debugger(&self) -> bool {
-        self.inspector_tasks.append_run_if_waiting_for_debugger()
+    pub(crate) fn run_if_waiting_for_debugger(&self, inspector_session_id: Option<&str>) -> bool {
+        self.inspector_tasks
+            .append_run_if_waiting_for_debugger(inspector_session_id)
     }
 
     pub(crate) fn dispose(&self, error: WorkerInspectorError) {
@@ -714,6 +715,7 @@ impl WorkerHandle {
         termination_requested: Arc<AtomicBool>,
     ) -> Self {
         let devtools = WorkerDevToolsHandle::new(tx.clone(), Arc::clone(&isolate_handle));
+        devtools.inspector_tasks().start();
         Self::new_with_termination_requested_and_devtools(
             tx,
             rx,
@@ -809,7 +811,7 @@ impl WorkerHandle {
     }
 
     pub(crate) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
-        self.devtools.run_if_waiting_for_debugger()
+        self.devtools.run_if_waiting_for_debugger(None)
     }
 
     pub(crate) fn devtools_handle(&self) -> WorkerDevToolsHandle {
