@@ -1955,6 +1955,11 @@ impl PageScriptHost {
         {
             return false;
         }
+        let Some(initiator) =
+            self.navigation_initiator_for_owner(self.entered_owner_dispatch_scope(scope))
+        else {
+            return false;
+        };
         let (document_response, response) =
             self.auxiliary_document_response_channel(target_url.as_str());
         if target_url.scheme() != "javascript" {
@@ -1990,6 +1995,7 @@ impl PageScriptHost {
             scope,
             popup_id,
             super::ChildBrowsingContextNavigationRequest {
+                initiator,
                 url: target_url,
                 method: "GET".to_owned(),
                 body: None,
@@ -2968,6 +2974,9 @@ impl PageScriptHost {
         self.start_lightweight_popup_document_load_with_request(
             task,
             super::ChildBrowsingContextNavigationRequest {
+                initiator: self.navigation_initiator_for_owner(
+                    super::OwnerDispatchScope::LightweightPopup(task.popup_id()),
+                )?,
                 url: target_url,
                 method: "GET".to_owned(),
                 body: None,
@@ -2990,13 +2999,17 @@ impl PageScriptHost {
         history: PendingLightweightPopupHistory,
     ) -> Option<u64> {
         let target_url = request.url.clone();
+        let initiator = request.initiator;
         let request = Request::new_bytes(
             &request.method,
             request.url.as_str(),
             request.body,
             request.request_headers,
         )
-        .ok()?;
+        .ok()?
+        .with_request_origin(initiator.origin())
+        .with_initiator_url(initiator.url())
+        .with_subresource_request_metadata(initiator.request_metadata());
         let popup_id = task.popup_id();
         if !self.lightweight_popup_navigation_attempt_is_current(task) {
             return None;

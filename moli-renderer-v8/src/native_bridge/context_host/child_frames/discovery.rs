@@ -373,6 +373,8 @@ impl PageScriptHost {
             // distinction from iframe/frame navigation so Fetch rejects the
             // unsupported schemes instead of leaving a local bootstrap pending.
             ChildBrowsingContextBootstrap::Request(ChildBrowsingContextNavigationRequest {
+                initiator: self
+                    .navigation_initiator_for_owner(self.owner_dispatch_scope_for_node(handle)?)?,
                 url,
                 method: "GET".to_owned(),
                 body: None,
