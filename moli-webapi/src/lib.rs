@@ -79,3 +79,5 @@ pub mod navigator_ua_data;
 
 pub mod base64;
 pub mod css_escape;
+
+pub mod indexed_db_values;

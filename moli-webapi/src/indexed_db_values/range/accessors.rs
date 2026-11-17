@@ -1,7 +1,7 @@
 use super::*;
-use crate::util::{get_private_value, set_private_value};
+use moli_v8_util::{get_private_value, set_private_value};
 
-pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_lower_getter<'s>(
+pub fn idb_key_range_lower_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
@@ -9,7 +9,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_lower_getter<'s>(
     bound_getter(scope, args.this(), LOWER, rv);
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_upper_getter<'s>(
+pub fn idb_key_range_upper_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
@@ -46,7 +46,7 @@ fn bound_getter<'s>(
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_lower_open_getter<'s>(
+pub fn idb_key_range_lower_open_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -58,7 +58,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_lower_open_getter<
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_upper_open_getter<'s>(
+pub fn idb_key_range_upper_open_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

@@ -1,8 +1,8 @@
 use super::*;
-use crate::webidl;
+use moli_webidl as webidl;
 
 #[derive(Debug)]
-pub(in crate::context_bootstrap::indexed_db) enum KeyConversionError {
+pub enum KeyConversionError {
     Invalid(&'static str),
     Terminated,
     Backend(IndexedDbError),
@@ -16,7 +16,7 @@ impl From<IndexedDbError> for KeyConversionError {
 }
 
 impl KeyConversionError {
-    pub(in crate::context_bootstrap::indexed_db) fn into_value<'s>(
+    pub fn into_value<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,
     ) -> Option<v8::Local<'s, v8::Value>> {
@@ -28,14 +28,14 @@ impl KeyConversionError {
         }
     }
 
-    pub(in crate::context_bootstrap::indexed_db) fn throw(self, scope: &mut v8::PinScope<'_, '_>) {
+    pub fn throw(self, scope: &mut v8::PinScope<'_, '_>) {
         if let Some(value) = self.into_value(scope) {
             scope.throw_exception(value);
         }
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key<'s>(
+pub fn parse_idb_key<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Result<Option<Key>, KeyConversionError> {
@@ -58,7 +58,7 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key<'s>(
     parsed
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn require_idb_key<'s>(
+pub fn require_idb_key<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<Key> {
@@ -75,14 +75,14 @@ pub(in crate::context_bootstrap::indexed_db) fn require_idb_key<'s>(
     }
 }
 
-pub(super) fn parse_idb_key_value<'s>(
+pub fn parse_idb_key_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Result<Option<Key>, KeyConversionError> {
     parse_idb_key_value_at_depth(scope, value, 0)
 }
 
-pub(super) fn parse_idb_key_value_at_depth<'s>(
+pub fn parse_idb_key_value_at_depth<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     depth: usize,
@@ -99,7 +99,7 @@ pub(super) fn parse_idb_key_value_at_depth<'s>(
     let mut input = value;
     let key = 'walk: loop {
         let mut key = if let Ok(array) = v8::Local::<v8::Array>::try_from(input) {
-            if frames.len() + depth >= moli_indexeddb::MAX_KEY_DEPTH {
+            if frames.len() + depth >= moli_indexeddb_types::MAX_KEY_DEPTH {
                 return Err(KeyConversionError::Invalid(
                     "IndexedDB array key exceeds the maximum nesting depth.",
                 ));
@@ -184,7 +184,7 @@ fn scalar_idb_key(
     }
     if let Ok(string) = v8::Local::<v8::String>::try_from(value) {
         return Ok(Key::String(
-            crate::util::v8_string_to_u16_string(scope, string).into_vec(),
+            moli_v8_util::v8_string_to_u16_string(scope, string).into_vec(),
         ));
     }
     if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
@@ -242,7 +242,7 @@ fn reject_unsupported_key_buffer(
     Ok(())
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn compare_idb_keys(left: &Key, right: &Key) -> i32 {
+pub fn compare_idb_keys(left: &Key, right: &Key) -> i32 {
     match left.cmp(right) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
@@ -250,23 +250,25 @@ pub(in crate::context_bootstrap::indexed_db) fn compare_idb_keys(left: &Key, rig
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn key_to_js_value<'s>(
+pub fn key_to_js_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: &Key,
 ) -> v8::Local<'s, v8::Value> {
     try_key_to_js_value(scope, key).unwrap_or_else(|| v8::undefined(scope).into())
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn try_key_to_js_value<'s>(
+pub fn try_key_to_js_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: &Key,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        Key::String(value) => crate::util::v8_string_from_utf16_units(scope, value).map(Into::into),
+        Key::String(value) => {
+            moli_v8_util::v8_string_from_utf16_units(scope, value).map(Into::into)
+        }
         Key::Number(value) => Some(v8::Number::new(scope, value.value()).into()),
         Key::Date(value) => v8::Date::new(scope, *value as f64).map(Into::into),
         Key::Binary(bytes) => {
-            crate::blob::array_buffer_from_bytes(scope, bytes.clone()).map(Into::into)
+            moli_v8_util::array_buffer_from_bytes(scope, bytes.clone()).map(Into::into)
         }
         Key::Array(values) => {
             let array = v8::Array::new(scope, 0);
@@ -284,7 +286,7 @@ pub(in crate::context_bootstrap::indexed_db) fn try_key_to_js_value<'s>(
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn parse_optional_count<'s>(
+pub fn parse_optional_count<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     operation_name: &'static str,
@@ -298,10 +300,7 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_optional_count<'s>(
 }
 
 /// Grow native key/index buffers while preserving allocation errors.
-pub(in crate::context_bootstrap::indexed_db) fn reserve_vec<T>(
-    values: &mut Vec<T>,
-    additional: usize,
-) -> Result<(), IndexedDbError> {
+pub fn reserve_vec<T>(values: &mut Vec<T>, additional: usize) -> Result<(), IndexedDbError> {
     values
         .try_reserve(additional)
         .map_err(|error| IndexedDbError::Resource(error.to_string()))

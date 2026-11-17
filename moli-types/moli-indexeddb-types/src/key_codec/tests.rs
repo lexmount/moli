@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "sqlite-errors")]
 use rusqlite::{Connection, params};
 
 fn number(value: f64) -> Key {
@@ -109,33 +110,36 @@ fn ordered_keys_match_native_comparison_and_sqlite_blob_order() {
         );
     }
 
-    let mut connection = Connection::open_in_memory().unwrap();
-    connection
-        .execute_batch(
-            "CREATE TABLE keys (key_sort BLOB PRIMARY KEY, key_value BLOB NOT NULL)
-             STRICT, WITHOUT ROWID",
-        )
-        .unwrap();
-    let transaction = connection.transaction().unwrap();
-    for (key, bytes) in keys.iter().zip(&encoded) {
-        transaction
-            .execute(
-                "INSERT INTO keys VALUES (?1, ?2) ON CONFLICT(key_sort) DO NOTHING",
-                params![bytes, key.encode_value().unwrap()],
+    #[cfg(feature = "sqlite-errors")]
+    {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE keys (key_sort BLOB PRIMARY KEY, key_value BLOB NOT NULL)
+                 STRICT, WITHOUT ROWID",
             )
             .unwrap();
+        let transaction = connection.transaction().unwrap();
+        for (key, bytes) in keys.iter().zip(&encoded) {
+            transaction
+                .execute(
+                    "INSERT INTO keys VALUES (?1, ?2) ON CONFLICT(key_sort) DO NOTHING",
+                    params![bytes, key.encode_value().unwrap()],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        keys.sort();
+        keys.dedup();
+        let stored = connection
+            .prepare("SELECT key_value FROM keys ORDER BY key_sort")
+            .unwrap()
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))
+            .unwrap()
+            .map(|row| Key::decode_value(&row.unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(stored, keys);
     }
-    transaction.commit().unwrap();
-    keys.sort();
-    keys.dedup();
-    let stored = connection
-        .prepare("SELECT key_value FROM keys ORDER BY key_sort")
-        .unwrap()
-        .query_map([], |row| row.get::<_, Vec<u8>>(0))
-        .unwrap()
-        .map(|row| Key::decode_value(&row.unwrap()).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(stored, keys);
 }
 
 #[test]

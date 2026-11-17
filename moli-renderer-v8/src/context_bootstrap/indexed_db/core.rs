@@ -1,6 +1,6 @@
 use super::{
-    CursorDirection, CursorSnapshotEntry, DatabaseHandle, IdbKeyRangeQuery, IndexInfo,
-    IndexedDbError, IndexedDbExecutionOwner, IndexedDbExternalObject, IndexedDbManager,
+    CursorDirection, CursorSnapshotEntry, DatabaseHandle, IndexInfo, IndexedDbError,
+    IndexedDbExecutionOwner, IndexedDbExternalObject, IndexedDbManager,
     IndexedDbObjectStoreMetadata, IndexedDbRuntimeArray, IndexedDbStorageScope, IndexedDbValue,
     IndexedDbWrapperKind, Key, KeyPath, ObjectStoreInfo, ObjectStoreKey, PreparedObjectStoreKey,
     PreparedObjectStoreWrite, TransactionHandle, TransactionMode,

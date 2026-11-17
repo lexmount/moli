@@ -1,0 +1,20 @@
+[package]
+license.workspace = true
+name = "moli-indexeddb-types"
+version = "0.1.0"
+edition = "2024"
+description = "Storage-independent IndexedDB keys, ranges and errors"
+
+[features]
+default = []
+# Keep the backend's existing From conversion without requiring SQLite for value bindings.
+sqlite-errors = ["dep:moli-sqlite", "dep:rusqlite"]
+
+[dependencies]
+moli-sqlite = { path = "../../moli-sqlite", optional = true }
+rusqlite = { version = "0.40.2", default-features = false, optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
+unicode-id-start = "1.4.0"
+
+[lints]
+workspace = true

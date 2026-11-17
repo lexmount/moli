@@ -18,10 +18,6 @@ pub use connection_queue::{
 mod cursor;
 mod name;
 pub use name::IndexedDbName;
-mod error;
-mod key;
-mod key_codec;
-mod key_path_codec;
 mod manager;
 mod options;
 pub mod sqlite;
@@ -41,9 +37,8 @@ pub use cursor::{
     CursorDirection, apply_collection_direction, apply_cursor_direction_by_key,
     compare_cursor_direction, compare_cursor_tuple_direction,
 };
-pub use error::IndexedDbError;
-pub use key::{Key, KeyNumber, KeyPath, MAX_KEY_DEPTH};
 pub use manager::IndexedDbManager;
+pub use moli_indexeddb_types::{IndexedDbError, Key, KeyNumber, KeyPath, KeyRange, MAX_KEY_DEPTH};
 pub use options::{
     GetAllOptionsCandidate, IndexOptionsValidationError, ObjectStoreOptionsValidationError,
     TransactionModeParseError, parse_regular_transaction_mode, should_parse_get_all_options,
@@ -52,6 +47,6 @@ pub use options::{
 pub use types::{
     DatabaseHandle, IndexInfo, IndexOptions, IndexedDbExternalObject,
     IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind, IndexedDbQuotaCheck,
-    IndexedDbValue, KeyRange, ObjectStoreInfo, ObjectStoreOptions, RecordSnapshot,
-    TransactionHandle, TransactionMode,
+    IndexedDbValue, ObjectStoreInfo, ObjectStoreOptions, RecordSnapshot, TransactionHandle,
+    TransactionMode,
 };
