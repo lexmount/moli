@@ -7,7 +7,6 @@ mod constructor;
 mod data;
 mod input;
 mod keyboard;
-mod navigation_init;
 mod pointer;
 mod security_policy;
 

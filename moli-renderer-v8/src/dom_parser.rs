@@ -18,7 +18,7 @@ use super::{
 };
 
 pub(crate) const DOM_PARSER_FOREIGN_NODE_SLOT: &str = "__moliDomParserForeignNode";
-const DOM_PARSER_CONSTRUCTION_REALM_SLOT: &str = "__moliDomParserConstructionRealm";
+use moli_webapi::dom_parser_values::DOM_PARSER_CONSTRUCTION_REALM_SLOT;
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
 const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
@@ -110,27 +110,7 @@ struct DomParserPrototypeMethodsDeclaration {
     parse_from_string: (),
 }
 
-pub(super) fn dom_parser_constructor_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(scope, "DOMParser constructor must be called with new");
-        return;
-    }
-    // The constructor's Window is independent of newTarget.prototype. Keep
-    // a V8-traced creation-Realm witness, not a native persistent Context root
-    // or a WindowProxy that can be rebound to another Window on navigation.
-    let realm = crate::util::new_null_prototype_object(scope);
-    crate::util::set_private_value(
-        scope,
-        args.this(),
-        DOM_PARSER_CONSTRUCTION_REALM_SLOT,
-        realm.into(),
-    );
-    rv.set(args.this().into());
-}
+pub(super) use moli_webapi::dom_parser_values::dom_parser_constructor_callback;
 
 pub(super) fn dom_parser_parse_from_string_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

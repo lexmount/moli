@@ -1,5 +1,8 @@
-use crate::context_bootstrap::events::EventInit;
-use crate::{web_api_interfaces, webidl};
+pub const NAVIGATE_EVENT_SYNTHETIC_SLOT: &str = "__lmNavigateEventSynthetic";
+use super::super::init::EventInit;
+use crate::interfaces as web_api_interfaces;
+use moli_webidl as webidl;
+use webidl::WebIdlDictionarySerialize;
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "NavigationType", rename_all = "kebab-case")]
@@ -90,4 +93,31 @@ pub(super) fn parse_current_entry_change_event_init<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<NavigationCurrentEntryChangeEventInitMembers<'s>> {
     webidl::parse_args::<CurrentEntryChangeArgs>(scope, args).map(|parsed| parsed.init)
+}
+
+impl<'s> NavigateEventInitMembers<'s> {
+    pub(super) fn initialize(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        self.initialize_snapshot(scope, event)
+            .expect("NavigateEvent state");
+        super::super::state::set_event_private_value(
+            scope,
+            event,
+            NAVIGATE_EVENT_SYNTHETIC_SLOT,
+            v8::Boolean::new(scope, true).into(),
+        );
+    }
+}
+impl<'s> NavigationCurrentEntryChangeEventInitMembers<'s> {
+    pub(super) fn initialize(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        self.initialize_snapshot(scope, event)
+            .expect("current entry event state");
+    }
 }

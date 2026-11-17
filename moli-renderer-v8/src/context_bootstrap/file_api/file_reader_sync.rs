@@ -2,11 +2,8 @@ use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::{file_reader_binary_string, file_reader_data_url, file_reader_text};
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-
-#[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::FileReaderSync)]
-struct FileReaderSyncObjectDeclaration {}
+pub(in crate::context_bootstrap) use moli_webapi::constructors::file_reader_sync_constructor_callback;
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::FileReaderSync, enumerable, receiver)]
@@ -52,24 +49,6 @@ struct FileReaderSyncReadAsTextArgs<'s> {
     )]
     blob: v8::Local<'s, v8::Object>,
     encoding: Option<String>,
-}
-
-pub(in crate::context_bootstrap) fn file_reader_sync_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'FileReaderSync': Please use the 'new' operator.",
-        );
-        return;
-    }
-    FileReaderSyncObjectDeclaration::default()
-        .initialize(scope, args.this())
-        .expect("FileReaderSync declaration should initialize");
-    rv.set(args.this().into());
 }
 
 pub(super) fn install_file_reader_sync_template_bindings<'s>(

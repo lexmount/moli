@@ -1,7 +1,6 @@
 use super::{
-    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, dispatch_simple_event_target_event,
-    global_constructor_object, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback,
+    dispatch_simple_event_target_event, global_constructor_object,
+    simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
 };
 use crate::web_api_interfaces;
 use crate::{
@@ -13,13 +12,13 @@ use crate::{
     webidl,
 };
 use moli_v8_util::reject_promise_with_type_error as reject_type_error;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+pub(in crate::context_bootstrap) use moli_webapi::idle_detector_values::idle_detector_constructor_callback;
+use moli_webapi::idle_detector_values::{
+    IDLE_DETECTOR_ABORT_ALGORITHM_SLOT, IDLE_DETECTOR_ABORT_SIGNAL_SLOT,
+    IDLE_DETECTOR_SCREEN_UNLOCKED_SLOT, IDLE_DETECTOR_STARTED_SLOT, IDLE_DETECTOR_USER_ACTIVE_SLOT,
+};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
-const IDLE_DETECTOR_STARTED_SLOT: &str = "__lmIdleDetectorStarted";
-const IDLE_DETECTOR_USER_ACTIVE_SLOT: &str = "__lmIdleDetectorUserActive";
-const IDLE_DETECTOR_SCREEN_UNLOCKED_SLOT: &str = "__lmIdleDetectorScreenUnlocked";
-const IDLE_DETECTOR_ABORT_SIGNAL_SLOT: &str = "__lmIdleDetectorAbortSignal";
-const IDLE_DETECTOR_ABORT_ALGORITHM_SLOT: &str = "__lmIdleDetectorAbortAlgorithm";
 const IDLE_DETECTOR_REGISTRY_SLOT: &str = "__lmIdleDetectorRegistry";
 const MINIMUM_IDLE_THRESHOLD_MS: u32 = 60_000;
 const ACTUAL_IDLE_STATE: crate::protocol_types::EmulatedIdleOverride =
@@ -27,28 +26,6 @@ const ACTUAL_IDLE_STATE: crate::protocol_types::EmulatedIdleOverride =
         is_user_active: true,
         is_screen_unlocked: true,
     };
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::IdleDetector)]
-struct IdleDetectorObjectDeclaration {
-    #[webapi(slot = IDLE_DETECTOR_STARTED_SLOT)]
-    started: bool,
-
-    #[webapi(slot = IDLE_DETECTOR_USER_ACTIVE_SLOT)]
-    is_user_active: bool,
-
-    #[webapi(slot = IDLE_DETECTOR_SCREEN_UNLOCKED_SLOT)]
-    is_screen_unlocked: bool,
-
-    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
-    event_listeners: (),
-
-    #[webapi(slot = IDLE_DETECTOR_ABORT_SIGNAL_SLOT, init = "null")]
-    abort_signal: (),
-
-    #[webapi(slot = IDLE_DETECTOR_ABORT_ALGORITHM_SLOT, init = "null")]
-    abort_algorithm: (),
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IdleDetector)]
@@ -92,30 +69,6 @@ struct IdleDetectorConstructorDeclaration {
         callback = idle_detector_request_permission_callback
     )]
     request_permission: (),
-}
-
-pub(in crate::context_bootstrap) fn idle_detector_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'IdleDetector': Please use the 'new' operator.",
-        );
-        return;
-    }
-
-    let detector = args.this();
-    if IdleDetectorObjectDeclaration::new(false, true, true)
-        .initialize(scope, detector)
-        .is_err()
-    {
-        rv.set_undefined();
-        return;
-    }
-    rv.set(detector.into());
 }
 
 pub(in crate::context_bootstrap) fn install_idle_detector_template_bindings<'s>(

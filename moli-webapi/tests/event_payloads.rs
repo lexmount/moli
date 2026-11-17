@@ -124,8 +124,31 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
     events::progress::install_progress_event_template_bindings(scope, progress, "ProgressEvent");
     finish_template(scope, interfaces::ProgressEvent::DESCRIPTOR, progress);
 
+    let extendable = v8::FunctionTemplate::new(
+        scope,
+        events::service_worker::extendable_event_constructor_callback,
+    );
+    extendable.inherit(event);
+    finish_template(scope, interfaces::ExtendableEvent::DESCRIPTOR, extendable);
+    let message = v8::FunctionTemplate::new(
+        scope,
+        events::service_worker::extendable_message_event_constructor_callback,
+    );
+    message.inherit(extendable);
+    finish_template(
+        scope,
+        interfaces::ExtendableMessageEvent::DESCRIPTOR,
+        message,
+    );
+    let fetch = v8::FunctionTemplate::new(scope, events::fetch::fetch_event_constructor_callback);
+    fetch.inherit(extendable);
+    events::fetch::install_value_template_bindings(scope, fetch);
+    finish_template(scope, interfaces::FetchEvent::DESCRIPTOR, fetch);
+
     for kind in [
         EventSubclassKind::CustomEvent,
+        EventSubclassKind::NavigateEvent,
+        EventSubclassKind::NavigationCurrentEntryChangeEvent,
         EventSubclassKind::MessageEvent,
         EventSubclassKind::StorageEvent,
         EventSubclassKind::CloseEvent,
@@ -1077,4 +1100,62 @@ fn standalone_event_and_progress_constructors_share_realm_clock_and_native_proje
         events::progress::construct_native_progress_event(scope, "load", true, 3.0, 7.0).unwrap();
     publish(scope, "nativeProgress", event);
     assert!(eval(scope, "nativeProgress instanceof NativeProgress && nativeProgress.isTrusted && nativeProgress.timeStamp === 81.5 && nativeProgress.loaded === 3 && nativeProgress.total === 7").is_true());
+}
+
+#[test]
+fn standalone_navigation_and_worker_events_preserve_native_references_and_promises() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 64.0);
+    // The embedder supplies already-resolved native identities. These value
+    // constructors do not allocate a Request, history entry or AbortSignal owner.
+    for (name, interface) in [
+        ("requestValue", interfaces::Request::DESCRIPTOR),
+        ("entryValue", interfaces::NavigationHistoryEntry::DESCRIPTOR),
+        (
+            "destinationValue",
+            interfaces::NavigationDestination::DESCRIPTOR,
+        ),
+        ("signalValue", interfaces::AbortSignal::DESCRIPTOR),
+        ("workerValue", interfaces::ServiceWorker::DESCRIPTOR),
+    ] {
+        let template = v8::FunctionTemplate::new(scope, illegal_constructor);
+        finish_template(scope, interface, template);
+        let object = v8::Object::new(scope);
+        interface.initialize(scope, object).unwrap();
+        publish(scope, name, object);
+    }
+    assert!(eval(scope, r#"(() => {
+      const check = ok => { if (!ok) throw new Error('event values'); };
+      const entry = new NavigationCurrentEntryChangeEvent('currententrychange', {from:entryValue, navigationType:'replace'});
+      check(entry.from === entryValue && entry.navigationType === 'replace' && entry.timeStamp === 64);
+      check(new NavigationCurrentEntryChangeEvent('change', {from:entryValue}).navigationType === null);
+      const navigate = new NavigateEvent('navigate', {destination:destinationValue, signal:signalValue, canIntercept:true});
+      check(navigate.destination === destinationValue && navigate.signal === signalValue && navigate.canIntercept);
+      const extendable = new ExtendableEvent('activate', {bubbles:true, composed:true});
+      check(extendable.type === 'activate' && extendable.bubbles && extendable.composed);
+      const order = [], messageInit = {};
+      Object.defineProperty(workerValue, 'scriptURL', {get() {throw new Error('identity must not read scriptURL');}});
+      for (const key of ['bubbles', 'cancelable', 'composed', 'data', 'lastEventId', 'origin', 'ports', 'source']) {
+        Object.defineProperty(messageInit, key, {get() {
+          order.push(key);
+          return ({data:7, lastEventId:'id\ud800', origin:'https://example.test', ports:new Set([endpoint]), source:workerValue})[key];
+        }});
+      }
+      const message = new ExtendableMessageEvent('message', messageInit);
+      check(order.join() === 'bubbles,cancelable,composed,data,lastEventId,origin,ports,source');
+      check(message.data === 7 && message.source === workerValue && message.ports[0] === endpoint && Object.isFrozen(message.ports));
+      check(message.lastEventId === 'id\ud800');
+      const fetch = new FetchEvent('fetch', {request:requestValue, clientId:'client', preloadResponse:7});
+      check(fetch instanceof ExtendableEvent && fetch.request === requestValue && fetch.clientId === 'client');
+      check(fetch.preloadResponse instanceof Promise && fetch.handled instanceof Promise);
+      check(fetch.resultingClientId === '' && fetch.replacesClientId === '');
+      try { new FetchEvent('fetch', {request:{}}); throw new Error('unbranded'); }
+      catch (error) { check(error instanceof TypeError); }
+      return true;
+    })()"#).is_true());
 }

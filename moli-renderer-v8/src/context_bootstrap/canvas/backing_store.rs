@@ -9,7 +9,7 @@ use crate::{
 use moli_canvas::{byte_len as canvas_byte_len, encode_data_url};
 use moli_webapi_declare::WebApiObject;
 
-const CANVAS_BACKING_STORE_SLOT: &str = "__moliCanvasBackingStore";
+use moli_webapi::canvas_context_values::CANVAS_BACKING_STORE_SLOT;
 const CANVAS_OWNER_SLOT: &str = "__moliCanvasOwner";
 const CANVAS_HAS_CONTEXT_SLOT: &str = "__moliCanvasHasContext";
 const CANVAS_2D_CONTEXT_SLOT: &str = "__moliCanvas2DContext";

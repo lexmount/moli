@@ -7,8 +7,6 @@ enum SubclassInit<'s> {
     Pointing(pointer::PointerEventInitPayload<'s>),
     Interaction(input::InteractionEventInit<'s>),
     Keyboard(keyboard::KeyboardEventInit<'s>),
-    CurrentEntry(navigation_init::NavigationCurrentEntryChangeEventInitMembers<'s>),
-    Navigate(navigation_init::NavigateEventInitMembers<'s>),
 }
 
 impl<'s> SubclassInit<'s> {
@@ -36,12 +34,6 @@ impl<'s> SubclassInit<'s> {
             EventSubclassKind::KeyboardEvent => {
                 Self::Keyboard(keyboard::parse_keyboard_event_init(scope, args)?)
             }
-            EventSubclassKind::NavigationCurrentEntryChangeEvent => Self::CurrentEntry(
-                navigation_init::parse_current_entry_change_event_init(scope, args)?,
-            ),
-            EventSubclassKind::NavigateEvent => {
-                Self::Navigate(navigation_init::parse_navigate_event_init(scope, args)?)
-            }
             _ => unreachable!("value event templates are constructed in moli-webapi"),
         })
     }
@@ -52,8 +44,6 @@ impl<'s> SubclassInit<'s> {
             Self::Pointing(init) => init.event_flags(),
             Self::Interaction(init) => init.event_flags(),
             Self::Keyboard(init) => init.event_flags(),
-            Self::CurrentEntry(init) => init.event_flags(),
-            Self::Navigate(init) => init.event_flags(),
         }
     }
 
@@ -67,10 +57,6 @@ impl<'s> SubclassInit<'s> {
             Self::Pointing(init) => init.initialize(scope, event),
             Self::Interaction(init) => return init.initialize(scope, event),
             Self::Keyboard(init) => keyboard::initialize_keyboard_event(scope, event, init),
-            Self::CurrentEntry(init) => {
-                data::initialize_navigation_current_entry_change_event(scope, event, init)
-            }
-            Self::Navigate(init) => data::initialize_navigate_event(scope, event, init),
         }
         true
     }

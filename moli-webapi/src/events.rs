@@ -7,10 +7,12 @@ use std::rc::Rc;
 
 pub mod audio;
 pub mod device;
+pub mod fetch;
 pub mod ice_error_event;
 pub mod init;
 pub mod kind;
 pub mod progress;
+pub mod service_worker;
 pub mod speech;
 pub mod state;
 pub mod subclasses;
