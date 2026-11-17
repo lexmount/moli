@@ -340,6 +340,7 @@ impl PageScriptHost {
                     .expect("committed child document"),
             ),
         );
+        self.refresh_current_child_document_ancestor_origins(handle);
 
         match owner_transition.local_window_owner_transition() {
             FrameLocalWindowOwnerTransition::Replaced { .. } => {
