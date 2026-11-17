@@ -1,5 +1,7 @@
-use super::*;
-use crate::webidl;
+use super::state::{event_backing, event_private_value};
+use moli_v8_util::set_private_value;
+use moli_webapi_declare::WebApiObject;
+use moli_webidl as webidl;
 
 const EVENT_MODIFIERS_SLOT: &str = "__moliEventModifiers";
 const MODIFIER_KEYS: [&str; 14] = [
@@ -22,7 +24,7 @@ const MODIFIER_KEYS: [&str; 14] = [
 /// The UIEventInit ancestor is converted before the modifier members.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "EventModifierInit")]
-pub(super) struct EventModifierInit<'s> {
+pub struct EventModifierInit<'s> {
     #[webidl(inherit)]
     ui: super::ui::UiEventInit<'s>,
     #[webidl(default = false)]
@@ -65,15 +67,11 @@ struct EventModifierProperties {
 }
 
 impl<'s> EventModifierInit<'s> {
-    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+    pub fn event_flags(&self) -> (bool, bool, bool) {
         self.ui.event_flags()
     }
 
-    pub(super) fn initialize(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        event: v8::Local<'s, v8::Object>,
-    ) {
+    pub fn initialize(&self, scope: &mut v8::PinScope<'s, '_>, event: v8::Local<'s, v8::Object>) {
         self.ui.initialize(scope, event);
         self.initialize_modifiers(scope, event);
     }
@@ -118,7 +116,7 @@ impl<'s> EventModifierInit<'s> {
     }
 }
 
-pub(in crate::context_bootstrap) fn initialize_legacy_event_modifiers<'s>(
+pub fn initialize_legacy_event_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     ctrl_key: bool,
@@ -143,7 +141,7 @@ struct GetModifierStateArgs {
     key_arg: String,
 }
 
-pub(in crate::context_bootstrap) fn event_get_modifier_state_callback<'s>(
+pub fn event_get_modifier_state_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,

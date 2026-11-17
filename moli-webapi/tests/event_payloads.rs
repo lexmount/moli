@@ -99,6 +99,7 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         scope,
         EventRuntime {
             timestamp,
+            is_window_receiver: |scope, receiver| interfaces::Window::is_instance(scope, receiver),
             initialize_wrapper,
         },
     );
@@ -117,6 +118,22 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
         );
     }
     finish_template(scope, interfaces::Event::DESCRIPTOR, event);
+
+    let ui = subclasses::build_template(scope, EventSubclassKind::UiEvent).unwrap();
+    ui.inherit(event);
+    finish_template(scope, interfaces::UIEvent::DESCRIPTOR, ui);
+    for kind in [
+        EventSubclassKind::FocusEvent,
+        EventSubclassKind::CompositionEvent,
+    ] {
+        let template = subclasses::build_template(scope, kind).unwrap();
+        template.inherit(ui);
+        finish_template(
+            scope,
+            interfaces::descriptor(kind.constructor_name()).unwrap(),
+            template,
+        );
+    }
 
     let progress =
         v8::FunctionTemplate::new(scope, events::progress::progress_event_constructor_callback);
@@ -360,6 +377,11 @@ fn install(scope: &mut v8::PinScope<'_, '_>, now: f64) {
 
     // Native payload brands without a DOM, audio graph, payment or sensor host.
     for (interface, name) in [
+        (interfaces::Window::DESCRIPTOR, "windowValue"),
+        (
+            interfaces::InputDeviceCapabilities::DESCRIPTOR,
+            "capabilitiesValue",
+        ),
         (interfaces::CSSAnimation::DESCRIPTOR, "animation"),
         (interfaces::CSSTransition::DESCRIPTOR, "transition"),
         (interfaces::Blob::DESCRIPTOR, "blob"),
@@ -1158,4 +1180,104 @@ fn standalone_navigation_and_worker_events_preserve_native_references_and_promis
       catch (error) { check(error instanceof TypeError); }
       return true;
     })()"#).is_true());
+}
+
+#[test]
+fn ui_event_values_convert_base_first_without_a_document_or_dispatcher() {
+    check(
+        r#"(() => {
+      const order = [], values = {
+        bubbles:true, cancelable:true, composed:true, detail:4294967297.9,
+        sourceCapabilities:capabilitiesValue, view:windowValue, relatedTarget:sourceElement
+      };
+      const init = new Proxy(values, {get(value, key) {order.push(key); return value[key];}});
+      const event = new FocusEvent({toString() {order.push('type'); return 'focus';}}, init);
+      assert(order.join() === 'type,bubbles,cancelable,composed,detail,sourceCapabilities,view,relatedTarget');
+      assert(event instanceof Event && event instanceof UIEvent && event instanceof FocusEvent);
+      assert(event.type === 'focus' && event.bubbles && event.cancelable && event.composed);
+      assert(event.detail === 1 && event.sourceCapabilities === capabilitiesValue);
+      assert(event.view === windowValue && event.relatedTarget === sourceElement);
+      assert(new UIEvent('default').view === null && new FocusEvent('default').relatedTarget === null);
+      assert(new CompositionEvent('input', {view:windowValue, data:'before\ud800after'}).data === 'before\ud800after');
+      const OriginalUI = UIEvent;
+      globalThis.UIEvent = function() {throw new Error('public UI constructor');};
+      assert(new CompositionEvent('input') instanceof OriginalUI);
+      let traps = 0;
+      const proxy = new Proxy(windowValue, {
+        get() {traps++; throw 42;}, getPrototypeOf() {traps++; throw 42;}
+      });
+      for (const fake of [{}, Object.create(Window.prototype), proxy]) {
+        let error;
+        try {new FocusEvent('bad', {view:fake});} catch (value) {error=value;}
+        assert(error instanceof TypeError && traps === 0);
+      }
+      const sentinel = new Error('view conversion');
+      try {new CompositionEvent('bad', {get view() {throw sentinel;}});}
+      catch (error) {assert(error === sentinel); return true;}
+      throw new Error('view getter was not read');
+    })()"#,
+    );
+}
+
+#[test]
+fn ui_event_window_checks_use_the_embedder_predicate_before_initializing_state() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    install(scope, 23.5);
+    events::install_runtime(
+        scope,
+        EventRuntime {
+            timestamp,
+            is_window_receiver: |_, _| false,
+            initialize_wrapper,
+        },
+    );
+    assert!(
+        eval(
+            scope,
+            r#"(() => {
+      try {new UIEvent('denied', {view:windowValue});}
+      catch (error) {return error instanceof TypeError;}
+      return false;
+    })()"#
+        )
+        .is_true()
+    );
+    assert_eq!(
+        scope
+            .get_current_context()
+            .get_slot::<Clock>()
+            .unwrap()
+            .reads
+            .get(),
+        0
+    );
+    events::install_runtime(
+        scope,
+        EventRuntime {
+            timestamp,
+            is_window_receiver: |scope, receiver| interfaces::Window::is_instance(scope, receiver),
+            initialize_wrapper,
+        },
+    );
+    assert!(
+        eval(
+            scope,
+            "new UIEvent('allowed', {view:windowValue}).timeStamp === 23.5"
+        )
+        .is_true()
+    );
+    assert_eq!(
+        scope
+            .get_current_context()
+            .get_slot::<Clock>()
+            .unwrap()
+            .reads
+            .get(),
+        1
+    );
 }

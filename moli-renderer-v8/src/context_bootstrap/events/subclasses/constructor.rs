@@ -3,7 +3,6 @@ use super::*;
 // Every kind has a complete derived dictionary. A new kind must select its
 // dictionary explicitly; there is no legacy EventInit-only fallback.
 enum SubclassInit<'s> {
-    Basic(basic::BasicEventInit<'s>),
     Pointing(pointer::PointerEventInitPayload<'s>),
     Interaction(input::InteractionEventInit<'s>),
     Keyboard(keyboard::KeyboardEventInit<'s>),
@@ -16,12 +15,6 @@ impl<'s> SubclassInit<'s> {
         kind: EventSubclassKind,
     ) -> Option<Self> {
         Some(match kind {
-            EventSubclassKind::UiEvent
-            | EventSubclassKind::FocusEvent
-            | EventSubclassKind::TextEvent
-            | EventSubclassKind::CompositionEvent => {
-                Self::Basic(basic::BasicEventInit::parse(scope, args, kind)?)
-            }
             EventSubclassKind::MouseEvent
             | EventSubclassKind::WheelEvent
             | EventSubclassKind::PointerEvent
@@ -40,7 +33,6 @@ impl<'s> SubclassInit<'s> {
 
     fn event_flags(&self) -> (bool, bool, bool) {
         match self {
-            Self::Basic(init) => init.event_flags(),
             Self::Pointing(init) => init.event_flags(),
             Self::Interaction(init) => init.event_flags(),
             Self::Keyboard(init) => init.event_flags(),
@@ -53,7 +45,6 @@ impl<'s> SubclassInit<'s> {
         event: v8::Local<'s, v8::Object>,
     ) -> bool {
         match self {
-            Self::Basic(init) => init.initialize(scope, event),
             Self::Pointing(init) => init.initialize(scope, event),
             Self::Interaction(init) => return init.initialize(scope, event),
             Self::Keyboard(init) => keyboard::initialize_keyboard_event(scope, event, init),

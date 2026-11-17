@@ -1,5 +1,6 @@
-use crate::webidl;
+use crate::interfaces as web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
+use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
 fn nullable_window_value<'s>(
@@ -14,27 +15,23 @@ fn nullable_window_value<'s>(
 /// UIEventInit members, converted after EventInit in dictionary order.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "UIEventInit", snapshot)]
-pub(super) struct UiEventInit<'s> {
+pub struct UiEventInit<'s> {
     #[webidl(inherit)]
-    base: super::EventInit,
+    base: super::init::EventInit,
     #[webidl(default = 0)]
     detail: i32,
-    #[webidl(nullable, interface = crate::web_api_interfaces::InputDeviceCapabilities)]
+    #[webidl(nullable, interface = web_api_interfaces::InputDeviceCapabilities)]
     source_capabilities: Option<v8::Local<'s, v8::Object>>,
-    #[webidl(nullable, interface = crate::web_api_interfaces::Window, brand_check = crate::context_bootstrap::is_window_receiver)]
+    #[webidl(nullable, interface = web_api_interfaces::Window, brand_check = is_window_receiver)]
     view: Option<v8::Local<'s, v8::Object>>,
 }
 
 impl<'s> UiEventInit<'s> {
-    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+    pub fn event_flags(&self) -> (bool, bool, bool) {
         (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
 
-    pub(super) fn initialize(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        event: v8::Local<'s, v8::Object>,
-    ) {
+    pub fn initialize(&self, scope: &mut v8::PinScope<'s, '_>, event: v8::Local<'s, v8::Object>) {
         self.initialize_snapshot(scope, event)
             .expect("UIEvent state should initialize");
     }
@@ -47,7 +44,7 @@ struct LegacyUiEventState<'s> {
     detail: i32,
 }
 
-pub(in crate::context_bootstrap) fn initialize_legacy_ui_event<'s>(
+pub fn initialize_legacy_ui_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     view: Option<v8::Local<'s, v8::Object>>,
@@ -57,4 +54,13 @@ pub(in crate::context_bootstrap) fn initialize_legacy_ui_event<'s>(
     LegacyUiEventState::new(view, detail)
         .initialize(scope, event)
         .expect("legacy UIEvent state should initialize");
+}
+
+// The embedder retains the exact native Window and detached-global predicate.
+// Dictionary conversion does not infer Window identity from public properties.
+pub(crate) fn is_window_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    (super::runtime(scope).is_window_receiver)(scope, receiver)
 }

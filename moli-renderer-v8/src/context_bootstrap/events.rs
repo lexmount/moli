@@ -10,16 +10,16 @@ use moli_webapi::events::kind;
 pub(crate) use moli_webapi::events::subclasses::message::construct_original_message_event;
 pub(crate) use moli_webapi::events::subclasses::storage::construct_original_storage_event_utf16;
 mod methods;
-mod modifiers;
+use moli_webapi::events::modifiers;
 mod subclasses;
 pub(crate) use moli_webapi::events::subclasses::submit::{
     mark_agent_submit_event, take_submit_event_response,
 };
+use moli_webapi::events::ui;
+use moli_webapi::events::value;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
-mod ui;
-use moli_webapi::events::value;
 pub(in crate::context_bootstrap) use ui::initialize_legacy_ui_event;
 mod wrappers;
 

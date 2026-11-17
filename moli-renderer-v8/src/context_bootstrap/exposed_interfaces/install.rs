@@ -226,6 +226,7 @@ fn install_event_runtime(scope: &mut v8::PinScope<'_, '_>) {
                     crate::context_bootstrap::current_performance_time_origin(scope),
                 )
             },
+            is_window_receiver: crate::context_bootstrap::is_window_receiver,
             initialize_wrapper: crate::context_bootstrap::events::initialize_event_wrapper,
         },
     );
