@@ -1,6 +1,8 @@
 //! WorkerGlobalScope runtime state and native queries for the current worker.
 
 use crate::content_security_policy::ContentSecurityPolicy;
+use crate::document_runtime::DocumentConnectPolicySnapshot;
+use crate::network_host::controlled_xhr::ControlledXhrContext;
 
 use super::*;
 
@@ -14,13 +16,18 @@ impl WorkerGlobalState {
         )
     }
 
-    pub(in crate::worker) fn subresource_interception_config(
-        &self,
-    ) -> SubresourceInterceptionClasses {
-        self.loader
-            .request_client()
-            .page_network_policy()
-            .subresource_interception_config()
+    pub(super) fn resource_load_control(&self) -> ControlledXhrContext {
+        ControlledXhrContext {
+            interception: self
+                .interception_context
+                .clone()
+                .expect("Worker resource loads own a native interception context"),
+            connect_policy: DocumentConnectPolicySnapshot::from_worker_policies(
+                self.content_security_policies.clone(),
+                self.content_security_report_only_policies.clone(),
+                self.content_security_reporting_endpoints.clone(),
+            ),
+        }
     }
 
     pub(crate) fn callback_invocation_allowed(&self) -> bool {

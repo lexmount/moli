@@ -378,7 +378,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let loader = state.borrow().loader.clone();
 
     let cancel_handle = state.borrow().network_cancel.child_for_subrequest();
-    let control = prepare_worker_xhr_control(&state.borrow());
+    let control = state.borrow().resource_load_control();
 
     if !async_request {
         send_synchronous_worker_xhr(scope, &state, xhr, prepared, loader, control);
@@ -473,20 +473,6 @@ fn worker_xhr_request(
         });
     }
     request
-}
-fn prepare_worker_xhr_control(state: &WorkerGlobalState) -> ControlledXhrContext {
-    ControlledXhrContext {
-        interception: state
-            .interception_context
-            .clone()
-            .expect("Worker XHR owns a native loader"),
-        connect_policy:
-            crate::document_runtime::DocumentConnectPolicySnapshot::from_worker_policies(
-                state.content_security_policies.clone(),
-                state.content_security_report_only_policies.clone(),
-                state.content_security_reporting_endpoints.clone(),
-            ),
-    }
 }
 
 fn worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourceFetchInfo {
