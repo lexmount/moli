@@ -4421,3 +4421,234 @@ async fn set_auto_attach_true_does_not_reattach_existing_session() {
     });
     ctx.with_fixture(|conn| assert!(conn.auto_attach_enabled()));
 }
+
+async fn push_current_javascript_dialog_for_active_target(
+    ctx: &mut TestContext,
+    browser_context_id: &str,
+    target_id: &str,
+    message: &str,
+) -> moli_core::page::RendererJavaScriptDialogCompletion {
+    use moli_core::page::{
+        RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererFrameToken,
+        RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+        RendererJavaScriptDialogSource, RendererLifecycleEpoch, RendererPendingJavaScriptDialog,
+    };
+
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    let owner =
+        crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: browser_context_id.to_owned(),
+            target_id: target_id.to_owned(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        });
+    // The dialog's renderer payload only carries the one-shot completion the
+    // test settles; the Page residence that authorizes the current-dialog
+    // check is installed separately on the target state.
+    let page_id = moli_core::PageId::new_for_testing(306);
+    let dialog = RendererPendingJavaScriptDialog::new(
+        RendererJavaScriptDialogId::new(1),
+        RendererDocumentLifecycleIdentity {
+            frame: RendererFrameToken { page_id },
+            document: RendererDocumentToken::new_for_testing(page_id, 1),
+            epoch: RendererLifecycleEpoch(1),
+        },
+        RendererJavaScriptDialogSource::RootFrame,
+        "about:blank".to_owned(),
+        "confirm".to_owned(),
+        message.to_owned(),
+        String::new(),
+        Some(completion.clone()),
+    );
+    ctx.with_fixture(|conn| {
+        let page_owner = conn
+            .target_page_residence_identity_for_owner(&owner)
+            .expect("dialog fixture requires a current Page");
+        conn.with_target_javascript_dialog_state_for_owner_mut(&owner, |state| {
+            state.push(crate::conn::TargetJavaScriptDialog::new(
+                page_owner,
+                target_id.to_owned(),
+                dialog,
+            ))
+        })
+        .expect("dialog fixture requires target state");
+    });
+    completion
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attach_with_open_javascript_dialog_responds_and_defers_binding_apply() {
+    // The deferred apply settles on a `spawn_local` supervised wait, exactly
+    // like the background navigation tasks it mirrors.
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = TestContext::new();
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-3069-DEFER",
+                "TID-3069-DEFER",
+                "<title>deferred attach</title>",
+            )
+            .await;
+            ctx.with_fixture(|conn| {
+                conn.browser_context
+                    .as_mut()
+                    .unwrap()
+                    .attach_active_session("SID-3069-A")
+            });
+
+            // A stored binding on the first session must reach every later session.
+            ctx.process_async(json!({
+                "id": 306_901,
+                "method": "Runtime.addBinding",
+                "sessionId": "SID-3069-A",
+                "params": { "name": "__moliIssue3069Probe" }
+            }))
+            .await;
+            ctx.expect_result(306_901, json!({}), Some("SID-3069-A"));
+
+            let dialog_completion = push_current_javascript_dialog_for_active_target(
+                &mut ctx,
+                "BID-3069-DEFER",
+                "TID-3069-DEFER",
+                "issue 3069",
+            )
+            .await;
+            ctx.with_fixture(|conn| {
+                let owner = crate::conn::CommandOwnerScope::for_route(
+                    crate::conn::CdpSessionRoute::PageTarget {
+                        browser_context_id: "BID-3069-DEFER".to_owned(),
+                        target_id: "TID-3069-DEFER".to_owned(),
+                        session_key: moli_page_types::DevToolsSessionKey::Primary,
+                    },
+                );
+                assert!(
+                    conn.has_current_javascript_dialog_for_owner(&owner),
+                    "the pushed dialog must count as current for the attach owner"
+                );
+            });
+
+            // The scheduler normally owns this channel; the test applies the deferred
+            // completion itself.
+            let (completion_tx, mut completion_rx) = tokio::sync::mpsc::unbounded_channel();
+            ctx.with_fixture(|conn| {
+                conn.set_deferred_attachment_binding_completion_sender(completion_tx)
+            });
+
+            ctx.process_async(json!({
+                "id": 306_902,
+                "method": "Target.attachToTarget",
+                "params": { "targetId": "TID-3069-DEFER", "flatten": true }
+            }))
+            .await;
+            let session_b = take_response_by_id(&mut ctx, 306_902)["result"]["sessionId"]
+                .as_str()
+                .expect("the attach must respond while the dialog is open")
+                .to_owned();
+            ctx.expect_event("Target.attachedToTarget", None);
+
+            // The deferred apply settles on the free renderer and hands its result to
+            // the scheduler channel.
+            let deferred =
+                tokio::time::timeout(std::time::Duration::from_secs(2), completion_rx.recv())
+                    .await
+                    .expect("deferred binding completion must arrive")
+                    .expect("deferred completion channel stays open");
+            let applied = ctx.with_fixture(|conn| deferred.finish(conn));
+            applied.expect("deferred binding apply must succeed");
+
+            // Settled bindings are live for the new session even though the dialog is
+            // still open.
+            ctx.process_async(json!({
+                "id": 306_903,
+                "method": "Runtime.enable",
+                "sessionId": session_b,
+                "params": {}
+            }))
+            .await;
+            ctx.expect_result(306_903, json!({}), Some(&session_b));
+            ctx.process_async(json!({
+                "id": 306_904,
+                "method": "Runtime.evaluate",
+                "sessionId": session_b,
+                "params": {
+                    "expression": "typeof __moliIssue3069Probe",
+                    "returnByValue": true
+                }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 306_904)["result"]["result"]["value"],
+                json!("function"),
+                "deferred bindings must be installed for the new session"
+            );
+
+            // Resolving the dialog still works normally afterwards.
+            assert!(dialog_completion.finish(false, String::new()));
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deferred_attachment_binding_apply_tolerates_a_dead_renderer() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = TestContext::new();
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-3069-DEAD",
+                "TID-3069-DEAD",
+                "<title>deferred attach dead renderer</title>",
+            )
+            .await;
+            ctx.with_fixture(|conn| {
+                conn.browser_context
+                    .as_mut()
+                    .unwrap()
+                    .attach_active_session("SID-3069-DEAD-A")
+            });
+            push_current_javascript_dialog_for_active_target(
+                &mut ctx,
+                "BID-3069-DEAD",
+                "TID-3069-DEAD",
+                "issue 3069 dead",
+            )
+            .await;
+            let (completion_tx, mut completion_rx) = tokio::sync::mpsc::unbounded_channel();
+            ctx.with_fixture(|conn| {
+                conn.set_deferred_attachment_binding_completion_sender(completion_tx)
+            });
+
+            ctx.process_async(json!({
+                "id": 306_911,
+                "method": "Target.attachToTarget",
+                "params": { "targetId": "TID-3069-DEAD", "flatten": true }
+            }))
+            .await;
+            take_response_by_id(&mut ctx, 306_911)["result"]["sessionId"]
+                .as_str()
+                .expect("the attach must respond while the dialog is open");
+
+            // Renderer death resolves the supervised wait with a failure; the
+            // completion carries it exactly like a renderer reply error would.
+            ctx.with_fixture(|conn| {
+                conn.browser_context
+                    .as_ref()
+                    .unwrap()
+                    .active_page_target()
+                    .loaded_page()
+                    .expect("fixture should retain a loaded Page")
+                    .crash_devtools_target_from_io()
+            });
+            let deferred =
+                tokio::time::timeout(std::time::Duration::from_secs(2), completion_rx.recv())
+                    .await
+                    .expect("the failed deferred completion must still arrive")
+                    .expect("deferred completion channel stays open");
+            let applied = ctx.with_fixture(|conn| deferred.finish(conn));
+            assert!(
+                applied.is_err(),
+                "a dead renderer must surface the apply failure for the scheduler warn path"
+            );
+        })
+        .await;
+}

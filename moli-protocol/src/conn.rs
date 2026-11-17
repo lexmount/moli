@@ -1752,6 +1752,16 @@ impl CdpConnection {
             .set_background_navigation_completion_sender(sender);
     }
 
+    pub fn set_deferred_attachment_binding_completion_sender(
+        &mut self,
+        sender: tokio::sync::mpsc::UnboundedSender<
+            crate::domains::target::DeferredAttachmentBindingCompletion,
+        >,
+    ) {
+        self.scheduler_hooks
+            .set_deferred_attachment_binding_completion_sender(sender);
+    }
+
     pub fn set_renderer_publication_sender(
         &mut self,
         sender: moli_core::RendererOutputTransportSender,
@@ -1818,6 +1828,18 @@ impl CdpConnection {
             .chain(self.inactive_browser_contexts.iter_mut())
             .flat_map(|context| context.page_targets.iter_mut())
             .filter_map(|target| target.runtime_slot.take_background_navigation_task())
+            .collect()
+    }
+
+    /// Removes the supervised deferred attachment binding waits before the
+    /// actor releases renderer and network owners. Callers abort all of them
+    /// before joining cancellation.
+    pub fn take_deferred_attachment_binding_tasks(&mut self) -> Vec<OwnedProtocolWaitTask> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .flat_map(|context| context.page_targets.iter_mut())
+            .flat_map(|target| target.runtime_slot.take_deferred_attachment_binding_tasks())
             .collect()
     }
 
@@ -2678,6 +2700,17 @@ impl CdpConnection {
         }
         self.scheduler_hooks
             .background_navigation_completion_sender()
+    }
+
+    pub(crate) fn deferred_attachment_binding_completion_sender(
+        &self,
+    ) -> Option<
+        tokio::sync::mpsc::UnboundedSender<
+            crate::domains::target::DeferredAttachmentBindingCompletion,
+        >,
+    > {
+        self.scheduler_hooks
+            .deferred_attachment_binding_completion_sender()
     }
 
     fn can_run_background_navigation_for_owner(&self, owner: &CommandOwnerScope) -> bool {

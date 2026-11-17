@@ -13,7 +13,7 @@ use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 use moli_protocol::{
     BackgroundNavigationCompletion, BackgroundProtocolEvent, CommandDispatchContext,
     CommandWaitLifetime, CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
-    ParsedCdpCommand, PendingCdpCommandDispatch,
+    DeferredAttachmentBindingCompletion, ParsedCdpCommand, PendingCdpCommandDispatch,
     conn::{RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady},
 };
 use serde_json::Value;
@@ -37,7 +37,8 @@ use super::command_task::{
 };
 use super::frontend_control::CdpFrontendControlState;
 use super::{
-    CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpOwnerActorLifecycle,
+    CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver,
+    CdpDeferredAttachmentBindingCompletionReceiver, CdpOwnerActorLifecycle,
     CdpRendererPublicationReceiver, CdpScheduler, CdpSchedulerEventReceivers,
     CommandOutputReleasePermit, CommandStartAction, CommandTaskStep, CommandTurnOutput,
     ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
@@ -150,6 +151,7 @@ enum SchedulerInput {
     ProtocolStateEventsReady,
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
+    DeferredAttachmentBindingCompletion(DeferredAttachmentBindingCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
     RendererPublication(RendererOutputTransportMessage),
     DeferredRuntimeInspectorResponse(Box<RuntimeInspectorResponseReady>),
@@ -164,6 +166,7 @@ struct SchedulerInputReceivers {
         mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     background_event_rx: CdpBackgroundEventReceiver,
     background_navigation_completion_rx: CdpBackgroundNavigationCompletionReceiver,
+    deferred_attachment_binding_completion_rx: CdpDeferredAttachmentBindingCompletionReceiver,
     renderer_publication_rx: CdpRendererPublicationReceiver,
     buffered_renderer_publications: VecDeque<RendererOutputTransportMessage>,
     ready_background_inputs_before_runtime_response: VecDeque<SchedulerInput>,
@@ -177,6 +180,8 @@ impl SchedulerInputReceivers {
             document_activity_completion_rx: receivers.document_activity_completion_rx,
             background_event_rx: receivers.background_event_rx,
             background_navigation_completion_rx: receivers.background_navigation_completion_rx,
+            deferred_attachment_binding_completion_rx: receivers
+                .deferred_attachment_binding_completion_rx,
             renderer_publication_rx: receivers.renderer_publication_rx,
             buffered_renderer_publications: VecDeque::new(),
             ready_background_inputs_before_runtime_response: VecDeque::new(),
@@ -198,6 +203,7 @@ impl SchedulerInputReceivers {
         // position is admitted.
         let activity_ready = self.document_activity_completion_rx.len();
         let navigation_ready = self.background_navigation_completion_rx.len();
+        let deferred_binding_ready = self.deferred_attachment_binding_completion_rx.len();
         let events_ready = self.background_event_rx.len();
         for _ in 0..activity_ready {
             let Ok(completion) = self.document_activity_completion_rx.try_recv() else {
@@ -212,6 +218,15 @@ impl SchedulerInputReceivers {
             };
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundNavigationCompletion(completion));
+        }
+        for _ in 0..deferred_binding_ready {
+            let Ok(completion) = self.deferred_attachment_binding_completion_rx.try_recv() else {
+                break;
+            };
+            self.ready_background_inputs_before_runtime_response
+                .push_back(SchedulerInput::DeferredAttachmentBindingCompletion(
+                    completion,
+                ));
         }
         for _ in 0..events_ready {
             let Ok(event) = self.background_event_rx.try_recv() else {
@@ -268,6 +283,9 @@ impl SchedulerInputReceivers {
                 maybe_completion = self.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
                 }
+                maybe_completion = self.deferred_attachment_binding_completion_rx.recv() => {
+                    maybe_completion.map(SchedulerInput::DeferredAttachmentBindingCompletion)
+                }
                 maybe_event = self.background_event_rx.recv() => {
                     maybe_event.map(SchedulerInput::BackgroundEvent)
                 }
@@ -292,6 +310,9 @@ impl SchedulerInputReceivers {
                 }
                 maybe_completion = self.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
+                }
+                maybe_completion = self.deferred_attachment_binding_completion_rx.recv() => {
+                    maybe_completion.map(SchedulerInput::DeferredAttachmentBindingCompletion)
                 }
                 maybe_event = self.background_event_rx.recv() => {
                     maybe_event.map(SchedulerInput::BackgroundEvent)
@@ -592,6 +613,12 @@ async fn run_cdp_scheduler_actor(
             .with_state(|state| state.take_background_navigation_tasks())
             .expect("live protocol actor state"),
     );
+    waits.extend(
+        scheduler
+            .state
+            .with_state(|state| state.take_deferred_attachment_binding_tasks())
+            .expect("live protocol actor state"),
+    );
     waits.extend(scheduler.take_protocol_work_tasks());
     for task in &waits {
         task.abort();
@@ -684,6 +711,9 @@ async fn handle_scheduler_input(
                 input,
             )
             .await
+        }
+        SchedulerInput::DeferredAttachmentBindingCompletion(completion) => {
+            apply_deferred_attachment_binding_completion(scheduler, completion)
         }
         SchedulerInput::BackgroundEvent(event) => {
             let output = scheduler.route_background_event_around_inflight_navigation(event);
@@ -857,6 +887,22 @@ async fn ingest_and_flush_renderer_publication(
         output,
     )
     .await
+}
+
+pub(super) fn apply_deferred_attachment_binding_completion(
+    scheduler: &mut CdpScheduler,
+    completion: DeferredAttachmentBindingCompletion,
+) -> bool {
+    // The attach response already went out; a failed late apply is tolerated
+    // exactly like the synchronous attach path tolerates one.
+    if let Err(error) = scheduler
+        .state
+        .with_state(|state| state.finish_deferred_target_attachment_bindings(completion))
+        .expect("live protocol actor state")
+    {
+        tracing::warn!(%error, "target attach renderer binding state apply failed");
+    }
+    true
 }
 
 async fn flush_background_completion_input(
@@ -2487,6 +2533,9 @@ fn scheduler_input_kind(input: &SchedulerInput) -> &'static str {
         SchedulerInput::ProtocolWorkCompletion(_) => "protocol_work_completion",
         SchedulerInput::DocumentActivityCompletion(_) => "document_activity_completion",
         SchedulerInput::BackgroundNavigationCompletion(_) => "background_navigation_completion",
+        SchedulerInput::DeferredAttachmentBindingCompletion(_) => {
+            "deferred_attachment_binding_completion"
+        }
         SchedulerInput::BackgroundEvent(_) => "background_event",
         SchedulerInput::DeferredRuntimeInspectorResponse(_) => {
             "deferred_runtime_inspector_response"
@@ -2546,6 +2595,7 @@ mod tests {
             document_activity_completion_rx,
             background_event_rx,
             background_navigation_completion_rx,
+            deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
             renderer_publication_rx,
         })
     }
@@ -3022,6 +3072,7 @@ mod tests {
             document_activity_completion_rx,
             background_event_rx,
             background_navigation_completion_rx,
+            deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
             renderer_publication_rx,
         });
         let (runtime_response_tx, mut runtime_response_rx) = mpsc::unbounded_channel();

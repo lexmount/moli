@@ -108,6 +108,7 @@ async fn dialog_handling_reaches_its_owner_during_pending_document_admission() {
         document_activity_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         background_event_rx: tokio::sync::mpsc::unbounded_channel().1,
         background_navigation_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
+        deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         renderer_publication_rx: moli_core::renderer_output_transport_channel().1,
     };
     let (ready, _ready_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -218,6 +219,7 @@ async fn classic_alert_wait_is_interrupted_by_a_dialog_not_by_a_blanket_exemptio
                 document_activity_completion_rx,
                 background_event_rx,
                 background_navigation_completion_rx,
+                deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
                 renderer_publication_rx,
             };
             let install = || {
@@ -338,6 +340,7 @@ async fn classic_alert_navigation_deadline_stops_only_the_timed_out_navigation()
                     document_activity_completion_rx,
                     background_event_rx,
                     background_navigation_completion_rx,
+                    deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
                     renderer_publication_rx,
                 };
                 let started = tokio::time::Instant::now();
@@ -2327,6 +2330,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
         document_activity_completion_rx,
         background_event_rx,
         background_navigation_completion_rx,
+        deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         renderer_publication_rx,
     };
     let stream =

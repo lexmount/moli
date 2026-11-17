@@ -10,6 +10,11 @@ pub(super) struct CdpSchedulerHooks {
     background_navigation_completion_sender: Option<
         tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
     >,
+    deferred_attachment_binding_completion_sender: Option<
+        tokio::sync::mpsc::UnboundedSender<
+            crate::domains::target::DeferredAttachmentBindingCompletion,
+        >,
+    >,
     renderer_publication_sender: Option<RendererOutputTransportSender>,
     runtime_inspector_response_ready_sender: Option<RuntimeInspectorResponseReadySender>,
 }
@@ -55,6 +60,25 @@ impl CdpSchedulerHooks {
 
     pub(super) fn has_background_navigation_completion_sender(&self) -> bool {
         self.background_navigation_completion_sender.is_some()
+    }
+
+    pub(super) fn set_deferred_attachment_binding_completion_sender(
+        &mut self,
+        sender: tokio::sync::mpsc::UnboundedSender<
+            crate::domains::target::DeferredAttachmentBindingCompletion,
+        >,
+    ) {
+        self.deferred_attachment_binding_completion_sender = Some(sender);
+    }
+
+    pub(super) fn deferred_attachment_binding_completion_sender(
+        &self,
+    ) -> Option<
+        tokio::sync::mpsc::UnboundedSender<
+            crate::domains::target::DeferredAttachmentBindingCompletion,
+        >,
+    > {
+        self.deferred_attachment_binding_completion_sender.clone()
     }
 
     pub(super) fn set_renderer_publication_sender(

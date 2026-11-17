@@ -12,11 +12,12 @@ use moli_protocol::{
     BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
     CdpInitialStoragePartition, CdpRendererCommandAccess, CdpSchedulerEvent,
     CdpTargetHostLifecycleObserver, CommandDispatchContext, CompletedCdpCommandDispatch,
-    DeferredMainDocumentLoadCompletionOutputAction, DeferredMainDocumentLoadObservationId,
-    DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentResidenceIdentity,
-    PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
-    PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
-    PendingPageScreencastCapture, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
+    DeferredAttachmentBindingCompletion, DeferredMainDocumentLoadCompletionOutputAction,
+    DeferredMainDocumentLoadObservationId, DeferredMainDocumentLoadPredecessorCandidate,
+    DevToolsDocumentResidenceIdentity, PageScreencastCaptureCompletion, PageScreencastCaptureStart,
+    PageScreencastRegistration, PageScreencastSubscriptionStatus, ParsedCdpCommand,
+    PendingCdpCommandDispatch, PendingPageScreencastCapture, ProtocolSchedulerWork,
+    ProtocolSchedulerWorkKind,
     automation::{
         AutomationCommand, AutomationResult, DevToolsError, DevToolsNavigationWait,
         FrontendProtocol,
@@ -242,6 +243,8 @@ impl ForegroundNavigationNetworkBarrier {
 pub(crate) type CdpBackgroundEventReceiver = mpsc::UnboundedReceiver<BackgroundProtocolEvent>;
 pub(crate) type CdpBackgroundNavigationCompletionReceiver =
     mpsc::UnboundedReceiver<BackgroundNavigationCompletion>;
+pub(crate) type CdpDeferredAttachmentBindingCompletionReceiver =
+    mpsc::UnboundedReceiver<DeferredAttachmentBindingCompletion>;
 pub(crate) type CdpRendererPublicationReceiver = moli_core::RendererOutputTransportReceiver;
 pub(crate) struct CdpSchedulerEventReceivers {
     pub(crate) state_events_ready: std::sync::Arc<tokio::sync::Notify>,
@@ -251,6 +254,8 @@ pub(crate) struct CdpSchedulerEventReceivers {
         mpsc::UnboundedReceiver<moli_protocol::conn::CompletedDocumentActivityUpdate>,
     pub(crate) background_event_rx: CdpBackgroundEventReceiver,
     pub(crate) background_navigation_completion_rx: CdpBackgroundNavigationCompletionReceiver,
+    pub(crate) deferred_attachment_binding_completion_rx:
+        CdpDeferredAttachmentBindingCompletionReceiver,
     pub(crate) renderer_publication_rx: CdpRendererPublicationReceiver,
 }
 
@@ -269,6 +274,7 @@ pub(crate) enum CdpSchedulerInterleavedInput {
     ProtocolStateEventsReady,
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
+    DeferredAttachmentBindingCompletion(DeferredAttachmentBindingCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
     RendererPublication(RendererOutputTransportMessage),
 }
@@ -289,6 +295,11 @@ impl CdpSchedulerEventReceivers {
             maybe_completion = self.background_navigation_completion_rx.recv() => {
                 maybe_completion.map(
                     CdpSchedulerInterleavedInput::BackgroundNavigationCompletion,
+                )
+            }
+            maybe_completion = self.deferred_attachment_binding_completion_rx.recv() => {
+                maybe_completion.map(
+                    CdpSchedulerInterleavedInput::DeferredAttachmentBindingCompletion,
                 )
             }
             maybe_event = self.background_event_rx.recv() => {
@@ -898,6 +909,11 @@ impl CdpScheduler {
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             mpsc::unbounded_channel();
         conn.set_background_navigation_completion_sender(background_navigation_completion_tx);
+        let (deferred_attachment_binding_completion_tx, deferred_attachment_binding_completion_rx) =
+            mpsc::unbounded_channel();
+        conn.set_deferred_attachment_binding_completion_sender(
+            deferred_attachment_binding_completion_tx,
+        );
         let (renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
         conn.set_renderer_publication_sender(renderer_publication_tx);
@@ -915,6 +931,7 @@ impl CdpScheduler {
                 document_activity_completion_rx,
                 background_event_rx,
                 background_navigation_completion_rx,
+                deferred_attachment_binding_completion_rx,
                 renderer_publication_rx,
             },
         )
@@ -2393,6 +2410,10 @@ impl CdpScheduler {
                     completion, receivers,
                 )
                 .await
+            }
+            CdpSchedulerInterleavedInput::DeferredAttachmentBindingCompletion(completion) => {
+                actor::apply_deferred_attachment_binding_completion(self, completion);
+                Ok(ProtocolOutputSequence::default())
             }
             CdpSchedulerInterleavedInput::BackgroundEvent(event) => {
                 Ok(self.route_background_event_around_inflight_navigation(event))

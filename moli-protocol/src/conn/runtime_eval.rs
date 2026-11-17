@@ -823,6 +823,35 @@ impl PendingRuntimeBindingPageCommandDispatch {
             completion,
         })
     }
+
+    /// Settles the binding page command, or hands the still-queued dispatch
+    /// back as soon as a JavaScript dialog opens (see
+    /// `moli_core::page::PendingPageCommand::wait_until_settled_or_dialog_open`).
+    /// Dropping the handed-back pending cancels the queued command, so the
+    /// caller must keep it alive and settle it once the renderer frees up.
+    pub async fn wait_until_settled_or_dialog_open(
+        self,
+    ) -> Result<Result<CompletedRuntimeBindingPageCommandDispatch>, Self> {
+        let Self {
+            owner,
+            operation,
+            pending,
+        } = self;
+        match pending.wait_until_settled_or_dialog_open().await {
+            Ok(result) => Ok(
+                result.map(|completion| CompletedRuntimeBindingPageCommandDispatch {
+                    owner,
+                    operation,
+                    completion,
+                }),
+            ),
+            Err(pending) => Err(Self {
+                owner,
+                operation,
+                pending,
+            }),
+        }
+    }
 }
 
 impl PendingRuntimeChildDefaultContextLookupDispatch {

@@ -41,16 +41,33 @@ pub(super) async fn complete_attachment(
         return Ok(error);
     }
     let owner = crate::conn::CommandOwnerScope::for_route(prepared.route().clone());
+    // Chromium completes Target.attachToTarget in ~0 ms even when the target
+    // shows a modal JavaScript dialog. A dialog that is already published
+    // defers the binding apply right away; one that opens while the apply
+    // waits is caught by the pending's dialog watch below.
+    let dialog_open =
+        driver.with_state(|state| state.has_current_javascript_dialog_for_owner(&owner))?;
+    let bind_owner = owner.clone();
     let pending =
-        driver.with_state(move |state| state.prepare_target_attachment_bindings(owner))?;
+        driver.with_state(move |state| state.prepare_target_attachment_bindings(bind_owner))?;
     let bindings = match pending {
-        Ok(pending) => match pending.wait().await {
-            Ok(completed) => context.with_state(driver, move |state, context| {
+        Err(error) => Err(error),
+        Ok(pending) if dialog_open => {
+            defer_or_settle_target_attachment_bindings(driver, context, &owner, pending).await
+        }
+        Ok(pending) => match pending.wait_until_settled_or_dialog_open().await {
+            Ok(Ok(completed)) => context.with_state(driver, move |state, context| {
                 state.finish_target_attachment_bindings(completed, context)
             })?,
-            Err(error) => Err(error),
+            Ok(Err(error)) => Err(error),
+            // The renderer dispatch stayed queued behind a dialog that opened
+            // mid-wait. Defer exactly like the already-open case: publish the
+            // response now and settle the apply once the renderer frees up.
+            Err(still_pending) => {
+                defer_or_settle_target_attachment_bindings(driver, context, &owner, still_pending)
+                    .await
+            }
         },
-        Err(error) => Err(error),
     };
     if let Err(error) = bindings
         && !error.is::<crate::conn::NoDocumentLoaded>()
@@ -77,6 +94,34 @@ pub(super) async fn complete_attachment(
             }
         });
         Ok(CommandOutputPlan::default())
+    }
+}
+
+/// Settles an attachment binding apply whose renderer dispatch is parked
+/// behind an open JavaScript dialog.
+///
+/// The apply is already enqueued, so renderer FIFO secures "bindings installed
+/// before the new session's first command executes" even without awaiting it
+/// here. With a scheduler completion channel the pending moves into a
+/// supervised background task and the attach response publishes immediately,
+/// matching Chromium. Without one the dispatch settles synchronously, exactly
+/// as before deferral existed.
+async fn defer_or_settle_target_attachment_bindings(
+    driver: &mut ProtocolWorkflowDriver,
+    context: &mut CommandWorkflowContext,
+    owner: &crate::conn::CommandOwnerScope,
+    pending: crate::conn::PendingRuntimeBindingPageCommandDispatch,
+) -> Result<()> {
+    let unapplied = driver
+        .with_state(|state| state.defer_target_attachment_binding_apply(owner, pending))??;
+    match unapplied {
+        None => Ok(()),
+        Some(pending) => match pending.wait().await {
+            Ok(completed) => context.with_state(driver, move |state, context| {
+                state.finish_target_attachment_bindings(completed, context)
+            })?,
+            Err(error) => Err(error),
+        },
     }
 }
 
