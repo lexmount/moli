@@ -377,6 +377,16 @@ fn set_window_event_handler_slot(
     value: v8::Local<'_, v8::Value>,
 ) {
     let global = scope.get_current_context().global(scope);
+    let property_name = match slot_name {
+        WINDOW_ONERROR_SLOT => "onerror",
+        WINDOW_ONUNHANDLEDREJECTION_SLOT => "onunhandledrejection",
+        WINDOW_ONREJECTIONHANDLED_SLOT => "onrejectionhandled",
+        _ => unreachable!("unknown Window event-handler slot"),
+    };
+    // The hidden value serves the legacy getter. Dispatch uses the same native
+    // registration sequence as addEventListener, including these special slots.
+    let handler = v8::Local::new(scope, value);
+    set_window_event_handler_value(scope, global, property_name, handler);
     let key = v8str(scope, slot_name);
 
     if value.is_null_or_undefined() {
