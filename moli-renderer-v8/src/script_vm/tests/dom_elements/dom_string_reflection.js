@@ -11,7 +11,8 @@
     ['textarea','placeholder','placeholder'],['textarea','dirName','dirname'],
     ['form','acceptCharset','accept-charset'],['form','target','target'],['a','download','download'],
     ['a','target','target'],['area','target','target'],['base','target','target'],
-    ['area','alt','alt'],['img','alt','alt'],['meta','content','content'],
+    ['area','alt','alt'],['area','hreflang','hreflang'],['area','type','type'],
+    ['img','alt','alt'],['meta','content','content'],
     ['meta','httpEquiv','http-equiv'],['label','htmlFor','for'],
     ['track','srclang','srclang'],['data','value','value'],['param','value','value'],
     ['table','summary','summary'],['table','cellPadding','cellpadding','null-empty'],
@@ -72,12 +73,18 @@
             checks.receiver &&= error instanceof other.TypeError;
           }
           checks.receiverOrder=receiverConversions===0 && traps===0;
-          if(kind==='usv' && ['img','source','link'].includes(tag)) {
-            const wrong=d.createElement('div');let getterError,setterError;
-            try {borrowed.get.call(wrong);}catch(e){getterError=e;}
-            try {borrowed.set.call(wrong,{toString(){receiverConversions++;return value;}});}catch(e){setterError=e;}
-            checks.interfaceReceiver=getterError instanceof other.TypeError &&
-              setterError instanceof other.TypeError && receiverConversions===0 && wrong.attributes.length===0;
+          const areaMetadata=tag==='area' && ['hreflang','type'].includes(property);
+          if((kind==='usv' && ['img','source','link'].includes(tag)) || areaMetadata) {
+            const wrongs=[d.createElement('div')];
+            if(areaMetadata) wrongs.push(d.createElementNS('http://www.w3.org/2000/svg','area'));
+            checks.interfaceReceiver=true;
+            for(const wrong of wrongs) {
+              let getterError,setterError;
+              try {borrowed.get.call(wrong);}catch(e){getterError=e;}
+              try {borrowed.set.call(wrong,{toString(){receiverConversions++;return value;}});}catch(e){setterError=e;}
+              checks.interfaceReceiver &&= getterError instanceof other.TypeError &&
+                setterError instanceof other.TypeError && receiverConversions===0 && wrong.attributes.length===0;
+            }
           }
           node[property]=null;
           const nullExpected=kind==='nullable'?null:kind==='null-empty'?'':'null';
