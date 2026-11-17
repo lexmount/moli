@@ -223,12 +223,13 @@ impl ImageSubresourceTerminal<'_> {
     fn resource_performance_entry(
         &self,
         request_url: &url::Url,
+        initiator_type: &'static str,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
             Self::Response { response, encoded } => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response_with_body_size(
                     request_url.as_str(),
-                    "img",
+                    initiator_type,
                     None,
                     response,
                     encoded.len(),
@@ -237,7 +238,7 @@ impl ImageSubresourceTerminal<'_> {
             Self::Failure => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_failure(
                     request_url.as_str(),
-                    "img",
+                    initiator_type,
                     None,
                 )
             }
@@ -254,6 +255,11 @@ fn apply_image_subresource_terminal(
     request_url: &url::Url,
     terminal: ImageSubresourceTerminal<'_>,
 ) {
+    let initiator_type = context_host
+        .borrow()
+        .pending_image_load_event(image_handle)
+        .filter(|pending| pending.id() == sequence)
+        .map(|pending| pending.resource_timing_initiator_type());
     let (accepted, followup) = match &terminal {
         ImageSubresourceTerminal::Response { response, encoded } => {
             let descriptor =
@@ -281,10 +287,10 @@ fn apply_image_subresource_terminal(
             (followup.is_some(), followup)
         }
     };
-    if accepted {
+    if accepted && let Some(initiator_type) = initiator_type {
         crate::context_bootstrap::record_resource_performance_entry(
             scope,
-            terminal.resource_performance_entry(request_url),
+            terminal.resource_performance_entry(request_url, initiator_type),
         );
     }
     let host_ptr: *mut PageScriptHost = context_host.as_ref().as_ptr();

@@ -719,6 +719,7 @@ pub(crate) struct PendingImageLoadEvent {
     target: WindowDocumentTaskTarget,
     owner: PendingImageLoadEventOwner,
     request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+    resource_timing_initiator_type: &'static str,
     network_state: PendingImageLoadNetworkState,
     terminal_followup_queued: bool,
 }
@@ -747,6 +748,7 @@ impl PendingImageLoadEvent {
         target: WindowDocumentTaskTarget,
         owner: PendingImageLoadEventOwner,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+        resource_timing_initiator_type: &'static str,
     ) -> Self {
         Self {
             id,
@@ -754,6 +756,7 @@ impl PendingImageLoadEvent {
             target,
             owner,
             request_initiator_type,
+            resource_timing_initiator_type,
             network_state: PendingImageLoadNetworkState::Unbound,
             terminal_followup_queued: false,
         }
@@ -777,6 +780,10 @@ impl PendingImageLoadEvent {
 
     pub(crate) fn request_initiator_type(self) -> crate::types::SubresourceRequestInitiatorType {
         self.request_initiator_type
+    }
+
+    pub(crate) fn resource_timing_initiator_type(self) -> &'static str {
+        self.resource_timing_initiator_type
     }
 
     pub(crate) fn network_request_id(self) -> Option<u64> {
