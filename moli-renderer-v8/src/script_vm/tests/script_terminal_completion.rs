@@ -19,6 +19,7 @@ addEventListener("error", () => {
         "body-only Window error",
         Some("https://script-terminal.test/body.js"),
         None,
+        None,
     )
     .expect("Window error body should dispatch");
     assert_eq!(

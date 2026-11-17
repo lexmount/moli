@@ -573,7 +573,7 @@ impl ScriptVm {
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Result<FollowupPageTaskDisposition> {
-        let mut planned_failure_work = self.document_runtime.plan_script_failure_lifecycle_work(
+        let mut planned_failure_work = self.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,

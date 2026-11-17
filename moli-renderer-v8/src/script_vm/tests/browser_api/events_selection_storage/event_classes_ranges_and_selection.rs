@@ -248,6 +248,7 @@ fn window_script_failure_error_event_is_trusted_without_trusting_synthetic_event
         "trusted browser-generated error",
         Some("https://window-error-trusted.test/script.js"),
         None,
+        None,
     );
     let result = vm
         .eval(

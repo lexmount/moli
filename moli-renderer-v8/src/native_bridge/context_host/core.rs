@@ -131,6 +131,24 @@ impl PageScriptHost {
         self.page_script_environment.as_ref()?.upgrade()
     }
 
+    pub(crate) fn emit_diagnostic(
+        &self,
+        build: impl FnOnce(crate::DiagnosticSource) -> Option<crate::DiagnosticEvent>,
+    ) {
+        self.browser_context_runtime.diagnostics().emit(|| {
+            let page_id = self.page_script_environment()?.page_id();
+            build(crate::DiagnosticSource::Page { page_id })
+        });
+    }
+
+    pub(crate) fn emit_script_load_failure(&self, url: &str, message: &str) {
+        self.emit_diagnostic(|source| {
+            Some(crate::DiagnosticEvent::script_load_failure(
+                source, url, message,
+            ))
+        });
+    }
+
     #[cfg(test)]
     pub(crate) fn bind_auxiliary_window_for_test(
         &mut self,

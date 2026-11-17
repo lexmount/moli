@@ -241,6 +241,12 @@ impl ParserClassicDocumentScriptExecutionHooks
         let script_handle = failure.script_handle();
         let script_url = failure.script_url().clone();
         let error = failure.error().to_owned();
+        if owner.page_vm.vm().current_main_document_task_owner() == Some(target.owner()) {
+            owner
+                .page_vm
+                .vm()
+                .emit_script_load_failure(script_url.as_str(), &error);
+        }
         let event = owner
             .page_vm
             .vm()

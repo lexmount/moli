@@ -12,10 +12,43 @@ use crate::context_bootstrap::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT, dispatch_window_error_event_with_details,
 };
-use crate::host::ScriptEventTask;
+use crate::host::{ModuleFailurePolicy, ScriptEventKind, ScriptEventTask};
+use crate::module_runtime::ModuleEntryId;
+use crate::page_task_queue::PostParseLifecycleWork;
+use crate::planning::PreparedScript;
+use crate::types::{ScriptErrorConstructorKind, ScriptSourceKind};
 use crate::util::{get_private_value, v8_string, v8str};
 
 impl ScriptVm {
+    pub(crate) fn emit_script_load_failure(&self, url: &str, message: &str) {
+        self._context_host
+            .borrow()
+            .emit_script_load_failure(url, message);
+    }
+
+    pub(super) fn plan_script_failure_lifecycle_work(
+        &mut self,
+        script: &PreparedScript,
+        message: &str,
+        module_failure_policy: Option<ModuleFailurePolicy>,
+        error_constructor: Option<ScriptErrorConstructorKind>,
+    ) -> Vec<PostParseLifecycleWork> {
+        let work = self.document_runtime.plan_script_failure_lifecycle_work(
+            script,
+            message,
+            module_failure_policy,
+            error_constructor,
+        );
+        self._context_host.borrow().emit_diagnostic(|source| {
+            let reports_source_failure = script.source_kind == ScriptSourceKind::External
+                && work.iter().any(|item| matches!(item, PostParseLifecycleWork::DispatchScriptEvent(task) if task.kind == ScriptEventKind::Error));
+            reports_source_failure.then(|| {
+                crate::DiagnosticEvent::script_load_failure(source, script.url.as_str(), message)
+            })
+        });
+        work
+    }
+
     pub(crate) fn dispatch_script_event_body_best_effort(&mut self, task: &ScriptEventTask) {
         if let Err(error) = self.dispatch_script_event_body(task) {
             self.record_runtime_warning(format_args!(
@@ -39,8 +72,11 @@ impl ScriptVm {
         message: &str,
         filename: Option<&str>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        failed_module: Option<ModuleEntryId>,
     ) {
-        if let Err(error) = self.report_window_error_body(message, filename, error_constructor) {
+        if let Err(error) =
+            self.report_window_error_body(message, filename, error_constructor, failed_module)
+        {
             self.record_runtime_warning(format_args!(
                 "window script failure body dispatch failed for `{}`: {error}",
                 filename.unwrap_or("")
@@ -53,8 +89,37 @@ impl ScriptVm {
         message: &str,
         filename: Option<&str>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        failed_module: Option<ModuleEntryId>,
     ) -> Result<()> {
+        // An evaluated module keeps the original thrown value, including a TLA
+        // rejection, in its V8 module record. Read it only at the existing error
+        // reporting boundary, after module evaluation has finished unwinding.
+        let failed_module =
+            failed_module.and_then(|entry| self.document_runtime.native_compiled_module(entry));
         self.with_default_context_scope(|scope, host_ptr| {
+            if let Some(module) = &failed_module {
+                let module = v8::Local::new(scope, module);
+                if module.get_status() == v8::ModuleStatus::Errored {
+                    let reason = module.get_exception();
+                    let (message, source, lineno, colno) =
+                        crate::exception_reporting::exception_message_details(scope, reason);
+                    let filename = if source.is_empty() {
+                        filename.unwrap_or_default()
+                    } else {
+                        &source
+                    };
+                    return dispatch_window_error_event_with_details(
+                        scope,
+                        host_ptr,
+                        &message,
+                        filename,
+                        lineno,
+                        colno,
+                        Some(reason),
+                    )
+                    .map_err(anyhow::Error::msg);
+                }
+            }
             let global = scope.get_current_context().global(scope);
             let message_value = v8_string(scope, message)
                 .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;

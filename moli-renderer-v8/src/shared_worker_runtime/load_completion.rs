@@ -86,6 +86,20 @@ fn finish_loading_with_runtime_service(
             match runtime_service.fail_loading_registry_entry(&params, instance_id) {
                 SharedWorkerLoadFailure::Failed { clients, .. } => {
                     if let Some(host) = host {
+                        params
+                            .launch_context
+                            .execution_policy
+                            .worker_context_runtime
+                            .with_diagnostic_source(crate::DiagnosticSource::SharedWorker {
+                                instance_id: instance_id.as_u64(),
+                            })
+                            .emit_diagnostic(|source| {
+                                crate::DiagnosticEvent::script_load_failure(
+                                    source,
+                                    params.key.script_url(),
+                                    &message,
+                                )
+                            });
                         host.close_completed_loading();
                         host.fail_clients(
                             clients,

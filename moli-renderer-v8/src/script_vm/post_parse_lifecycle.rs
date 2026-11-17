@@ -1210,7 +1210,7 @@ impl ScriptVm {
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
         lease: MainDocumentScriptLoadDelayLease,
     ) {
-        let work = self.document_runtime.plan_script_failure_lifecycle_work(
+        let work = self.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
@@ -1261,7 +1261,7 @@ impl ScriptVm {
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
         lease: MainDocumentScriptLoadDelayLease,
     ) -> RuntimeScriptFailureTerminalBodySettlement {
-        let work = self.document_runtime.plan_script_failure_lifecycle_work(
+        let work = self.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
@@ -1279,6 +1279,7 @@ impl ScriptVm {
                         &task.message,
                         task.filename.as_deref(),
                         task.error_constructor,
+                        None,
                     );
                     activity = crate::script_vm::ScriptTerminalBodyActivity::EventDispatchAttempted;
                 }
@@ -1459,6 +1460,7 @@ impl ScriptVm {
                     message,
                     module_failure_policy,
                     error_constructor,
+                    None,
                 );
                 self.enqueue_immediate_runtime_script_work_if_needed();
                 return activity;

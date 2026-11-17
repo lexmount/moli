@@ -307,6 +307,88 @@ async fn main_parser_module_tla_rejection_reports_without_duplicate_completion()
     })
     .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn main_parser_inline_module_tla_rejection_preserves_the_original_error() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        for (source, suspends) in [
+            ("await Promise.reject(globalThis.expectedError);", false),
+            (
+                "await new Promise((_, reject) => { globalThis.rejectInlineModule = reject; });",
+                true,
+            ),
+        ] {
+            let mut page_vm = test_page_vm_with_loader_and_document_url(
+                &loader,
+                Vec::new(),
+                Url::parse("https://example.com/inline-module.html").expect("document URL"),
+            );
+            page_vm.vm_mut().eval(
+                r#"
+                globalThis.expectedError = new TypeError("inline TLA rejected");
+                globalThis.inlineModuleErrors = [];
+                addEventListener("error", event => {
+                    inlineModuleErrors.push(event.error === expectedError);
+                    event.preventDefault();
+                });
+                "#,
+            )?;
+            let document = &mut page_vm.vm_mut().document_runtime;
+            let body = document
+                .snapshot_document()
+                .document_body_handle()
+                .expect("body");
+            let script_node = document
+                .dom_host_mut()
+                .create_parser_element_without_attributes(
+                    "script".to_owned(),
+                    "http://www.w3.org/1999/xhtml".to_owned(),
+                    None,
+                );
+            assert!(document.dom_host_mut().append_child(body, script_node));
+            let handle = document.bind_parser_owned_script_handle_for_node(script_node);
+            let mut script = prepared_inline_module_for_page_vm_test(
+                &page_vm,
+                script_node.index() as u32,
+                source,
+            );
+            script.host_script_handle = Some(handle);
+            let work = install_parser_module_defer_work(&mut page_vm, script);
+            page_vm
+                .execute_post_parse_page_owned_task_on_named_owner_lane(&loader, work)
+                .await?;
+
+            if suspends {
+                assert_eq!(
+                    page_vm
+                        .vm_mut()
+                        .eval("JSON.stringify(inlineModuleErrors)")?,
+                    "[]"
+                );
+                page_vm.vm_mut().eval("rejectInlineModule(expectedError)")?;
+            }
+            run_parser_module_completion_turns_for_test(
+                &mut page_vm,
+                &loader,
+                usize::from(suspends),
+                "inline module TLA rejection",
+            )
+            .await;
+            assert_eq!(
+                page_vm
+                    .vm_mut()
+                    .eval("JSON.stringify(inlineModuleErrors)")?,
+                "[true]"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline module rejection should report the original exception");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn parser_module_graph_failure_leaves_shared_sibling_fetch_for_joined_script_waiter() {
     run_page_vm_async_test(async move {

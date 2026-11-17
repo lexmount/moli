@@ -78,6 +78,9 @@ impl RendererSharedWorkerHost {
         .with_network_policy(execution_policy.network_policy)
         .with_policy_context(policy_context)
         .with_worker_context_runtime(execution_policy.worker_context_runtime.clone())
+        .with_diagnostic_source(crate::DiagnosticSource::SharedWorker {
+            instance_id: self.instance_id().as_u64(),
+        })
         .with_pause_evaluation_until_debugger(
             execution_policy
                 .worker_context_runtime

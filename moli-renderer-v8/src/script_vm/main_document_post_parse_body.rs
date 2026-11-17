@@ -129,6 +129,7 @@ impl ScriptVm {
                     &task.message,
                     task.filename.as_deref(),
                     task.error_constructor,
+                    None,
                 ) {
                     Ok(()) => MainDocumentPostParseCallbackSettlement::Completed,
                     Err(error) => {

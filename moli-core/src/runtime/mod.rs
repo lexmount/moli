@@ -261,6 +261,16 @@ fn initial_navigation_request(request: Request) -> Request {
 }
 
 impl Browser {
+    /// Subscribe to diagnostics from this Browser's Pages and Workers.
+    ///
+    /// The subscription receives future events. Producers continue when a
+    /// receiver lags. Drop the subscription to stop receiving diagnostics.
+    pub fn subscribe_diagnostics(&self) -> crate::DiagnosticsSubscription {
+        self.js_runtime
+            .browser_context_runtime()
+            .subscribe_diagnostics()
+    }
+
     fn resource_request_client(&self) -> ResourceRequestClient {
         ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),

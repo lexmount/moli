@@ -246,6 +246,10 @@ impl DocumentRuntime {
                 .current_main_document_resource_loader()
                 .is_none()
             {
+                unsafe { &*host_ptr }.emit_script_load_failure(
+                    script.url.as_str(),
+                    "script resource loader is unavailable",
+                );
                 let task = ScriptEventTask::new(ScriptEventKind::Error, host_script_handle);
                 if let Err(error) = self.host_dispatch_script_event(scope, host_ptr, &task) {
                     debug!(

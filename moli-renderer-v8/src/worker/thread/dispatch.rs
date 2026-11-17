@@ -411,6 +411,14 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
                 rejection.clone(),
             );
         }
+        with_worker_diagnostic(scope, |scope, source| {
+            crate::exception_reporting::diagnostic_from_exception(
+                scope,
+                source,
+                reason,
+                !allows_default,
+            )
+        });
         if allows_default {
             log_unhandled_promise_rejection(scope, reason);
         }
@@ -3450,6 +3458,18 @@ fn maybe_send_service_worker_periodic_sync_completion(
     let _ = parent_tx.send(message);
 }
 
+fn with_worker_diagnostic<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    build: impl FnOnce(&mut v8::PinScope<'s, '_>, crate::DiagnosticSource) -> crate::DiagnosticEvent,
+) {
+    if let Some(state) = get_worker_state(scope) {
+        state
+            .borrow()
+            .worker_context_runtime
+            .emit_diagnostic(|source| build(scope, source));
+    }
+}
+
 pub(super) fn dispatch_worker_exception<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
@@ -3530,6 +3550,30 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
 ) -> bool {
     apply_worker_exception_location_overrides(scope, &mut report, exception);
     let handled = dispatch_worker_error_event(scope, global, &report, exception, script_url);
+    with_worker_diagnostic(scope, |scope, source| {
+        let stack = if handled {
+            None
+        } else {
+            exception.and_then(|value| {
+                crate::exception_reporting::captured_exception_stack(scope, value)
+            })
+        };
+        crate::DiagnosticEvent::runtime_exception(
+            source,
+            &report.summary,
+            report.source.as_deref().unwrap_or(script_url),
+            report
+                .line
+                .and_then(|line| u32::try_from(line).ok())
+                .unwrap_or(0),
+            report
+                .column
+                .and_then(|column| u32::try_from(column).ok())
+                .unwrap_or(0),
+            stack.as_deref(),
+            handled,
+        )
+    });
     if !handled {
         report_exception_to_parent_with_phase_and_source(
             &report,

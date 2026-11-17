@@ -455,6 +455,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         ) {
             Ok(source) => source,
             Err(message) => {
+                nested_context
+                    .worker_context_runtime
+                    .emit_diagnostic(|source| {
+                        crate::DiagnosticEvent::script_load_failure(
+                            source,
+                            resolved_url.as_str(),
+                            &message,
+                        )
+                    });
                 let _ =
                     nested_context
                         .wake_tx
