@@ -4,7 +4,7 @@
 
 A binding belongs here when its argument conversion, native value state, callbacks and template installation can travel together. Reuse the existing intrinsic registry and native interface identities. Values and dictionaries may accept already-resolved input from the embedder, such as canvas dimensions, a browser identity snapshot or a secure-context flag.
 
-Page and Worker embeddings retain realm exposure, DOM projection, permissions, task scheduling and native backend ownership. In particular, exposure checks precede CryptoKey clone materialization. Installing a shared value factory does not grant authority to expose its interface. The existing Event and EventTarget capabilities provide the host hooks needed by shared event constructors; extracting a binding must not add a second dispatcher or callback registry.
+Page and Worker embeddings retain realm exposure, DOM projection, permissions, task scheduling and native backend ownership. IndexedDB key/range/error models live in `moli-indexeddb-types`, shared with SQL storage through its existing public re-exports. In particular, exposure checks precede CryptoKey clone materialization. Installing a shared value factory does not grant authority to expose its interface. The existing Event and EventTarget capabilities provide the host hooks needed by shared event constructors; extracting a binding must not add a second dispatcher or callback registry.
 
 The direct binding migration includes these groups:
 
@@ -12,7 +12,7 @@ The direct binding migration includes these groups:
 | --- | --- |
 | URLs and platform values | URL, URLSearchParams and its iterator, WorkerLocation, External, PictureInPictureWindow, resize entries, video configuration queries, WebGL value records |
 | Network values | Headers and its iterator; transport-independent header policy lives in `moli-fetch-types` and is re-exported by `moli-fetch` |
-| Collections and records | FileList, Touch/TouchList, native WebIDL collection iterators, CryptoKey, MutationRecord, IntersectionObserverEntry and IdleDeadline |
+| Collections and records | FileList, Touch/TouchList, native WebIDL collection iterators, CryptoKey, IDBKeyRange/IDBRecord, MutationRecord, IntersectionObserverEntry and IdleDeadline |
 | Canvas and media values | WebGL binding state and methods, ImageBitmap value lifetime, TextMetrics, CanvasGradient validation, MediaCapabilities and MediaSource capability queries |
 | Standalone constructors and conversions | TextEncoder, value-event dictionaries and constructors, TrustedHTML/TrustedScript/TrustedScriptURL, credential values and JSON conversions, NavigatorUAData, AbortSignal value/argument shapes, base64 and CSS identifier escaping |
 

@@ -3084,12 +3084,22 @@ version = "0.1.0"
 dependencies = [
  "moli-crypto",
  "moli-file-api",
+ "moli-indexeddb-types",
  "moli-sqlite",
  "parking_lot",
  "rusqlite",
  "serde",
  "strum",
  "tokio",
+]
+
+[[package]]
+name = "moli-indexeddb-types"
+version = "0.1.0"
+dependencies = [
+ "moli-sqlite",
+ "rusqlite",
+ "serde",
  "unicode-id-start",
 ]
 
@@ -3802,6 +3812,7 @@ dependencies = [
  "moli-canvas",
  "moli-fetch-types",
  "moli-geometry",
+ "moli-indexeddb-types",
  "moli-time",
  "moli-url",
  "moli-v8-test-util",

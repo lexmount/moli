@@ -13,7 +13,7 @@ struct IdbKeyRangeBoundArgs<'s> {
     upper_open: bool,
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_bound_callback<'s>(
+pub fn idb_key_range_bound_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,

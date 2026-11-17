@@ -1,7 +1,7 @@
 use super::*;
 
 mod dom_string_list;
-mod errors;
+use moli_webapi::indexed_db_values::errors;
 mod manager;
 mod origin;
 

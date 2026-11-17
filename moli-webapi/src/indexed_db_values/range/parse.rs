@@ -1,7 +1,8 @@
 use super::*;
-use crate::{util::get_private_value, web_api_interfaces};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::get_private_value;
 
-pub(in crate::context_bootstrap::indexed_db) fn parse_key_range_from_value<'s>(
+pub fn parse_key_range_from_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<IdbKeyRangeQuery> {
@@ -24,7 +25,7 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_key_range_from_value<'s>(
     })
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn parse_key_or_range<'s>(
+pub fn parse_key_or_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> std::result::Result<Option<IdbKeyRangeQuery>, KeyConversionError> {

@@ -1,4 +1,4 @@
-use super::*;
+use super::IndexedDbError;
 
 fn backend_error_name(error: &IndexedDbError) -> &'static str {
     match error {
@@ -24,20 +24,20 @@ fn backend_error_name(error: &IndexedDbError) -> &'static str {
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn dom_exception_value<'s>(
+pub fn dom_exception_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     name: &str,
 ) -> v8::Local<'s, v8::Value> {
-    crate::context_bootstrap::new_dom_exception_value(scope, message, name)
+    crate::dom_exception::new_dom_exception_value(scope, message, name)
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn request_error_object<'s>(
+pub fn request_error_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     error: &IndexedDbError,
 ) -> v8::Local<'s, v8::Value> {
     if let IndexedDbError::QuotaExceeded { quota, requested } = error {
-        return crate::context_bootstrap::new_quota_exceeded_error_value(
+        return crate::dom_exception::new_quota_exceeded_error_value(
             scope,
             &error.to_string(),
             Some(*quota as f64),

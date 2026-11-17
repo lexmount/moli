@@ -1,8 +1,8 @@
 use super::*;
 
 mod key_path;
-mod range;
-mod value;
+use moli_webapi::indexed_db_values::key as value;
+use moli_webapi::indexed_db_values::range;
 mod write;
 
 pub(in crate::context_bootstrap::indexed_db) use self::key_path::*;

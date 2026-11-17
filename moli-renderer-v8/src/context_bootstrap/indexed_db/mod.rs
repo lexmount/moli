@@ -11,7 +11,7 @@ mod database;
 mod event_target;
 mod install;
 mod operation_state;
-mod record;
+use moli_webapi::indexed_db_values::record;
 mod runtime;
 mod state;
 mod storage_bucket;

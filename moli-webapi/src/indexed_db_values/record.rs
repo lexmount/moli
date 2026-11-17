@@ -1,8 +1,6 @@
 use super::{Key, key_to_js_value, require_idb_key, try_key_to_js_value};
-use crate::{
-    util::{get_private_value, private_key},
-    web_api_interfaces,
-};
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::{get_private_value, private_key};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const KEY: &str = "__moli_idb_record_key";
@@ -33,7 +31,7 @@ struct RecordPrototype {
     value: (),
 }
 
-pub(super) fn install_record_template_bindings<'s>(
+pub fn install_record_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     prototype: v8::Local<'s, v8::ObjectTemplate>,
     name: &str,
@@ -43,7 +41,7 @@ pub(super) fn install_record_template_bindings<'s>(
     }
 }
 
-pub(super) fn create_record<'s>(
+pub fn create_record<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: &Key,
     primary_key: &Key,
@@ -108,7 +106,7 @@ fn materialize_record_key<'s>(
             .iter()
             .map(|key| materialize_record_key(scope, key, record_context))
             .collect::<Option<Vec<_>>>()?;
-        return crate::util::serialize_v8_array(scope, values.as_slice()).map(Into::into);
+        return moli_webapi_declare::serialize_v8_array(scope, values.as_slice()).map(Into::into);
     }
     // Match Chromium's key-to-value conversion: Arrays use the current getter
     // context, while Date and binary wrappers use the record's relevant context.

@@ -1,5 +1,5 @@
 use super::*;
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -15,7 +15,7 @@ struct IdbKeyRangeObjectDeclaration<'scope> {
     upper_open: bool,
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn create_key_range_object<'s>(
+pub fn create_key_range_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: &IdbKeyRangeQuery,
 ) -> Option<v8::Local<'s, v8::Object>> {
