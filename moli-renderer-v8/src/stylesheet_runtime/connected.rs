@@ -1521,8 +1521,8 @@ impl DocumentRuntime {
                         .is_ok_and(|response| response.load_event_successful),
                     network_results: vec![ConnectedLoadNetworkResult {
                         network_observed: false,
-                        resource_timing_initiator_type: "link",
                         resource_timing: Some(Box::new(resource_timing)),
+                        resource_timing_initiator_type: "link",
                         import_options: None,
                         consumed_preload_error: false,
                         document_owner,

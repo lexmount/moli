@@ -117,6 +117,8 @@ async fn connected_link_timing_masks_cross_origin_network_observations() {
 struct DomInitiatorServer {
     origin: String,
     requests: Arc<AtomicUsize>,
+    held_import: Arc<tokio::sync::Notify>,
+    held_import_started: Arc<tokio::sync::Notify>,
     _server: TimingServer,
 }
 
@@ -129,12 +131,18 @@ async fn dom_initiator_server() -> DomInitiatorServer {
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(AtomicUsize::new(0));
     let request_count = requests.clone();
+    let held_import = Arc::new(tokio::sync::Notify::new());
+    let import_gate = held_import.clone();
+    let held_import_started = Arc::new(tokio::sync::Notify::new());
+    let import_started = held_import_started.clone();
     let task = tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request_count = request_count.clone();
             let redirect_url = redirect_url.clone();
+            let import_gate = import_gate.clone();
+            let import_started = import_started.clone();
             connections.spawn(async move {
                 let mut request = Vec::new();
                 while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
@@ -146,6 +154,10 @@ async fn dom_initiator_server() -> DomInitiatorServer {
                 let request = String::from_utf8(request).unwrap();
                 let path = request.split_whitespace().nth(1).unwrap();
                 request_count.fetch_add(1, Ordering::SeqCst);
+                if path.starts_with("/initiator-held.css") {
+                    import_started.notify_one();
+                    import_gate.notified().await;
+                }
                 if path.starts_with("/redirect-image") {
                     let head = format!("HTTP/1.1 302 Found\r\nLocation: {redirect_url}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n");
                     let _ = socket.write_all(head.as_bytes()).await;
@@ -154,6 +166,11 @@ async fn dom_initiator_server() -> DomInitiatorServer {
                 let (mime, body): (&str, &[u8]) = match path.split('?').next().unwrap() {
                     "/image.gif" => ("image/gif", b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff!\xf9\x04\x01\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;"),
                     "/sheet.css" => ("text/css", b"p { color: green }") ,
+                    "/initiator-root.css" => ("text/css", b"@import '/initiator-nested.css'; p { color: green }") ,
+                    "/initiator-nested.css" => ("text/css", b"@import '/initiator-leaf.css'; p { color: blue }") ,
+                    "/initiator-leaf.css" => ("text/css", b"p { color: red }") ,
+                    "/initiator-detached.css" => ("text/css", b"@import '/initiator-held.css'; p { color: green }") ,
+                    "/initiator-held.css" => ("text/css", b"p { color: red }") ,
                     "/script.js" => ("text/javascript", b"globalThis.__domScriptLoaded = true;"),
                     "/frame.html" => ("text/html", b"<!doctype html><title>resource initiator</title>"),
                     _ => panic!("unexpected native fixture request: {path}"),
@@ -174,6 +191,8 @@ async fn dom_initiator_server() -> DomInitiatorServer {
         },
         origin,
         requests,
+        held_import,
+        held_import_started,
     }
 }
 
@@ -474,6 +493,123 @@ async fn image_timing_retains_the_triggering_script_initiator() {
         "const image = new Image(); image.src = '/image.gif'; document.body.appendChild(image);",
     )
     .await;
+}
+
+#[tokio::test]
+async fn stylesheet_resource_timing_distinguishes_links_from_imports() {
+    let server = dom_initiator_server().await;
+    for mode in ["link", "inline", "cssom", "removed-link"] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut page = new_storage_page_task_executor_test_vm_with_loader(
+            &format!("{}/document.html", server.origin),
+            &loader,
+        );
+        let root_path = if mode == "removed-link" {
+            "/initiator-detached.css"
+        } else {
+            "/initiator-root.css"
+        };
+        let root_url = format!("{}{root_path}?mode={mode}", server.origin);
+        let import = serde_json::to_string(&format!("@import url(\"{root_url}\");")).unwrap();
+        let source = match mode {
+            "link" | "removed-link" => format!(
+                "globalThis.timingOwner=document.createElement('link'); timingOwner.rel='stylesheet'; timingOwner.href={}; document.head.appendChild(timingOwner);",
+                serde_json::to_string(&root_url).unwrap(),
+            ),
+            "inline" => format!(
+                "globalThis.timingOwner=document.createElement('style'); timingOwner.textContent={import}; document.head.appendChild(timingOwner);",
+            ),
+            "cssom" => format!(
+                "globalThis.timingOwner=document.createElement('style'); document.head.appendChild(timingOwner); timingOwner.sheet.insertRule({import},0);",
+            ),
+            _ => unreachable!(),
+        };
+        let before = server.requests.load(Ordering::SeqCst);
+        exec_resource_initiator_script(&mut page, &server.origin, "stylesheet-caller", &source);
+        let expected_count = if mode == "removed-link" { 2 } else { 3 };
+        if mode == "removed-link" {
+            // Hold the imported response after its real request has started,
+            // then retire DOM installation authority before publication.
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                while server.requests.load(Ordering::SeqCst) - before < expected_count {
+                    if page
+                        .run_one_oldest_ready_page_task_executor_turn(&loader)
+                        .await
+                        .unwrap()
+                    {
+                        continue;
+                    }
+                    tokio::select! {
+                        arrived = page.wait_for_task_executor_work_arrival() => {
+                            assert!(arrived, "stylesheet task routes must remain live");
+                        }
+                        _ = server.held_import_started.notified() => {}
+                    }
+                }
+            })
+            .await
+            .expect("native imported request should start before owner removal");
+            page.eval("timingOwner.remove()").unwrap();
+            server.held_import.notify_one();
+        }
+        let entries_expression =
+            "performance.getEntriesByType('resource').filter(e=>e.name.includes('/initiator-'))";
+        advance_page_task_executor_until_eval_equals(
+            &mut page,
+            &loader,
+            &format!("{entries_expression}.length"),
+            &expected_count.to_string(),
+            "real stylesheet root and import timing",
+        )
+        .await;
+        let entries: Vec<serde_json::Value> = serde_json::from_str(
+            &page
+                .eval(&format!(
+                    "JSON.stringify({entries_expression}.map(e=>e.toJSON()))"
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            server.requests.load(Ordering::SeqCst) - before,
+            expected_count,
+            "{mode}: no duplicate physical fetches"
+        );
+        for entry in &entries {
+            let name = entry["name"].as_str().unwrap();
+            let expected_type = if name == root_url && matches!(mode, "link" | "removed-link") {
+                "link"
+            } else {
+                "css"
+            };
+            assert_eq!(entry["initiatorType"], expected_type, "{mode}: {entry}");
+            let status = entry["responseStatus"].as_u64().unwrap();
+            assert!(
+                status == 200 || (mode == "removed-link" && status == 0),
+                "{entry}"
+            );
+            if status == 200 {
+                assert!(entry["encodedBodySize"].as_u64().unwrap() > 0, "{entry}");
+            }
+            assert!(
+                entry["responseEnd"].as_f64().unwrap() >= entry["fetchStart"].as_f64().unwrap(),
+                "{entry}"
+            );
+        }
+        page.eval("timingOwner.remove()").unwrap();
+        let retained: Vec<serde_json::Value> = serde_json::from_str(
+            &page
+                .eval(&format!(
+                    "JSON.stringify({entries_expression}.map(e=>e.toJSON()))"
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            retained, entries,
+            "{mode}: immutable fetch attribution survives DOM removal"
+        );
+    }
 }
 
 #[tokio::test]

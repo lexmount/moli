@@ -2561,8 +2561,8 @@ impl ScriptVm {
         for network_result in results {
             let crate::document_runtime::ConnectedLoadNetworkResult {
                 network_observed,
-                resource_timing_initiator_type,
                 resource_timing,
+                resource_timing_initiator_type,
                 import_options,
                 consumed_preload_error,
                 document_owner,
