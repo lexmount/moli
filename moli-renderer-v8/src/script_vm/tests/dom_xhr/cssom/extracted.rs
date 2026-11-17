@@ -11,3 +11,5 @@ mod rule_tree_scaling;
 mod style_rule_mutations;
 mod stylesheets_and_at_rules;
 mod typed_values;
+
+mod attr_invalidation;
