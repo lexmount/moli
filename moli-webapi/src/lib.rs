@@ -56,6 +56,8 @@ pub mod queuing_strategy;
 pub mod resize_observer_entry;
 pub mod rtc;
 pub mod speech_synthesis;
+pub mod text_codec;
+pub mod text_decoder;
 pub mod text_encoder;
 pub mod text_metrics;
 pub mod time_ranges;

@@ -1,8 +1,9 @@
+#![allow(dead_code)] // Each integration-test binary uses its own subset of this fixture.
+
 use moli_v8_util::{register_ecmascript_intrinsic, throw_type_error, v8_string, v8str};
 use moli_webapi::{dom_exception, interfaces};
 use moli_webapi_declare::WebApiInterfaceDescriptor;
 
-#[allow(dead_code)] // Each integration-test binary uses its own subset of this fixture.
 pub fn illegal_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _: v8::FunctionCallbackArguments<'s>,

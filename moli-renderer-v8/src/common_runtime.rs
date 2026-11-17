@@ -32,7 +32,7 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct CommonRuntimeState {
     pub(crate) finalizers: RefCell<V8FinalizerRegistry>,
-    pub(crate) text_codecs: TextCodecStore,
+    pub(crate) text_codecs: Rc<TextCodecStore>,
     pub(crate) callbacks: CallbackRegistry,
 }
 
@@ -54,6 +54,7 @@ impl CommonRuntimeState {
 
     pub(crate) fn clear_for_context_teardown(&self) {
         self.callbacks.clear_for_context_teardown();
+        self.text_codecs.clear_for_context_teardown();
         // Cleanup may reenter native components. Drop the component borrow
         // before executing any cleanup, just as registration releases owner
         // borrows before allocating a V8 weak handle.
@@ -104,6 +105,7 @@ impl CommonRuntimeBinding {
             );
             return;
         }
+        TextCodecStore::install(context, &common.text_codecs);
         let previous = context.set_slot(Rc::new(Self {
             common: Rc::downgrade(common),
             owner: RuntimeOwner::Window {
@@ -125,6 +127,7 @@ impl CommonRuntimeBinding {
                 Arc::clone(&state.termination_requested),
             )
         };
+        TextCodecStore::install(context, &common.text_codecs);
         let previous = context.set_slot(Rc::new(Self {
             common: Rc::downgrade(&common),
             owner: RuntimeOwner::Worker {
