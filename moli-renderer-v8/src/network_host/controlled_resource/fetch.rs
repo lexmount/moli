@@ -4,7 +4,6 @@ use moli_fetch::{RequestCredentialsMode, RequestMode, ResponseHead};
 use tokio::sync::mpsc;
 
 use crate::{
-    context_bootstrap::FetchResourceTiming,
     network::{ResourceInterceptionBody, interception_output::ResourceInterceptionContext},
     types::{
         NetworkBodySourceId, PendingSubresourceFetchInfo, ScriptNetworkOutputItem,
@@ -24,12 +23,10 @@ pub(crate) struct ControlledFetchStream {
     fetch_id: u32,
     interception: ResourceInterceptionContext,
     request_origin: moli_url::WebOrigin,
-    request_url: Arc<url::Url>,
     load: crate::network::loads::ResourceLoadLease,
     mode: RequestMode,
     credentials: RequestCredentialsMode,
     policy: SubresourcePolicyContext,
-    resource_timing: FetchResourceTiming,
     pub(super) body_source_id: Option<NetworkBodySourceId>,
     response: Option<Box<StreamedFetchResponse>>,
     delivered: usize,
@@ -42,7 +39,7 @@ struct StreamedFetchResponse {
     handle: SubresourceNetworkRequestHandle,
     head: ResponseHead,
     body: ResourceInterceptionBody,
-    metadata: Arc<moli_fetch_types::FetchResponseMetadata>,
+    needs_orb_body_validation: bool,
 }
 
 impl ControlledFetchStream {
@@ -78,22 +75,18 @@ impl ControlledFetchStream {
         credentials: RequestCredentialsMode,
         policy: SubresourcePolicyContext,
         request_origin: moli_url::WebOrigin,
-        request_url: Arc<url::Url>,
         load: crate::network::loads::ResourceLoadLease,
-        resource_timing: FetchResourceTiming,
         timing: crate::worker::WorkerResourceTiming,
     ) -> Self {
         Self {
             completion,
             request_origin,
-            request_url,
             load,
             fetch_id,
             interception,
             mode,
             credentials,
             policy,
-            resource_timing,
             body_source_id: None,
             response: None,
             delivered: 0,
@@ -119,14 +112,14 @@ impl ControlledFetchStream {
         }
         self.timing.observe_head(&head);
         if !skip_fetch_security_validation {
-        super::super::validate_fetch_response_headers(
-            &self.request_origin,
-            &head,
-            self.mode,
-            self.credentials,
-            self.policy,
-            self.load.request_client().web_security_disabled(),
-        )?;
+            super::super::validate_fetch_response_headers(
+                &self.request_origin,
+                &head,
+                self.mode,
+                self.credentials,
+                self.policy,
+                self.load.request_client().web_security_disabled(),
+            )?;
         }
         let handle = info
             .network_request_handle
@@ -166,28 +159,37 @@ impl ControlledFetchStream {
             self.response_filter.as_ref(),
             self.load.request_client().web_security_disabled(),
         ));
-        let mut observable_head = head.clone();
-        observable_head.headers = super::super::filter_cors_exposed_response_headers(
-            &self.request_origin,
+        let web_security_disabled = self.load.request_client().web_security_disabled();
+        let needs_orb_body_validation = !skip_fetch_security_validation
+            && !web_security_disabled
+            && super::super::fetch_response_needs_orb_body_validation(
+                &self.request_origin,
+                &head.final_url,
+                &head.headers,
+                self.mode,
+            );
+        self.timing.select_native_response(
             &head,
-            self.credentials,
-            self.load.request_client().web_security_disabled(),
+            Arc::clone(&metadata),
+            self.response_filter.clone(),
+            None,
+            skip_fetch_security_validation,
         );
-        let _ = self.completion.send(WorkerFetchEvent::StreamingStarted(Box::new(
-            WorkerFetchStreamingStarted {
-                response_filter: self.response_filter.clone(),
-                skip_fetch_security_validation,
-                fetch_id: self.fetch_id,
-                body_source_id,
-                head: observable_head,
-                metadata: Arc::clone(&metadata),
-            },
-        )));
+        let _ = self
+            .completion
+            .send(WorkerFetchEvent::StreamingStarted(Box::new(
+                WorkerFetchStreamingStarted {
+                    fetch_id: self.fetch_id,
+                    body_source_id,
+                    head: head.clone(),
+                    metadata: Arc::clone(&metadata),
+                },
+            )));
         self.response = Some(Box::new(StreamedFetchResponse {
             handle,
             head,
             body,
-            metadata,
+            needs_orb_body_validation,
         }));
         Ok(())
     }
@@ -221,7 +223,12 @@ impl ControlledFetchStream {
                     message,
                 });
             }
-        } else {
+        } else if !self
+            .response
+            .as_ref()
+            .expect("response precedes body")
+            .needs_orb_body_validation
+        {
             let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
                 WorkerFetchStreamingChunk {
                     fetch_id: self.fetch_id,
@@ -234,7 +241,6 @@ impl ControlledFetchStream {
     }
 
     pub(super) fn finish(&mut self, mut result: Result<(), String>) {
-        self.timing.complete();
         let response = *self
             .response
             .take()
@@ -242,18 +248,7 @@ impl ControlledFetchStream {
         let handle = response.handle;
         let body = response.body.finish_capture(self.delivered);
         let mut opaque_response_blocked = false;
-        if !self.load.request_client().web_security_disabled() && result.is_ok()
-            && self
-                .response_filter
-                .as_ref()
-                .is_none_or(|filter| filter.service_worker_metadata().is_none())
-            && super::super::fetch_response_needs_orb_body_validation(
-                &self.request_origin,
-                &response.head.final_url,
-                &response.head.headers,
-                self.mode,
-            )
-        {
+        if result.is_ok() && response.needs_orb_body_validation {
             match super::super::validated_opaque_response_body(&response.head.headers, &body) {
                 Ok(_) => {}
                 Err(super::super::FetchResponseSecurityViolation::OpaqueResponseBlocked(_)) => {
@@ -262,6 +257,24 @@ impl ControlledFetchStream {
                 Err(error) => result = Err(error.into_message()),
             }
         }
+        if result.is_ok() && response.needs_orb_body_validation && !opaque_response_blocked {
+            match body.try_bytes() {
+                Ok(bytes) => {
+                    let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
+                        WorkerFetchStreamingChunk {
+                            fetch_id: self.fetch_id,
+                            body_source_id: self.body_source_id.unwrap(),
+                            bytes: bytes.into_owned(),
+                        },
+                    ));
+                }
+                Err(error) => result = Err(error.to_string()),
+            }
+        }
+        if opaque_response_blocked {
+            self.timing.discard_response();
+        }
+        self.timing.complete();
         let terminal = match &result {
             Ok(()) if opaque_response_blocked => SubresourceBodyFinished::failed_with_partial_body(
                 handle,
@@ -283,16 +296,7 @@ impl ControlledFetchStream {
             WorkerFetchStreamingFinished {
                 fetch_id: self.fetch_id,
                 body_source_id: self.body_source_id.unwrap(),
-                opaque_response_blocked,
-                result: result.map(|()| {
-                    self.resource_timing.completed(
-                        &self.request_url,
-                        &response.head,
-                        body.len(),
-                        &response.metadata,
-                        None,
-                    )
-                }),
+                result,
             },
         ));
     }
@@ -311,14 +315,10 @@ impl super::ControlledResourceLoad {
         mut self,
         completion: mpsc::UnboundedSender<WorkerFetchEvent>,
         fetch_id: u32,
-        resource_timing: FetchResourceTiming,
         integrity: String,
         timing: crate::worker::WorkerResourceTiming,
         event_source_parser: Option<crate::network_host::EventSourceParser>,
     ) {
-        // Network/CDP correlation follows redirects; Resource Timing names
-        // the original request, including when interception rewrites its URL.
-        let request_url = Arc::new(self.info.url.clone());
         let super::ResourceResponsePolicy::Fetch(policy) = self.response_policy else {
             panic!("Worker fetch requires Fetch response policy");
         };
@@ -328,20 +328,27 @@ impl super::ControlledResourceLoad {
             .expect("native Worker Fetch has a browser origin")
             .clone();
         let web_security_disabled = self.load.request_client().web_security_disabled();
-        let mut stream = super::ControlledResourceStream::WorkerFetch(Box::new(ControlledFetchStream::new(
-            completion.clone(),
-            fetch_id,
-            self.native_interception().clone(),
-            self.request.request_mode,
-            self.effective_credentials_mode(),
-            policy,
-            request_origin.clone(),
-            Arc::clone(&request_url),
-            self.load.clone(),
-            resource_timing.clone(),
-            timing.clone(),
-        ).with_event_source_parser(event_source_parser)));
-        let result = self.run_inner((integrity.is_empty() && self.info.resource_type != crate::types::SubresourceResourceType::Font).then_some(&mut stream)).await;
+        let mut stream = super::ControlledResourceStream::WorkerFetch(Box::new(
+            ControlledFetchStream::new(
+                completion.clone(),
+                fetch_id,
+                self.native_interception().clone(),
+                self.request.request_mode,
+                self.effective_credentials_mode(),
+                policy,
+                request_origin.clone(),
+                self.load.clone(),
+                timing.clone(),
+            )
+            .with_event_source_parser(event_source_parser),
+        ));
+        let result = self
+            .run_inner(
+                (integrity.is_empty()
+                    && self.info.resource_type != crate::types::SubresourceResourceType::Font)
+                    .then_some(&mut stream),
+            )
+            .await;
         let result = self.normalize_cancellation(result);
         stream.policy_violations(std::mem::take(&mut self.csp_violations));
         if stream.body_source_id().is_some() {
@@ -394,6 +401,7 @@ impl super::ControlledResourceLoad {
                         &head,
                         self.request.request_mode,
                         self.request.redirect_mode(),
+                        web_security_disabled,
                     )
                 })
                 .unwrap_or_else(|| crate::types::FetchResponseType::Basic.into());
@@ -407,17 +415,6 @@ impl super::ControlledResourceLoad {
                 result = Err(error);
             }
         }
-        if let Ok(delivered) = &result {
-            let head = delivered.response.head();
-            timing.observe_head(&head);
-            timing.observe_chunk(delivered.response.body_bytes().len());
-            if let Some(filter) = self.response_filter.clone() {
-                timing.select_response(&head, filter, delivered.response.body_bytes().len(), true);
-            }
-        } else {
-            timing.discard_response();
-        }
-        timing.complete();
         let mut record = super::result::XhrLoadResult::new(self.info.clone(), result, headers);
         if let Err(error) = &record.result {
             record.network_record = failure_record(&self.info, network_error(error));
@@ -441,7 +438,7 @@ impl super::ControlledResourceLoad {
         });
         let result = record.result.map(|response| {
             let body_size = response.body_bytes().len();
-            let (mut head, body) = response.into_body();
+            let (head, body) = response.into_body();
             let mut metadata = super::super::fetch_response_metadata(
                 &request_origin,
                 &head,
@@ -456,30 +453,36 @@ impl super::ControlledResourceLoad {
             } else {
                 body
             };
-            let resource_timing = resource_timing.completed(
-                &request_url,
-                &head,
-                body_size,
-                &metadata,
-                delivery.as_ref(),
-            );
-            if !delivery.as_ref().is_some_and(|filter| filter.is_readable()) {
-                head.headers = super::super::filter_cors_exposed_response_headers(
-                    &request_origin,
+            if blocked_opaque {
+                timing.discard_response();
+            } else {
+                let synthetic = delivery
+                    .as_ref()
+                    .is_some_and(|filter| filter.service_worker_metadata().is_some());
+                timing.select_native_response(
                     &head,
-                    self.request.credentials_mode,
-                    web_security_disabled,
+                    Arc::new(metadata.clone()),
+                    delivery.clone(),
+                    Some(body_size),
+                    synthetic,
                 );
             }
             crate::worker::WorkerFetchResponse {
                 head,
                 body,
                 metadata,
-                resource_timing,
             }
         });
+        if result.is_err() {
+            timing.discard_response();
+        }
+        timing.complete();
         let _ = completion.send(WorkerFetchEvent::Completion(Box::new(
-            crate::worker::WorkerFetchCompletion { fetch_id, body_is_null: record.body_is_null, result },
+            crate::worker::WorkerFetchCompletion {
+                fetch_id,
+                body_is_null: record.body_is_null,
+                result,
+            },
         )));
         let _ = completion.send(WorkerFetchEvent::ResourceTiming { fetch_id, timing });
     }

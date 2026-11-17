@@ -248,7 +248,11 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         .blob_url_entry
         .as_ref()
         .is_some_and(|entry| entry.is_authorized_fetch(&prepared.resolved_url));
-    if !authorized_blob && !prepared.resource_loader.request_client().web_security_disabled()
+    if !authorized_blob
+        && !prepared
+            .resource_loader
+            .request_client()
+            .web_security_disabled()
         && let Err(error) = moli_fetch::FetchUrlList::new(&prepared.resolved_url, &[])
             .validate_request_mode(prepared.request_mode, &prepared.request_origin)
     {
@@ -287,23 +291,38 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     // Renderer-owned URLs, including local errors, bypass network interception.
     match resolve_local_fetch(host, &prepared) {
         Ok(Some(response)) => {
-            let (head, body) = response.into_body();
-            let mut metadata = head.fetch_metadata(&prepared.request_origin, prepared.request_mode);
-            if authorized_blob {
+            let web_security_disabled = prepared
+                .resource_loader
+                .request_client()
+                .web_security_disabled();
+            let response_obj = if authorized_blob {
+                let (head, body) = response.into_body();
+                let mut metadata = head.fetch_metadata_with_web_security(
+                    &prepared.request_origin,
+                    prepared.request_mode,
+                    web_security_disabled,
+                );
                 metadata.response_type = moli_fetch_types::FetchResponseType::Basic;
-            }
-            let response_obj =
-                build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
+                build_fetch_response_object_from_body_source_with_metadata(
                     scope,
+                    &prepared.method,
+                    head,
+                    body,
+                    &metadata,
+                )
+            } else {
+                build_fetch_response_object_for_request_mode(
+                    scope,
+                    &prepared.request_origin,
                     FetchResponseRequest {
                         method: &prepared.method,
                         mode: prepared.request_mode,
                         redirect_mode: prepared.redirect_mode,
                     },
-                    head,
-                    body,
-                    metadata,
-                );
+                    response,
+                    web_security_disabled,
+                )
+            };
             resolver.resolve(scope, response_obj.into());
             rv.set(promise.into());
             return;

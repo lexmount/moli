@@ -412,7 +412,7 @@ fn register_pending_window_fetch_for_test(
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
-                preload_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 let metadata = head.fetch_metadata_with_web_security(
@@ -446,6 +446,7 @@ fn register_pending_window_fetch_for_test(
             PendingWindowFetchTestStage::Auth => {
                 host.record_pending_subresource_auth(crate::types::PendingSubresourceAuthState {
                     body_is_null: None,
+                    consumed_preload: false,
                     pending,
                     response: crate::types::PendingSubresourceAuthResponse {
                         request_url: url.clone(),
@@ -2291,7 +2292,6 @@ fn eval_probe_fixture_output(url: &str, markup: &str) -> serde_json::Value {
     serde_json::from_str(&output).expect("fixture output should be valid json")
 }
 
-#[cfg(feature = "devtools")]
 fn force_gc_and_report_inspector_policy_for_test(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,

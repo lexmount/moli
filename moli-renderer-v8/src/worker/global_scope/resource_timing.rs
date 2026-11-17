@@ -11,14 +11,11 @@ use moli_url::WebOrigin;
 use url::Url;
 
 use crate::context_bootstrap::{FetchResourceTiming, ResourcePerformanceEntry};
-use crate::network_host::{
-    FetchResponseRequest, validate_cors_response_chain, validate_fetch_response_headers,
-};
+use crate::network_host::{validate_cors_response_chain, validate_fetch_response_headers};
 use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourcePolicyContext};
 
 pub(super) enum WorkerTimingRequest {
     Fetch {
-        method: String,
         mode: RequestMode,
         credentials: RequestCredentialsMode,
         redirect: RequestRedirectMode,
@@ -35,31 +32,38 @@ pub(super) enum WorkerTimingRequest {
 }
 
 impl WorkerTimingRequest {
-    fn filter(
+    fn response_snapshot(
         &self,
         origin: &WebOrigin,
         head: &ResponseHead,
-    ) -> Option<AsyncSubresourceFetchResponseFilter> {
-        let (method, mode, credentials, redirect) = match self {
+        web_security_disabled: bool,
+    ) -> Option<(
+        moli_fetch::FetchResponseMetadata,
+        Option<AsyncSubresourceFetchResponseFilter>,
+    )> {
+        let (mode, redirect) = match self {
             Self::Fetch {
-                method,
                 mode,
                 credentials,
                 redirect,
                 policy,
                 ..
             } => {
-                validate_fetch_response_headers(origin, head, *mode, *credentials, *policy).ok()?;
-                (method.as_str(), *mode, *credentials, *redirect)
+                validate_fetch_response_headers(
+                    origin,
+                    head,
+                    *mode,
+                    *credentials,
+                    *policy,
+                    web_security_disabled,
+                )
+                .ok()?;
+                (*mode, *redirect)
             }
             Self::Xhr { credentials } => {
-                validate_cors_response_chain(origin, head, *credentials).ok()?;
-                (
-                    "GET",
-                    RequestMode::Cors,
-                    *credentials,
-                    RequestRedirectMode::Follow,
-                )
+                validate_cors_response_chain(origin, head, *credentials, web_security_disabled)
+                    .ok()?;
+                (RequestMode::Cors, RequestRedirectMode::Follow)
             }
             Self::EventSource {
                 credentials,
@@ -71,24 +75,27 @@ impl WorkerTimingRequest {
                     RequestMode::Cors,
                     *credentials,
                     *policy,
+                    web_security_disabled,
                 )
                 .ok()?;
-                (
-                    "GET",
-                    RequestMode::Cors,
-                    *credentials,
-                    RequestRedirectMode::Follow,
-                )
+                (RequestMode::Cors, RequestRedirectMode::Follow)
             }
         };
-        Some(
-            FetchResponseRequest {
-                method,
-                mode,
-                redirect_mode: redirect,
-            }
-            .network_response_filter(origin, head, credentials),
-        )
+        let delivery = crate::network_host::network_response_filter(
+            origin,
+            head,
+            mode,
+            redirect,
+            web_security_disabled,
+        );
+        let metadata = crate::network_host::fetch_response_metadata(
+            origin,
+            head,
+            mode,
+            delivery.as_ref(),
+            web_security_disabled,
+        );
+        Some((metadata, delivery))
     }
 
     fn initiator_type(&self) -> &'static str {
@@ -111,13 +118,14 @@ struct WorkerResourceTimingInner {
     name: Url,
     origin: WebOrigin,
     request: WorkerTimingRequest,
+    web_security_disabled: bool,
     state: Mutex<WorkerResourceTimingState>,
 }
 
 struct WorkerResourceTimingState {
     clock: FetchResourceTiming,
     transport: Option<FetchCancelHandle>,
-    response: Option<(ResponseHead, AsyncSubresourceFetchResponseFilter)>,
+    response: Option<WorkerTimingResponse>,
     body_size: usize,
     completed_at: Option<Instant>,
     synthetic_response_start: Option<Instant>,
@@ -126,12 +134,19 @@ struct WorkerResourceTimingState {
     reported: bool,
 }
 
+struct WorkerTimingResponse {
+    head: ResponseHead,
+    metadata: Arc<moli_fetch::FetchResponseMetadata>,
+    delivery: Option<AsyncSubresourceFetchResponseFilter>,
+}
+
 impl WorkerResourceTiming {
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
         name: Url,
         origin: WebOrigin,
         request: WorkerTimingRequest,
+        web_security_disabled: bool,
     ) -> Self {
         let clock = FetchResourceTiming::capture_for_initiator_type(
             scope,
@@ -142,6 +157,7 @@ impl WorkerResourceTiming {
             name,
             origin,
             request,
+            web_security_disabled,
             state: Mutex::new(WorkerResourceTimingState {
                 clock,
                 transport: None,
@@ -172,9 +188,16 @@ impl WorkerResourceTiming {
     }
 
     pub(crate) fn observe_head(&self, head: &ResponseHead) {
-        let filter = self.0.request.filter(&self.0.origin, head);
+        let snapshot =
+            self.0
+                .request
+                .response_snapshot(&self.0.origin, head, self.0.web_security_disabled);
         let mut state = self.0.state.lock();
-        state.response = filter.map(|filter| (head.clone(), filter));
+        state.response = snapshot.map(|(metadata, delivery)| WorkerTimingResponse {
+            head: head.clone(),
+            metadata: Arc::new(metadata),
+            delivery,
+        });
         state.response_is_synthetic = false;
     }
 
@@ -205,16 +228,37 @@ impl WorkerResourceTiming {
     pub(crate) fn begin_synthetic_response(&self) {
         self.discard_response();
         let mut state = self.0.state.lock();
-        state.synthetic_response_start = state.completed_at;
+        state.synthetic_response_start = state.completed_at.take();
         state.response_is_synthetic = true;
     }
 
-    pub(crate) fn select_streaming_response(
+    /// Use the same immutable decision that constructs the native Fetch response.
+    pub(crate) fn select_native_response(
         &self,
         head: &ResponseHead,
-        filter: AsyncSubresourceFetchResponseFilter,
+        metadata: Arc<moli_fetch::FetchResponseMetadata>,
+        delivery: Option<AsyncSubresourceFetchResponseFilter>,
+        body_size: Option<usize>,
+        synthetic: bool,
     ) {
-        self.0.state.lock().response = Some((head.clone(), filter));
+        let mut state = self.0.state.lock();
+        if synthetic && state.synthetic_response_start.is_none() {
+            if let Some(transport) = state.transport.take() {
+                state
+                    .clock
+                    .observe_service_worker_timing(transport.response_timing());
+            }
+            state.synthetic_response_start = Some(Instant::now());
+        }
+        state.response = Some(WorkerTimingResponse {
+            head: head.clone(),
+            metadata,
+            delivery,
+        });
+        state.response_is_synthetic = synthetic;
+        if let Some(body_size) = body_size {
+            state.body_size = body_size;
+        }
     }
 
     pub(crate) fn select_response(
@@ -224,22 +268,26 @@ impl WorkerResourceTiming {
         body_size: usize,
         synthetic: bool,
     ) {
-        let mut state = self.0.state.lock();
-        if synthetic && state.synthetic_response_start.is_none() {
-            // A fulfilled/intercepted response is a new client handover. The
-            // transport that previously supplied a challenge is not its clock.
-            if let Some(transport) = state.transport.take() {
-                state
-                    .clock
-                    .observe_service_worker_timing(transport.response_timing());
+        let mode = match &self.0.request {
+            WorkerTimingRequest::Fetch { mode, .. } => *mode,
+            WorkerTimingRequest::Xhr { .. } | WorkerTimingRequest::EventSource { .. } => {
+                RequestMode::Cors
             }
-            let now = Instant::now();
-            state.synthetic_response_start = Some(now);
-            state.completed_at = Some(now);
-        }
-        state.response = Some((head.clone(), filter));
-        state.response_is_synthetic = synthetic;
-        state.body_size = body_size;
+        };
+        let metadata = crate::network_host::fetch_response_metadata(
+            &self.0.origin,
+            head,
+            mode,
+            Some(&filter),
+            self.0.web_security_disabled,
+        );
+        self.select_native_response(
+            head,
+            Arc::new(metadata),
+            Some(filter),
+            Some(body_size),
+            synthetic,
+        );
     }
 
     pub(crate) fn publish(&self, scope: &mut v8::PinScope<'_, '_>) {
@@ -254,10 +302,10 @@ impl WorkerResourceTiming {
         {
             let mut state = self.0.state.lock();
             state.aborted = true;
-            if state
-                .transport
-                .as_ref()
-                .is_some_and(|transport| transport.response_timing().response_end_at().is_some())
+            if state.completed_at.is_some()
+                || state.transport.as_ref().is_some_and(|transport| {
+                    transport.response_timing().response_end_at().is_some()
+                })
             {
                 // IO has committed its terminal but its Worker delivery may
                 // still be queued behind running JS. Let that event report.
@@ -284,7 +332,8 @@ impl WorkerResourceTiming {
             .transport
             .as_ref()
             .map(FetchCancelHandle::response_timing);
-        let completed = native.is_some_and(|timing| timing.response_end_at().is_some());
+        let completed = state.completed_at.is_some()
+            || native.is_some_and(|timing| timing.response_end_at().is_some());
         let end = if aborted && !completed {
             Instant::now()
         } else {
@@ -305,20 +354,13 @@ impl WorkerResourceTiming {
         } else {
             state.body_size
         };
-        let mode = match &self.0.request {
-            WorkerTimingRequest::Fetch { mode, .. } => *mode,
-            WorkerTimingRequest::Xhr { .. } | WorkerTimingRequest::EventSource { .. } => {
-                RequestMode::Cors
-            }
-        };
-        let mut entry = if !rejected && let Some((head, filter)) = &state.response {
+        let mut entry = if !rejected && let Some(response) = &state.response {
             let mut entry = state.clock.completed(
                 &self.0.name,
-                &self.0.origin,
-                mode,
-                head,
+                &response.head,
                 body_size,
-                Some(filter),
+                &response.metadata,
+                response.delivery.as_ref(),
             );
             if aborted {
                 entry.mark_aborted(completed);

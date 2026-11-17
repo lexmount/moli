@@ -136,28 +136,31 @@ impl PageScriptHost {
         let origin = loader.fetch_context().request_origin();
         let attribution = &completion.network_attribution;
         let mut entry = match result {
-            Ok(response) if attribution.request_mode == moli_fetch::RequestMode::NoCors => {
-                attribution.timing.classic_script_response(
-                    &attribution.request_url,
+            Ok(response) => {
+                let head = response.head();
+                let web_security_disabled = loader.request_client().web_security_disabled();
+                let filter = crate::network_host::network_response_filter(
                     &origin,
-                    &response.head(),
-                    response.body_bytes().len(),
-                )
-            }
-            Ok(response) => attribution.timing.completed(
-                &attribution.request_url,
-                &origin,
-                attribution.request_mode,
-                &response.head(),
-                response.body_bytes().len(),
-                crate::network_host::network_response_filter(
-                    &origin,
-                    &response.head(),
+                    &head,
                     attribution.request_mode,
                     moli_fetch::RequestRedirectMode::Follow,
+                    web_security_disabled,
+                );
+                let metadata = crate::network_host::fetch_response_metadata(
+                    &origin,
+                    &head,
+                    attribution.request_mode,
+                    filter.as_ref(),
+                    web_security_disabled,
+                );
+                attribution.timing.completed(
+                    &attribution.request_url,
+                    &head,
+                    response.body_bytes().len(),
+                    &metadata,
+                    filter.as_ref(),
                 )
-                .as_ref(),
-            ),
+            }
             Err(_) => attribution.timing.failed(&attribution.request_url),
         };
         if let Some(end) = attribution.response_end {

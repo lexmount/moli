@@ -850,6 +850,7 @@ pub(super) struct PendingSubresourceResponseState {
 
 pub(super) struct PendingSubresourceAuthState {
     pub(super) body_is_null: Option<bool>,
+    pub(super) consumed_preload: bool,
     pub(super) pending: PendingSubresourceFetchState,
     #[cfg(any(test, feature = "devtools"))]
     pub(super) response: PendingSubresourceAuthResponse,

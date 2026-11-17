@@ -371,12 +371,7 @@ pub(super) fn node_text_content_setter_function<'s>(
                     &value.utf16_units(),
                 );
             } else {
-                set_text_content_in_reaction_scope(
-                    scope,
-                    node.runtime_ptr,
-                    node.handle,
-                    value,
-                );
+                set_text_content_in_reaction_scope(scope, node.runtime_ptr, node.handle, value);
             }
             if let Some(removed_count) = removed_count {
                 context_bootstrap::live_ranges_character_data_reset(

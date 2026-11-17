@@ -198,7 +198,9 @@ async fn window_service_worker_response_filter_survives_streaming_clone_and_cach
 #[tokio::test]
 async fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache() {
     let loader = static_http_loader(std::iter::empty::<String>());
-    for streaming in [false, true] {
+    for (streaming, skip_fetch_security_validation) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
         for (mode, redirect, status, response_type) in [
             ("no-cors", "follow", 200, "opaque"),
             ("cors", "manual", 302, "opaqueredirect"),
@@ -272,7 +274,7 @@ async fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache()
                 vm.start_streaming_async_subresource_fetch(
                     crate::types::AsyncSubresourceStreamingStarted {
                         response_filter: None,
-                        skip_fetch_security_validation: false,
+                        skip_fetch_security_validation,
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: "GET".to_owned(),
@@ -300,7 +302,7 @@ async fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache()
                         request_headers: Default::default(),
                         request_body: None,
                         response_status_text: None,
-                        skip_fetch_security_validation: false,
+                        skip_fetch_security_validation,
                         response_filter: None,
                         network_error_text: None,
                         result: Ok(
@@ -327,7 +329,7 @@ async fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache()
             assert_eq!(
                 vm.eval("opaqueResult").unwrap(),
                 "ok",
-                "{response_type}/streaming={streaming}"
+                "{response_type}/streaming={streaming}/skip_validation={skip_fetch_security_validation}"
             );
             let context_ptr: *const v8::Global<v8::Context> =
                 &vm.current_main_world().unwrap().context;

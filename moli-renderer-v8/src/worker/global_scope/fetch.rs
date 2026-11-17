@@ -6,8 +6,8 @@ use std::sync::atomic::AtomicU64;
 use crate::network::interception_output::ResourceInterceptionContext;
 use crate::network_host::{BlobUrlFetchEnvironment, CapturedBlobUrl};
 
+use crate::network_host::HeadersGuard;
 use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
-use crate::network_host::{HeadersGuard, validate_fetch_response_headers};
 use crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata;
 use crate::types::{
     ScriptNetworkOutputItem, SubresourcePolicyContext, WebSocketLifecycleEvent,
@@ -1102,13 +1102,13 @@ pub(super) fn start_worker_resource_fetch<'s>(
         resolved_url.clone(),
         origin,
         WorkerTimingRequest::Fetch {
-            method: method.clone(),
             mode: request_mode,
             credentials: network_credentials_mode,
             redirect: redirect_mode,
             policy: policy_context,
             font: kind == WorkerFetchKind::Font,
         },
+        web_security_disabled,
     );
 
     if let Some(message) = check_worker_request_csp(
@@ -1178,7 +1178,9 @@ pub(super) fn start_worker_resource_fetch<'s>(
     }
 
     if !web_security_disabled
-        && !blob_url_entry.as_ref().is_some_and(|entry| entry.is_authorized_fetch(&resolved_url))
+        && !blob_url_entry
+            .as_ref()
+            .is_some_and(|entry| entry.is_authorized_fetch(&resolved_url))
         && let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
             .validate_request_mode(request_mode, &request_origin)
     {
@@ -1502,7 +1504,6 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
                 .get(&chunk.fetch_id)
                 .is_some_and(|pending| {
                     pending.streaming_body_source_id == Some(chunk.body_source_id)
-                        && !pending.streaming_needs_orb_body_validation
                 });
             if deliver {
                 enqueue_pending_network_body_chunk(scope, chunk.body_source_id, chunk.bytes);
@@ -1519,14 +1520,19 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     started: WorkerFetchStreamingStarted,
 ) {
-    if super::event_source::start_response(scope, state, &started) { return; }
+    if super::event_source::start_response(scope, state, &started) {
+        return;
+    }
     let (resolver, method) = {
         let mut state = state.borrow_mut();
         let Some(pending) = state.pending_fetches.get_mut(&started.fetch_id) else {
             return;
         };
         pending.streaming_body_source_id = Some(started.body_source_id);
-        (pending.client.resolver().clone(), pending.request_method.clone())
+        (
+            pending.client.resolver().clone(),
+            pending.request_method.clone(),
+        )
     };
     // Security checks, exposed headers and immutable metadata belong to the
     // native load. This task only constructs the Response in its Worker realm.
@@ -1538,9 +1544,14 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         &started.metadata,
     );
     let resolver = v8::Local::new(scope, &resolver);
-    let upload = state.borrow().pending_fetches.get(&started.fetch_id)
+    let upload = state
+        .borrow()
+        .pending_fetches
+        .get(&started.fetch_id)
         .and_then(|pending| pending.upload.clone());
-    if let Some(upload) = upload { upload.finish(scope); }
+    if let Some(upload) = upload {
+        upload.finish(scope);
+    }
     let _ = resolver.resolve(scope, response.into());
 }
 
@@ -1562,8 +1573,8 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     }
     pending.load.finish();
     match finished.result {
-        Ok(entry) => {
-            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+        Ok(()) => {
+            pending.timing.publish(scope);
             close_pending_network_body_stream(scope, finished.body_source_id);
         }
         Err(error_text) => {
@@ -1601,14 +1612,13 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     let resolver = v8::Local::new(scope, pending.client.resolver());
     match completion.result {
         Ok(response) => {
-            crate::context_bootstrap::record_resource_performance_entry(
-                scope,
-                response.resource_timing,
-            );
+            pending.timing.publish(scope);
             if let Some(face) = pending.client.font_face() {
                 let usable = (200..300).contains(&response.head.status)
                     && response.metadata.response_type.is_readable();
-                let bytes = usable.then(|| response.body.as_materialized_bytes()).flatten();
+                let bytes = usable
+                    .then(|| response.body.as_materialized_bytes())
+                    .flatten();
                 let face = v8::Local::new(scope, face);
                 crate::context_bootstrap::finish_font_face_url_load(scope, face, bytes);
                 // Font bytes stay native; author ArrayBuffer.then is never read.
@@ -1616,10 +1626,18 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 return;
             }
             let response_obj = if completion.body_is_null == Some(true) {
-                crate::network_host::build_null_body_fetch_response_object_with_metadata(scope, response.head, &response.metadata)
+                crate::network_host::build_null_body_fetch_response_object_with_metadata(
+                    scope,
+                    response.head,
+                    &response.metadata,
+                )
             } else {
                 crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
-                    scope, &pending.request_method, response.head, response.body, &response.metadata,
+                    scope,
+                    &pending.request_method,
+                    response.head,
+                    response.body,
+                    &response.metadata,
                 )
             };
             let _ = resolver.resolve(scope, response_obj.into());

@@ -144,7 +144,7 @@ fn stream_source_redirect_modes_and_missing_location_keep_the_response() -> Resu
                 .with_redirect_mode(mode)
                 .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
                 let mut state = ManualCorsRedirectState::new(request, Vec::new());
-                let result = state.advance(response_head(&url, status, location), false, None);
+                let result = state.advance(response_head(&url, status, location), None, false);
                 match mode {
                     RequestRedirectMode::Manual => assert_eq!(
                         result,
@@ -186,7 +186,7 @@ fn byte_backed_request_bodies_remain_replayable_across_redirects() -> Result<()>
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
         let mut state = ManualCorsRedirectState::new(request, Vec::new());
         assert_eq!(
-            state.advance(response_head(&url, status, Some("/final")), false, None),
+            state.advance(response_head(&url, status, Some("/final")), None, false,),
             Ok(SubresourceResponseTransition::FollowedRedirect)
         );
         if matches!(status, 301 | 302) {

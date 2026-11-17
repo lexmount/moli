@@ -223,6 +223,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
     ) -> moli_stylesheet_blocking::PreparedStylesheetFetch {
         let options = self.prepare_stylesheet_fetch_options(options);
         let request_origin = self.loader.fetch_context().request_origin();
+        let web_security_disabled = self.loader.request_client().web_security_disabled();
         let request = stylesheet_readiness_request(
             &document_url,
             &request_origin,
@@ -240,7 +241,13 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         {
             return if let Some(response) = consumer.try_response() {
                 moli_stylesheet_blocking::PreparedStylesheetFetch::reused(
-                    stylesheet_terminal_from_preload(&request_origin, &url, &options, response),
+                    stylesheet_terminal_from_preload(
+                        &request_origin,
+                        &url,
+                        &options,
+                        response,
+                        web_security_disabled,
+                    ),
                 )
             } else {
                 moli_stylesheet_blocking::PreparedStylesheetFetch::new(Box::pin(async move {
@@ -249,6 +256,7 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                         &url,
                         &options,
                         consumer.response().await,
+                        web_security_disabled,
                     )
                 }))
             };
@@ -424,7 +432,13 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
                 }
             }
         }
-        return stylesheet_terminal_from_preload(&request_origin, &url, &options, preload);
+        return stylesheet_terminal_from_preload(
+            &request_origin,
+            &url,
+            &options,
+            preload,
+            loader.web_security_disabled(),
+        );
     }
     if let Some(context) = service_worker_context {
         match context
@@ -554,6 +568,7 @@ fn stylesheet_terminal_from_preload(
     url: &Url,
     options: &StylesheetFetchOptions,
     result: Result<crate::network::preloads::DocumentPreloadResponse, String>,
+    web_security_disabled: bool,
 ) -> StylesheetFetchTerminal {
     match result {
         Ok(preload) => {
@@ -570,6 +585,7 @@ fn stylesheet_terminal_from_preload(
                 options,
                 preload.response,
                 provenance,
+                web_security_disabled,
             )
             .with_service_worker_response_url(preload.service_worker_response_url)
         }
@@ -687,6 +703,7 @@ fn stylesheet_terminal_from_response(
         options,
         response,
         &response_provenance,
+        web_security_disabled,
     )
     .with_environment_encoding(options.environment_encoding().map(str::to_owned));
     match response_provenance {
@@ -703,6 +720,7 @@ fn classify_stylesheet_response(
     options: &StylesheetFetchOptions,
     response: crate::protocol_types::NavigationResponse,
     response_provenance: &StylesheetResponseProvenance,
+    web_security_disabled: bool,
 ) -> StylesheetFetchTerminal {
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
     let head = response.head();
@@ -971,6 +989,7 @@ mod tests {
                 &document_options,
                 response,
                 provenance,
+                false,
             );
             let terminal = terminal.with_service_worker_response_url(response_url);
             let options =
@@ -979,8 +998,13 @@ mod tests {
             assert_eq!(options.referrer_policy(), Some(expected));
             assert_eq!(options.referrer_url(), Some(&url));
             let preload = stylesheet_preload_response(&terminal, &document_options).unwrap();
-            let consumed =
-                stylesheet_terminal_from_preload(&origin, &url, &document_options, Ok(preload));
+            let consumed = stylesheet_terminal_from_preload(
+                &origin,
+                &url,
+                &document_options,
+                Ok(preload),
+                false,
+            );
             let consumed_options =
                 crate::document_runtime::stylesheet_import_options(&consumed, &document_options)
                     .unwrap();
@@ -1136,6 +1160,7 @@ mod tests {
                 &StylesheetFetchOptions::default(),
                 response,
                 StylesheetResponseProvenance::Network,
+                false,
             );
             assert!(terminal.is_ready(), "{filter:?}");
             assert_eq!(terminal.origin_clean(), Some(readable), "{filter:?}");

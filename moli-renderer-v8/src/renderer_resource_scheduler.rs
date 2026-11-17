@@ -258,8 +258,12 @@ impl RendererResourceScheduler {
                 outcome = async {
                     if let Some(resource) = blob_resource {
                         crate::planning::load_captured_blob_script_source_outcome(
-                            &script, &request_origin, &resource, None,
-                        ).await
+    &script,
+    &request_origin,
+    &resource,
+    None,
+    request_client.web_security_disabled(),
+).await
                     } else {
                         crate::planning::load_service_worker_aware_external_script_source_outcome_with_request(
                             &script, &request_origin, &request_client, runner, None, request,

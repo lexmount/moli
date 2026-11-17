@@ -50,6 +50,8 @@ impl ScriptVm {
                     response.request_mode,
                     response.credentials_mode,
                     policy,
+                    host.document_resource_loader_for_window_owner(response.owner)
+                        .is_some_and(|loader| loader.request_client().web_security_disabled()),
                 )
                 .is_err()
             {

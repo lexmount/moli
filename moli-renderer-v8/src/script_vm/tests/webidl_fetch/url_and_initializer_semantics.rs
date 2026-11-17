@@ -1011,6 +1011,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                     },
                     "redirected-body".to_owned(),
                 ),
+                false,
             );
             let materialized =
                 crate::network_host::materialize_response_object(scope, response.into(), "test")
@@ -1565,9 +1566,12 @@ request_include_credentials: false,
                         let metadata = head.fetch_metadata(&(&document_url).into(), request.mode);
                         let response = match source {
                             "response" => crate::network_host::build_fetch_response_object_for_request_mode(
-                                scope, &document_url, request,
-                                moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
-                            ),
+scope,
+&document_url,
+request,
+moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
+false,
+),
                             "bytes" => crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
                                 scope, request.method, head,
                                 moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
@@ -1805,12 +1809,12 @@ request_include_credentials: false,
                     };
                 let mut metadata = head.fetch_metadata(&moli_url::WebOrigin::from_url(&document_url), moli_fetch::RequestMode::Cors);
                 metadata.response_type = filter;
-                let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
+                let response = crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
                     scope,
-                    crate::network_host::FetchResponseRequest { redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: moli_fetch::RequestMode::Cors },
+                    "GET",
                     head,
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
-                    metadata,
+                    &metadata,
                 );
                 let global = context.global(scope);
                 let _ = global.set(

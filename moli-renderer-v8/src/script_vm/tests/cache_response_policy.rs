@@ -54,6 +54,7 @@ fn install_responses(vm: &mut ScriptVm, origin: &str) {
                     },
                 },
                 moli_fetch::Response::from_head_and_text_body(head, "body".to_owned()),
+                false,
             );
             values.push(response.into());
         }

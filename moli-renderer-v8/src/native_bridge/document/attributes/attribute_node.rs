@@ -2,8 +2,7 @@ use super::*;
 use crate::custom_elements;
 use crate::dom::native::{Attribute, DomStringValue, Element};
 use crate::native_bridge::element::{
-    TrustedAttributeSetter,
-    remove_live_element_attribute_ns_appending_to_current_reaction_queue,
+    TrustedAttributeSetter, remove_live_element_attribute_ns_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_utf16_units_appending_to_current_reaction_queue,
     trusted_attribute_value_string16,
 };
@@ -416,7 +415,9 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
         metadata.namespace_uri.as_deref(),
         &metadata.local_name,
     );
-    if !owner.is_some_and(|owner| same_attribute_owner(scope, owner, element)) || current_value.is_none() {
+    if !owner.is_some_and(|owner| same_attribute_owner(scope, owner, element))
+        || current_value.is_none()
+    {
         throw_dom_exception(
             scope,
             "NotFoundError",

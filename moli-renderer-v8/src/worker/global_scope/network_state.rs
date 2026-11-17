@@ -42,20 +42,11 @@ pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) client: WorkerFetchClient,
     pub(in crate::worker) request_headers: moli_fetch::RequestHeaders,
 
-    /// Effective network credentials; the input Request and FetchEvent retain
-    /// the author's original credentials mode.
-    pub(in crate::worker) credentials_mode: RequestCredentialsMode,
-    pub(in crate::worker) request_mode: moli_fetch::RequestMode,
-    pub(in crate::worker) redirect_mode: RequestRedirectMode,
-
-    pub(in crate::worker) policy_context: crate::types::SubresourcePolicyContext,
-    pub(in crate::worker) resource_timing: crate::context_bootstrap::FetchResourceTiming,
     pub(in crate::worker) signal_id: Option<u32>,
     pub(in crate::worker) load: ResourceLoadLease,
     pub(in crate::worker) request_method: String,
 
     pub(in crate::worker) streaming_body_source_id: Option<NetworkBodySourceId>,
-    pub(in crate::worker) streaming_needs_orb_body_validation: bool,
 }
 
 pub(crate) enum WorkerFetchEvent {
@@ -120,8 +111,6 @@ pub(crate) struct WorkerFetchCompletion {
 }
 
 pub(crate) struct WorkerFetchStreamingStarted {
-    pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
-    pub(crate) skip_fetch_security_validation: bool,
     pub(crate) fetch_id: u32,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) head: ResponseHead,
@@ -135,17 +124,15 @@ pub(crate) struct WorkerFetchStreamingChunk {
 }
 
 pub(crate) struct WorkerFetchStreamingFinished {
-    pub(crate) opaque_response_blocked: bool,
     pub(crate) fetch_id: u32,
     pub(crate) body_source_id: NetworkBodySourceId,
-    pub(crate) result: Result<crate::context_bootstrap::ResourcePerformanceEntry, String>,
+    pub(crate) result: Result<(), String>,
 }
 
 pub(crate) struct WorkerFetchResponse {
     pub(crate) head: ResponseHead,
     pub(crate) body: ResponseBody,
     pub(crate) metadata: moli_fetch_types::FetchResponseMetadata,
-    pub(crate) resource_timing: crate::context_bootstrap::ResourcePerformanceEntry,
 }
 
 pub(in crate::worker) struct PendingWorkerXhr {

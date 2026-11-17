@@ -28,15 +28,17 @@ impl ScriptVm {
                     &pending.request_origin,
                     head,
                     pending.credentials_mode,
+                    pending.load.request_client().web_security_disabled(),
                 )
             });
-            timing.completed(
+            timing.completed_for_request(
                 &pending.info.url,
                 &pending.request_origin,
                 pending.request_mode,
                 head,
                 body_size,
                 Some(&filter),
+                pending.load.request_client().web_security_disabled(),
             )
         } else {
             timing.failed(&pending.info.url)

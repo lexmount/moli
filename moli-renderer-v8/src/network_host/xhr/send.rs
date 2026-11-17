@@ -500,13 +500,17 @@ fn send_synchronous_network_xhr(
         Ok(response) => {
             crate::context_bootstrap::record_resource_performance_entry(
                 scope,
-                timing.completed(
+                timing.completed_for_request(
                     &prepared.resolved_url,
                     &prepared.request_origin,
                     RequestMode::Cors,
                     &response.head(),
                     response.body_bytes().len(),
                     completed.response_filter.as_ref(),
+                    prepared
+                        .resource_loader
+                        .request_client()
+                        .web_security_disabled(),
                 ),
             );
             let observable_headers = match completed.response_filter.as_ref() {
@@ -515,13 +519,19 @@ fn send_synchronous_network_xhr(
                     &response.head(),
                     filter,
                     prepared.credentials_mode,
-                    prepared.resource_loader.request_client().web_security_disabled(),
+                    prepared
+                        .resource_loader
+                        .request_client()
+                        .web_security_disabled(),
                 ),
                 None => crate::network_host::filter_cors_exposed_response_headers(
                     &prepared.request_origin,
                     &response.head(),
                     prepared.credentials_mode,
-                    prepared.resource_loader.request_client().web_security_disabled(),
+                    prepared
+                        .resource_loader
+                        .request_client()
+                        .web_security_disabled(),
                 ),
             };
             let mut response = response;

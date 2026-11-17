@@ -69,6 +69,7 @@ fn validate_pending_window_fetch_integrity(
             &pending.request_origin,
             &response.head(),
             pending.credentials_mode,
+            pending.load.request_client().web_security_disabled(),
         )
     });
     crate::network_host::validate_fetch_response_integrity(
@@ -260,7 +261,12 @@ fn window_subresource_response_filter(
                     fetch.redirect_mode()
                 }),
         }
-        .network_response_filter(&pending.request_origin, head, pending.credentials_mode)
+        .network_response_filter(
+            &pending.request_origin,
+            head,
+            pending.credentials_mode,
+            pending.load.request_client().web_security_disabled(),
+        )
     })
 }
 

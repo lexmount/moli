@@ -32,12 +32,11 @@ pub(crate) use self::cors::{
 pub(crate) use self::materialize::materialize_response_object;
 pub(crate) use self::materialize::{
     FetchResponseRequest, MaterializedResponseBody, MaterializedResponseHead,
-    materialize_cache_response_object_head,
     build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_with_metadata,
     build_fetch_response_object_from_stream_with_metadata, build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_with_metadata,
-    build_null_body_fetch_response_object_with_metadata,
+    build_null_body_fetch_response_object_with_metadata, materialize_cache_response_object_head,
     materialize_response_object_body, materialize_response_object_body_preserving_error,
     materialize_response_object_body_with_chunk_callback,
     materialize_response_object_head_for_service_worker_respond_with,
