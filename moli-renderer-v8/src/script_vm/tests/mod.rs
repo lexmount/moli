@@ -358,7 +358,7 @@ fn register_pending_window_fetch_for_test(
     );
 
     if !matches!(stage, PendingWindowFetchTestStage::Pending) {
-        let pending = host
+        let mut pending = host
             .take_pending_subresource_fetch(internal_id)
             .expect("test Fetch should move from pending into its requested stage");
         match stage {
@@ -377,6 +377,29 @@ fn register_pending_window_fetch_for_test(
                 });
             }
             PendingWindowFetchTestStage::Streaming => {
+                let head = moli_fetch::ResponseHead {
+                    status_text: None,
+                    final_url: url.clone(),
+                    status: 200,
+                    headers: Vec::new(),
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    cache_state: Default::default(),
+                    negotiated_http_version: None,
+                };
+                let metadata = head.fetch_metadata_with_web_security(
+                    &pending.request_origin,
+                    pending.request_mode,
+                    pending.load.request_client().web_security_disabled(),
+                );
+                if let crate::types::PendingSubresourceContinuation::Fetch(fetch) =
+                    &mut pending.continuation
+                {
+                    fetch.response_metadata = Some(metadata);
+                }
                 host.record_streaming_subresource_fetch(
                     crate::types::StreamingSubresourceFetchState {
                         response_filter: None,
@@ -386,19 +409,7 @@ fn register_pending_window_fetch_for_test(
                         request_headers: Vec::new().into(),
                         request_body: None,
                         body_source_id: 10_000 + internal_id,
-                        head: moli_fetch::ResponseHead {
-                            status_text: None,
-                            final_url: url.clone(),
-                            status: 200,
-                            headers: Vec::new(),
-                            request_cookie_report: None,
-                            cookie_set_reports: Vec::new(),
-                            redirected: false,
-                            redirect_chain: Vec::new(),
-                            from_cache: false,
-                            cache_state: Default::default(),
-                            negotiated_http_version: None,
-                        },
+                        head,
                         network_request_headers: None,
                         body_capture: crate::types::StreamingSubresourceBody::new(None, None),
                         event_source_parser: None,

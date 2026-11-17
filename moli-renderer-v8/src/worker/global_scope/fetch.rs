@@ -1161,7 +1161,6 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                     pending.request_mode,
                     pending.load.request_client().web_security_disabled(),
                 ),
-                pending.request_mode,
                 pending.request_method.clone(),
                 observable_head,
             ))
@@ -1181,19 +1180,15 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         }
         return;
     }
-    if let Some((resolver, metadata, request_mode, request_method, observable_head)) =
-        response_input
-    {
-        let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_metadata(
-            scope,
-            crate::network_host::FetchResponseRequest {
-                method: &request_method,
-                mode: request_mode,
-            },
-            observable_head,
-            started.body_source_id,
-            metadata,
-        );
+    if let Some((resolver, metadata, request_method, observable_head)) = response_input {
+        let response_obj =
+            crate::network_host::build_fetch_response_object_from_stream_with_metadata(
+                scope,
+                &request_method,
+                observable_head,
+                started.body_source_id,
+                &metadata,
+            );
         let resolver = v8::Local::new(scope, &resolver);
         let _ = resolver.resolve(scope, response_obj.into());
     }
@@ -1221,12 +1216,14 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
                 scope,
                 pending.resource_timing.completed(
                     &pending.request_url,
-                    &request_origin,
-                    pending.request_mode,
                     &head,
                     body.len(),
+                    &head.fetch_metadata_with_web_security(
+                        &request_origin,
+                        pending.request_mode,
+                        web_security_disabled,
+                    ),
                     None,
-                    web_security_disabled,
                 ),
             );
             close_pending_network_body_stream(scope, finished.body_source_id);
@@ -1311,20 +1308,6 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 }
             };
 
-            let entry = if opaque_response_blocked {
-                pending.resource_timing.failed(&pending.request_url)
-            } else {
-                pending.resource_timing.completed(
-                    &pending.request_url,
-                    &request_origin,
-                    pending.request_mode,
-                    &response_head,
-                    response.subresource_response_body().len(),
-                    response_filter.as_ref(),
-                    web_security_disabled,
-                )
-            };
-            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
             let mut metadata = crate::network_host::fetch_response_metadata(
                 &request_origin,
                 &response_head,
@@ -1336,6 +1319,14 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 metadata.response_type = crate::types::FetchResponseType::Opaque;
                 metadata.timing_allow_passed = false;
             }
+            let entry = pending.resource_timing.completed(
+                &pending.request_url,
+                &response_head,
+                response.subresource_response_body().len(),
+                &metadata,
+                response_filter.as_ref(),
+            );
+            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
             let filtered_headers = if response_filter
                 .as_ref()
                 .is_some_and(|filter| filter.is_readable())
@@ -1356,7 +1347,14 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             } else {
                 body
             };
-            let response_obj = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(scope,crate::network_host::FetchResponseRequest {method:&pending.request_method,mode:pending.request_mode},head,body,metadata);
+            let response_obj =
+                crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
+                    scope,
+                    &pending.request_method,
+                    head,
+                    body,
+                    &metadata,
+                );
             let _ = resolver.resolve(scope, response_obj.into());
         }
         Err(message) => {

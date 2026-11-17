@@ -19,7 +19,7 @@ use crate::context_bootstrap::{
 use crate::exception_reporting::{V8ExceptionReport, log_unhandled_promise_rejection};
 use crate::network_host::{
     MaterializedResponseBody, MaterializedResponseHead,
-    build_navigation_preload_response_object_from_stream_for_request_mode,
+    build_navigation_preload_response_object_from_stream_with_metadata,
     build_service_worker_request_object, close_pending_network_body_stream,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
     materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
@@ -2803,16 +2803,13 @@ fn start_service_worker_navigation_preload_response_in_context(
         cache_state: Default::default(),
         negotiated_http_version: None,
     };
-    let response_object = build_navigation_preload_response_object_from_stream_for_request_mode(
+    let response_object = build_navigation_preload_response_object_from_stream_with_metadata(
         scope,
         &started.request_url,
-        crate::network_host::FetchResponseRequest {
-            method: &started.request_method,
-            mode: started.request_mode,
-        },
+        &started.request_method,
         head,
         started.body_source_id,
-        started.response_head.metadata,
+        &started.response_head.metadata,
     );
     let resolver = v8::Local::new(scope, resolver);
     let _ = resolver.resolve(scope, response_object.into());

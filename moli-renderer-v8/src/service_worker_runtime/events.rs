@@ -663,7 +663,6 @@ pub(crate) struct ServiceWorkerNavigationPreloadResponseStarted {
     pub(crate) owner: ServiceWorkerRunOwner,
     pub(crate) request_url: Url,
     pub(crate) request_method: String,
-    pub(crate) request_mode: moli_fetch::RequestMode,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) response_head: MaterializedServiceWorkerFetchResponseHead,
 }

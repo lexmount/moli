@@ -30,10 +30,9 @@ pub(crate) use self::materialize::materialize_response_object;
 pub(crate) use self::materialize::{
     FetchResponseRequest, MaterializedResponseBody, MaterializedResponseHead,
     build_fetch_response_object_for_request_mode,
-    build_fetch_response_object_from_body_source_for_request_mode_with_metadata,
-    build_fetch_response_object_from_stream_for_request_mode_with_metadata,
-    build_filtered_cached_response_object,
-    build_navigation_preload_response_object_from_stream_for_request_mode,
+    build_fetch_response_object_from_body_source_with_metadata,
+    build_fetch_response_object_from_stream_with_metadata, build_filtered_cached_response_object,
+    build_navigation_preload_response_object_from_stream_with_metadata,
     materialize_response_object_body, materialize_response_object_body_preserving_error,
     materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,

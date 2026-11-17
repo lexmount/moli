@@ -20,7 +20,6 @@ struct ServiceWorkerNavigationPreloadDispatch {
     owner: ServiceWorkerRunOwner,
     request_url: url::Url,
     request_method: String,
-    request_mode: moli_fetch::RequestMode,
     request_client: ResourceRequestClient,
     resource_task_runner: crate::network::RendererResourceTaskRunner,
     cancel_handle: moli_fetch::FetchCancelHandle,
@@ -124,7 +123,6 @@ async fn stream_navigation_preload_response(
         owner: dispatch.owner.clone(),
         request_url: dispatch.request_url,
         request_method: dispatch.request_method,
-        request_mode: dispatch.request_mode,
         body_source_id,
         response_head,
     }) {
@@ -1459,7 +1457,6 @@ impl ServiceWorkerRuntimeService {
         }
 
         let request_url = job.request.url.clone();
-        let request_mode = job.request.request_mode;
         let request_method = job.request.method.clone();
         let request_client = job.request_client.clone();
         let resource_task_runner = job.resource_task_runner.clone();
@@ -1480,7 +1477,6 @@ impl ServiceWorkerRuntimeService {
             owner: event.owner.clone(),
             request_url,
             request_method,
-            request_mode,
             request_client,
             resource_task_runner,
             cancel_handle,

@@ -739,25 +739,27 @@ impl ScriptVm {
                         trace_fields,
                         record_started,
                     );
-                    if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
-                        let entry = if opaque_response_blocked {
-                            // ORB removes the original headers and body measurements;
-                            // its TAO header cannot re-enable those measurements.
-                            fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url))
-                        } else {
-                            fetch.resource_timing().completed(
-                                fetch.initial_request_url(&pending.info.url), &pending.request_origin, pending.request_mode,
-                                &response.head(), response.body_bytes().len(), response_filter.as_ref(),
-                            pending.load.request_client().web_security_disabled(),)
-                        };
-                        crate::context_bootstrap::record_resource_performance_entry(scope, entry);
-                    }
+                    let response_head = response.head();
                     let mut metadata = crate::network_host::fetch_response_metadata(
-                        &pending.request_origin, &response.head(), pending.request_mode, response_filter.as_ref(),
-                    pending.load.request_client().web_security_disabled(),);
+                        &pending.request_origin,
+                        &response_head,
+                        pending.request_mode,
+                        response_filter.as_ref(),
+                        pending.load.request_client().web_security_disabled(),
+                    );
                     if opaque_response_blocked {
                         metadata.response_type = crate::types::FetchResponseType::Opaque;
                         metadata.timing_allow_passed = false;
+                    }
+                    if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
+                        let entry = fetch.resource_timing().completed(
+                            fetch.initial_request_url(&pending.info.url),
+                            &response_head,
+                            response.body_bytes().len(),
+                            &metadata,
+                            response_filter.as_ref(),
+                        );
+                        crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                     }
                     let mut observable_response = response;
                     if matches!(
@@ -787,15 +789,12 @@ impl ScriptVm {
                                 body
                             };
                             let response_obj =
-                                crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
+                                crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
                                     scope,
-                                    crate::network_host::FetchResponseRequest {
-                                        method: &response_request_method,
-                                        mode: pending.request_mode,
-                                    },
+                                    &response_request_method,
                                     head,
                                     body,
-                                    metadata,
+                                    &metadata,
                                 );
                             if let Some(status_text) = response_status_text.as_deref() {
                                 crate::network_host::set_response_slot_string(

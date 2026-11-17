@@ -214,6 +214,7 @@ impl PendingSubresourceContinuation {
 
 pub(super) struct PendingWindowFetchContinuation {
     pub(super) intercepted_request: Option<Box<moli_fetch::Request>>,
+    pub(super) response_metadata: Option<moli_fetch_types::FetchResponseMetadata>,
     promise: PendingWindowFetchPromise,
     resource_timing: crate::context_bootstrap::FetchResourceTiming,
     keepalive: bool,
@@ -238,6 +239,7 @@ impl PendingWindowFetchContinuation {
     ) -> Self {
         Self {
             intercepted_request: None,
+            response_metadata: None,
             promise: PendingWindowFetchPromise::Active(resolver),
             resource_timing,
             keepalive,
