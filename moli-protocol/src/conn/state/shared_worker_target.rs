@@ -381,19 +381,16 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn set_network_enabled(&mut self, session_id: &str, enabled: bool) -> bool {
-        if enabled {
-            self.runtime_slot.enable_attached_network_events(session_id);
-        } else {
-            self.runtime_slot
-                .disable_attached_network_events(session_id);
-        }
         let Some(state) = self.session_state_mut(session_id) else {
             return false;
         };
         if enabled {
             state.network_session_state.network_enabled = true;
+            self.runtime_slot.enable_attached_network_events(session_id);
         } else {
             state.network_session_state = Default::default();
+            self.runtime_slot
+                .remove_attached_network_session(session_id);
         }
         true
     }

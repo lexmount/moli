@@ -1720,13 +1720,126 @@ impl TargetRuntimeSlot {
 
 #[cfg(test)]
 mod tests {
-    use moli_core::page::{
-        RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch, ScriptNetworkOutputItem,
-        SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+    use moli_core::{
+        RendererOwnerLocalHostId,
+        network::ResourceInterceptionEvent,
+        page::{
+            RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch,
+            ScriptNetworkOutputItem, SubresourceNetworkRecord, SubresourceRequestInitiatorType,
+            SubresourceRequestStarted, SubresourceResourceType, WebSocketFrameDirection,
+            WebSocketFrameOpcode, WebSocketNetworkEvent,
+        },
     };
+    use moli_shared_worker::SharedWorkerInstanceId;
     use url::Url;
 
     use super::*;
+    use crate::conn::{BrowserContext, CdpConnection, SharedWorkerTargetState};
+    use crate::domains::target::prepare_worker_resource;
+
+    #[test]
+    fn worker_network_disable_reclaims_websocket_frames_with_another_listener() {
+        const CONTEXT: &str = "BID-worker";
+        const TARGET: &str = "TID-worker";
+        const ACTIVE: &str = "SID-active";
+        const DISABLED: &str = "SID-disabled";
+        const SOCKET: u64 = 7;
+        let script_url = Url::parse("https://example.test/worker.js").unwrap();
+        let socket_url = Url::parse("wss://example.test/socket").unwrap();
+        let mut target = SharedWorkerTargetState::new(
+            RendererOwnerLocalHostId::new_for_testing(1),
+            SharedWorkerInstanceId::from_u64(1),
+            TARGET.to_owned(),
+            None,
+            script_url.to_string(),
+            String::new(),
+        );
+        target.attach_session(ACTIVE.to_owned());
+        target.attach_session(DISABLED.to_owned());
+        let mut context = BrowserContext::new(CONTEXT.to_owned());
+        context.insert_shared_worker_target(target);
+        let mut conn = CdpConnection::default();
+        conn.install_browser_context_fixture_for_test(context);
+        assert!(conn.enable_network_listener_for_session_owner(Some(ACTIVE)));
+        assert!(conn.enable_network_listener_for_session_owner(Some(DISABLED)));
+
+        let publish = |conn: &mut CdpConnection, item| {
+            let (events, _, _) = prepare_worker_resource(
+                conn,
+                CONTEXT.to_owned(),
+                TARGET.to_owned(),
+                ResourceInterceptionEvent::Network(Box::new(item)),
+            )
+            .expect("Worker target stays live");
+            events
+                .into_iter()
+                .filter_map(|event| event.into_wire_message())
+                .collect::<Vec<_>>()
+        };
+        let handshake = SubresourceNetworkRecord::success(
+            None,
+            script_url.clone(),
+            socket_url.clone(),
+            "GET".to_owned(),
+            Default::default(),
+            None,
+            SubresourceResourceType::WebSocket,
+            None,
+            Vec::new(),
+            socket_url.clone(),
+            101,
+            Vec::new(),
+            String::new(),
+            Vec::new(),
+        )
+        .with_websocket_socket_id(SOCKET);
+        let handshake_events = publish(
+            &mut conn,
+            ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(handshake)),
+        );
+        assert_eq!(
+            handshake_events
+                .iter()
+                .filter(|event| event["method"] == "Network.webSocketHandshakeResponseReceived")
+                .count(),
+            2
+        );
+
+        let frame = ScriptNetworkOutputItem::WebSocketNetworkEvent(WebSocketNetworkEvent::new(
+            SOCKET,
+            script_url,
+            socket_url,
+            WebSocketFrameDirection::Received,
+            WebSocketFrameOpcode::Text,
+            3,
+        ));
+        let first = publish(&mut conn, frame.clone());
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0]["sessionId"], ACTIVE);
+        assert_eq!(first[1]["sessionId"], DISABLED);
+        let request_id = first[0]["params"]["requestId"].clone();
+        assert_eq!(first[1]["params"]["requestId"], request_id);
+
+        assert!(conn.disable_network_listener_for_session_owner(Some(DISABLED)));
+        for _ in 0..8 {
+            let events = publish(&mut conn, frame.clone());
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["method"], "Network.webSocketFrameReceived");
+            assert_eq!(events[0]["sessionId"], ACTIVE);
+            assert_eq!(events[0]["params"]["requestId"], request_id);
+        }
+        let target = conn
+            .shared_worker_target_for_session(Some(DISABLED))
+            .expect("Network.disable keeps the session attached");
+        assert!(!target.network_enabled(DISABLED));
+        assert_eq!(
+            target
+                .runtime_slot
+                .network_agent
+                .retained_delivery_output_count(),
+            0
+        );
+    }
 
     #[test]
     fn successor_network_idle_ignores_retained_predecessor_delivery_state() {

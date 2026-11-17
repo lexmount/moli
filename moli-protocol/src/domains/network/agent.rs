@@ -616,6 +616,11 @@ impl TargetNetworkAgentState {
     }
 
     #[cfg(test)]
+    pub(crate) fn retained_delivery_output_count(&self) -> usize {
+        self.output_queue.retained_delivery_output_count()
+    }
+
+    #[cfg(test)]
     pub(crate) fn artifacts_are_default_for_test(&self) -> bool {
         self.artifacts == TargetNetworkArtifacts::default()
     }
