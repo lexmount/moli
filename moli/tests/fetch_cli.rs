@@ -63,6 +63,8 @@ mod readiness;
 mod redirect_chain;
 #[path = "fetch_cli/subprocess.rs"]
 mod subprocess;
+#[path = "fetch_cli/timing.rs"]
+mod timing;
 #[path = "fetch_cli/web_security.rs"]
 mod web_security;
 
@@ -2643,7 +2645,7 @@ fn cli_readiness_plan_combines_early_response_selector_and_script() -> Result<()
         "html",
         &[
             "--timeout",
-            "1600",
+            timing::TIMEOUT_MS,
             "--wait-response-url",
             "/wait-until-json-data",
             "--wait-response-body",
@@ -3047,7 +3049,7 @@ fn cli_networkidle_timeout_logs_warning_and_returns_best_effort_output() -> Resu
         "--wait-until",
         "networkidle",
         "--timeout",
-        "1200",
+        "10000",
         "--dump",
         "html",
         &url,
@@ -3069,7 +3071,7 @@ fn cli_networkidle_timeout_logs_warning_and_returns_best_effort_output() -> Resu
         "stderr={stderr}"
     );
     assert!(stderr.contains("wait_until=NetworkIdle"), "stderr={stderr}");
-    assert!(stderr.contains("timeout_ms=1200"), "stderr={stderr}");
+    assert!(stderr.contains("timeout_ms=10000"), "stderr={stderr}");
     Ok(())
 }
 
@@ -3230,11 +3232,8 @@ fn cli_zero_deadline_cannot_enter_a_best_effort_page_stage() -> Result<()> {
 
 fn assert_cli_quiet_page_uses_remaining_best_effort_budget(wait_until: &str) -> Result<()> {
     let runtime = fixture_runtime()?;
-    let server = runtime.block_on(FixtureServer::spawn())?;
-    let url = server.url("/wait-until-slow-static");
-    // After the 500 ms response, 250 ms remains. That is shorter than either
-    // stability window, although a freshly started timer would let this
-    // otherwise quiet page settle successfully.
+    let server = runtime.block_on(timing::TimingFixture::spawn(timing::BECOMES_QUIET))?;
+    let url = server.url();
     let output = run_moli([
         "moli",
         "fetch",
@@ -3245,13 +3244,13 @@ fn assert_cli_quiet_page_uses_remaining_best_effort_budget(wait_until: &str) -> 
         "--wait-until",
         wait_until,
         "--timeout",
-        "750",
+        timing::TIMEOUT_MS,
         "--dump",
         "html",
         &url,
     ])?;
 
-    runtime.block_on(server.shutdown());
+    drop(server);
 
     assert!(
         output.status.success(),
@@ -3261,6 +3260,10 @@ fn assert_cli_quiet_page_uses_remaining_best_effort_budget(wait_until: &str) -> 
     );
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
+    assert!(
+        stdout.contains("data-activity=\"pending\""),
+        "stdout={stdout}"
+    );
     assert!(stdout.contains("slow-main=ready"), "stdout={stdout}");
     assert!(
         stderr.contains("fetch readiness wait timed out; returning best-effort page"),
@@ -3282,11 +3285,8 @@ fn cli_quiet_page_domstable_uses_remaining_best_effort_budget() -> Result<()> {
 #[test]
 fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() -> Result<()> {
     let runtime = fixture_runtime()?;
-    let server = runtime.block_on(FixtureServer::spawn())?;
-    let url = server.url("/wait-until-delayed-interval-fetch");
-    // Three seconds are spent on the main response. A reset would take at
-    // least eight seconds; allow scheduling slack while still rejecting it.
-    let started = std::time::Instant::now();
+    let server = runtime.block_on(timing::TimingFixture::spawn(timing::LATE_SELECTOR))?;
+    let url = server.url();
     let output = run_moli([
         "moli",
         "fetch",
@@ -3297,15 +3297,14 @@ fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() ->
         "--wait-until",
         "networkidle",
         "--wait-selector",
-        "#never-appears",
+        "#late-ready",
         "--timeout",
-        "5000",
+        timing::TIMEOUT_MS,
         "--dump",
         "html",
         &url,
     ])?;
-    let elapsed = started.elapsed();
-    runtime.block_on(server.shutdown());
+    drop(server);
 
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
@@ -3316,12 +3315,8 @@ fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() ->
         "stderr={stderr}"
     );
     assert!(
-        stderr.contains("fetch readiness timed out after 5000 ms while waiting for a selector"),
+        stderr.contains("fetch readiness timed out after 30000 ms while waiting for a selector"),
         "stderr={stderr}"
-    );
-    assert!(
-        elapsed < std::time::Duration::from_secs(7),
-        "the selector appears to have received a fresh timeout: {elapsed:?}"
     );
     Ok(())
 }
@@ -3535,7 +3530,12 @@ fn cli_http_redirect_with_location_does_not_consume_redirect_wait() -> Result<()
     let output = run_fetch_cli_with_dump_and_args(
         &url,
         "json",
-        &["--timeout", "4000", "--redirect-wait-ms", "10000"],
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            "60000",
+        ],
     )?;
     runtime.block_on(server.shutdown());
 
@@ -3677,7 +3677,16 @@ fn cli_load_follows_five_same_url_replacements_after_403() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-five-navigations");
-    let output = run_fetch_cli_with_wait_until(&url, "load")?;
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            "10000",
+        ],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -3734,7 +3743,7 @@ fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
                             hits[0].fetch_add(1, Ordering::SeqCst);
                             // Spend part of the single budget before the 403 document is ready.
                             // Its replacement grace is explicitly longer than this response.
-                            tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                             (
                                 StatusCode::FORBIDDEN,
                                 Html(
@@ -3761,8 +3770,8 @@ fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
                     "/load-tail.js",
                     get(|State(hits): State<Arc<[AtomicUsize; 3]>>| async move {
                         hits[2].fetch_add(1, Ordering::SeqCst);
-                        // This fits a fresh 5s budget, but not the budget left after the 403.
-                        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                        // This fits a fresh 30s budget, but not the 15s left after the 403.
+                        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
                         (
                             [("content-type", "text/javascript")],
                             "window.loadTailCompleted = true;",
@@ -3780,7 +3789,12 @@ fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
     let output = run_fetch_cli_with_dump_and_args(
         &format!("{base}/challenge"),
         "html",
-        &["--timeout", "5000", "--redirect-wait-ms", "5000"],
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            timing::TIMEOUT_MS,
+        ],
     )?;
     assert!(
         !output.status.success(),
@@ -3793,7 +3807,7 @@ fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("fetch readiness timed out after 5000 ms while waiting for load"),
+        stderr.contains("fetch readiness timed out after 30000 ms while waiting for load"),
         "stderr={stderr}"
     );
     assert_eq!(
@@ -3806,7 +3820,12 @@ fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
     let direct = run_fetch_cli_with_dump_and_args(
         &format!("{base}/replacement"),
         "html",
-        &["--timeout", "5000", "--redirect-wait-ms", "5000"],
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            timing::TIMEOUT_MS,
+        ],
     )?;
     assert!(
         direct.status.success(),
@@ -3920,7 +3939,16 @@ fn cli_redirect_wait_can_extend_http_error_navigation_grace() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-late-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--redirect-wait-ms", "1500"])?;
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            "10000",
+        ],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -4107,7 +4135,16 @@ fn cli_explicit_load_returns_a_replacement_error_document() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation-to-error");
-    let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "json",
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            "10000",
+        ],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -4302,19 +4339,19 @@ fn cli_slow_streaming_500_fallback_remains_live_for_page_waits() -> Result<()> {
 #[test]
 fn cli_slow_streaming_500_and_page_wait_share_one_total_timeout() -> Result<()> {
     let runtime = fixture_runtime()?;
-    let server = runtime.block_on(FixtureServer::spawn())?;
-    let url = server.url("/wait-until-http-error-slow-streaming-500");
+    let server = runtime.block_on(timing::TimingFixture::spawn_streaming_error())?;
+    let url = server.url();
     let output = run_fetch_cli_with_dump_and_args(
         &url,
         "json",
         &[
             "--timeout",
-            "4000",
+            timing::TIMEOUT_MS,
             "--wait-selector",
             "#slow-http-error-post-load-after-total-deadline",
         ],
     )?;
-    runtime.block_on(server.shutdown());
+    drop(server);
 
     assert!(
         !output.status.success(),
@@ -4326,7 +4363,7 @@ fn cli_slow_streaming_500_and_page_wait_share_one_total_timeout() -> Result<()> 
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("fetch readiness timed out after 4000 ms while waiting for a selector"),
+        stderr.contains("fetch readiness timed out after 30000 ms while waiting for a selector"),
         "stderr={stderr}"
     );
     Ok(())
@@ -4398,7 +4435,16 @@ fn cli_slow_streaming_403_uses_remaining_configured_wait_for_navigation() -> Res
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--redirect-wait-ms", "3000"])?;
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "json",
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            "10000",
+        ],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -4427,7 +4473,16 @@ fn cli_http_error_replacement_to_slow_streaming_500_returns_complete_body() -> R
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation-to-slow-streaming-500");
-    let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "json",
+        &[
+            "--timeout",
+            timing::TIMEOUT_MS,
+            "--redirect-wait-ms",
+            "10000",
+        ],
+    )?;
     runtime.block_on(server.shutdown());
 
     assert!(

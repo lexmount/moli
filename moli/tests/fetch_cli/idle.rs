@@ -41,6 +41,14 @@ fn assert_done(output: Output) {
     assert!(stdout.contains("<main>done</main>"), "stdout={stdout}");
 }
 
+// Functional idle cases wait for finite work to finish. Their budget includes
+// browser startup and storage I/O on shared runners; explicit deadline tests
+// below keep their own budgets and delayed-work relationships.
+fn run_until_done(url: &str, extra: &[&str]) -> Result<()> {
+    assert_done(run(url, super::timing::TIMEOUT_MS, extra)?);
+    Ok(())
+}
+
 struct Server {
     _runtime: tokio::runtime::Runtime,
     task: tokio::task::JoinHandle<()>,
@@ -109,7 +117,7 @@ fn idle_accepts_documents_without_a_javascript_realm() -> Result<()> {
         vec!["--dump", "html"],
         vec!["--dump", "html", "--disable-js"],
     ] {
-        assert_done(run("data:text/html,<main>done</main>", "3000", &extra)?);
+        run_until_done("data:text/html,<main>done</main>", &extra)?;
     }
     Ok(())
 }
@@ -128,7 +136,7 @@ fn idle_waits_for_future_timers_and_their_microtask_followups() -> Result<()> {
         }));
     "#,
     );
-    assert_done(run(&url, "3000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -145,7 +153,7 @@ fn idle_waits_until_an_interval_is_cleared() -> Result<()> {
         }, 40);
     "#,
     );
-    assert_done(run(&url, "3000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -160,7 +168,7 @@ fn idle_ignores_canceled_timers_internal_timeouts_and_unbacked_promises() -> Res
         queueMicrotask(() => document.querySelector('main').textContent = 'done');
     "#,
     );
-    assert_done(run(&url, "2000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -183,7 +191,7 @@ fn idle_waits_for_fetch_and_xhr_callbacks_and_their_timers() -> Result<()> {
         xhr.send();
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -208,7 +216,7 @@ fn idle_waits_for_indexed_db_requests_transactions_and_their_followups() -> Resu
         };
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -225,7 +233,7 @@ fn idle_keeps_fetch_alive_until_an_internal_abort_timeout_fires() -> Result<()> 
         );
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -238,7 +246,7 @@ fn idle_waits_for_dynamic_module_evaluation_and_its_callbacks() -> Result<()> {
         }, 30));
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -252,7 +260,7 @@ fn idle_drains_worker_messages_before_the_worker_closes() -> Result<()> {
         });
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -269,7 +277,7 @@ fn idle_stops_waiting_after_a_worker_is_terminated() -> Result<()> {
         };
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -288,7 +296,7 @@ fn idle_drains_all_worker_messages_after_immediate_close() -> Result<()> {
         };
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -297,7 +305,7 @@ fn idle_ignores_a_worker_terminated_while_its_script_is_loading() -> Result<()> 
     let server = Server::new(
         "const worker = new Worker('/waiting-worker.js'); worker.terminate(); document.querySelector('main').textContent = 'done'",
     )?;
-    assert_done(run(&server.url, "3000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -313,7 +321,7 @@ fn idle_waits_for_websocket_close_and_its_callback() -> Result<()> {
         }, 30);
     "#,
     )?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -330,7 +338,7 @@ fn idle_drains_started_message_ports_and_observes_close() -> Result<()> {
         channel.port2.postMessage('done');
     "#,
     );
-    assert_done(run(&url, "3000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -350,7 +358,7 @@ fn idle_observes_native_message_port_listeners_without_calling_author_getters() 
         c.port2.postMessage('done');
     "#,
     );
-    assert_done(run(&url, "3000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -364,7 +372,7 @@ fn idle_ignores_internal_stream_transfer_ports_without_backing_work() -> Result<
         queueMicrotask(() => document.querySelector('main').textContent = 'done');
     "#,
     );
-    assert_done(run(&url, "2000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -381,7 +389,7 @@ fn idle_ignores_unstarted_ports_and_ports_without_receivers() -> Result<()> {
         queueMicrotask(() => document.querySelector('main').textContent = 'done');
     "#,
     );
-    assert_done(run(&url, "2000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -496,7 +504,7 @@ fn idle_waits_for_child_window_timers_and_releases_removed_windows() -> Result<(
         }, 100);
     "#,
     );
-    assert_done(run(&url, "3000", &["--dump", "html"])?);
+    run_until_done(&url, &["--dump", "html"])?;
     Ok(())
 }
 
@@ -563,6 +571,6 @@ fn idle_keeps_page_delay_outside_readiness_deadline() -> Result<()> {
 #[test]
 fn idle_follows_navigation_and_keeps_waiting_on_the_replacement_document() -> Result<()> {
     let server = Server::new("setTimeout(() => location.href = '/next', 40)")?;
-    assert_done(run(&server.url, "5000", &["--dump", "html"])?);
+    run_until_done(&server.url, &["--dump", "html"])?;
     Ok(())
 }

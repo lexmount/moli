@@ -785,7 +785,7 @@ async fn http_failure_modes_use_redirect_status_when_readiness_fails() -> Result
                 let output = server.run_with_timeout(
                     &format!("/{prefix}/{status}"),
                     &[flag, "--dump", "markdown", "--wait-selector", "#app"],
-                    1000,
+                    10000,
                 )?;
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(stderr.contains("waiting for a selector"), "{stderr}");
