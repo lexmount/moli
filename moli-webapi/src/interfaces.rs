@@ -391,6 +391,7 @@ interfaces! {
     OffscreenCanvasRenderingContext2D;
     Option;
     OscillatorNode: AudioScheduledSourceNode;
+    PageRevealEvent: Event;
     PageTransitionEvent: Event;
     Path2D;
     PaymentResponse: EventTarget;

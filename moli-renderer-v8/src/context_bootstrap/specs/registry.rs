@@ -473,6 +473,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::PopStateEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::PageRevealEvent::DESCRIPTOR,
+        kind: ConstructorKind::PageRevealEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PageTransitionEvent::DESCRIPTOR,
         kind: ConstructorKind::PageTransitionEvent,
     },

@@ -146,3 +146,13 @@ pub(super) fn clipboard_change_event_change_id_getter_function<'s>(
     };
     rv.set(value);
 }
+
+pub(super) fn page_reveal_event_view_transition_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let value = event_private_value(scope, args.this(), PAGE_REVEAL_EVENT_VIEW_TRANSITION_SLOT)
+        .unwrap_or_else(|| v8::null(scope).into());
+    rv.set(value);
+}

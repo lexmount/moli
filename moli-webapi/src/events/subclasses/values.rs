@@ -93,6 +93,15 @@ pub(super) struct PageTransitionInit {
     persisted: bool,
 }
 
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PageRevealEventInit", snapshot)]
+pub(super) struct PageRevealInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::ViewTransition, snapshot_slot = PAGE_REVEAL_EVENT_VIEW_TRANSITION_SLOT)]
+    view_transition: Option<v8::Local<'s, v8::Object>>,
+}
+
 pub(super) enum ValueEventInit<'s> {
     Clipboard(ClipboardInit<'s>),
     Close(CloseInit),
@@ -102,6 +111,7 @@ pub(super) enum ValueEventInit<'s> {
     PopState(PopStateInit<'s>),
     HashChange(HashChangeInit),
     PageTransition(PageTransitionInit),
+    PageReveal(PageRevealInit<'s>),
 }
 
 impl<'s> ValueEventInit<'s> {
@@ -132,6 +142,9 @@ impl<'s> ValueEventInit<'s> {
             EventSubclassKind::HashChangeEvent => {
                 Self::HashChange(parse_event_dictionary(scope, args, "HashChangeEvent")?)
             }
+            EventSubclassKind::PageRevealEvent => {
+                Self::PageReveal(parse_event_dictionary(scope, args, "PageRevealEvent")?)
+            }
             EventSubclassKind::PageTransitionEvent => {
                 Self::PageTransition(parse_event_dictionary(scope, args, "PageTransitionEvent")?)
             }
@@ -149,6 +162,7 @@ impl<'s> ValueEventInit<'s> {
             Self::PopState(init) => &init.base,
             Self::HashChange(init) => &init.base,
             Self::PageTransition(init) => &init.base,
+            Self::PageReveal(init) => &init.base,
         };
         (base.bubbles, base.cancelable, base.composed)
     }
@@ -167,6 +181,7 @@ impl<'s> ValueEventInit<'s> {
             Self::PopState(init) => init.initialize_snapshot(scope, event),
             Self::HashChange(init) => init.initialize_snapshot(scope, event),
             Self::PageTransition(init) => init.initialize_snapshot(scope, event),
+            Self::PageReveal(init) => init.initialize_snapshot(scope, event),
         }
         .expect("value event dictionary state");
     }

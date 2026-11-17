@@ -33,6 +33,7 @@ pub enum EventSubclassKind {
     FontFaceSetLoadEvent = 31,
     HashChangeEvent = 32,
     ClipboardChangeEvent = 33,
+    PageRevealEvent = 34,
 }
 
 impl EventSubclassKind {
@@ -86,6 +87,7 @@ impl EventSubclassKind {
             31 => Some(Self::FontFaceSetLoadEvent),
             32 => Some(Self::HashChangeEvent),
             33 => Some(Self::ClipboardChangeEvent),
+            34 => Some(Self::PageRevealEvent),
             _ => None,
         }
     }
@@ -113,6 +115,7 @@ impl EventSubclassKind {
             Self::InputEvent => "InputEvent",
             Self::PopStateEvent => "PopStateEvent",
             Self::PageTransitionEvent => "PageTransitionEvent",
+            Self::PageRevealEvent => "PageRevealEvent",
             Self::CommandEvent => "CommandEvent",
             Self::ToggleEvent => "ToggleEvent",
             Self::TrackEvent => "TrackEvent",

@@ -152,6 +152,7 @@ struct ClipboardChangeEventTemplateAccessorsDeclaration {
 
 pub fn template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
+        "PageRevealEvent" => EventTemplateDeclaration::new::<PageRevealEventTemplateDeclaration>(),
         "MessageEvent" => EventTemplateDeclaration::new::<MessageEventTemplateMethodsDeclaration>(),
         "StorageEvent" => EventTemplateDeclaration::new::<StorageEventTemplateMethodsDeclaration>(),
         "ClipboardEvent" => {
@@ -193,4 +194,11 @@ struct StorageEventTemplateMethodsDeclaration {
         callback = storage_event_init_callback
     )]
     init_storage_event: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PageRevealEvent, enumerable, receiver)]
+struct PageRevealEventTemplateDeclaration {
+    #[webapi(accessor_property = "viewTransition", getter = page_reveal_event_view_transition_getter)]
+    view_transition: (),
 }
