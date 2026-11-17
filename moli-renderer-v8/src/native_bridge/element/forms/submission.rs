@@ -606,11 +606,19 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         else {
             return false;
         };
+        let Some(initiator_url) = runtime
+            .owner_dispatch_scope_for_node(document)
+            .and_then(|owner| runtime.document_referrer_source_url_for_dispatch_scope(owner))
+        else {
+            return false;
+        };
         (
             document,
-            runtime.document_url_for_handle(document),
+            initiator_url,
             moli_url::WebOrigin::from_serialized(
-                &runtime.document_security_origin(document).ascii_serialization(),
+                &runtime
+                    .document_security_origin(document)
+                    .ascii_serialization(),
             ),
         )
     };
@@ -629,23 +637,6 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     if !form_is_connected_or_in_detached_document(unsafe { &*runtime_ptr }, form_handle) {
         return false;
     }
-    // formdata may update the policy after the submitting document was captured.
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(policy) = runtime.owner_dispatch_scope_for_node(submitting_document)
-        .and_then(|owner| runtime.document_policy_container_for_inheritance(owner))
-    else {
-        return false;
-    };
-    let initiator = RendererNavigationInitiator::new(
-        initiator_url,
-        initiator_origin,
-        crate::context_bootstrap::document_referrer_policy_for_native_document(
-            unsafe { &*runtime_ptr },
-            submitting_document,
-        ),
-        policy,
-    );
-
     // Entry construction fires formdata. Read the selected attributes and the
     // owning Document's first base target only after its listeners finish.
     let target_name = {
@@ -654,6 +645,36 @@ pub(in crate::native_bridge) fn submit_form_default_action(
             submitter.and_then(|handle| reflected_attribute(runtime, handle, "formtarget"));
         super::super::activation::form_navigation_target_name(runtime, form_handle, override_target)
     };
+    // formdata may update the policy after the submitting document was captured.
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(mut policy) = runtime
+        .owner_dispatch_scope_for_node(submitting_document)
+        .and_then(|owner| runtime.document_policy_container_for_inheritance(owner))
+    else {
+        return false;
+    };
+    let suppress_referrer = super::super::activation::form_navigation_suppresses_referrer(
+        runtime,
+        form_handle,
+        target_name.as_deref(),
+    );
+    if suppress_referrer {
+        policy.referrer_policy = Some("no-referrer".to_owned());
+    }
+    let initiator = RendererNavigationInitiator::new(
+        initiator_url,
+        initiator_origin,
+        if suppress_referrer {
+            Some("no-referrer".to_owned())
+        } else {
+            crate::context_bootstrap::document_referrer_policy_for_native_document(
+                runtime,
+                submitting_document,
+            )
+        },
+        policy,
+    );
+
     let Some(target) = super::super::activation::choose_form_navigation_target(
         scope,
         runtime_ptr,
@@ -700,11 +721,6 @@ pub(in crate::native_bridge) fn submit_form_default_action(
         request,
         mutation,
         user_initiated,
-        initiator: super::super::activation::form_navigation_initiator(
-            unsafe { &*runtime_ptr },
-            form_handle,
-            target_name.as_deref(),
-        ),
         source_document_identity: runtime.root_document_lifecycle_identity(),
         related_source: None,
     };
@@ -796,7 +812,6 @@ pub(in crate::native_bridge) struct PlannedFormNavigation {
     request: FormSubmissionMethod,
     mutation: moli_page_types::NavigationHistoryMutation,
     user_initiated: bool,
-    initiator: Option<crate::runtime::RendererNavigationInitiator>,
     pub(in crate::native_bridge) source_document_identity:
         Option<crate::RendererDocumentLifecycleIdentity>,
     pub(in crate::native_bridge) related_source:
@@ -1002,7 +1017,10 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
                 );
                 runtime.set_pending_location_navigation_source(request.initiator, None);
                 if navigation.related_source.is_none() {
-                    crate::context_bootstrap::web_mcp::bind_root_navigation(runtime, navigation.form);
+                    crate::context_bootstrap::web_mcp::bind_root_navigation(
+                        runtime,
+                        navigation.form,
+                    );
                 }
                 true
             }

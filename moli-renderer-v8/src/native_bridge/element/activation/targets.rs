@@ -475,14 +475,22 @@ pub(in crate::native_bridge) enum FormNavigationTarget {
     Related(crate::script_vm::RendererPageScriptEnvironment),
 }
 
-pub(in crate::native_bridge) fn form_navigation_initiator(
+pub(in crate::native_bridge) fn form_navigation_suppresses_referrer(
+    runtime: &PageScriptHost,
+    form: DomHandle,
+    target_name: Option<&str>,
+) -> bool {
+    element_popup_relations(runtime, form, target_name.unwrap_or("_self")).suppress_referrer
+}
+
+fn form_navigation_initiator(
     runtime: &PageScriptHost,
     form: DomHandle,
     target_name: Option<&str>,
 ) -> Option<crate::runtime::RendererNavigationInitiator> {
     let source = runtime.owner_dispatch_scope_for_node(form)?;
     let mut policy = runtime.document_policy_container_for_inheritance(source)?;
-    if element_popup_relations(runtime, form, target_name.unwrap_or("_self")).suppress_referrer {
+    if form_navigation_suppresses_referrer(runtime, form, target_name) {
         policy.referrer_policy = Some("no-referrer".to_owned());
     }
     let loader = runtime.document_resource_loader_for_dispatch_scope(source)?;
