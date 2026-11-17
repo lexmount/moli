@@ -10,6 +10,7 @@ mod data_response;
 mod dom;
 mod file_input;
 mod forms;
+#[cfg(feature = "devtools")]
 mod interception_route;
 mod json_response;
 mod misc;

@@ -124,6 +124,7 @@ async fn child_realm_materialization_body_does_not_checkpoint_between_document_s
     .expect("child realm materialization body boundary witness should run");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn child_realm_materialization_creates_named_preload_world_in_the_selected_turn() {
     run_page_vm_async_test(async move {
@@ -189,6 +190,7 @@ async fn child_realm_materialization_creates_named_preload_world_in_the_selected
     .expect("child named-world materialization witness should run");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn detached_session_binding_is_not_installed_in_a_later_child_realm() {
     run_page_vm_async_test(async move {

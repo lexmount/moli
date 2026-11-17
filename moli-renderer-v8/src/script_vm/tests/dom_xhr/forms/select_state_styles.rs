@@ -201,6 +201,7 @@ fn selection_changes_refresh_required_select_and_container_validity_styles() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn select_autofill_refreshes_selected_peer_and_has_styles_before_callbacks() {
     for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {

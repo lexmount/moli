@@ -4,6 +4,8 @@ mod constructors;
 mod dispatch;
 
 pub(crate) use self::constructors::construct_focus_event;
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use self::constructors::construct_keyboard_event;
 pub(super) use self::constructors::{ClickEventSource, construct_click_event};
 pub(crate) use self::constructors::{
     InputEventCoordinates, TextEditInputType, construct_command_event, construct_drop_input_event,
@@ -22,7 +24,7 @@ pub(crate) use self::constructors::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use self::constructors::{
-    construct_keyboard_event, construct_pointer_event, construct_pointer_event_with_related_target,
+    construct_pointer_event, construct_pointer_event_with_related_target,
     construct_text_input_event_for_target,
 };
 pub(crate) use self::dispatch::{

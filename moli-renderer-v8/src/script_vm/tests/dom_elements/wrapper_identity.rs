@@ -429,6 +429,7 @@ fn traversal_filter_wraps_unseen_nodes_in_their_document_realm() {
     assert_eq!(result, "true:true:true:true:true:true");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn isolated_child_dom_wrappers_use_isolated_intrinsic_prototypes() {
     let mut vm = new_parsed_test_vm(

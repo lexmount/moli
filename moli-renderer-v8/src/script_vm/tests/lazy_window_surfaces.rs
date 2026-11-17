@@ -91,6 +91,7 @@ fn default_trusted_types_materialized(vm: &mut ScriptVm) -> bool {
     .expect("Trusted Types lazy-state diagnostics")
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn child_default_and_isolated_bootstrap_keep_expensive_window_surfaces_lazy() {
     let mut vm = new_storage_test_vm("https://lazy-window-bootstrap.test/");
@@ -1029,6 +1030,7 @@ fn performance_clock_access_keeps_nested_state_lazy_until_its_own_api_is_used() 
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn child_isolated_world_materializes_realm_local_wrappers_only_on_access() {
     let mut vm = new_storage_test_vm("https://lazy-window-isolated.test/");

@@ -96,6 +96,7 @@ use crate::frame_owner_model::{
 };
 use crate::native_bridge::PendingWindowMessageEndpoint;
 
+#[cfg(feature = "devtools")]
 mod accessibility;
 mod async_subresource_completion;
 mod blob_slice;
@@ -122,12 +123,14 @@ mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod document_script_completion;
+#[cfg(feature = "devtools")]
 mod dom_publication;
 mod element_toggle_event;
 mod fetch_blob_reading;
 mod fetch_xhr;
 mod file_entry_file_callback;
 mod file_reader;
+#[cfg(feature = "devtools")]
 mod file_system_directory_reader;
 mod grid_item_box_generation;
 mod grid_item_paint_order;

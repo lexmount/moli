@@ -174,6 +174,7 @@ fn resource_store_restores_imported_resources_for_update_check() {
     );
     assert_eq!(diagnostics.registrations[0].id, restored_registration_id);
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_pause_on_start_defers_main_script_update_check_after_target_creation() {
     let service = new_service_worker_runtime_service_with_resource_store(
@@ -228,6 +229,7 @@ fn devtools_pause_on_start_defers_main_script_update_check_after_target_creation
         "deferred update check should still expose the precreated installing target: {target_events:?}"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_related_pause_on_start_defers_matching_update_check() {
     let service = new_service_worker_runtime_service_with_resource_store(

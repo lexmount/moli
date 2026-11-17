@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn scrollbar_emulation_republishes_frames_hit_targets_and_screencast_pixels() {
     run_page_vm_async_test(async move {

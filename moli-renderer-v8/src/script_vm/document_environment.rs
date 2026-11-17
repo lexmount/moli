@@ -408,6 +408,7 @@ impl ScriptVm {
             .set_blocked_url_patterns(patterns);
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn set_fetch_subresource_interception(
         &mut self,
         classes: SubresourceInterceptionClasses,

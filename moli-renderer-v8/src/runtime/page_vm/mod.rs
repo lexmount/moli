@@ -4612,6 +4612,7 @@ impl PageVm {
         self.vm_mut().set_network_offline(env.network_offline);
         self.vm_mut()
             .set_blocked_url_patterns(&env.blocked_url_patterns);
+        #[cfg(feature = "devtools")]
         self.vm_mut()
             .set_fetch_subresource_interception(env.fetch_subresource_interception_classes);
         if matches!(

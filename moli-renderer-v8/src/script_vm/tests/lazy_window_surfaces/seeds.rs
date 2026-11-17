@@ -112,6 +112,7 @@ async fn navigator_identity_seed_keeps_window_metadata_and_network_profile_coher
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn child_default_and_isolated_navigator_materialize_from_the_loader_seed() {
     const USER_AGENT: &str = "Moli-Lazy-Child-Navigator/1.0";

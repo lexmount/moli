@@ -1,13 +1,7 @@
 use super::*;
 
 pub(super) async fn child_node_world(vm: &mut ScriptVm, name: &str) -> i64 {
-    vm.eval(
-        "globalThis.frame=document.createElement('iframe');\
-         frame.srcdoc='<!doctype html><body><span id=childTarget>child</span></body>';\
-         (document.body||document.documentElement||document).appendChild(frame);'ready'",
-    )
-    .unwrap();
-    run_child_navigation_commit_and_host_load_for_test(vm, "child Node world").await;
+    super::native_node_event_outcomes::attach_child_target(vm).await;
     let frame_id = vm
         .live_child_default_runtime_realm_inventory()
         .into_iter()

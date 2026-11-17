@@ -992,8 +992,11 @@ impl RendererOwnerLocalStore {
                     .loader
                     .set_cache_disabled(configuration.cache_disabled);
                 request.blocked_url_patterns = configuration.blocked_url_patterns;
-                request.fetch_subresource_interception_classes =
-                    configuration.fetch_subresource_interception_classes;
+                #[cfg(feature = "devtools")]
+                {
+                    request.fetch_subresource_interception_classes =
+                        configuration.fetch_subresource_interception_classes;
+                }
             }};
         }
         apply_configuration!(&mut residence.request);

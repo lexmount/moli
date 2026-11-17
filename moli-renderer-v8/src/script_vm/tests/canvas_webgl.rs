@@ -659,6 +659,7 @@ fn canvas_text_metrics_uses_the_context_realm() {
     assert_eq!(result, "true|true|true|true");
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn canvas_text_metrics_keep_the_isolated_world_realm() {
     let mut vm = new_parsed_test_vm(

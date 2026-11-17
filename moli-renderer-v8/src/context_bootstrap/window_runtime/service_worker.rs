@@ -1,6 +1,6 @@
 use super::*;
 use crate::context_bootstrap::navigator_runtime::{
-    SERVICE_WORKER_OWNER_TOKEN_SLOT, service_worker_container_for_window,
+    SERVICE_WORKER_OWNER_TOKEN_SLOT, service_worker_container_for_client,
     service_worker_owner_token_value,
 };
 use crate::document_runtime::DomHandle;
@@ -810,7 +810,7 @@ fn service_worker_container_for_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let window = match owner {
+    let client = match owner {
         crate::native_bridge::OwnerDispatchScope::Top => scope.get_current_context().global(scope),
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             let host_ptr = context_host_ptr_from_global_bridge(scope)?;
@@ -821,14 +821,7 @@ fn service_worker_container_for_owner<'s>(
             unsafe { &*host_ptr }.lightweight_popup_window(scope, popup_id)?
         }
     };
-    service_worker_container_from_window(scope, window)
-}
-
-fn service_worker_container_from_window<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    service_worker_container_for_window(scope, window)
+    service_worker_container_for_client(scope, client)
 }
 
 fn service_worker_container_registration_cache<'s>(

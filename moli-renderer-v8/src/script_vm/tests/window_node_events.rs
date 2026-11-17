@@ -1,6 +1,8 @@
+#[cfg(feature = "devtools")]
 use super::window_node_worlds::child_node_world;
 use super::*;
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn isolated_node_events_project_receivers_targets_and_share_dispatch_state() {
     for policy in [
@@ -65,6 +67,7 @@ async fn isolated_node_events_project_receivers_targets_and_share_dispatch_state
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn adopted_node_events_use_current_document_window_in_the_listener_world() {
     for policy in [
@@ -99,6 +102,7 @@ async fn adopted_node_events_use_current_document_window_in_the_listener_world()
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn inert_document_factories_preserve_native_execution_context_for_node_events() {
     for policy in [
@@ -193,6 +197,7 @@ fn template_owner_document_clones_inherit_execution_context() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn retired_frame_nodes_and_inert_factories_distinguish_execution_context_presence() {
     for policy in [

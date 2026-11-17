@@ -374,6 +374,7 @@ async fn inline_svg_reveal_waits_for_visual_publication() {
     }).await.expect("revealed SVG must become measurable only after a new publication");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn inline_svg_screencast_publishes_changed_geometry_and_skips_clean_polls() {
     use crate::runtime::{

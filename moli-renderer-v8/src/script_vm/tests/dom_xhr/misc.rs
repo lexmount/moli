@@ -629,6 +629,7 @@ fn detached_document_shadow_root_inner_html_setter_updates_query_surface() {
 
     assert_eq!(result, "1|shadow");
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn child_document_content_type_uses_resource_mime() {
     let mut vm = new_storage_test_vm("https://child-content-type.test/");

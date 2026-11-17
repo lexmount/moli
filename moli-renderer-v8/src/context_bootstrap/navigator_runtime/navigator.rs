@@ -1646,22 +1646,26 @@ fn navigator_runtime_data_object<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-pub(in crate::context_bootstrap) fn service_worker_container_for_window<'s>(
+pub(in crate::context_bootstrap) fn service_worker_container_for_client<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
+    client: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    // Native notifications address the Window's associated container. Neither
-    // Window.navigator nor Navigator.serviceWorker invokes author code here.
-    let navigator = get_private_value(scope, window, WINDOW_NAVIGATOR_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .or_else(|| {
-            super::super::window_lazy_surface::ensure_window_lazy_surface_object(
-                scope,
-                window,
-                super::super::window_lazy_surface::WindowLazySurface::Navigator,
-            )
-            .ok()
-        })?;
+    // Native notifications resolve the client container through its realm's
+    // navigator backing without invoking author-defined getters.
+    let navigator = if get_private_value(scope, client, WORKER_NAVIGATOR_INSTALLED_SLOT).is_some() {
+        ensure_worker_navigator_in_current_realm(scope).ok()?
+    } else {
+        get_private_value(scope, client, WINDOW_NAVIGATOR_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .or_else(|| {
+                super::super::window_lazy_surface::ensure_window_lazy_surface_object(
+                    scope,
+                    client,
+                    super::super::window_lazy_surface::WindowLazySurface::Navigator,
+                )
+                .ok()
+            })?
+    };
     let backing = navigator_runtime_data_object(scope, navigator)?;
     ensure_navigator_subobject(scope, backing, NavigatorSubobject::ServiceWorker)
         .ok()

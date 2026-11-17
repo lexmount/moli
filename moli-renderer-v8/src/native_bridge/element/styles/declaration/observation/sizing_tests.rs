@@ -69,6 +69,7 @@ fn computed_size_property_batch_looks_up_one_element_once_without_a_document_ind
     assert_eq!(host.layout_snapshot_cache_observability_for_test(), before);
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn computed_size_inspector_property_batch_shares_one_size_lookup() {
     let mut vm = fixture("<div id=target class=sized></div>");
@@ -104,6 +105,7 @@ fn computed_size_inspector_property_batch_shares_one_size_lookup() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn computed_size_dom_snapshot_batches_all_nodes_in_one_observation() {
     let mut markup = String::new();

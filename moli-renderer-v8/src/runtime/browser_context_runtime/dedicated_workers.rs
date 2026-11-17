@@ -65,11 +65,13 @@ impl RendererBrowserContextRuntime {
             .remove(&instance_id);
     }
 
+    #[cfg(feature = "devtools")]
     pub fn set_shared_worker_pause_on_start_for_devtools(&self, pause: bool) {
         self.inner
             .shared_worker_pause_on_start_for_devtools
             .store(pause, std::sync::atomic::Ordering::Release);
     }
+    #[cfg(feature = "devtools")]
     pub fn set_dedicated_worker_pause_on_start_for_devtools(&self, pause: bool) {
         self.inner
             .dedicated_worker_pause_on_start_for_devtools
@@ -77,9 +79,16 @@ impl RendererBrowserContextRuntime {
     }
 
     pub(crate) fn dedicated_worker_pause_on_start_for_devtools(&self) -> bool {
-        self.inner
-            .dedicated_worker_pause_on_start_for_devtools
-            .load(std::sync::atomic::Ordering::Relaxed)
+        #[cfg(feature = "devtools")]
+        {
+            self.inner
+                .dedicated_worker_pause_on_start_for_devtools
+                .load(std::sync::atomic::Ordering::Relaxed)
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            false
+        }
     }
 
     fn dedicated_worker_devtools_handle(&self, instance_id: u64) -> Option<WorkerDevToolsHandle> {
@@ -266,7 +275,7 @@ impl RendererBrowserContextRuntime {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
 

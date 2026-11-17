@@ -1,3 +1,4 @@
+#[cfg(feature = "devtools")]
 mod baseline_drag_views;
 mod beforeinput_target_validation;
 mod fetch_cache_modes;
@@ -6,20 +7,27 @@ mod selection_worlds;
 mod child_document_web_fonts;
 mod credential_container;
 mod credential_json_options;
+#[cfg(feature = "devtools")]
 mod cross_document_drag_events;
 mod cross_origin_navigation;
 mod current_pass_css_fonts;
 mod document_encodings;
 mod document_location_activity;
+#[cfg(feature = "devtools")]
 mod drag_drop_outcomes;
 mod idb_transaction_gc;
 mod message_port_transfer;
+#[cfg(feature = "devtools")]
 mod native_drag_payloads;
+#[cfg(feature = "devtools")]
 mod native_drag_pointer_coordinates;
+#[cfg(feature = "devtools")]
 mod native_drag_pointer_suppression;
+#[cfg(feature = "devtools")]
 mod native_drag_source_events;
 mod picture_in_picture_interfaces;
 mod touch_native_receivers;
+#[cfg(feature = "devtools")]
 mod touch_snapshot;
 mod visual_viewport_receiver;
 mod writable_stream_native_receivers;
@@ -2299,6 +2307,7 @@ mod svg_matrix_native_receivers;
 
 mod lazy_window_surfaces;
 mod midi_owner_interfaces;
+#[cfg(feature = "devtools")]
 mod mouse_snapshot;
 mod multipart_encoding;
 mod native_bridge_identity;
@@ -2397,6 +2406,7 @@ mod window_immutable_prototype_chain;
 
 mod window_getter_consolidation;
 mod window_node_events;
+#[cfg(feature = "devtools")]
 mod window_node_worlds;
 mod window_receiver_access;
 mod worklet_interfaces;

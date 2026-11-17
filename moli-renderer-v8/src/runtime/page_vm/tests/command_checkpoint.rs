@@ -63,6 +63,7 @@ Promise.resolve().then(() => __passiveTimezoneCheckpoint += 1);
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn file_input_command_completes_listener_microtasks_before_returning() {
     let mut page_vm = test_page_vm();
@@ -119,6 +120,7 @@ input.addEventListener("change", () => {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn insert_text_command_completes_listener_microtasks_before_returning() {
     let mut page_vm = test_page_vm();
@@ -199,6 +201,7 @@ new MutationObserver(records => {
     .expect("setDocumentContent command checkpoint should complete");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_interception_command_completes_window_reactions_without_runtime_drain() {
     run_page_vm_async_test(async move {
@@ -266,6 +269,7 @@ Promise.resolve().then(() => __fetchCommandCheckpoint += 1);
     .expect("Fetch-interception command checkpoint witness should run");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn offline_fetch_continue_publishes_completed_after_window_command_checkpoint() {
     run_page_vm_async_test(async move {
@@ -359,6 +363,7 @@ Promise.resolve().then(() => __offlineContinueCheckpoint += 1);
     .expect("offline Fetch-continuation command witness should run");
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn rejected_fetch_interception_command_without_window_body_does_not_checkpoint() {
     run_page_vm_async_test(async move {

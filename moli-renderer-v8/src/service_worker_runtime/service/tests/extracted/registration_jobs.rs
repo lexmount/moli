@@ -1020,6 +1020,7 @@ fn stored_registration_resources_use_serialized_storage_key() {
         ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url)
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_unregister_scope_uses_owner_unregistration_path() {
     let service = new_service_worker_runtime_service();
@@ -1063,6 +1064,7 @@ fn devtools_unregister_scope_uses_owner_unregistration_path() {
         "DevTools unregister should destroy the runtime-owned target: {target_events:?}"
     );
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_update_registration_enters_existing_registration_job_queue() {
     let service = new_service_worker_runtime_service();
@@ -1107,6 +1109,7 @@ fn devtools_update_registration_enters_existing_registration_job_queue() {
     assert_eq!(diagnostics.queued_register_job_count, 1);
     assert!(!completion_queue.has_ready_task());
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_functional_event_dispatch_uses_active_registration_owner() {
     let service = new_service_worker_runtime_service();

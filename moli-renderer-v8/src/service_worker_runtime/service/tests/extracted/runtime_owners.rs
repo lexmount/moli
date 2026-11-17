@@ -23,6 +23,7 @@ fn restored_launch_config_resolves_the_current_browser_resource_runtime() {
     );
     assert!(!replacement_client.shares_resource_runtime_with(&first_client));
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_pause_on_start_marks_non_released_launch_for_evaluation_pause() {
     let service = new_service_worker_runtime_service();
@@ -59,6 +60,7 @@ fn devtools_pause_on_start_marks_non_released_launch_for_evaluation_pause() {
     );
     service.terminate_all_for_context_shutdown();
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_pause_on_start_pauses_attached_stopped_worker_restart() {
     let service = new_service_worker_runtime_service();
@@ -94,6 +96,7 @@ fn devtools_pause_on_start_pauses_attached_stopped_worker_restart() {
     );
     service.terminate_all_for_context_shutdown();
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_pause_on_start_does_not_pause_unattached_stopped_worker_restart() {
     let service = new_service_worker_runtime_service();
@@ -128,6 +131,7 @@ fn devtools_pause_on_start_does_not_pause_unattached_stopped_worker_restart() {
     );
     service.terminate_all_for_context_shutdown();
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_pause_on_start_does_not_retroactively_pause_existing_stopped_worker() {
     let service = new_service_worker_runtime_service();
@@ -155,6 +159,7 @@ fn devtools_pause_on_start_does_not_retroactively_pause_existing_stopped_worker(
     );
     service.terminate_all_for_context_shutdown();
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_released_launch_does_not_double_pause_evaluation() {
     let service = new_service_worker_runtime_service();
@@ -182,6 +187,7 @@ fn devtools_released_launch_does_not_double_pause_evaluation() {
     );
     service.terminate_all_for_context_shutdown();
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_run_if_prereleases_starting_worker_evaluation_before_host_running() {
     let service = new_service_worker_runtime_service();
@@ -241,6 +247,7 @@ fn devtools_run_if_prereleases_starting_worker_evaluation_before_host_running() 
     }
     service.terminate_all_for_context_shutdown();
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn devtools_stop_worker_records_target_stopped() {
     let service = new_service_worker_runtime_service();

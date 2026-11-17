@@ -44,7 +44,7 @@ use std::sync::{
 use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::mpsc::error::TryRecvError;
-#[cfg(feature = "devtools")]
+#[cfg(any(test, feature = "devtools"))]
 use tokio::sync::oneshot;
 use url::Url;
 

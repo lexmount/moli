@@ -310,6 +310,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn raw_owner_admission_rejects_inspector_page_commands() {
         let handle = RenderRuntimeHandle::disconnected();

@@ -495,7 +495,7 @@ pub(super) fn inspector_session_key(inspector_session_id: Option<&str>) -> DevTo
     DevToolsSessionKey::from_wire_session_id(inspector_session_id.filter(|id| !id.is_empty()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 mod tests {
     use super::*;
     use crate::inspector_session::dispatch_with_runtime_defaults;

@@ -848,6 +848,7 @@ async fn child_detach_retires_document_modulator_at_owner_boundary() {
         "detach transition must retire ScriptVm modulator state at the enclosing owner boundary"
     );
 }
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn runtime_protocol_retains_connected_style_event_bodies_without_numeric_termination() {
     const STYLE_COUNT: usize = 129;

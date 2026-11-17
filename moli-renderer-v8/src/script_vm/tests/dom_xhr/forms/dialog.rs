@@ -2,6 +2,7 @@ use super::*;
 
 // Match the real-input Chromium probe: Escape itself does not grant history
 // activation, so establish it with an ordinary trusted key first.
+#[cfg(feature = "devtools")]
 fn press_dialog_escape(vm: &mut ScriptVm) {
     for (event, key, code) in [
         ("keydown", "a", "KeyA"),
@@ -236,6 +237,7 @@ fn dialog_form_submission_distinguishes_absent_and_empty_submitter_values() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_keydown_light_dismisses_modal_dialog() {
     let mut vm = new_storage_test_vm("https://dialog-escape-modal.test/");
@@ -283,6 +285,7 @@ fn dialog_escape_keydown_light_dismisses_modal_dialog() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_keydown_respects_prevent_default() {
     let mut vm = new_storage_test_vm("https://dialog-escape-prevent-default.test/");
@@ -345,6 +348,7 @@ fn dialog_escape_keydown_respects_prevent_default() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_keydown_does_not_close_non_modal_dialog() {
     let mut vm = new_storage_test_vm("https://dialog-escape-non-modal.test/");
@@ -377,6 +381,7 @@ fn dialog_escape_keydown_does_not_close_non_modal_dialog() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_follows_modal_open_order() {
     for (options, expected) in [
@@ -425,6 +430,7 @@ fn dialog_escape_follows_modal_open_order() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_cancellation_preserves_modal_order() {
     let mut vm = new_storage_test_vm("https://dialog-cancel-modal-order.test/");
@@ -457,6 +463,7 @@ fn dialog_escape_cancellation_preserves_modal_order() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_is_scoped_to_keyboard_dispatch_document() {
     for owner in 0..2 {
@@ -498,6 +505,7 @@ for (let i = 0; i < realms.length; i++) {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_untrusted_keydown_keeps_modal_order() {
     let mut vm = new_storage_test_vm("https://dialog-untrusted-escape.test/");
@@ -520,6 +528,7 @@ fn dialog_escape_untrusted_keydown_keeps_modal_order() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_uses_internal_keyboard_key() {
     for replace_prototype in [false, true] {
@@ -555,6 +564,7 @@ document.addEventListener('keydown', event => {{
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test]
 async fn dialog_escape_cancel_reentry_is_bound_to_original_opening() {
     for (action, expected, queues_close) in [
@@ -634,6 +644,7 @@ dialogProbe.dialogs.first.addEventListener('cancel', () => {{
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_after_adoption_uses_destination_registration() {
     for explicit_removal in [false, true] {
@@ -660,6 +671,7 @@ dialog.querySelector('button').focus();
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_after_atomic_move_keeps_original_opening_order() {
     let mut vm = new_storage_test_vm("https://dialog-escape-atomic-move.test/");
@@ -687,6 +699,7 @@ dialogProbe.dialogs.second.querySelector('button').focus();
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_respects_closedby_policy() {
     for (attribute, expected_open) in [
@@ -721,6 +734,7 @@ if (closedby !== null) dialogProbe.dialogs.first.setAttribute('closedby', closed
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_rechecks_closedby_after_keyboard_and_cancel_listeners() {
     for (event, initial, action, expected_open, expected_cancels) in [
@@ -761,6 +775,7 @@ target.addEventListener('{event}', () => dialog.{action});
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_closedby_ignores_namespaced_attributes() {
     for (on_cancel, policy, expected_open) in [
@@ -815,6 +830,7 @@ else setPolicy();
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn dialog_escape_does_not_bypass_top_modal_closedby_none() {
     // This covers the current modal-only close-request selection. Chromium can

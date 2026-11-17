@@ -18,8 +18,24 @@ impl ServiceWorkerRuntimeService {
 
     #[cfg(test)]
     pub(crate) fn stop_all_running_hosts_for_test(&self) {
-        self.devtools_stop_all_workers()
-            .expect("test host stop should use the production ServiceWorker retirement path");
+        self.stop_running_workers("test_stop_all");
+    }
+
+    #[cfg(any(test, feature = "devtools"))]
+    pub(super) fn stop_running_workers(&self, reason: &'static str) -> usize {
+        let hosts = {
+            let mut state = self.inner.state.lock();
+            let version_ids = state.versions.keys().copied().collect::<Vec<_>>();
+            version_ids
+                .into_iter()
+                .filter_map(|version_id| stop_worker_version_locked(&mut state, version_id, reason))
+                .collect::<Vec<_>>()
+        };
+        let stopped_count = hosts.len();
+        for host in hosts {
+            host.terminate_without_join();
+        }
+        stopped_count
     }
 
     fn take_context_shutdown_work(
@@ -91,6 +107,19 @@ impl ServiceWorkerRuntimeService {
             }
         }
     }
+}
+
+#[cfg(any(test, feature = "devtools"))]
+pub(super) fn stop_worker_version_locked(
+    state: &mut ServiceWorkerRuntimeState,
+    version_id: ServiceWorkerVersionId,
+    reason: &'static str,
+) -> Option<SharedRendererServiceWorkerHost> {
+    let version = state.versions.get_mut(&version_id)?;
+    let host = version.running_state.take_host_for_shutdown()?;
+    version.idle_timeout_token = None;
+    state.record_target_stopped(version_id, host.run_identity(), reason);
+    Some(host)
 }
 
 fn take_running_hosts_for_shutdown_locked(

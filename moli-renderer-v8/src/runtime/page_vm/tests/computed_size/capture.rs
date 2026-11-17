@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn computed_size_dom_snapshot_capture_preserves_rows_and_never_starts_layout() {
     run_page_vm_async_test(async move {

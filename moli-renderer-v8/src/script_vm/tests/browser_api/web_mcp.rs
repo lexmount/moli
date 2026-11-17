@@ -305,6 +305,7 @@ fn web_mcp_execution_rechecks_caller_detached_during_input_serialization() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn web_mcp_root_devtools_cannot_invoke_tools_from_a_popup_frame_tree() {
     let mut vm = new_storage_page_task_executor_test_vm("https://tools.test/");

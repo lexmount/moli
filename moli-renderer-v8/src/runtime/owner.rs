@@ -125,6 +125,7 @@ pub struct RendererPreparedDocumentCommitConfiguration {
     pub bypass_service_worker: bool,
     pub cache_disabled: bool,
     pub blocked_url_patterns: Vec<String>,
+    /// Applied only when renderer DevTools is enabled.
     pub fetch_subresource_interception_classes: crate::SubresourceInterceptionClasses,
 }
 

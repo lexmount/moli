@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::{Result, anyhow};
 #[cfg(feature = "devtools")]
-use anyhow::{Result, anyhow, bail, ensure};
+use anyhow::{bail, ensure};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use url::Url;
@@ -150,10 +151,29 @@ impl ResourceInterceptionPause {
             },
             InterceptionPhase::Auth => ResourceInterceptionDecision::CancelAuth,
         };
-        self.sender
+        self.send_decision(decision).is_ok()
+    }
+
+    fn send_decision(&self, decision: ResourceInterceptionDecision) -> Result<()> {
+        let sender = self
+            .sender
             .lock()
             .take()
-            .is_some_and(|sender| sender.send(decision).is_ok())
+            .ok_or_else(|| anyhow!("network pause was already resumed"))?;
+        sender
+            .send(decision)
+            .map_err(|_| anyhow!("network load is no longer waiting"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn send_test_decision(
+        &self,
+        internal_id: u64,
+        phase: InterceptionPhase,
+        decision: ResourceInterceptionDecision,
+    ) {
+        assert_eq!((self.internal_id, self.phase), (internal_id, phase));
+        self.send_decision(decision).expect("native test decision");
     }
 
     /// Releasing an interceptor changes native eligibility immediately. It
@@ -167,7 +187,6 @@ impl ResourceInterceptionPause {
     /// native network command subset is accepted; other Page work stays queued.
     #[cfg(feature = "devtools")]
     pub fn dispatch(&self, command: RendererPageCommand) -> Result<ResourceInterceptionReply> {
-        #[cfg(feature = "devtools")]
         use RendererPageCommand as C;
         use ResourceInterceptionDecision as D;
         use ResourceInterceptionReply as R;
@@ -281,13 +300,7 @@ impl ResourceInterceptionPause {
             id == self.internal_id && phase == self.phase,
             "network pause identity or phase does not match"
         );
-        let tx = self
-            .sender
-            .lock()
-            .take()
-            .ok_or_else(|| anyhow!("network pause was already resumed"))?;
-        tx.send(decision)
-            .map_err(|_| anyhow!("network load is no longer waiting"))?;
+        self.send_decision(decision)?;
         Ok(reply)
     }
 }

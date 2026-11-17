@@ -383,6 +383,7 @@ parserTarget.focus();
             );
         }));
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn parser_remove_pending_pointer_capture_target_clears_like_js_remove() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -553,6 +554,7 @@ window.parserPendingPointerCapture = installPendingPointerCaptureTarget('parser-
             );
         }));
 }
+#[cfg(feature = "devtools")]
 #[test]
 fn parser_reparent_pending_pointer_capture_target_to_disconnected_parent_clears_like_js() {
     let runtime = tokio::runtime::Builder::new_current_thread()

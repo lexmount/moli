@@ -347,6 +347,7 @@ fn mouse_input_json_witness(reply: &RendererPageReply) -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "devtools")]
 async fn dispatch_wheel_for_action_window_test(
     page: &RendererPageHandle,
     delta_y: f64,
@@ -389,6 +390,7 @@ async fn capture_screenshot_with_request(
     }
 }
 
+#[cfg(feature = "devtools")]
 async fn capture_screencast_frame_with_request(
     page: &RendererPageHandle,
     request: super::RendererCaptureScreencastFrameRequest,
@@ -552,6 +554,7 @@ async fn assert_window_performance_surface_for_test(page: &RendererPageHandle, p
     );
 }
 
+#[cfg(any(test, feature = "devtools"))]
 async fn runtime_heap_usage_for_test(page: &RendererPageHandle) -> serde_json::Value {
     let (reply, _) = page
         .run_async_command(RendererPageCommand::RuntimeHeapUsage)
@@ -641,6 +644,7 @@ fn runtime_indexed_db_test_root(label: &str) -> std::path::PathBuf {
     ))
 }
 
+#[cfg(feature = "devtools")]
 async fn create_isolated_world_for_test(
     page: &RendererPageHandle,
     name: &str,
@@ -660,6 +664,7 @@ async fn create_isolated_world_for_test(
     }
 }
 
+#[cfg(feature = "devtools")]
 async fn create_isolated_world_runtime_activity_for_test(
     page: &RendererPageHandle,
     inspector_session_id: Option<&str>,
@@ -681,6 +686,7 @@ async fn create_isolated_world_runtime_activity_for_test(
     }
 }
 
+#[cfg(feature = "devtools")]
 async fn create_isolated_world_for_frame_for_test(
     page: &RendererPageHandle,
     frame_id: &str,
@@ -1046,6 +1052,7 @@ async fn shared_worker_probe_messages(page: &RendererPageHandle) -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("expected SharedWorker probe messages string"))
 }
 
+#[cfg(feature = "devtools")]
 async fn runtime_protocol_object_id(
     page: &RendererPageHandle,
     request: serde_json::Value,
@@ -1058,6 +1065,7 @@ async fn runtime_protocol_object_id(
         .ok_or_else(|| anyhow::anyhow!("expected Runtime response {response_id} to carry objectId"))
 }
 
+#[cfg(feature = "devtools")]
 async fn dispatch_runtime_protocol_for_test(
     page: &RendererPageHandle,
     request: serde_json::Value,
@@ -1067,6 +1075,7 @@ async fn dispatch_runtime_protocol_for_test(
         .map(|(messages, _)| messages)
 }
 
+#[cfg(feature = "devtools")]
 async fn dispatch_runtime_protocol_with_output_for_test(
     page: &RendererPageHandle,
     request: serde_json::Value,
@@ -1092,6 +1101,7 @@ async fn dispatch_runtime_protocol_with_output_for_test(
     Ok((messages, output))
 }
 
+#[cfg(feature = "devtools")]
 async fn dispatch_runtime_protocol_with_context_resolution_for_test(
     page: &RendererPageHandle,
     action: &str,
@@ -1128,12 +1138,14 @@ fn runtime_protocol_response_by_id(
         .find(|message| message.get("id").and_then(serde_json::Value::as_i64) == Some(response_id))
 }
 
+#[cfg(feature = "devtools")]
 async fn runtime_enable_events_for_test(
     page: &RendererPageHandle,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     runtime_enable_events_for_inspector_session_for_test(page, None).await
 }
 
+#[cfg(feature = "devtools")]
 async fn runtime_enable_events_for_inspector_session_for_test(
     page: &RendererPageHandle,
     inspector_session_id: Option<&str>,
@@ -1276,6 +1288,7 @@ fn runtime_default_context_count(messages: &[serde_json::Value]) -> usize {
         .count()
 }
 
+#[cfg(feature = "devtools")]
 async fn add_runtime_binding_for_test(
     page: &RendererPageHandle,
     name: &str,
@@ -1298,6 +1311,7 @@ async fn add_runtime_binding_for_test(
     }
 }
 
+#[cfg(feature = "devtools")]
 async fn remove_runtime_binding_for_test(
     page: &RendererPageHandle,
     name: &str,
@@ -1328,6 +1342,7 @@ async fn set_stored_document_start_scripts_for_test(
     }
 }
 
+#[cfg(feature = "devtools")]
 async fn set_runtime_binding_state_for_test(
     page: &RendererPageHandle,
     inspector_session_id: Option<String>,

@@ -232,6 +232,7 @@ fn synthetic_clicks_match_pointer_identity_across_realms_and_adoption() {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn accesskey_clicks_use_the_focused_document_and_synthetic_pointer_identity() {
     let mut vm = new_storage_test_vm("https://accesskey-click-realms.test/");
@@ -306,6 +307,7 @@ for (let index = 0; index < realms.length; index++) {
     );
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn accesskey_document_is_frozen_before_keydown_adoption() {
     for owner in 0..2 {
@@ -360,6 +362,7 @@ source.focus();
     }
 }
 
+#[cfg(feature = "devtools")]
 #[test]
 fn keyboard_activation_uses_trusted_non_pointer_clicks() {
     let mut vm = new_storage_test_vm("https://keyboard-click-realms.test/");

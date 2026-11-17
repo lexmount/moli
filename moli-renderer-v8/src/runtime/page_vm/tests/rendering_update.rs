@@ -3,6 +3,7 @@ use super::*;
 mod image_repeat;
 mod planar_transforms;
 mod print;
+#[cfg(feature = "devtools")]
 mod print_isolation;
 mod transform_precision;
 
