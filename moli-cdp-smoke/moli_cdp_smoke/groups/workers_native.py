@@ -60,7 +60,7 @@ function receive(data, reply) {
     }).catch(error=>reply({largeError:String(error)}));
   } else if (data.kind === 'abort-body') controller.abort('native-body-abort');
   else if (data.kind === 'fetch') {
-    fetch(data.url, {redirect:data.redirect || 'follow'}).then(async r => {
+    fetch(data.url, {method:data.method || 'GET',body:data.body,credentials:data.credentials || 'same-origin',redirect:data.redirect || 'follow',cache:data.cache || 'default'}).then(async r => {
       const clone = r.clone();
       reply({status:r.status,type:r.type,bodyNull:r.body === null,body:await r.text(),clone:await clone.text()});
     }, e => reply({error:e.name}));
@@ -124,7 +124,48 @@ class _Fixture(AbstractContextManager):
                     self.end_headers()
                     self.wfile.write(b"missing")
                     return
-                if path == "/worker.js":
+                if path.startswith("/native-probe/real-redirect-"):
+                    suffix = path.removeprefix("/native-probe/real-redirect-")
+                    self.send_response(int(suffix.split("-")[0]))
+                    self.send_header("Location", "/original-" + suffix)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if path.startswith("/original-"):
+                    body, kind = b"original body", "text/plain"
+                elif path.startswith("/edited-"):
+                    body, kind = b"edited body", "text/plain"
+                elif path.startswith("/worker-cache-"):
+                    self.protocol_version = "HTTP/1.1"
+                    if self.headers.get("If-None-Match") == '"worker-cache-probe"':
+                        self.send_response(304)
+                        self.send_header("ETag", '"worker-cache-probe"')
+                        self.send_header("Cache-Control", "max-age=0, must-revalidate")
+                        self.send_header("X-Validated", "wire-304")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", "11")
+                    self.send_header("ETag", '"worker-cache-probe"')
+                    self.send_header("Cache-Control", "max-age=0, must-revalidate")
+                    self.send_header("X-Cached", "body-200")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(b"cached body")
+                    return
+                elif path.startswith("/native-probe/basic-auth-"):
+                    if self.headers.get("Authorization") != "Basic dXNlcjpwYXNz":
+                        self.send_response(401)
+                        self.send_header(
+                            "WWW-Authenticate", 'Basic realm="worker-extra-info"'
+                        )
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    body, kind = b"authenticated", "text/plain"
+                elif path == "/worker.js":
                     body, kind = SCRIPT.encode(), "text/javascript"
                 elif path == "/reader-barrier.js":
                     body, kind = b"void 0;", "text/javascript"
@@ -267,6 +308,7 @@ class _Targets:
             )
         for method in (
             "Fetch.requestPaused",
+            "Fetch.authRequired",
             "Network.requestWillBeSent",
             "Network.requestWillBeSentExtraInfo",
             "Network.responseReceivedExtraInfo",
@@ -624,6 +666,233 @@ async def _check_redirect_responses(
                     "no next hop " + label,
                 )
                 state.record("native_worker_synthetic_" + label, {"response": result})
+
+
+async def _check_continued_real_redirects(
+    state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
+) -> None:
+    for original_status, status in ((302, 302), (302, 200), (307, 302), (307, 200)):
+        suffix = f"{original_status}-{status}"
+        path = "/native-probe/real-redirect-" + suffix
+        url = fixture.origin + path
+        await page.evaluate(
+            'url=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url,method:"POST",body:"upload"});}',
+            url,
+        )
+        pause = await targets.pause(url, child, False)
+        await targets.page_cdp.send(
+            "Fetch.continueRequest",
+            {"requestId": pause["requestId"], "interceptResponse": True},
+        )
+        pause = await targets.pause(url, child, False, response=True)
+        await targets.page_cdp.send(
+            "Fetch.continueResponse",
+            {
+                "requestId": pause["requestId"],
+                "responseCode": status,
+                "responseHeaders": [
+                    {"name": "Location", "value": "/edited-" + suffix},
+                    {"name": "Content-Type", "value": "text/plain"},
+                ],
+            },
+        )
+        await wait_until(
+            lambda: page.evaluate("nativeMessages.length>0"),
+            "continued original redirect",
+        )
+        result = await page.evaluate("nativeMessages[0]")
+        assert_equal(
+            result,
+            {
+                "status": 200,
+                "type": "basic",
+                "bodyNull": False,
+                "body": "original body",
+                "clone": "original body",
+            },
+            "continueResponse follows the original transport target",
+        )
+        await targets.event("Network.loadingFinished", requestId=pause["networkId"])
+        assert_equal(
+            fixture.hits["/original-" + suffix], 1, "original target actually fetched"
+        )
+        assert_equal(
+            fixture.hits["/edited-" + suffix],
+            0,
+            "edited Location is only a response header",
+        )
+        redirects = [
+            e
+            for e in targets.events
+            if e["method"] == "Network.requestWillBeSent"
+            and e["params"]["requestId"] == pause["networkId"]
+            and "redirectResponse" in e["params"]
+        ]
+        assert_equal(len(redirects), 1, "one reported redirect")
+        assert_equal(
+            redirects[0]["params"]["redirectResponse"]["status"],
+            status,
+            "edited redirect response status",
+        )
+        headers = {
+            k.lower(): v
+            for k, v in redirects[0]["params"]["redirectResponse"]["headers"].items()
+        }
+        assert_equal(
+            headers.get("location"),
+            "/edited-" + suffix,
+            "edited response header projection",
+        )
+        received = next(
+            r for r in fixture.requests if r["path"] == "/original-" + suffix
+        )
+        assert_equal(
+            received["method"],
+            "GET" if original_status == 302 else "POST",
+            "method follows original redirect status",
+        )
+        assert_equal(
+            received["body"],
+            "" if original_status == 302 else "upload",
+            "upload follows original redirect status",
+        )
+        state.record(
+            "native_worker_continued_real_redirect_" + suffix,
+            {"response": result, "redirects": redirects},
+        )
+
+
+async def _check_cache_revalidation(
+    state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
+) -> None:
+    path = "/worker-cache-revalidate"
+    url = fixture.origin + path
+    for index, wire_status in enumerate((200, 304)):
+        before = len(targets.events)
+        await page.evaluate(
+            'url=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url,cache:"no-cache",credentials:"omit"});}',
+            url,
+        )
+        await wait_until(
+            lambda: page.evaluate("nativeMessages.length>0"),
+            "Worker cache revalidation",
+        )
+        result = await page.evaluate("nativeMessages[0]")
+        assert_equal(result["status"], 200, "cache-revalidated effective status")
+        assert_equal(result["body"], "cached body", "cache-revalidated body")
+        fresh = targets.events[before:]
+        request = next(
+            e
+            for e in fresh
+            if e["method"] == "Network.requestWillBeSent"
+            and e["params"]["request"]["url"] == url
+            and e.get("sessionId") == child.session
+        )
+        request_id = request["params"]["requestId"]
+        extra = await targets.event(
+            "Network.responseReceivedExtraInfo", requestId=request_id
+        )
+        assert_equal(
+            extra["params"]["statusCode"], wire_status, "raw revalidation status"
+        )
+        if index:
+            headers = {k.lower(): v for k, v in extra["params"]["headers"].items()}
+            assert_equal(
+                headers.get("x-validated"), "wire-304", "raw validation headers"
+            )
+            assert_equal(
+                headers.get("x-cached"), None, "cached headers are absent from raw 304"
+            )
+        await targets.event("Network.loadingFinished", requestId=request_id)
+        response = await targets.event("Network.responseReceived", requestId=request_id)
+        assert_equal(
+            response["params"]["response"]["status"],
+            200,
+            "effective Network response after validation",
+        )
+        state.record(
+            "native_worker_cache_revalidation_" + str(index),
+            {"response": result, "extra": extra},
+        )
+    assert_equal(
+        fixture.hits[path], 2, "both cache validation requests reached the server"
+    )
+    assert_equal(
+        {
+            k.lower(): v
+            for k, v in next(
+                r for r in reversed(fixture.requests) if r["path"] == path
+            )["headers"].items()
+        }.get("if-none-match"),
+        '"worker-cache-probe"',
+        "ETag validation sent",
+    )
+
+
+async def _check_auth_extra_info(
+    state: SmokeState, fixture: _Fixture, page: Any, targets: _Targets, child: _Child
+) -> None:
+    await targets.page_cdp.send(
+        "Fetch.enable",
+        {"handleAuthRequests": True, "patterns": [{"urlPattern": "*native-probe*"}]},
+    )
+    url = fixture.origin + "/native-probe/basic-auth-success"
+    await page.evaluate(
+        'url=>{nativeMessages=[];nativePort.postMessage({kind:"fetch",url});}', url
+    )
+    pause = await targets.pause(url, child, False)
+    await targets.page_cdp.send(
+        "Fetch.continueRequest",
+        {"requestId": pause["requestId"], "interceptResponse": True},
+    )
+    auth = await targets.event("Fetch.authRequired")
+    # A command round trip drains facts preceding the live authentication pause.
+    await targets.page_cdp.send("Network.getCookies", {"urls": [url]})
+
+    def extras():
+        return [
+            e
+            for e in targets.events
+            if e["method"] == "Network.responseReceivedExtraInfo"
+            and e["params"]["requestId"] == pause["networkId"]
+        ]
+
+    assert_equal(extras(), [], "retryable challenge has no response ExtraInfo")
+    await targets.page_cdp.send(
+        "Fetch.continueWithAuth",
+        {
+            "requestId": auth["params"]["requestId"],
+            "authChallengeResponse": {
+                "response": "ProvideCredentials",
+                "username": "user",
+                "password": "pass",
+            },
+        },
+    )
+    response = await targets.pause(url, child, False, response=True)
+    extra = await targets.event(
+        "Network.responseReceivedExtraInfo", requestId=pause["networkId"]
+    )
+    assert_equal(
+        extra["params"]["statusCode"],
+        200,
+        "selected authenticated response before pause",
+    )
+    await targets.page_cdp.send(
+        "Fetch.continueResponse", {"requestId": response["requestId"]}
+    )
+    await wait_until(
+        lambda: page.evaluate("nativeMessages.length>0"),
+        "authenticated Worker response",
+    )
+    result = await page.evaluate("nativeMessages[0]")
+    assert_equal(result["body"], "authenticated", "authenticated body")
+    await targets.event("Network.loadingFinished", requestId=pause["networkId"])
+    assert_equal(len(extras()), 1, "exactly one selected response ExtraInfo")
+    state.record(
+        "native_worker_auth_selected_extra_info",
+        {"response": result, "extras": extras()},
+    )
 
 
 async def _check_large_worker_reader(
@@ -1136,6 +1405,10 @@ async def run_native_worker_loading_group(state: SmokeState) -> None:
                     await _check_redirect_responses(
                         state, fixture, page, targets, child
                     )
+                    await _check_continued_real_redirects(
+                        state, fixture, page, targets, child
+                    )
+                    await _check_auth_extra_info(state, fixture, page, targets, child)
                     await _check_large_worker_reader(
                         state, fixture, page, targets, child
                     )
@@ -1150,6 +1423,9 @@ async def run_native_worker_loading_group(state: SmokeState) -> None:
                 if not shared:
                     await page_cdp.send("Fetch.disable")
                     await _check_network_extra_info(
+                        state, fixture, page, targets, child
+                    )
+                    await _check_cache_revalidation(
                         state, fixture, page, targets, child
                     )
                     await page_cdp.send(

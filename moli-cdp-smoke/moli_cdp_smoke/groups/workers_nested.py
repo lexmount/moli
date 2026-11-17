@@ -272,6 +272,45 @@ async def check_nested_worker_protocol(
                 result["result"]["value"], 2, "flattened child Inspector response"
             )
             await probe.command("Runtime.runIfWaitingForDebugger", session=inner)
+        elif case == "close-running":
+            await probe.response(create, outer)
+            await probe.command("Runtime.runIfWaitingForDebugger", session=inner)
+            boot = await probe.command(
+                "Runtime.evaluate",
+                {
+                    "expression": "childBoot",
+                    "awaitPromise": True,
+                    "returnByValue": True,
+                },
+                outer,
+            )
+            assert_equal(
+                boot["result"]["value"], "booted", "Worker runs before closeTarget"
+            )
+            child_target = attached["params"]["targetInfo"]["targetId"]
+            close_id = await client.send(
+                "Target.closeTarget", {"targetId": child_target}
+            )
+            closed = await probe.wait(lambda m: m.get("id") == close_id)
+            assert_equal(
+                closed.get("error"),
+                {"code": -32602, "message": "Specified target doesn't support closing"},
+                "running DedicatedWorker cannot be closed through CDP",
+            )
+            result = await probe.command(
+                "Runtime.evaluate", {"expression": "40+2", "returnByValue": True}, inner
+            )
+            assert_equal(
+                result["result"]["value"],
+                42,
+                "rejected close leaves Worker execution alive",
+            )
+            targets = await probe.command("Target.getTargets")
+            assert_equal(
+                any(t["targetId"] == child_target for t in targets["targetInfos"]),
+                True,
+                "rejected close retains running target",
+            )
         elif not loading:
             await probe.response(create, outer)
             if case == "disable-auto-attach":
@@ -349,6 +388,7 @@ async def run_nested_worker_protocol_checks(
             "script-failure",
             "late-auto-attach",
             "close-loading",
+            "close-running",
             "failed-script-detach",
         ):
             await check_nested_worker_protocol(state, fixture, case, endpoint)
