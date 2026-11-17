@@ -968,6 +968,32 @@ mod tests {
         assert!(document.append_child(parent, text));
     }
 
+    #[test]
+    fn image_url_empty_filter_preserves_vertical_tab() {
+        let (mut document, root) = document_with_root();
+        let image = document.create_element("img");
+        assert!(document.append_child(root, image));
+        for source in ["", " ", "\t", "\n", "\r", "\u{c}", " \t\n\r\u{c}"] {
+            assert!(document.set_attribute(image, "src", source));
+            let element = document.node(image).unwrap().as_element().unwrap();
+            assert_eq!(
+                ax_element_url(&document, element, "image"),
+                None,
+                "src={source:?}"
+            );
+        }
+        for source in ["\u{b}", " \t\u{b}\r "] {
+            assert!(!trim_html_spaces(source).is_empty());
+            assert!(document.set_attribute(image, "src", source));
+            let element = document.node(image).unwrap().as_element().unwrap();
+            assert_eq!(
+                ax_element_url(&document, element, "image"),
+                Some(Url::parse("https://example.test/").unwrap()),
+                "src={source:?}"
+            );
+        }
+    }
+
     fn node_name(document: &NativeDom, node_id: NodeId) -> String {
         let host = DomHost::from_dom(document.clone());
         let mut styles = super::super::tests::FixtureStyles::visible(&host);

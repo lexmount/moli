@@ -371,6 +371,113 @@ async fn semantic_presentational_links_keep_native_roles_and_targets() -> Result
 }
 
 #[tokio::test]
+async fn semantic_presentational_roles_follow_standard_global_aria_properties() -> Result<()> {
+    let (_browser, mut page, server) = load_page(
+        r#"<!doctype html>
+        <h2 role="none" aria-disabled="false">Disabled property</h2>
+        <h2 role="presentation" aria-dropeffect="none">Drop property</h2>
+        <h2 role="none" aria-errormessage="message">Error property</h2>
+        <h2 role="presentation" aria-grabbed="false">Grabbed property</h2>
+        <h2 role="none" aria-haspopup="false">Popup property</h2>
+        <h2 role="presentation" aria-hidden="false">Visible hidden property</h2>
+        <h2 role="none" aria-invalid="false">Invalid property</h2>
+        <h2 role="none" aria-label="Canonical label">Visual label</h2>
+        <h2 role="none" aria-description="Description">Description extension</h2>
+        <h2 role="none" aria-braillelabel="Braille">Braille extension</h2>
+        <h2 role="none" aria-brailleroledescription="Braille role">Braille role extension</h2>
+        <h2 role="none" aria-labeledby="message">Misspelled label</h2>
+        <h2 role="none" aria-level="3">Role-specific property</h2>
+        <h2 id="foreign" role="none">Foreign namespace</h2>
+        <h2 id="foreign-unprefixed" role="none">Foreign unprefixed namespace</h2>
+        <h2 id="aria-namespace" role="none">ARIA namespace</h2>
+        <h2 role="none" aria-hidden="true">Hidden secret</h2>
+        <h2 role="button" aria-hidden="false">Explicit button</h2>
+        <span id="message" hidden>Hidden message</span>"#,
+    )
+    .await?;
+    let setup = page.evaluate_runtime_expression_by_value_async(
+        r#"(() => {
+            const cases = [
+                ['foreign', 'urn:test', 'x:aria-label', 'Foreign label'],
+                ['foreign-unprefixed', 'urn:test', 'aria-live', 'polite'],
+                ['aria-namespace', 'http://www.w3.org/ns/wai-aria/', 'aria:aria-label', 'Namespaced label'],
+            ];
+            for (const [id, namespace, name, value] of cases)
+                document.getElementById(id).setAttributeNS(namespace, name, value);
+            return cases.every(([id, namespace, name, value]) =>
+                document.getElementById(id).getAttributeNS(namespace, name.split(':').pop()) === value);
+        })()"#,
+    ).await?;
+    assert_eq!(setup["value"], true, "{setup}");
+    let (nodes, text) = semantic_nodes_and_text(&mut page).await?;
+    let mut headings = nodes
+        .iter()
+        .filter(|node| node["role"]["value"] == "heading")
+        .map(|node| node["name"]["value"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    headings.sort_unstable();
+    let mut expected = vec![
+        "Disabled property",
+        "Drop property",
+        "Error property",
+        "Grabbed property",
+        "Popup property",
+        "Visible hidden property",
+        "Invalid property",
+        "Canonical label",
+        "Description extension",
+        "Braille extension",
+        "Braille role extension",
+    ];
+    expected.sort_unstable();
+    assert_eq!(headings, expected, "{text}");
+    assert!(!text.contains("Hidden secret"), "{text}");
+    assert_semantic_target(&nodes, &text, "Explicit button", "button", None, false);
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn semantic_html_whitespace_excludes_vertical_tab() -> Result<()> {
+    let (_browser, mut page, server) = load_page(
+        r#"<!doctype html><base href="/assets/">
+        <h2 id="vt" role="presentation" tabindex="&#11;0">VT heading</h2>
+        <h2 id="tab" role="presentation" tabindex="&#9;0">TAB heading</h2>
+        <img src="&#11;" alt="VT image"><img src="&#9;" alt="TAB image">
+        <img src="" alt="Empty image"><img src=" " alt="Space image">"#,
+    )
+    .await?;
+    let tab_indices = page
+        .evaluate_runtime_expression_by_value_async(
+            "[document.getElementById('vt').tabIndex, document.getElementById('tab').tabIndex]",
+        )
+        .await?;
+    assert_eq!(tab_indices["value"], json!([-1, 0]), "{tab_indices}");
+    let (nodes, text) = semantic_nodes_and_text(&mut page).await?;
+    assert!(
+        nodes.iter().any(
+            |node| node["role"]["value"] == "heading" && node["name"]["value"] == "TAB heading"
+        ),
+        "{text}"
+    );
+    assert!(!nodes.iter().any(|node| node["role"]["value"] == "heading" && node["name"]["value"] == "VT heading"), "{text}");
+    let base = page.final_url().join("/assets/")?;
+    assert_semantic_target(
+        &nodes,
+        &text,
+        "VT image",
+        "image",
+        Some(base.as_str()),
+        false,
+    );
+    for name in ["TAB image", "Empty image", "Space image"] {
+        assert_semantic_target(&nodes, &text, name, "image", None, false);
+    }
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn semantic_url_trimming_preserves_unicode_path_data() -> Result<()> {
     let (_browser, mut page, server) = load_page(
         r#"<!doctype html><base href="/assets/">

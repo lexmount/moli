@@ -146,8 +146,10 @@ fn explicit_aria_role(
 }
 
 fn has_global_aria_property(element: &Element) -> bool {
-    // Chromium AXObject::DoesUndoRolePresentation. Deprecated global states
-    // such as aria-disabled, and aria-hidden, do not undo presentation.
+    // WAI-ARIA 1.2 sections 3.5 and 6.5: deprecated globals still participate
+    // in presentational-role conflicts. Preserve the supported ARIA 1.3
+    // braille/description globals too. HTML (including XHTML) ARIA attributes
+    // have no namespace; another namespace's matching local name is unrelated.
     [
         "aria-atomic",
         "aria-braillelabel",
@@ -158,10 +160,16 @@ fn has_global_aria_property(element: &Element) -> bool {
         "aria-describedby",
         "aria-description",
         "aria-details",
+        "aria-disabled",
+        "aria-dropeffect",
+        "aria-errormessage",
         "aria-flowto",
+        "aria-grabbed",
+        "aria-haspopup",
+        "aria-hidden",
+        "aria-invalid",
         "aria-keyshortcuts",
         "aria-label",
-        "aria-labeledby",
         "aria-labelledby",
         "aria-live",
         "aria-owns",
@@ -369,6 +377,114 @@ mod tests {
     use url::Url;
 
     #[test]
+    fn presentation_conflicts_follow_standard_global_aria_properties() {
+        // WAI-ARIA 1.2 section 6.5, including deprecated globals. Preserve the
+        // three supported ARIA 1.3 globals as well.
+        let properties = [
+            "aria-atomic",
+            "aria-busy",
+            "aria-controls",
+            "aria-current",
+            "aria-describedby",
+            "aria-details",
+            "aria-disabled",
+            "aria-dropeffect",
+            "aria-errormessage",
+            "aria-flowto",
+            "aria-grabbed",
+            "aria-haspopup",
+            "aria-hidden",
+            "aria-invalid",
+            "aria-keyshortcuts",
+            "aria-label",
+            "aria-labelledby",
+            "aria-live",
+            "aria-owns",
+            "aria-relevant",
+            "aria-roledescription",
+            "aria-braillelabel",
+            "aria-brailleroledescription",
+            "aria-description",
+        ];
+        let mut document = NativeDom::new_html(Url::parse("https://example.test/").unwrap());
+        let root = document.create_element("main");
+        assert!(document.append_child(document.document_node_id(), root));
+        for role in ["none", "presentation"] {
+            for property in properties {
+                for (namespace, prefix) in [
+                    (None, None),
+                    (Some("urn:test"), None),
+                    (Some("urn:test"), Some("x")),
+                    (Some("http://www.w3.org/ns/wai-aria/"), None),
+                    (Some("http://www.w3.org/ns/wai-aria/"), Some("aria")),
+                ] {
+                    let heading = document.create_element("h2");
+                    assert!(document.append_child(root, heading));
+                    assert!(document.set_attribute(heading, "role", role));
+                    assert!(
+                        document.set_attribute_ns(heading, namespace, prefix, property, "false")
+                    );
+                    assert_eq!(
+                        ax_role(&document, document.node(heading).unwrap()),
+                        if namespace.is_none() {
+                            "heading"
+                        } else {
+                            "none"
+                        },
+                        "role={role}, {property}, namespace={namespace:?}, prefix={prefix:?}"
+                    );
+                }
+            }
+            for property in [
+                "aria-labeledby",
+                "aria-checked",
+                "aria-expanded",
+                "aria-level",
+                "aria-selected",
+                "aria-valuenow",
+                "aria-unknown",
+            ] {
+                let heading = document.create_element("h2");
+                assert!(document.append_child(root, heading));
+                assert!(document.set_attribute(heading, "role", role));
+                assert!(document.set_attribute(heading, property, "false"));
+                assert_eq!(
+                    ax_role(&document, document.node(heading).unwrap()),
+                    "none",
+                    "{property}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn presentation_focus_conflicts_distinguish_html_spaces_from_vertical_tab() {
+        let mut document = NativeDom::new_html(Url::parse("https://example.test/").unwrap());
+        for role in ["none", "presentation"] {
+            for (tabindex, expected) in [
+                (" 0", "heading"),
+                ("\t0", "heading"),
+                ("\n0", "heading"),
+                ("\r0", "heading"),
+                ("\u{c}0", "heading"),
+                ("\u{b}0", "none"),
+                ("\u{a0}0", "none"),
+                ("0\u{b}", "heading"),
+            ] {
+                let heading = document.create_element("h2");
+                assert!(document.append_child(document.document_node_id(), heading));
+                assert!(document.set_attribute(heading, "role", role));
+                assert!(document.set_attribute(heading, "tabindex", tabindex));
+                assert_eq!(
+                    ax_role(&document, document.node(heading).unwrap()),
+                    expected,
+                    "tabindex={tabindex:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn presentation_conflicts_use_focus_support_and_global_aria_properties() {
         let cases = [
             ("a", vec![("href", "/go")], "link"),
@@ -383,8 +499,8 @@ mod tests {
             ("img", vec![("tabindex", "\u{a0}0")], "none"),
             ("img", vec![("aria-label", "")], "image"),
             ("img", vec![("aria-live", "off")], "image"),
-            ("img", vec![("aria-hidden", "false")], "none"),
-            ("img", vec![("aria-disabled", "true")], "none"),
+            ("img", vec![("aria-hidden", "false")], "image"),
+            ("img", vec![("aria-disabled", "true")], "image"),
             ("div", vec![("contenteditable", "true")], "generic"),
         ];
         let mut document = NativeDom::new_html(Url::parse("https://example.test/").unwrap());
