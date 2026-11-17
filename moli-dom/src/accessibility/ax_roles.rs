@@ -3,6 +3,19 @@ use crate::{
     native::{Element, NativeDom, Node},
 };
 
+/// Chromium's ui::IsLink classification for computed AX roles.
+pub(super) fn is_link(role: &str) -> bool {
+    matches!(
+        role,
+        "link" | "doc-backlink" | "doc-biblioref" | "doc-glossref" | "doc-noteref"
+    )
+}
+
+/// Blink's AXObject::IsImage excludes canvas from ui::IsImage.
+pub(super) fn is_image(role: &str) -> bool {
+    matches!(role, "image" | "doc-cover" | "graphics-symbol" | "SvgRoot")
+}
+
 pub(super) fn ax_role(node: &Node) -> &'static str {
     match node.kind() {
         NodeData::Document(_) => "RootWebArea",

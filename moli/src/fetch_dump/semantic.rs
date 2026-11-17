@@ -101,7 +101,7 @@ fn render_payloads_text(payloads: &[AccessibilityNode]) -> String {
             out.push_str(" = ");
             out.push_str(value);
         }
-        if node.role == "link"
+        if node.is_link()
             && let Some(url) = node
                 .properties()
                 .into_iter()
@@ -238,22 +238,32 @@ mod tests {
 
     #[test]
     fn text_shows_the_url_of_links_only() {
-        let url = || {
-            Some(vec![
-                serde_json::json!({"name":"url", "value":{"type":"string", "value":"https://example.com/a"}}),
-            ])
-        };
-        let mut link = node(2, "link", Some(1), &[]);
-        link.name = Some("A".to_owned());
-        link.set_rare_data(None, None, url());
-        let mut image = node(3, "image", Some(1), &[]);
-        image.set_rare_data(None, None, url());
-        let text = render_payloads_text(&[node(1, "RootWebArea", None, &[2, 3]), link, image]);
-        assert_eq!(
-            text,
-            "- RootWebArea [backendNodeId=1]\n  \
-             - link: A → https://example.com/a [backendNodeId=2]\n  \
+        for role in [
+            "link",
+            "doc-backlink",
+            "doc-biblioref",
+            "doc-glossref",
+            "doc-noteref",
+        ] {
+            let url = || {
+                Some(vec![
+                    serde_json::json!({"name":"url", "value":{"type":"string", "value":"https://example.com/a"}}),
+                ])
+            };
+            let mut link = node(2, role, Some(1), &[]);
+            link.name = Some("A".to_owned());
+            link.set_rare_data(None, None, url());
+            let mut image = node(3, "image", Some(1), &[]);
+            image.set_rare_data(None, None, url());
+            let text = render_payloads_text(&[node(1, "RootWebArea", None, &[2, 3]), link, image]);
+            assert_eq!(
+                text,
+                format!(
+                    "- RootWebArea [backendNodeId=1]\n  \
+             - {role}: A → https://example.com/a [backendNodeId=2]\n  \
              - image [backendNodeId=3]"
-        );
+                )
+            );
+        }
     }
 }
