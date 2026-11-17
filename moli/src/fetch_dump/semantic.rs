@@ -101,6 +101,18 @@ fn render_payloads_text(payloads: &[AccessibilityNode]) -> String {
             out.push_str(" = ");
             out.push_str(value);
         }
+        if node.role == "link"
+            && let Some(url) = node
+                .properties()
+                .into_iter()
+                .flatten()
+                .find(|property| property["name"] == "url")
+                .and_then(|property| property["value"]["value"].as_str())
+            && !url.is_empty()
+        {
+            out.push_str(" → ");
+            out.push_str(url);
+        }
         if let Some(backend) = node.backend_node_id {
             write!(&mut out, " [backendNodeId={backend}]").expect("writing to a String");
         }
@@ -222,5 +234,26 @@ mod tests {
         let text = render_payloads_text(&nodes);
         assert_eq!(text.lines().count(), (DEPTH + 1) as usize);
         assert!(text.ends_with("  - textbox: Name = value [backendNodeId=2049]"));
+    }
+
+    #[test]
+    fn text_shows_the_url_of_links_only() {
+        let url = || {
+            Some(vec![
+                serde_json::json!({"name":"url", "value":{"type":"string", "value":"https://example.com/a"}}),
+            ])
+        };
+        let mut link = node(2, "link", Some(1), &[]);
+        link.name = Some("A".to_owned());
+        link.set_rare_data(None, None, url());
+        let mut image = node(3, "image", Some(1), &[]);
+        image.set_rare_data(None, None, url());
+        let text = render_payloads_text(&[node(1, "RootWebArea", None, &[2, 3]), link, image]);
+        assert_eq!(
+            text,
+            "- RootWebArea [backendNodeId=1]\n  \
+             - link: A → https://example.com/a [backendNodeId=2]\n  \
+             - image [backendNodeId=3]"
+        );
     }
 }

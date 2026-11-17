@@ -16,7 +16,7 @@
 | Need | Command shape | Notes |
 | --- | --- | --- |
 | Read page content | `--dump markdown` | Default for research and summarization |
-| Inspect semantic structure | `--dump semantic_tree_text` | Compact roles, labels, text, and backend node IDs |
+| Inspect semantic structure | `--dump semantic_tree_text` | Compact roles, labels, text, link URLs, and backend node IDs |
 | Process semantic structure | `--dump semantic_tree` | Structured accessibility-oriented payload |
 | Process stable fields | `--dump json` | Returns response metadata plus rendered `html` or a raw `body_base64` |
 | Inspect exact DOM | `--dump html` | Useful when Markdown loses important structure |
