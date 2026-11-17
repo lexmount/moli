@@ -577,7 +577,7 @@ impl ControlledResourceLoad {
             }
             let mut response = response;
             let mut body_from_network = body_from_network;
-            let mut continued_final_response = false;
+            let mut continued_response_head = None;
             if handle_auth_requests
                 && matches!(response.head.status, 401 | 407)
                 && let Some(challenge) = crate::protocol_types::extract_subresource_auth_challenge(
@@ -655,10 +655,7 @@ impl ControlledResourceLoad {
                     D::ContinueResponse { status, headers } => {
                         // This decision edits an existing response. It cannot
                         // turn a transport's final response into a new hop.
-                        continued_final_response =
-                            !matches!(response.head.status, 301 | 302 | 303 | 307 | 308)
-                                || super::async_fetch::redirect_location(&response.head.headers)
-                                    .is_none();
+                        continued_response_head = Some(response.head.clone());
                         if let Some(status) = status {
                             response.head.status = status;
                             response.head.status_text = None;
@@ -684,40 +681,47 @@ impl ControlledResourceLoad {
                 }
             }
             use super::response_hop::{
-                SubresourceResponseTransition, advance_subresource_response,
+                SubresourceResponseTransition, advance_validated_subresource_response,
             };
-            let transition = if (continued_final_response
-                && self.request.redirect_mode() != moli_fetch::RequestRedirectMode::Manual)
-                || (matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
-                    && self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
-                    && super::async_fetch::redirect_location(&response.head.headers).is_none())
+            let decision_head = continued_response_head.as_ref().unwrap_or(&response.head);
+            if self.response_filter.is_none() {
+                self.request.validate_cors_response_for_url(
+                    &response.head.final_url,
+                    &response.head.headers,
+                )?;
+            }
+            let transition = if matches!(self.response_policy, ResourceResponsePolicy::Fetch(_))
+                && self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Error
+                && super::async_fetch::redirect_location(&decision_head.headers).is_none()
             {
-                if self.response_filter.is_none() {
-                    self.request.validate_cors_response_for_url(
-                        &response.head.final_url,
-                        &response.head.headers,
-                    )?;
-                }
                 SubresourceResponseTransition::FinalResponse
-            } else if self.response_filter.is_some() {
-                super::response_hop::advance_validated_subresource_response(
-                    &mut self.request,
-                    response.head.clone(),
-                    network_request_headers.is_some(),
-                )?
             } else {
-                advance_subresource_response(
+                if self.response_filter.is_none() {
+                    self.request
+                        .observe_redirect_requests(&decision_head.redirect_chain);
+                }
+                advance_validated_subresource_response(
                     &mut self.request,
-                    response.head.clone(),
+                    decision_head.clone(),
                     network_request_headers.is_some(),
                 )?
             };
+            if continued_response_head.is_some()
+                && transition == SubresourceResponseTransition::FollowedRedirect
+            {
+                self.request.set_last_redirect_response(&response.head);
+            }
             let manual = matches!(
                 transition,
                 SubresourceResponseTransition::ManualResponse { .. }
-            );
+            ) || (self.request.redirect_mode()
+                == moli_fetch::RequestRedirectMode::Manual
+                && matches!(response.head.status, 301 | 302 | 303 | 307 | 308));
             if manual && matches!(self.response_policy, ResourceResponsePolicy::Xhr) {
                 return Err("XHR requests must follow redirects".into());
+            }
+            if manual && self.response_filter.is_none() {
+                self.response_filter = Some(crate::types::FetchResponseType::OpaqueRedirect.into());
             }
             if manual || transition == SubresourceResponseTransition::FinalResponse {
                 response.head.redirect_chain = self.request.redirect_chain().to_vec();

@@ -1373,6 +1373,20 @@ impl Request {
         Ok(())
     }
 
+    /// Project a DevTools-edited response after following the transport's
+    /// original decision. This must not change its destination or method.
+    pub fn set_last_redirect_response(&mut self, response: &crate::ResponseHead) {
+        let redirect = self
+            .redirect_chain
+            .last_mut()
+            .expect("a redirect was followed");
+        redirect.status = response.status;
+        redirect.headers.clone_from(&response.headers);
+        redirect
+            .cookie_set_reports
+            .clone_from(&response.cookie_set_reports);
+    }
+
     pub fn with_redirect_policy(mut self, policy: RequestRedirectPolicy) -> Self {
         self.redirect_policy = Some(policy);
         self

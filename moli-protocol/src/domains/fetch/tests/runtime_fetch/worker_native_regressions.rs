@@ -247,6 +247,8 @@ async fn check_worker_redirect_extra_info(shared: bool) {
 async fn worker_continue_response_preserves_wire_info_without_creating_a_redirect() {
     let next_hits = Arc::new(AtomicUsize::new(0));
     let hits = next_hits.clone();
+    let original_requests = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let originals = original_requests.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -255,7 +257,7 @@ async fn worker_continue_response_preserves_wire_info_without_creating_a_redirec
             .route("/worker.js", get(|| async { ([("content-type", "text/javascript")], r#"
                 onmessage = async event => {
                     try {
-                        const r = await fetch(event.data.url, {redirect: event.data.redirect || 'follow'});
+                        const r = await fetch(event.data.url, {method:event.data.method || 'GET',body:event.data.body,redirect: event.data.redirect || 'follow'});
                         postMessage({status:r.status, type:r.type, body:await r.text()});
                     } catch(error) { postMessage({error:error.name}); }
                 };
@@ -263,6 +265,12 @@ async fn worker_continue_response_preserves_wire_info_without_creating_a_redirec
             "#) }))
             .route("/probe", get(|| async { ([("content-type","text/plain"),("x-wire","original")], "network") }))
             .route("/empty", get(|| async { (axum::http::StatusCode::FOUND, [("location", "")], "empty-location-body") }))
+            .route("/probe-redirect302", any(|| async { (StatusCode::FOUND,[("location","/original")]) }))
+            .route("/probe-redirect307", any(|| async { (StatusCode::TEMPORARY_REDIRECT,[("location","/original")]) }))
+            .route("/original", any(move |method:Method, body:String| { let originals=originals.clone(); async move {
+                originals.lock().await.push((method.to_string(),body));
+                "original"
+            } }))
             .route("/next", get(move || { let hits = hits.clone(); async move {
                 hits.fetch_add(1, Ordering::SeqCst);
                 "next"
@@ -369,6 +377,75 @@ async fn worker_continue_response_preserves_wire_info_without_creating_a_redirec
         assert!(
             extras.iter().all(|e| e["params"]["statusCode"] == 200),
             "CDP edits must never replace wire metadata: {extras:?}"
+        );
+    }
+    for (index, (original_status, edited_status)) in
+        [(302, 302), (302, 200), (307, 302), (307, 200)]
+            .into_iter()
+            .enumerate()
+    {
+        let id = 57_100 + index as u64 * 4;
+        let url = format!("{origin}/probe-redirect{original_status}?edit={edited_status}");
+        command(&mut ctx,id,"Runtime.evaluate",json!({"expression":format!(
+            "globalThis.wireResult=new Promise(resolve=>{{wireWorker.onmessage=e=>resolve(e.data);wireWorker.postMessage({{url:{url:?},method:'POST',body:'upload'}});}});'started'"
+        )})).await;
+        let pause = wait_for_request_paused(&mut ctx, &url, "original redirect response").await;
+        let network_id = pause["params"]["networkId"].clone();
+        command(
+            &mut ctx,
+            id + 1,
+            "Fetch.continueResponse",
+            json!({"requestId":pause["params"]["requestId"],"responseCode":edited_status,
+                "responseHeaders":[{"name":"Location","value":"/next"}]
+            }),
+        )
+        .await;
+        let result = command(
+            &mut ctx,
+            id + 2,
+            "Runtime.evaluate",
+            json!({"expression":"wireResult","awaitPromise":true,"returnByValue":true}),
+        )
+        .await;
+        assert_eq!(
+            result["result"]["result"]["value"],
+            json!({"status":200,"type":"basic","body":"original"})
+        );
+        wait_until_scheduler_message(&mut ctx, "original redirect terminal", |e| {
+            e["method"] == "Network.loadingFinished" && e["params"]["requestId"] == network_id
+        })
+        .await;
+        assert_eq!(
+            next_hits.load(Ordering::SeqCst),
+            1,
+            "edited target must not be requested"
+        );
+        let requests = original_requests.lock().await;
+        assert_eq!(requests.len(), index + 1);
+        assert_eq!(
+            requests[index],
+            if original_status == 302 {
+                ("GET".into(), String::new())
+            } else {
+                ("POST".into(), "upload".into())
+            }
+        );
+        let redirect = ctx
+            .sent
+            .iter()
+            .find(|e| {
+                e["method"] == "Network.requestWillBeSent"
+                    && e["params"]["requestId"] == network_id
+                    && e["params"].get("redirectResponse").is_some()
+            })
+            .unwrap();
+        assert_eq!(
+            redirect["params"]["redirectResponse"]["status"],
+            edited_status
+        );
+        assert_eq!(
+            redirect["params"]["redirectResponse"]["headers"]["Location"],
+            "/next"
         );
     }
     command(&mut ctx, 57_040, "Fetch.disable", json!({})).await;
