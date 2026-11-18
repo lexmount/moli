@@ -20,7 +20,7 @@ use super::{
     document_world::DocumentStyleWorld,
     eligibility::child_list_effects_have_current_topology,
     mutation_effect::{
-        detached_style_subtree_roots_for_mutations, normalized_deferred_structural_mutation_effects,
+        detached_style_subtree_roots_for_mutations, retain_live_structural_mutation_effects,
     },
     schedule::queue_style_invalidation_for_scope,
     scope::{
@@ -110,7 +110,6 @@ impl MoliStyleEngine {
                 &world,
                 host,
                 document_effects,
-                document_effects,
                 emulated_media,
                 viewport,
             );
@@ -155,7 +154,6 @@ impl MoliStyleEngine {
         &self,
         world: &DocumentStyleWorld,
         host: &DomHost,
-        scope_effects: &[StyleMutationEffect],
         effects: &[StyleMutationEffect],
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
@@ -163,9 +161,7 @@ impl MoliStyleEngine {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(std::time::Instant::now);
         let source_scope_started = profile_enabled.then(std::time::Instant::now);
-        // The retained cause may omit exhausted fragment history, but source
-        // ownership still comes from every original mutation handle.
-        let source_scope = source_scope_for_mutations(host, scope_effects);
+        let source_scope = source_scope_for_mutations(host, effects);
         let source_scope_us = source_scope_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -209,82 +205,47 @@ impl MoliStyleEngine {
     pub(super) fn flush_pending_structural_mutations_for_world(
         &self,
         host: &DomHost,
-        document: DomHandle,
         world: &DocumentStyleWorld,
     ) {
         for group in world.pending_structural_mutations.take() {
-            self.queue_deferred_style_invalidation_for_mutations(
-                document,
+            let (mut effects, input_count) = group.effects.into_effects();
+            // Exhausted fragments can still contribute detached roots and source
+            // ownership. Resolve these against the full history before pruning.
+            self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
+            let source_scope = source_scope_for_mutations(host, &effects);
+            let merged_count = effects.len();
+            retain_live_structural_mutation_effects(host, &mut effects);
+            if !mutation_effects_have_source_scope(&effects) {
+                continue;
+            }
+
+            // Keep the original cutoff for batches with no exhausted fragment
+            // history. Otherwise count only the work left after pruning.
+            let effect_count = if effects.len() == merged_count {
+                input_count
+            } else {
+                effects.len()
+            };
+            let pending_effects = if effect_count <= IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT
+                && child_list_effects_have_current_topology(host, &effects)
+            {
+                effects.retain(|effect| {
+                    !matches!(effect, StyleMutationEffect::DisconnectedSubtrees { .. })
+                });
+                effects
+            } else {
+                Vec::new()
+            };
+            self.queue_style_invalidation_scope(
+                world.document,
                 world,
                 host,
-                &group.effects,
                 &group.emulated_media,
                 group.viewport,
+                source_scope,
+                PendingStyleInvalidationCause::Mutation(pending_effects),
             );
         }
-    }
-
-    fn queue_deferred_style_invalidation_for_mutations(
-        &self,
-        document: DomHandle,
-        world: &DocumentStyleWorld,
-        host: &DomHost,
-        effects: &[StyleMutationEffect],
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) {
-        // Even an exhausted ordinary fragment can have removed previously
-        // styled descendants. Retire those inputs before filtering history.
-        self.invalidate_detached_style_subtrees_for_mutations(host, effects);
-        let normalized = normalized_deferred_structural_mutation_effects(host, effects);
-        if !mutation_effects_have_source_scope(&normalized) {
-            return;
-        }
-        if normalized.len() <= IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT
-            && child_list_effects_have_current_topology(host, &normalized)
-        {
-            self.queue_style_invalidation_for_mutations(
-                world,
-                host,
-                effects,
-                &normalized,
-                emulated_media,
-                viewport,
-            );
-            return;
-        }
-        self.queue_structural_mutation_source_scope_fallback(
-            document,
-            world,
-            host,
-            effects,
-            emulated_media,
-            viewport,
-        );
-    }
-
-    fn queue_structural_mutation_source_scope_fallback(
-        &self,
-        document: DomHandle,
-        world: &DocumentStyleWorld,
-        host: &DomHost,
-        effects: &[StyleMutationEffect],
-        emulated_media: &EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) {
-        // Use all mutation handles to cover both the old and new tree scopes.
-        // Cause-local fallback roots are not enough when old neighbors moved.
-        let source_scope = source_scope_for_mutations(host, effects);
-        let cause = PendingStyleInvalidationCause::Mutation(Vec::new());
-        self.queue_style_invalidation_scope(
-            document,
-            world,
-            host,
-            emulated_media,
-            viewport,
-            source_scope,
-            cause,
-        );
     }
 
     pub(super) fn invalidate_detached_style_subtrees_for_mutations(

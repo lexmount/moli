@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use indexmap::IndexSet;
 use moli_selector::{
@@ -271,62 +271,13 @@ pub(crate) fn normalized_style_attribute_name(
         .unwrap_or_else(|| name.to_owned())
 }
 
-/// Keep only live structural history for an emptied ordinary fragment. Removed
-/// roots must already have been invalidated from the original effects, and the
-/// caller must retain the original source scope. A fragment with children, an
-/// element parent, and a ShadowRoot can still have selector-dependent styles.
-/// Their histories must pass the ordinary retained-topology checks unchanged.
-pub(super) fn normalized_deferred_structural_mutation_effects<'a>(
+/// Drop exhausted ordinary fragment history after resolving the full source
+/// scope and retiring removed roots. Later mutations can refill the fragment.
+pub(super) fn retain_live_structural_mutation_effects(
     host: &DomHost,
-    effects: &'a [StyleMutationEffect],
-) -> Cow<'a, [StyleMutationEffect]> {
-    if !effects
-        .iter()
-        .any(|effect| is_empty_ordinary_fragment_child_list(host, effect))
-    {
-        return Cow::Borrowed(effects);
-    }
-
-    let mut normalized = Vec::with_capacity(effects.len());
-    let mut connected_roots = IndexSet::new();
-    let mut disconnected_roots = IndexSet::new();
-    let mut connected_slot = None;
-    let mut disconnected_slot = None;
-    for effect in effects {
-        if is_empty_ordinary_fragment_child_list(host, effect) {
-            continue;
-        }
-        match effect {
-            StyleMutationEffect::ConnectedSubtrees { roots } => {
-                if connected_slot.is_none() {
-                    connected_slot = Some(normalized.len());
-                    normalized.push(effect.clone());
-                }
-                connected_roots.extend(roots.iter().copied());
-            }
-            StyleMutationEffect::DisconnectedSubtrees { roots } => {
-                if disconnected_slot.is_none() {
-                    disconnected_slot = Some(normalized.len());
-                    normalized.push(effect.clone());
-                }
-                disconnected_roots.extend(roots.iter().copied());
-            }
-            // Connection facts are sets, but child-list and slot histories are
-            // ordered inputs. Do not deduplicate or collapse their splices.
-            _ => normalized.push(effect.clone()),
-        }
-    }
-    if let Some(slot) = connected_slot {
-        normalized[slot] = StyleMutationEffect::ConnectedSubtrees {
-            roots: connected_roots.into_iter().collect::<Vec<_>>().into(),
-        };
-    }
-    if let Some(slot) = disconnected_slot {
-        normalized[slot] = StyleMutationEffect::DisconnectedSubtrees {
-            roots: disconnected_roots.into_iter().collect::<Vec<_>>().into(),
-        };
-    }
-    Cow::Owned(normalized)
+    effects: &mut Vec<StyleMutationEffect>,
+) {
+    effects.retain(|effect| !is_empty_ordinary_fragment_child_list(host, effect));
 }
 
 fn is_empty_ordinary_fragment_child_list(host: &DomHost, effect: &StyleMutationEffect) -> bool {
@@ -569,8 +520,20 @@ mod tests {
         ));
     }
 
+    fn merged_structural_effects(effects: &[StyleMutationEffect]) -> Vec<StyleMutationEffect> {
+        use crate::style_engine::pending_mutation::PendingStructuralStyleEffects;
+
+        let mut pending = PendingStructuralStyleEffects::default();
+        for effect in effects {
+            pending.extend(std::slice::from_ref(effect));
+        }
+        let (merged, input_count) = pending.into_effects();
+        assert_eq!(input_count, effects.len());
+        merged
+    }
+
     #[test]
-    fn consumed_fragment_normalization_preserves_real_splices_and_the_effect_limit() {
+    fn consumed_fragment_preparation_preserves_real_splices_and_the_effect_limit() {
         use crate::style_engine::{
             eligibility::child_list_effects_have_current_topology,
             scope::style_source_scope_for_mutation_effects,
@@ -605,8 +568,26 @@ mod tests {
             inserted,
             "cleanup must see the original removed roots before normalization"
         );
-        let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
-        assert!(matches!(&normalized, Cow::Owned(_)));
+        let mut normalized = merged_structural_effects(&effects);
+        let connected_batches = normalized
+            .iter()
+            .filter_map(|effect| match effect {
+                StyleMutationEffect::ConnectedSubtrees { roots } => Some(roots.as_ref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let connected_roots = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                StyleMutationEffect::ConnectedSubtrees { roots } => Some(roots.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(connected_batches, [connected_roots.as_slice()]);
+        retain_live_structural_mutation_effects(&host, &mut normalized);
         assert!(normalized.len() <= 256);
         assert!(child_list_effects_have_current_topology(&host, &normalized));
         assert_eq!(
@@ -637,7 +618,8 @@ mod tests {
             let added = host.append_child_effects(parent, child);
             collect_native_effects(&mut effects, &host, &added);
         }
-        let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
+        let mut normalized = merged_structural_effects(&effects);
+        retain_live_structural_mutation_effects(&host, &mut normalized);
         assert_eq!(
             normalized
                 .iter()
@@ -649,10 +631,10 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_element_shadow_and_nonempty_fragment_histories_stay_borrowed() {
+    fn element_shadow_and_refilled_fragment_histories_are_retained() {
         use crate::style_engine::eligibility::child_list_effects_have_current_topology;
 
-        for parent_kind in ["detached-element", "shadow-root", "nonempty-fragment"] {
+        for parent_kind in ["detached-element", "shadow-root", "refilled-fragment"] {
             let mut host = test_host();
             let document = host.document_handle();
             let destination = host.create_element("main");
@@ -664,12 +646,7 @@ mod tests {
                     assert!(host.append_child(document, shadow_host));
                     host.attach_shadow_root(shadow_host, "open").unwrap()
                 }
-                "nonempty-fragment" => {
-                    let fragment = host.create_document_fragment();
-                    let remaining = host.create_element("span");
-                    assert!(host.append_child(fragment, remaining));
-                    fragment
-                }
+                "refilled-fragment" => host.create_document_fragment(),
                 _ => unreachable!(),
             };
             let moved = host.create_element("span");
@@ -683,9 +660,14 @@ mod tests {
                 StyleMutationEffect::ChildList { parent, removed_nodes, .. }
                     if *parent == old_parent && removed_nodes == &[moved]
             )));
-            let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
-            assert!(matches!(&normalized, Cow::Borrowed(_)), "{parent_kind}");
-            assert_eq!(normalized.as_ref(), effects.as_slice(), "{parent_kind}");
+            let mut normalized = merged_structural_effects(&effects);
+            if parent_kind == "refilled-fragment" {
+                let remaining = host.create_element("span");
+                assert!(host.append_child(old_parent, remaining));
+            }
+            let original_count = normalized.len();
+            retain_live_structural_mutation_effects(&host, &mut normalized);
+            assert_eq!(normalized.len(), original_count, "{parent_kind}");
             assert!(
                 !child_list_effects_have_current_topology(&host, &normalized),
                 "real reparenting must retain the conservative fallback: {parent_kind}"
@@ -711,8 +693,8 @@ mod tests {
         collect_native_effects(&mut effects, &host, &staged);
         let consumed = host.append_child_effects(destination, fragment);
         collect_native_effects(&mut effects, &host, &consumed);
-        let normalized = normalized_deferred_structural_mutation_effects(&host, &effects);
-        assert!(matches!(&normalized, Cow::Owned(_)));
+        let mut normalized = merged_structural_effects(&effects);
+        retain_live_structural_mutation_effects(&host, &mut normalized);
         assert!(normalized.iter().any(|effect| matches!(
             effect,
             StyleMutationEffect::ChildList { parent, removed_nodes, .. }

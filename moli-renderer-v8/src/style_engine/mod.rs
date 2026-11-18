@@ -820,7 +820,7 @@ impl MoliStyleEngine {
         boundary: StyleInvalidationDrainBoundary,
     ) {
         let world = self.world_for_document(document);
-        self.flush_pending_structural_mutations_for_world(host, document, &world);
+        self.flush_pending_structural_mutations_for_world(host, &world);
         let pending = world.pending_invalidations.take();
         let source_stores = world.borrow_source_stores();
         drain_style_invalidations(
