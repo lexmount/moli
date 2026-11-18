@@ -123,18 +123,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "context_bootstrap/stream_adapter/read_request.rs",
-        2,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
-        "context_bootstrap/stream_adapter/utils.rs",
-        // Pending promise settlement and cancellation continuations use the
-        // native Promise API; the remaining calls run stream algorithms.
-        4,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
         "context_bootstrap/websocket/constructor.rs",
         1,
         DirectCallOwner::BrowserAlgorithm,
@@ -422,6 +410,11 @@ fn shared_webapi_callback_and_native_forwarding_inventory_is_frozen() {
             ("highlights/iterators.rs".to_owned(), 1),
             // The captured Highlight runtime initializer, formerly in the Renderer.
             ("highlights.rs".to_owned(), 1),
+            // Streams' browser-owned read steps and algorithm calls moved with
+            // their state. Web IDL stream callbacks still enter through the
+            // embedder's typed callback executor.
+            ("streams/adapter/read_request.rs".to_owned(), 2),
+            ("streams/adapter/utils.rs".to_owned(), 4),
             // Captured native collection intrinsics, not author callback calls.
             ("webidl_iterator.rs".to_owned(), 4),
         ])

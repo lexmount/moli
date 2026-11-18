@@ -114,6 +114,7 @@ fn install_values(
     install_realm_callbacks(
         scope,
         RealmCallbacks {
+            runtime: None,
             point_mutated: reflect_point,
         },
     );

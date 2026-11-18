@@ -11,6 +11,7 @@
 
 mod embedding;
 
+pub mod abort_signal;
 pub mod abort_signal_values;
 pub mod animation;
 pub mod base64;
@@ -63,6 +64,7 @@ pub mod resize_observer_entry;
 pub mod rtc;
 pub mod speech_synthesis;
 pub mod storage_values;
+pub mod streams;
 pub mod text_codec;
 pub mod text_decoder;
 pub mod text_encoder;
@@ -80,4 +82,7 @@ pub mod webidl_iterator;
 pub mod websocket_values;
 pub mod worker_location;
 
-pub use embedding::{RealmCallbacks, install_realm_callbacks};
+pub use embedding::{
+    RealmCallbacks, RealmRuntime, WebIdlCallbackInvocation, WebIdlCallbackResult,
+    install_realm_callbacks,
+};
