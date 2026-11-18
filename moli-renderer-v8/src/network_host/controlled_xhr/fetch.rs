@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use moli_fetch::{RequestCredentialsMode, RequestMode, ResponseHead};
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 
 use crate::{
     context_bootstrap::FetchResourceTiming,
@@ -21,6 +21,7 @@ use crate::{
 /// neither needs the creator Page to resume a Worker command.
 pub(crate) struct ControlledFetchStream {
     completion: mpsc::UnboundedSender<WorkerFetchEvent>,
+    body_queue_slots: Arc<Semaphore>,
     fetch_id: u32,
     interception: ResourceInterceptionContext,
     request_origin: moli_url::WebOrigin,
@@ -30,16 +31,16 @@ pub(crate) struct ControlledFetchStream {
     credentials: RequestCredentialsMode,
     policy: SubresourcePolicyContext,
     resource_timing: FetchResourceTiming,
-    pub(super) body_source_id: Option<NetworkBodySourceId>,
-    response: Option<Box<StreamedFetchResponse>>,
-    delivered: usize,
+    started: Option<Box<StartedFetchStream>>,
 }
 
-struct StreamedFetchResponse {
+struct StartedFetchStream {
+    body_source_id: NetworkBodySourceId,
     handle: SubresourceNetworkRequestHandle,
     head: ResponseHead,
     body: ResourceInterceptionBody,
     metadata: Arc<moli_fetch_types::FetchResponseMetadata>,
+    delivered: usize,
 }
 
 impl ControlledFetchStream {
@@ -56,6 +57,7 @@ impl ControlledFetchStream {
 
     pub(super) fn new(
         completion: mpsc::UnboundedSender<WorkerFetchEvent>,
+        body_queue_slots: Arc<Semaphore>,
         fetch_id: u32,
         interception: ResourceInterceptionContext,
         mode: RequestMode,
@@ -68,6 +70,7 @@ impl ControlledFetchStream {
     ) -> Self {
         Self {
             completion,
+            body_queue_slots,
             request_origin,
             request_url,
             load,
@@ -77,10 +80,12 @@ impl ControlledFetchStream {
             credentials,
             policy,
             resource_timing,
-            body_source_id: None,
-            response: None,
-            delivered: 0,
+            started: None,
         }
+    }
+
+    pub(super) fn body_source_id(&self) -> Option<NetworkBodySourceId> {
+        self.started.as_ref().map(|started| started.body_source_id)
     }
 
     pub(super) fn start(
@@ -125,7 +130,6 @@ impl ControlledFetchStream {
                 ),
             ));
         let body_source_id = super::super::new_network_body_source_id();
-        self.body_source_id = Some(body_source_id);
         let metadata = Arc::new(super::super::fetch_response_metadata(
             &self.request_origin,
             &head,
@@ -148,44 +152,50 @@ impl ControlledFetchStream {
                 metadata: Arc::clone(&metadata),
             },
         ));
-        self.response = Some(Box::new(StreamedFetchResponse {
+        self.started = Some(Box::new(StartedFetchStream {
+            body_source_id,
             handle,
             head,
             body,
             metadata,
+            delivered: 0,
         }));
         Ok(())
     }
 
-    pub(super) fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-        let handle = self
-            .response
-            .as_ref()
-            .expect("response precedes body")
-            .handle;
-        self.delivered += bytes.len();
+    pub(super) async fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        let started = self.started.as_mut().expect("response precedes body");
+        // Bound queued body chunks across a Worker's requests. Header and
+        // terminal events share the FIFO but do not have to acquire a slot.
+        let cancel = started.body.cancellation_handle();
+        let slot = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(super::super::ABORTED_ERROR_TEXT.to_owned()),
+            () = self.completion.closed() => None,
+            slot = Arc::clone(&self.body_queue_slots).acquire_owned() => slot.ok(),
+        };
+        started.delivered += bytes.len();
         self.interception
             .publish_network(ScriptNetworkOutputItem::SubresourceDataReceived(
-                SubresourceDataReceived::new(handle, bytes.len(), bytes.len()),
+                SubresourceDataReceived::new(started.handle, bytes.len(), bytes.len()),
             ));
         // A detached JS consumer does not cancel a keepalive transport. Its
         // resource lease, rather than this delivery channel, owns cancellation.
-        let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
-            WorkerFetchStreamingChunk {
-                body_source_id: self.body_source_id.unwrap(),
-                bytes,
-            },
-        ));
+        if let Some(queue_slot) = slot {
+            let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
+                WorkerFetchStreamingChunk {
+                    body_source_id: started.body_source_id,
+                    bytes,
+                    _queue_slot: queue_slot,
+                },
+            ));
+        }
         Ok(())
     }
 
-    pub(super) fn finish(&mut self, result: Result<(), String>) {
-        let response = *self
-            .response
-            .take()
-            .expect("streamed response must have headers");
+    fn finish(&self, response: StartedFetchStream, result: Result<(), String>) {
         let handle = response.handle;
-        let body = response.body.finish_capture(self.delivered);
+        let body = response.body.finish_capture(response.delivered);
         let terminal = match &result {
             Ok(()) => SubresourceBodyFinished::ready_after_streaming(handle, body.clone()),
             Err(error) => SubresourceBodyFinished::failed_with_partial_body(
@@ -201,7 +211,7 @@ impl ControlledFetchStream {
         let _ = self.completion.send(WorkerFetchEvent::StreamingFinished(
             WorkerFetchStreamingFinished {
                 fetch_id: self.fetch_id,
-                body_source_id: self.body_source_id.unwrap(),
+                body_source_id: response.body_source_id,
                 result: result.map(|()| {
                     self.resource_timing.completed(
                         &self.request_url,
@@ -228,6 +238,7 @@ impl super::ControlledResourceLoad {
     pub(crate) async fn run_fetch(
         mut self,
         completion: mpsc::UnboundedSender<WorkerFetchEvent>,
+        body_queue_slots: Arc<Semaphore>,
         fetch_id: u32,
         resource_timing: FetchResourceTiming,
     ) {
@@ -245,6 +256,7 @@ impl super::ControlledResourceLoad {
         let web_security_disabled = self.load.request_client().web_security_disabled();
         let mut stream = super::ControlledResourceStream::WorkerFetch(ControlledFetchStream::new(
             completion.clone(),
+            body_queue_slots,
             fetch_id,
             self.interception.clone(),
             self.request.request_mode,
@@ -258,11 +270,11 @@ impl super::ControlledResourceLoad {
         let result = self.run_inner(Some(&mut stream)).await;
         let result = self.normalize_cancellation(result);
         stream.policy_violations(std::mem::take(&mut self.csp_violations));
-        if stream.body_source_id().is_some() {
-            let super::ControlledResourceStream::WorkerFetch(stream) = &mut stream else {
-                unreachable!()
-            };
-            stream.finish(result.map(|_| ()));
+        let super::ControlledResourceStream::WorkerFetch(mut stream) = stream else {
+            unreachable!()
+        };
+        if let Some(started) = stream.started.take() {
+            stream.finish(*started, result.map(|_| ()));
             self.load.finish();
             self.publish_completed();
             return;

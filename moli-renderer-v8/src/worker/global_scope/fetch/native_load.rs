@@ -46,7 +46,7 @@ pub(super) fn start<'s>(
         resource_type: SubresourceResourceType::Fetch,
         request_cookie_report: None,
     };
-    let (fetch_id, completion, control, resource_timing) = {
+    let (fetch_id, completion, body_queue_slots, control, resource_timing) = {
         let mut state = state.borrow_mut();
         let fetch_id = next_fetch_id(&mut state);
         let resource_timing =
@@ -67,6 +67,7 @@ pub(super) fn start<'s>(
         (
             fetch_id,
             state.fetch_completion_tx.clone(),
+            Arc::clone(&state.fetch_body_queue_slots),
             state.resource_load_control(),
             resource_timing,
         )
@@ -78,7 +79,7 @@ pub(super) fn start<'s>(
         control
             .fetch_load(request, info, load, cancel, policy_context)
             .with_service_worker(service_worker, service_worker_client, metadata)
-            .run_fetch(completion, fetch_id, resource_timing)
+            .run_fetch(completion, body_queue_slots, fetch_id, resource_timing)
             .await;
     });
     Some(promise)

@@ -98,7 +98,7 @@ impl ControlledResourceStream {
     pub(super) fn body_source_id(&self) -> Option<NetworkBodySourceId> {
         match self {
             Self::Document(stream) => stream.body_source_id,
-            Self::WorkerFetch(stream) => stream.body_source_id,
+            Self::WorkerFetch(stream) => stream.body_source_id(),
         }
     }
     pub(super) fn start(
@@ -113,10 +113,10 @@ impl ControlledResourceStream {
             Self::WorkerFetch(stream) => stream.start(info, head, headers, body),
         }
     }
-    pub(super) fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+    pub(super) async fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {
         match self {
             Self::Document(stream) => stream.chunk(bytes),
-            Self::WorkerFetch(stream) => stream.chunk(bytes),
+            Self::WorkerFetch(stream) => stream.chunk(bytes).await,
         }
     }
 }
