@@ -35,10 +35,11 @@ use super::{
     },
     script_provenance::CompiledStringProvenance,
     util::{
-        context_host_from_global_bridge, context_host_ptr_from_global_bridge,
-        context_host_ptr_from_window_object, get_private_value,
-        script_base_url_from_continuation_data, script_base_url_from_host_defined_options,
-        set_private_value, throw_type_error, v8_string, v8str,
+        context_host_from_global_bridge, context_host_ptr_from_context_slot,
+        context_host_ptr_from_global_bridge, context_host_ptr_from_window_object,
+        get_private_value, script_base_url_from_continuation_data,
+        script_base_url_from_host_defined_options, set_private_value, throw_type_error, v8_string,
+        v8str,
     },
     webidl,
 };
@@ -49,14 +50,13 @@ use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
 pub(crate) use moli_webapi::idle_deadline::install_idle_deadline_template_bindings;
 use moli_webapi_declare::WebApiObject;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 const WINDOW_SCROLL_X_SLOT: &str = "__moliWindowScrollX";
 const WINDOW_SCROLL_Y_SLOT: &str = "__moliWindowScrollY";
 const WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT: &str =
     "__moliWindowPendingAnimationFrameTimestamp";
-const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
 const IDLE_OPPORTUNITY_DELAY_MS: u32 = 1;
 const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
 pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessageEndpoint";
@@ -1963,14 +1963,15 @@ pub(crate) fn finish_animation_frame_callback_batch(
 pub(crate) fn build_window_idle_deadline<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     did_timeout: bool,
+    deadline_ms: f64,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let now_ms = current_time_ms();
-    let deadline_ms = if did_timeout {
-        now_ms
-    } else {
-        now_ms + IDLE_CALLBACK_BUDGET_MS
-    };
     let time_origin_ms = current_performance_time_origin(scope);
+    moli_webapi::idle_deadline::install_runtime(
+        scope,
+        moli_webapi::idle_deadline::IdleDeadlineRuntime {
+            pending_work_deadline_ms: idle_deadline_pending_work_deadline_ms,
+        },
+    );
     moli_webapi::idle_deadline::build(scope, deadline_ms, time_origin_ms, did_timeout)
 }
 
@@ -2182,6 +2183,24 @@ fn incumbent_window_message_source_identity(
         identity.owner(),
         identity.realm_token(),
     ))
+}
+
+fn idle_deadline_pending_work_deadline_ms<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deadline: v8::Local<'s, v8::Object>,
+    now_ms: f64,
+) -> Option<f64> {
+    deadline
+        .get_creation_context(scope)
+        .and_then(context_host_ptr_from_context_slot)
+        .and_then(|host_ptr| unsafe { &*host_ptr }.next_idle_period_work_deadline())
+        .map(|pending| {
+            now_ms
+                + pending
+                    .saturating_duration_since(Instant::now())
+                    .as_secs_f64()
+                    * 1000.0
+        })
 }
 
 #[cfg(test)]

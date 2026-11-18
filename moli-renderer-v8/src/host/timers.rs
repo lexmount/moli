@@ -230,6 +230,13 @@ const TIMER_CALLBACK_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 pub(crate) struct HostTimeoutScheduler {
     scheduler: TimerScheduler<ScheduledTimerTask>,
     running_timer: Option<RunningTimerContext>,
+    idle_period: Option<WindowIdlePeriod>,
+}
+
+#[derive(Clone, Copy)]
+struct WindowIdlePeriod {
+    ends_at: Instant,
+    deadline_ms: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -275,6 +282,23 @@ impl fmt::Debug for HostTimeoutScheduler {
 }
 
 impl HostTimeoutScheduler {
+    const IDLE_PERIOD_BUDGET: Duration = Duration::from_millis(50);
+
+    fn begin_idle_period(&mut self) -> f64 {
+        if let Some(period) = self.idle_period
+            && Instant::now() < period.ends_at
+        {
+            return period.deadline_ms;
+        }
+        let deadline_ms =
+            crate::window_host::current_time_ms() + Self::IDLE_PERIOD_BUDGET.as_secs_f64() * 1000.0;
+        self.idle_period = Some(WindowIdlePeriod {
+            ends_at: Instant::now() + Self::IDLE_PERIOD_BUDGET,
+            deadline_ms,
+        });
+        deadline_ms
+    }
+
     /// Browser tasks share the Window task scheduler and its retirement checks,
     /// but are not JS timer handles that clearTimeout can cancel.
     /// Returns whether the task was admitted by the owner and Realm checks.
@@ -427,6 +451,27 @@ impl HostTimeoutScheduler {
         delay_ms: u32,
         owner: HostTimerOwner,
     ) -> u32 {
+        // Requests registered after the current period began belong to the
+        // next period, including requests posted by microtasks or other tasks.
+        // Reserve its maximum window; pending work can shorten timeRemaining()
+        // without admitting a later request back into this period.
+        let now = Instant::now();
+        let delay_ms = self
+            .idle_period
+            .filter(|period| now < period.ends_at)
+            .map_or(delay_ms, |period| {
+                delay_ms
+                    .max((period.ends_at.duration_since(now).as_secs_f64() * 1000.0).ceil() as u32)
+            });
+        let delay_ms = if timeout_deadline_ms >= 0.0 {
+            delay_ms.min(
+                (timeout_deadline_ms - crate::window_host::current_time_ms())
+                    .max(0.0)
+                    .ceil() as u32,
+            )
+        } else {
+            delay_ms
+        };
         self.queue_window_webidl(
             scope,
             callback,
@@ -877,6 +922,10 @@ impl HostTimeoutScheduler {
             self.scheduler.finish_running(timer_id);
             return HostTimeoutRunResult::Consumed;
         }
+        let idle_period_deadline_ms = timer
+            .payload
+            .is_unexpired_idle_callback_at(crate::window_host::current_time_ms())
+            .then(|| self.begin_idle_period());
         let target_binding = timer.payload.owner.window_binding();
         let execution_context = timer
             .payload
@@ -901,6 +950,7 @@ impl HostTimeoutScheduler {
                 scope,
                 &timer.payload.callback,
                 &timer.payload.extra_args,
+                idle_period_deadline_ms,
             );
             let target_remains_current =
                 target_binding.is_none_or(|binding| window_timer_target_is_current(scope, binding));
@@ -973,6 +1023,14 @@ impl HostTimeoutScheduler {
         self.scheduler.has_pending_matching(|task| {
             !matches!(task.callback, ScheduledTimerCallback::InternalFunction(_))
         })
+    }
+
+    pub(crate) fn next_idle_period_work_deadline(&self) -> Option<Instant> {
+        let now_ms = crate::window_host::current_time_ms();
+        // Main transports animation frames through this same native heap.
+        // Include those wakes and ordinary work, but skip unexpired idle work.
+        self.scheduler
+            .next_deadline_matching(|task| !task.is_unexpired_idle_callback_at(now_ms))
     }
 
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
@@ -1175,6 +1233,7 @@ fn run_window_timer_callback(
     scope: &mut v8::PinScope<'_, '_>,
     callback: &ScheduledTimerCallback,
     extra_args: &[v8::Global<v8::Value>],
+    idle_period_deadline_ms: Option<f64>,
 ) -> std::result::Result<HostTimeoutRunResult, HostTimeoutRunResult> {
     match callback {
         ScheduledTimerCallback::Function(function)
@@ -1252,7 +1311,7 @@ fn run_window_timer_callback(
                 TIMER_CALLBACK_WATCHDOG_TIMEOUT,
             );
             let watchdog_timeout = watchdog.timeout();
-            let result = callback.invoke(scope, host_ptr, extra_args);
+            let result = callback.invoke(scope, host_ptr, extra_args, idle_period_deadline_ms);
             let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
             if watchdog_timed_out {
                 return Err(HostTimeoutRunResult::CallbackError(format!(

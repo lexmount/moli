@@ -336,6 +336,10 @@ impl DocumentRuntime {
         self.timeouts.has_keep_alive_timers()
     }
 
+    pub(crate) fn next_idle_period_work_deadline(&self) -> Option<std::time::Instant> {
+        self.timeouts.next_idle_period_work_deadline()
+    }
+
     pub(crate) fn next_timeout_deadline(&self) -> Option<std::time::Instant> {
         self.timeouts.next_deadline()
     }
