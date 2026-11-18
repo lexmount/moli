@@ -13,11 +13,7 @@ pub(in crate::context_bootstrap) fn resolve_location_navigation_target(
             url::Url::parse(raw_target.as_deref().unwrap_or(current_href)).ok()
         }
         LocationNavigationKind::Assign | LocationNavigationKind::Replace => {
-            let raw_target = raw_target.unwrap_or_default();
-            if raw_target.is_empty() {
-                return url::Url::parse(current_href).ok();
-            }
-
+            let raw_target = raw_target?;
             if let Ok(absolute) = url::Url::parse(&raw_target) {
                 return Some(absolute);
             }
