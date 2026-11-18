@@ -1520,8 +1520,7 @@ async fn service_worker_message_wait_until_same_turn_after_pending_promise_settl
 }
 
 #[tokio::test]
-async fn service_worker_message_wait_until_original_promise_microtask_keeps_wrapped_lifetime_active()
- {
+async fn service_worker_message_wait_until_expires_before_the_extra_microtask() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(
         r#"
@@ -1531,8 +1530,8 @@ async fn service_worker_message_wait_until_original_promise_microtask_keeps_wrap
                 resolveFirst = resolve;
             });
             event.waitUntil(first);
-            // Web IDL wraps first in a new Promise. This original Promise's
-            // reaction and its microtask run before the wrapped lifetime settles.
+            // The first Promise's reaction can still extend the event. A
+            // further microtask runs after the pending count reaches zero.
             first.then(() => Promise.resolve().then(() => {
                 let result = "unset";
                 try {
@@ -1560,7 +1559,7 @@ async fn service_worker_message_wait_until_original_promise_microtask_keeps_wrap
         ServiceWorkerEventId::from_u64_for_worker(68)
     );
     assert_eq!(completion.result, Ok(()));
-    assert_eq!(console, "log: extra-turn:OK");
+    assert_eq!(console, "log: extra-turn:InvalidStateError:true");
     handle.terminate_and_join();
 }
 
@@ -1721,7 +1720,7 @@ async fn service_worker_wait_until_uses_native_promise_adoption() {
 }
 
 #[tokio::test]
-async fn service_worker_wait_until_wraps_native_promises_before_registering_lifetime() {
+async fn service_worker_wait_until_observes_native_promises_and_adopts_thenables() {
     ensure_v8();
     for borrowed in [false, true] {
         let source = format!(
@@ -1729,22 +1728,23 @@ async fn service_worker_wait_until_wraps_native_promises_before_registering_life
             r#"
         self.addEventListener("install", event => {
             const IntrinsicPromise = Promise;
-            const promise = IntrinsicPromise.resolve("ok");
-            let reads = 0, calls = 0;
-            Object.defineProperty(promise, 'constructor', {
-                get() { throw Error('Promise constructor should not be read'); }
+            const nativePromise = IntrinsicPromise.resolve("ok");
+            Object.defineProperty(nativePromise, 'then', {
+                get() { throw Error('native Promise.then override should not be read'); }
             });
-            Object.defineProperty(promise, 'then', {get() {
+            let reads = 0, calls = 0;
+            const thenable = {get then() {
                 reads++;
                 return function(resolve) {
-                    if (this !== promise) throw Error('incorrect then receiver');
+                    if (this !== thenable) throw Error('incorrect then receiver');
                     calls++;
                     resolve('assimilated');
                 };
-            }});
+            }};
             self.Promise = function() { throw Error('author Promise constructor'); };
             const method = borrowed ? ExtendableEvent.prototype.waitUntil : event.waitUntil;
-            method.call(event, promise);
+            method.call(event, nativePromise);
+            method.call(event, thenable);
             if (reads !== 1 || calls !== 0) throw Error('incorrect synchronous Promise conversion');
             method.call(event, new IntrinsicPromise(resolve => setTimeout(() => {
                 if (reads !== 1 || calls !== 1) throw Error('incorrect asynchronous Promise adoption');
