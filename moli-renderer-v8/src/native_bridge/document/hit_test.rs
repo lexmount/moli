@@ -532,8 +532,35 @@ fn element_at_point(
     if !point_is_inside_viewport(metrics, x, y) {
         return Ok(None);
     }
-    Ok(hit
+    let element = hit
         .and_then(|hit| element_for_hit_source(runtime, hit.source))
+        .filter(|element| !runtime.dom_host().is_inert_in_document(*element));
+    if let Some(element) = element {
+        return Ok(retarget_element_to_tree_scope(runtime, element, tree_scope));
+    }
+
+    if hit.is_some() {
+        let (_, hits) = observable_hit_test_all(
+            runtime,
+            document,
+            moli_layout::LayoutPoint::new(x as f32, y as f32),
+            false,
+        )?;
+        if let Some(element) = hits.into_iter().find_map(|hit| {
+            let element = element_for_hit_source(runtime, hit.source)?;
+            if runtime.dom_host().is_inert_in_document(element) {
+                return None;
+            }
+            retarget_element_to_tree_scope(runtime, element, tree_scope)
+        }) {
+            return Ok(Some(element));
+        }
+    }
+
+    Ok(runtime
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(document)
         .and_then(|element| retarget_element_to_tree_scope(runtime, element, tree_scope)))
 }
 
@@ -561,9 +588,13 @@ fn elements_at_point(
     let mut seen = HashSet::new();
     let mut elements = Vec::new();
     for hit in hits {
-        let Some(element) = element_for_list_hit_source(runtime, hit.source)
-            .and_then(|element| retarget_element_to_tree_scope(runtime, element, tree_scope))
-        else {
+        let Some(element) = element_for_list_hit_source(runtime, hit.source) else {
+            continue;
+        };
+        if runtime.dom_host().is_inert_in_document(element) {
+            continue;
+        }
+        let Some(element) = retarget_element_to_tree_scope(runtime, element, tree_scope) else {
             continue;
         };
         if seen.insert(element) {
