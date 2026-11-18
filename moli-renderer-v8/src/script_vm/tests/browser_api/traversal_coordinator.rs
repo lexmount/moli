@@ -1,6 +1,60 @@
 use super::*;
 
 #[tokio::test]
+async fn history_traversal_aborted_during_dispatch_preserves_successor() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+    vm.eval(
+        r##"
+        history.pushState(1, '', '#1');
+        globalThis.events = [];
+        globalThis.traversalResult = null;
+        globalThis.successorResult = null;
+        globalThis.successorEvent = null;
+        globalThis.releaseSuccessor = null;
+        navigation.onnavigateerror = event => events.push(['error', event.error.name, location.hash]);
+        navigation.addEventListener('navigate', event => {
+            event.signal.addEventListener('abort', () => {
+                events.push(['abort', event.signal.reason.name, location.hash]);
+            });
+            event.intercept({precommitHandler() {
+                events.push(['precommit']);
+                return new Promise(() => {});
+            }});
+            navigation.addEventListener('navigate', event => {
+                successorEvent = event;
+                event.intercept({
+                    scroll: 'manual',
+                    handler: () => new Promise(resolve => releaseSuccessor = resolve),
+                });
+            }, {once: true});
+            navigation.navigate('#2').finished.then(
+                entry => successorResult = new URL(entry.url).hash
+            );
+        }, {once: true});
+        const traversal = navigation.back();
+        Promise.all([traversal.committed, traversal.finished].map(promise =>
+            promise.then(() => 'committed', error => error.name)
+        )).then(value => traversalResult = value);
+        "##,
+    )
+    .unwrap();
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    vm.eval("successorEvent.scroll(); releaseSuccessor();")
+        .expect("the replacement should still own its interception state");
+    assert_eq!(
+        vm.eval("JSON.stringify([location.hash, events, traversalResult, successorResult])")
+            .unwrap(),
+        r##"["#2",[["abort","AbortError","#1"],["error","AbortError","#1"]],["AbortError","AbortError"],"#2"]"##
+    );
+}
+
+#[tokio::test]
 async fn history_traversal_retirement_reentry_preserves_reattached_frame_and_sibling_state() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm =
