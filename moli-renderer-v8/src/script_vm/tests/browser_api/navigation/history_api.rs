@@ -592,3 +592,35 @@ fn location_hash_empty_fragment_serializes_empty_and_clears_target() {
 
     assert_eq!(result, "#target/true|true||false|true");
 }
+
+#[test]
+fn empty_location_urls_follow_the_live_entry_document_base() {
+    for operation in [
+        "location.href = input",
+        "location.assign(input)",
+        "location.replace(input)",
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://navigation-base.test/entry/page.html",
+            "<!doctype html><head><base href='/initial/'></head><body></body>",
+        );
+        vm.eval(&format!(
+            r#"
+const input = {{toString() {{
+  document.querySelector('base').href = '/converted/target.html?q=empty#discard';
+  return '';
+}}}};
+{operation};
+"#
+        ))
+        .unwrap();
+        let pending = vm
+            .take_pending_location_navigation_with_seed()
+            .expect("empty URL resolves to a cross-document navigation");
+        assert_eq!(
+            pending.url.as_str(),
+            "https://navigation-base.test/converted/target.html?q=empty",
+            "{operation}"
+        );
+    }
+}
