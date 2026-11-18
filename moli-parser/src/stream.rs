@@ -22,10 +22,10 @@ use crate::script_planning::{
 
 use super::{
     html::{
-        ParserBlockingStylesheetPause, ParserFinishDiscoverySignals, ParserInputQueue,
-        ParserInputSession, ParserPumpOutcome, ParserPumpStep, ParserScriptElementStateTransition,
-        ParserScriptHandoff, ParserScriptNoExecutionOutcome, ParserScriptPreparationFailure,
-        ParserYield,
+        HtmlFragmentContext, ParserBlockingStylesheetPause, ParserFinishDiscoverySignals,
+        ParserInputQueue, ParserInputSession, ParserPumpOutcome, ParserPumpStep,
+        ParserScriptElementStateTransition, ParserScriptHandoff, ParserScriptNoExecutionOutcome,
+        ParserScriptPreparationFailure, ParserYield,
     },
     live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
@@ -461,18 +461,10 @@ impl HtmlTreeSinkStream {
 
     pub(super) fn from_fragment_target(
         target: ParserStreamHtmlTreeSinkTarget,
-        context_handle: NativeNodeId,
-        context_namespace: &str,
-        context_local_name: &str,
+        context: HtmlFragmentContext,
         scripting_enabled: bool,
     ) -> Self {
-        let session = new_fragment_html_tree_sink_session(
-            target,
-            context_handle,
-            context_namespace,
-            context_local_name,
-            scripting_enabled,
-        );
+        let session = new_fragment_html_tree_sink_session(target, context, scripting_enabled);
         Self::from_session(session)
     }
 

@@ -34,21 +34,11 @@ pub(in crate::context_bootstrap) fn create_contextual_fragment_internal<'s>(
     });
     // Context selection uses the actual tree, including for windowless documents
     // and registered native Proxies. Public Node properties are author-controlled.
-    let context_handle = element.unwrap_or_else(|| {
-        runtime
-            .dom_host_mut()
-            .create_element_without_attributes_for_document(
-                document_handle,
-                "body".to_owned(),
-                "http://www.w3.org/1999/xhtml".to_owned(),
-                None,
-            )
-    });
     let fragment = runtime.build_range_contextual_fragment_from_html(
         scope,
         host_ptr,
         document_handle,
-        context_handle,
+        element,
         html,
     )?;
     runtime

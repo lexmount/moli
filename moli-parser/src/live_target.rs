@@ -20,7 +20,9 @@ use moli_stylesheet_blocking::{
 };
 
 use super::{HtmlTreeSinkState, stream::HtmlTreeSinkStream};
-use crate::html::{ParseHandle, ParserCustomElementConstructionHandoff, ParserElementFlags};
+use crate::html::{
+    HtmlFragmentContext, ParseHandle, ParserCustomElementConstructionHandoff, ParserElementFlags,
+};
 
 #[cfg(test)]
 mod pending_text_tests;
@@ -3743,9 +3745,7 @@ pub(super) fn new_live_fragment_root_html_tree_sink_stream(
     final_url: Url,
     fragment_handle: NativeNodeId,
     owner_document_handle: NativeNodeId,
-    context_handle: NativeNodeId,
-    context_namespace: &str,
-    context_local_name: &str,
+    context: HtmlFragmentContext,
     runtime_dom_sinks: ParserRuntimeDomSinks,
     allow_declarative_shadow_roots: bool,
     scripting_enabled: bool,
@@ -3758,9 +3758,7 @@ pub(super) fn new_live_fragment_root_html_tree_sink_stream(
             runtime_dom_sinks,
             allow_declarative_shadow_roots,
         ),
-        context_handle,
-        context_namespace,
-        context_local_name,
+        context,
         scripting_enabled,
     );
     stream.clear_runtime_dom_sinks_after_parse_step();
@@ -4432,9 +4430,7 @@ fn parser_stream_live_fragment_root_writes_fragment() {
             url,
             fragment,
             document,
-            context,
-            "http://www.w3.org/1999/xhtml",
-            "div",
+            HtmlFragmentContext::new(Some(context), "http://www.w3.org/1999/xhtml", "div"),
             &mut collector,
             false,
             true,
@@ -4516,9 +4512,7 @@ fn live_fragment_parser_uses_template_contents_owner_document() {
             url,
             fragment,
             document,
-            context,
-            "http://www.w3.org/1999/xhtml",
-            "div",
+            HtmlFragmentContext::new(Some(context), "http://www.w3.org/1999/xhtml", "div"),
             "<template><span>inside</span></template>",
             &mut collector,
             false,

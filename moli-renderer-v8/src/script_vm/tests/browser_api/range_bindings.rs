@@ -22,6 +22,85 @@ fn range_contextual_fragments_use_native_context_and_preserve_receiver_realm() {
 }
 
 #[test]
+fn range_default_fragment_context_adds_only_the_normal_parser_nodes() {
+    let mut vm = new_parsed_test_vm("https://range-fragment-nodes.test/", "<!doctype html>");
+    for markup in ["", "<span>x</span>"] {
+        let growth = ["document.body", "document", "document.documentElement"].map(|context| {
+            let before = vm.document_runtime.dom_host().dom().len();
+            assert_eq!(
+                vm.eval(&format!(
+                    r#"(() => {{
+                        const range = document.createRange();
+                        range.setStart({context}, 0);
+                        for (let i = 0; i < 32; i++) {{
+                            const fragment = range.createContextualFragment({markup:?});
+                            if (fragment.ownerDocument !== document) return false;
+                        }}
+                        return true;
+                    }})()"#
+                ))
+                .unwrap(),
+                "true"
+            );
+            vm.document_runtime.dom_host().dom().len() - before
+        });
+        assert_eq!(
+            growth, [growth[0]; 3],
+            "the default context should allocate the same nodes as a body context for {markup:?}"
+        );
+    }
+}
+
+#[test]
+fn range_default_fragment_context_uses_the_owner_document_default_registry() {
+    let mut vm = new_parsed_test_vm(
+        "https://range-fragment-registry.test/",
+        "<!doctype html><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                const child = document.getElementById("child").contentWindow;
+                const detached = document.implementation.createHTMLDocument();
+                const scoped = new CustomElementRegistry();
+                scoped.initialize(detached);
+                if (detached.documentElement.customElementRegistry !== scoped) return false;
+
+                const tag = "range-fragment-marker";
+                customElements.define(tag, class extends HTMLElement {
+                    constructor() { super(); this.constructedIn = "main"; }
+                });
+                child.customElements.define(tag, class extends child.HTMLElement {
+                    constructor() { super(); this.constructedIn = "child"; }
+                });
+                scoped.define(tag, class extends HTMLElement {
+                    constructor() { super(); this.constructedIn = "scoped"; }
+                });
+
+                for (const [doc, registry, constructedIn] of [
+                    [document, customElements, "main"],
+                    [child.document, child.customElements, "child"],
+                    [detached, null, undefined],
+                ]) {
+                    for (const context of [doc, doc.documentElement]) {
+                        const range = doc.createRange();
+                        range.setStart(context, 0);
+                        const fragment = range.createContextualFragment('<range-fragment-marker></range-fragment-marker>');
+                        const element = fragment.firstElementChild;
+                        if (element.ownerDocument !== doc ||
+                            element.customElementRegistry !== registry ||
+                            element.constructedIn !== constructedIn) return false;
+                    }
+                }
+                return true;
+            })()"#
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn range_members_validate_native_receivers_before_argument_conversion() {
     let mut vm = new_parsed_test_vm(
         "https://range-native-receivers.test/",
