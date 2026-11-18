@@ -378,6 +378,44 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
 }
 #[cfg(feature = "devtools")]
 #[test]
+fn viewport_scrollbar_drag_works_with_an_inert_document_root() {
+    let mut vm = new_rendered_test_vm(
+        "https://inert-viewport-scrollbar.test/",
+        r#"<!doctype html><style>body { margin: 0; }</style>
+        <dialog>modal</dialog><div style="height: 200vh"></div>"#,
+    );
+
+    for (setup, publish_layout) in [
+        ("document.documentElement.inert = true", false),
+        (
+            "window.scrollTo(0, 0); document.documentElement.inert = false; document.querySelector('dialog').showModal()",
+            true,
+        ),
+    ] {
+        vm.eval(setup).expect("document root should become inert");
+        if publish_layout {
+            publish_layout_for_test(&mut vm);
+        }
+        let x = vm
+            .eval("document.documentElement.clientWidth + 5")
+            .expect("viewport scrollbar position should evaluate")
+            .parse::<f64>()
+            .expect("viewport scrollbar position should be numeric");
+        assert_eq!(vm.eval("window.scrollY").unwrap(), "0");
+
+        vm.dispatch_mouse_event_at_point(x, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+            .expect("viewport thumb press should dispatch");
+        vm.dispatch_mouse_event_at_point(x, 150.0, "mousemove", -1, Some(1), 0.0, 0.0)
+            .expect("viewport thumb drag should dispatch");
+        vm.dispatch_mouse_event_at_point(x, 150.0, "mouseup", 0, Some(0), 0.0, 0.0)
+            .expect("viewport thumb release should dispatch");
+
+        assert_eq!(vm.eval("window.scrollY > 0").unwrap(), "true", "{setup}");
+    }
+}
+
+#[cfg(feature = "devtools")]
+#[test]
 fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
     let mut vm = new_storage_test_vm("https://painted-scrollbar-surface.test/");
     vm.eval(

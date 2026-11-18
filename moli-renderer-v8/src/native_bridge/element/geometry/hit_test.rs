@@ -192,7 +192,9 @@ fn input_surface_hit_test_in_tree(
                         LayoutControlSurfaceHit::Scrollbar(hit) => hit.source,
                         LayoutControlSurfaceHit::ScrollbarCorner(hit) => hit.source,
                     };
-                    if live_interaction_target(runtime, source).is_none() {
+                    // Viewport scrollbars remain interactive when the document root is inert.
+                    let is_viewport_control = source == tree.source_root();
+                    if !is_live_hit_source(runtime, source, is_viewport_control) {
                         continue;
                     }
                     match &mut control {
@@ -211,7 +213,11 @@ fn input_surface_hit_test_in_tree(
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
-                    let Some(target) = live_interaction_target(runtime, layout_hit.source) else {
+                    let Some(target) = live_interaction_target(
+                        runtime,
+                        layout_hit.source,
+                        ignore_pointer_events_none,
+                    ) else {
                         continue;
                     };
                     live_dom_hit = Some((layout_hit, target));
@@ -293,14 +299,17 @@ fn live_hit_in_tree(
     ignore_pointer_events_none: bool,
 ) -> Option<(LayoutHit<DomHandle>, DomHandle)> {
     let first_hit = tree.hit_test(point, ignore_pointer_events_none);
-    let live_first_hit = first_hit
-        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
+    let resolve_hit = |hit: LayoutHit<DomHandle>| {
+        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
+            .map(|target| (hit, target))
+    };
+    let live_first_hit = first_hit.and_then(resolve_hit);
     if live_first_hit.is_some() || first_hit.is_none() {
         return live_first_hit;
     }
     tree.hit_test_all(point, ignore_pointer_events_none)
         .into_iter()
-        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)))
+        .find_map(resolve_hit)
 }
 
 fn live_hit_in_frame(
@@ -314,8 +323,11 @@ fn live_hit_in_frame(
         frame.point,
         ignore_pointer_events_none,
     )?;
-    let live_first_hit = first_hit
-        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
+    let resolve_hit = |hit: LayoutHit<DomHandle>| {
+        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
+            .map(|target| (hit, target))
+    };
+    let live_first_hit = first_hit.and_then(resolve_hit);
     // A latest-layout snapshot may still contain a text fragment whose DOM
     // node was replaced after publication, and `inert` can change without
     // changing geometry. Walk the sampled paint stack only when the live DOM
@@ -330,9 +342,7 @@ fn live_hit_in_frame(
         frame.point,
         ignore_pointer_events_none,
     )?;
-    Ok(hits
-        .into_iter()
-        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target))))
+    Ok(hits.into_iter().find_map(resolve_hit))
 }
 
 /// Resolve the foremost painted hit and the viewport sampled by the same
@@ -371,7 +381,10 @@ pub(crate) fn observable_hit_test(
     }
 }
 
-fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Option<DomHandle> {
+pub(in crate::native_bridge) fn element_for_hit_source(
+    runtime: &PageScriptHost,
+    mut source: DomHandle,
+) -> Option<DomHandle> {
     loop {
         let node = runtime.dom_host().node(source)?;
         if node.is_element() {
@@ -385,8 +398,19 @@ fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Op
     }
 }
 
-fn live_interaction_target(runtime: &PageScriptHost, source: DomHandle) -> Option<DomHandle> {
-    let target = element_for_hit_source(runtime, source)?;
-    (runtime.dom_host().is_connected(target) && !runtime.dom_host().is_inert_in_document(target))
-        .then_some(target)
+fn is_live_hit_source(runtime: &PageScriptHost, source: DomHandle, ignore_inert: bool) -> bool {
+    let dom = runtime.dom_host();
+    dom.is_connected(source) && (ignore_inert || !dom.is_inert_in_document(source))
+}
+
+pub(in crate::native_bridge) fn live_interaction_target(
+    runtime: &PageScriptHost,
+    source: DomHandle,
+    ignore_pointer_events_none: bool,
+) -> Option<DomHandle> {
+    // Slotted text can be inside a modal dialog while its DOM parent is inert.
+    if !is_live_hit_source(runtime, source, ignore_pointer_events_none) {
+        return None;
+    }
+    element_for_hit_source(runtime, source)
 }
