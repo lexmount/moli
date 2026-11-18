@@ -43,21 +43,17 @@ impl ControlledXhrContext {
         info.request_headers = request.interception_request_headers_with_web_security(
             load.request_client().web_security_disabled(),
         );
-        super::ControlledResourceLoad {
-            response_policy: super::ResourceResponsePolicy::Xhr,
-            service_worker: None,
-            response_filter: None,
+        let mut controlled = super::ControlledResourceLoad::new(
+            self.interception,
             request,
             info,
             load,
             cancel,
-            interception: self.interception,
-            connect_policy: Some(self.connect_policy),
-            csp_violations: Vec::new(),
-            preflight_headers,
-            initial_decision: None,
-            request_initiator_type: crate::types::SubresourceRequestInitiatorType::Script,
-        }
+            crate::types::SubresourceRequestInitiatorType::Script,
+        );
+        controlled.connect_policy = Some(self.connect_policy);
+        controlled.preflight_headers = preflight_headers;
+        controlled
     }
 }
 
@@ -71,8 +67,7 @@ impl ControlledXhrContext {
         policy: crate::types::SubresourcePolicyContext,
     ) -> super::ControlledResourceLoad {
         let headers = request.request_headers.to_byte_strings();
-        let mut controlled = self.load(request, info, load, cancel, headers);
-        controlled.response_policy = super::ResourceResponsePolicy::Fetch(policy);
-        controlled
+        self.load(request, info, load, cancel, headers)
+            .with_fetch_policy(policy)
     }
 }

@@ -71,39 +71,35 @@ impl ResourceInterceptionContext {
             })),
         }
     }
-    pub(crate) fn worker_control_closed(&self) -> bool {
+    fn control_root(&self) -> &Self {
         let mut control = self;
-        loop {
-            match control {
-                Self::Document { output, .. } => return output.is_closed(),
-                Self::Worker(output) => match &output.control {
-                    Some(parent) => control = parent,
-                    None => return output.closed.load(Ordering::Acquire),
-                },
-            }
+        while let Self::Worker(output) = control
+            && let Some(parent) = &output.control
+        {
+            control = parent;
+        }
+        control
+    }
+
+    pub(crate) fn worker_control_closed(&self) -> bool {
+        match self.control_root() {
+            Self::Document { output, .. } => output.is_closed(),
+            Self::Worker(output) => output.closed.load(Ordering::Acquire),
         }
     }
+
     pub(crate) async fn worker_control_shutdown(&self) {
-        let mut control = self;
-        loop {
-            match control {
-                Self::Document { output, .. } => return output.shutdown().await,
-                Self::Worker(output) => {
-                    if let Some(parent) = &output.control {
-                        control = parent;
-                        continue;
-                    }
-                    loop {
-                        let notified = output.closed_notify.notified();
-                        tokio::pin!(notified);
-                        notified.as_mut().enable();
-                        if output.closed.load(Ordering::Acquire) {
-                            return;
-                        }
-                        notified.await;
-                    }
+        match self.control_root() {
+            Self::Document { output, .. } => output.shutdown().await,
+            Self::Worker(output) => loop {
+                let notified = output.closed_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if output.closed.load(Ordering::Acquire) {
+                    return;
                 }
-            }
+                notified.await;
+            },
         }
     }
 

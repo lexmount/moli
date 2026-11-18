@@ -2,7 +2,7 @@
 
 use crate::content_security_policy::ContentSecurityPolicy;
 use crate::document_runtime::DocumentConnectPolicySnapshot;
-use crate::network_host::controlled_xhr::ControlledXhrContext;
+use crate::network_host::controlled_resource::ControlledXhrContext;
 
 use super::*;
 

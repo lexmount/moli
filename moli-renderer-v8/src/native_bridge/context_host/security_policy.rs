@@ -1,7 +1,7 @@
 use crate::content_security_policy::ContentSecurityPolicy;
 
 use super::{OwnerDispatchScope, PageScriptHost};
-use crate::network_host::controlled_xhr::{ControlledXhrContext, XhrInterceptionRoute};
+use crate::network_host::controlled_resource::{ControlledXhrContext, XhrInterceptionRoute};
 use crate::types::SubresourceResourceType;
 use crate::{
     content_security_policy::{

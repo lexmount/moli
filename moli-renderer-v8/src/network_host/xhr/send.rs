@@ -2,10 +2,8 @@ mod paths;
 mod request;
 
 use self::paths::{
-    dispatch_service_worker_xhr, queue_local_xhr_response, record_bad_port_xhr_failure,
-    record_blocked_xhr_failure, record_compatibility_intercepted_xhr, record_csp_xhr_failure,
-    record_offline_xhr_failure, record_url_policy_xhr_failure, record_xhr_response_success,
-    request_body_text, spawn_network_xhr_fetch,
+    dispatch_service_worker_xhr, queue_local_xhr_response, record_compatibility_intercepted_xhr,
+    record_xhr_response_success, request_body_text, spawn_network_xhr_fetch,
 };
 #[cfg(test)]
 pub(crate) use self::request::prepare_xhr_send_body;
@@ -25,7 +23,7 @@ use super::events::{
 };
 use super::*;
 use crate::network::synchronous_load::{SynchronousLoadOutcome, wait_for_synchronous_load};
-use crate::network_host::controlled_xhr::{
+use crate::network_host::controlled_resource::{
     ControlledXhrContext, XhrInterceptionRoute, start_buffered_xhr,
 };
 use crate::runtime::RendererPageContextCancelReason;
@@ -77,7 +75,7 @@ pub(super) fn xhr_send_callback<'s>(
 
     let prepared = match prepare_xhr_send_request(scope, host, xhr, method, prepared_body) {
         Ok(prepared) => prepared,
-        Err(XhrSendPrepareError::ExecutionContext) => {
+        Err(error) => {
             if async_request {
                 queue_xhr_failure_delivery(scope, xhr);
             } else {
@@ -85,18 +83,14 @@ pub(super) fn xhr_send_callback<'s>(
                     xhr_state_string_property(scope, xhr, XHR_URL_SLOT).unwrap_or_default();
                 throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
             }
-            tracing::debug!("XHR owner execution context is unavailable");
-            return;
-        }
-        Err(XhrSendPrepareError::Url(message)) => {
-            if async_request {
-                queue_xhr_failure_delivery(scope, xhr);
-            } else {
-                let request_url =
-                    xhr_state_string_property(scope, xhr, XHR_URL_SLOT).unwrap_or_default();
-                throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
+            match error {
+                XhrSendPrepareError::ExecutionContext => {
+                    tracing::debug!("XHR owner execution context is unavailable");
+                }
+                XhrSendPrepareError::Url(message) => {
+                    tracing::debug!("XHR URL resolution error: {message}");
+                }
             }
-            tracing::debug!("XHR URL resolution error: {message}");
             return;
         }
     };
@@ -129,45 +123,30 @@ pub(super) fn xhr_send_callback<'s>(
             &violation,
             "XMLHttpRequest",
         );
-        if async_request {
-            record_csp_xhr_failure(scope, host, xhr, prepared, message);
-        } else {
-            record_synchronous_xhr_failure(scope, host, xhr, prepared, message);
-        }
+        record_xhr_failure(scope, host, xhr, prepared, async_request, message);
         return;
     }
 
     if let Err(error) = url_policy {
-        if async_request {
-            record_url_policy_xhr_failure(scope, host, xhr, prepared, error.to_string());
-        } else {
-            record_synchronous_xhr_failure(scope, host, xhr, prepared, error.to_string());
-        }
+        record_xhr_failure(scope, host, xhr, prepared, async_request, error.to_string());
         return;
     }
 
     if moli_fetch::should_request_be_blocked_due_to_bad_port(&prepared.resolved_url) {
-        if async_request {
-            record_bad_port_xhr_failure(scope, host, xhr, prepared);
-        } else {
-            let error_text = format!("xhr: blocked bad port for `{}`", prepared.resolved_url);
-            record_synchronous_xhr_failure(scope, host, xhr, prepared, error_text);
-        }
+        let error = format!("xhr: blocked bad port for `{}`", prepared.resolved_url);
+        record_xhr_failure(scope, host, xhr, prepared, async_request, error);
         return;
     }
 
     if host.is_url_blocked(&prepared.resolved_url) {
-        if async_request {
-            record_blocked_xhr_failure(scope, host, xhr, prepared);
-        } else {
-            record_synchronous_xhr_failure(
-                scope,
-                host,
-                xhr,
-                prepared,
-                BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
-            );
-        }
+        record_xhr_failure(
+            scope,
+            host,
+            xhr,
+            prepared,
+            async_request,
+            BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
+        );
         return;
     }
 
@@ -181,11 +160,8 @@ pub(super) fn xhr_send_callback<'s>(
                 record_xhr_response_success(host, &prepared, &response);
                 apply_xhr_response(scope, xhr, response);
             }
-            Err(error) if async_request => {
-                record_url_policy_xhr_failure(scope, host, xhr, prepared, error.to_string());
-            }
             Err(error) => {
-                record_synchronous_xhr_failure(scope, host, xhr, prepared, error.to_string());
+                record_xhr_failure(scope, host, xhr, prepared, async_request, error.to_string());
             }
         }
         return;
@@ -194,11 +170,7 @@ pub(super) fn xhr_send_callback<'s>(
     let route = match host.xhr_interception_route(prepared.owner) {
         Ok(route) => route,
         Err(message) => {
-            if async_request {
-                record_url_policy_xhr_failure(scope, host, xhr, prepared, message.into());
-            } else {
-                record_synchronous_xhr_failure(scope, host, xhr, prepared, message.into());
-            }
+            record_xhr_failure(scope, host, xhr, prepared, async_request, message.into());
             return;
         }
     };
@@ -218,17 +190,14 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
     if host.network_offline() {
-        if async_request {
-            record_offline_xhr_failure(scope, host, xhr, prepared);
-        } else {
-            record_synchronous_xhr_failure(
-                scope,
-                host,
-                xhr,
-                prepared,
-                "Network emulation offline".to_owned(),
-            );
-        }
+        record_xhr_failure(
+            scope,
+            host,
+            xhr,
+            prepared,
+            async_request,
+            "Network emulation offline".to_owned(),
+        );
         return;
     }
 
@@ -250,7 +219,7 @@ pub(super) fn xhr_send_callback<'s>(
         let control = match route.synchronous() {
             Ok(control) => control,
             Err(message) => {
-                record_synchronous_xhr_failure(scope, host, xhr, prepared, message.into());
+                record_xhr_failure(scope, host, xhr, prepared, false, message.into());
                 return;
             }
         };
@@ -371,11 +340,12 @@ fn send_synchronous_network_xhr(
         crate::network::loads::ResourceLoadDisposition::Ordinary,
         Some(cancel_handle.clone()),
     ) else {
-        record_synchronous_xhr_failure(
+        record_xhr_failure(
             scope,
             host,
             xhr,
             prepared,
+            false,
             "XHR Document is no longer active".into(),
         );
         return;
@@ -468,7 +438,7 @@ fn send_synchronous_network_xhr(
     let completed = match result {
         Ok(completed) => completed,
         Err(error) => {
-            record_synchronous_xhr_failure(scope, host, xhr, prepared, error);
+            record_xhr_failure(scope, host, xhr, prepared, false, error);
             return;
         }
     };
@@ -525,14 +495,15 @@ fn synchronous_xhr_timeout(
         .map(|value| Duration::from_millis(value.min(u32::MAX as f64) as u64))
 }
 
-fn record_synchronous_xhr_failure(
+fn record_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
+    async_request: bool,
     error_text: String,
 ) {
-    let request_url = prepared.resolved_url.to_string();
+    let request_url = (!async_request).then(|| prepared.resolved_url.to_string());
     host.record_subresource_network(SubresourceNetworkRecord::failure(
         prepared.frame_id,
         prepared.document_url,
@@ -543,5 +514,9 @@ fn record_synchronous_xhr_failure(
         SubresourceResourceType::Xhr,
         error_text,
     ));
-    throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
+    if let Some(request_url) = request_url {
+        throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
+    } else {
+        queue_xhr_failure_delivery(scope, xhr);
+    }
 }

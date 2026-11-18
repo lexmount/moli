@@ -891,7 +891,7 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
     InterceptionOutputReady(crate::network::interception_output::InterceptionOutputWake),
-    InterceptedXhrCompleted(Box<crate::network_host::controlled_xhr::XhrLoadResult>),
+    InterceptedXhrCompleted(Box<crate::network_host::controlled_resource::XhrLoadResult>),
     InterceptedXhrStreamingStarted {
         info: Box<PendingSubresourceFetchInfo>,
         started: Box<AsyncSubresourceStreamingStarted>,
