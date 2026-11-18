@@ -416,6 +416,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 )
             } else {
                 host.start_worker_script_load(
+                    scope,
                     worker_id,
                     resolved_url,
                     base_url,

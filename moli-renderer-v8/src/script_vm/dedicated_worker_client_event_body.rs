@@ -44,6 +44,25 @@ impl ScriptVm {
             .current_dedicated_worker_client_event_identity(worker_id)
     }
 
+    pub(crate) fn record_dedicated_worker_script_resource_timing(
+        &mut self,
+        creator: crate::native_bridge::WindowExecutionContextIdentity,
+        entry: crate::context_bootstrap::ResourcePerformanceEntry,
+    ) -> Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            let host = unsafe { &*host_ptr };
+            if host.window_execution_context_identity_is_current(creator)
+                && let Some((token, context)) =
+                    host.window_execution_context(scope, creator.owner(), creator.dispatch_scope())
+                && token == creator.realm_token()
+            {
+                let scope = &mut v8::ContextScope::new(scope, context);
+                crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+            }
+            Ok(())
+        })
+    }
+
     /// Apply one exact DedicatedWorker client-event body.
     ///
     /// The selected Page-task dispatcher owns the ordinary task-end

@@ -80,10 +80,18 @@ impl PageVm {
 
     pub(in crate::runtime) fn apply_selected_page_dedicated_worker_client_event_turn(
         &mut self,
-        task: RendererPageDedicatedWorkerClientEventTask,
+        mut task: RendererPageDedicatedWorkerClientEventTask,
     ) -> anyhow::Result<PageDedicatedWorkerClientEventTurnOutcome> {
         let owner = task.owner();
         let event_kind = task.event_kind();
+        // The completed fetch belongs to the exact creator Window. Its entry
+        // can survive termination of the Worker while that Window remains current.
+        if self.document_lifecycle.identity().document == owner.root_document()
+            && let Some(entry) = task.take_resource_timing()
+        {
+            self.vm_mut()
+                .record_dedicated_worker_script_resource_timing(owner.execution_context(), entry)?;
+        }
         let current_owner =
             self.current_page_dedicated_worker_client_event_owner(owner.worker_id());
         let target_effect = if current_owner == Some(owner) {

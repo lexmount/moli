@@ -159,6 +159,7 @@ pub(crate) fn current_performance_time_origin(scope: &mut v8::PinScope<'_, '_>) 
         .unwrap_or(0.0)
 }
 
+#[derive(Debug)]
 pub(crate) struct ResourcePerformanceEntry {
     name: String,
     initiator_type: String,
