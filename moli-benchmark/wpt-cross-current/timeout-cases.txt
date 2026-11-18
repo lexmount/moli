@@ -38,7 +38,6 @@ dom/events/webkit-animation-end-event.html
 dom/events/webkit-animation-iteration-event.html
 dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
-dom/nodes/NodeList-static-length-getter-tampered-1.html
 editing/crashtests/designMode-caret-change.html
 editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-events.html
 editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
@@ -114,4 +113,3 @@ svg/linking/scripted/href-script-element.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-navigation.html?36-last
 xhr/open-url-multi-window-4.htm
-xhr/setrequestheader-header-forbidden.htm
