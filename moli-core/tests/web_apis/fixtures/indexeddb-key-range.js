@@ -78,7 +78,9 @@ async function keyRangeProbe(name = 'key-range-' + Math.random()) {
   for (const [label, make, mutate] of [
     ['array', () => [[1]], value => value[0][0] = 99],
     ['numeric array', () => [1,2], value => value[0] = 99],
-    ['string array', () => [['a']], value => value[0][0] = 'z']
+    ['string array', () => [['a']], value => value[0][0] = 'z'],
+    ['date', () => new Date(1), value => value.setTime(99)],
+    ['binary', () => new Uint8Array([1]).buffer, value => new Uint8Array(value)[0] = 99]
   ]) {
     const input = make(), range = IDBKeyRange.only(input);
     mutate(input);
@@ -120,16 +122,17 @@ async function keyRangeProbe(name = 'key-range-' + Math.random()) {
       ['upper',poison(IDBKeyRange.upperBound([3],true)),[1,2]],
       ['empty',poison(IDBKeyRange.lowerBound([9])),[]]
     ]) for (const [sourceName, source] of [['store',store],['index',store.index('i')]]) {
-      for (const method of ['get','getKey','getAll','getAllKeys','count','openCursor','openKeyCursor']) {
+      for (const method of ['get','getKey','getAll','getAllKeys','getAllRecords','count','openCursor','openKeyCursor']) {
         const test = label + ' ' + rangeName + ' ' + sourceName + '.' + method;
         try {
-          const r = source[method](range);
+          const r = source[method](method === 'getAllRecords' ? {query:range} : range);
           pending.push(request(r).then(value => {
             let actual, expected;
             if (method === 'get') { actual = value && value.id; expected = ids[0]; }
             else if (method === 'getKey') { actual = value; expected = ids.length ? [ids[0]] : undefined; }
             else if (method === 'getAll') { actual = value.map(v => v.id); expected = ids; }
             else if (method === 'getAllKeys') { actual = value; expected = ids.map(id => [id]); }
+            else if (method === 'getAllRecords') { actual = value.map(v => v.primaryKey); expected = ids.map(id => [id]); }
             else if (method === 'count') { actual = value; expected = ids.length; }
             else { actual = value && [value.key,value.primaryKey]; expected = ids.length ? [[ids[0]],[ids[0]]] : null; }
             equal(test,actual,expected);
@@ -162,12 +165,14 @@ async function keyRangeProbe(name = 'key-range-' + Math.random()) {
       blocker.objectStore('d').get([0]);
       const deletion = db.transaction('d','readwrite'), deleted = done(deletion), deletes = deletion.objectStore('d');
       if (mode === 'started') await request(deletes.get([0]));
-      // Read protected bounds, then delete individual keys using main’s current API.
+      // Queue both operations before awaiting so pending transactions also
+      // exercise range deletion with the protected native bounds.
       for (let id=1;id<=4;id++) deletes.put({id,group:[id]},[id]);
       try {
-        const selectedKeys = await request(deletes.getAllKeys(poison()));
-        equal(mode + ' captures private bounds before deleting',selectedKeys,[[2],[3]]);
-        for (const key of selectedKeys) await request(deletes.delete(key));
+        const selectedKeys = request(deletes.getAllKeys(poison()));
+        const deletedKeys = request(deletes.delete(poison()));
+        equal(mode + ' captures private bounds before deleting',await selectedKeys,[[2],[3]]);
+        await deletedKeys;
       }
       catch (error) { check(mode + ' delete accepted',false,error.name); }
       equal(mode + ' delete respects private bounds', await request(deletes.getAllKeys()), [[1],[4]]);
