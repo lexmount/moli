@@ -2399,7 +2399,6 @@ html/semantics/embedded-content/the-img-element/naturalWidth-naturalHeight-width
 html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
-html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/lazy-out-of-band-load.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/not-broken-while-load-task-scheduled.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/src-then-lazy-load.html
