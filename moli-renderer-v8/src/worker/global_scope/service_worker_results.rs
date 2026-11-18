@@ -63,6 +63,7 @@ pub(in crate::worker) struct PendingServiceWorkerPushUnsubscribe {
 pub(in crate::worker) enum PendingServiceWorkerClientQueryType {
     Get,
     MatchAll,
+    Claim,
 }
 
 /// Checked allocator for one operation-local Service Worker request namespace.
@@ -425,6 +426,9 @@ pub(in crate::worker) fn drain_service_worker_client_query_result(
     };
     let resolver = v8::Local::new(scope, &pending.resolver);
     match pending.query_type {
+        PendingServiceWorkerClientQueryType::Claim => {
+            let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        }
         PendingServiceWorkerClientQueryType::Get => {
             let value = result
                 .clients

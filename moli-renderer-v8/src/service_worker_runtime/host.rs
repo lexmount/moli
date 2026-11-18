@@ -829,8 +829,15 @@ fn spawn_parent_message_pump(
                     WorkerToParentMessage::ServiceWorkerClientsClaim {
                         registration_id,
                         version_id,
+                        request_id,
                     } => {
-                        service.enqueue_clients_claim_requested(registration_id, version_id);
+                        if version_id == source_host.version_id() {
+                            service.enqueue_clients_claim_requested(
+                                registration_id,
+                                source_host.run_owner(),
+                                request_id,
+                            );
+                        }
                     }
                     WorkerToParentMessage::ServiceWorkerImportedScriptLoaded {
                         registration_id,

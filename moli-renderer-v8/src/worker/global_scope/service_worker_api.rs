@@ -1171,14 +1171,34 @@ pub(super) fn service_worker_clients_claim_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if let Some((registration_id, version_id, parent_tx)) = service_worker_runtime_identity(scope) {
-        let _ = parent_tx.send(WorkerToParentMessage::ServiceWorkerClientsClaim {
-            registration_id,
-            version_id,
-        });
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    rv.set(resolver.get_promise(scope).into());
+    if let Some((registration_id, version_id, parent_tx)) = service_worker_runtime_identity(scope)
+        && let Some(state) = get_worker_state(scope)
+    {
+        let request_id = state
+            .borrow_mut()
+            .register_pending_service_worker_client_query(
+                v8::Global::new(scope, resolver),
+                PendingServiceWorkerClientQueryType::Claim,
+            );
+        if parent_tx
+            .send(WorkerToParentMessage::ServiceWorkerClientsClaim {
+                registration_id,
+                version_id,
+                request_id,
+            })
+            .is_ok()
+        {
+            return;
+        }
+        state
+            .borrow_mut()
+            .take_pending_service_worker_client_query(request_id);
     }
-    let undefined: v8::Local<'_, v8::Value> = v8::undefined(scope).into();
-    rv.set(resolved_worker_promise(scope, undefined).into());
+    let _ = resolver.resolve(scope, v8::undefined(scope).into());
 }
 
 pub(super) fn service_worker_clients_get_callback<'s>(
