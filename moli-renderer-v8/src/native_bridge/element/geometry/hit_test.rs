@@ -148,6 +148,13 @@ fn input_surface_hit_test_in_tree(
         for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
             match surface {
                 LayoutPaintedSurfaceHit::Control(mut control) => {
+                    let source = match &control {
+                        LayoutControlSurfaceHit::Scrollbar(hit) => hit.source,
+                        LayoutControlSurfaceHit::ScrollbarCorner(hit) => hit.source,
+                    };
+                    if live_interaction_target(runtime, source).is_none() {
+                        continue;
+                    }
                     match &mut control {
                         LayoutControlSurfaceHit::Scrollbar(hit) => {
                             hit.viewport_to_local =
@@ -164,13 +171,11 @@ fn input_surface_hit_test_in_tree(
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
-                    let Some(target) = element_for_hit_source(runtime, layout_hit.source) else {
+                    let Some(target) = live_interaction_target(runtime, layout_hit.source) else {
                         continue;
                     };
-                    if runtime.dom_host().is_connected(target) {
-                        live_dom_hit = Some((layout_hit, target));
-                        break;
-                    }
+                    live_dom_hit = Some((layout_hit, target));
+                    break;
                 }
             }
         }
@@ -228,25 +233,14 @@ fn live_hit_in_tree(
     ignore_pointer_events_none: bool,
 ) -> Option<(LayoutHit<DomHandle>, DomHandle)> {
     let first_hit = tree.hit_test(point, ignore_pointer_events_none);
-    let live_first_hit = first_hit.and_then(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    });
+    let live_first_hit = first_hit
+        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
     if live_first_hit.is_some() || first_hit.is_none() {
         return live_first_hit;
     }
     tree.hit_test_all(point, ignore_pointer_events_none)
         .into_iter()
-        .find_map(|hit| {
-            let target = element_for_hit_source(runtime, hit.source)?;
-            runtime
-                .dom_host()
-                .is_connected(target)
-                .then_some((hit, target))
-        })
+        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)))
 }
 
 fn live_hit_in_document(
@@ -256,29 +250,20 @@ fn live_hit_in_document(
     ignore_pointer_events_none: bool,
 ) -> Result<Option<(LayoutHit<DomHandle>, DomHandle)>, LayoutError> {
     let (_, first_hit) = observable_hit_test(runtime, document, point, ignore_pointer_events_none)?;
-    let live_first_hit = first_hit.and_then(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    });
+    let live_first_hit = first_hit
+        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
     // A latest-layout snapshot may still contain a text fragment whose DOM
-    // node was replaced after the snapshot was published. Walk the sampled
-    // paint stack only on that stale-source path until it identifies a
-    // currently connected element. This live DOM check neither refreshes nor
+    // node was replaced after publication, and `inert` can change without
+    // changing geometry. Walk the sampled paint stack only when the live DOM
+    // rejects the foremost candidate. This check neither refreshes nor
     // invalidates layout; the common case retains the single-hit fast path.
     if live_first_hit.is_some() || first_hit.is_none() {
         return Ok(live_first_hit);
     }
     let (_, hits) = observable_hit_test_all(runtime, document, point, ignore_pointer_events_none)?;
-    Ok(hits.into_iter().find_map(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    }))
+    Ok(hits
+        .into_iter()
+        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target))))
 }
 
 fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Option<DomHandle> {
@@ -293,4 +278,10 @@ fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Op
         }
         source = parent;
     }
+}
+
+fn live_interaction_target(runtime: &PageScriptHost, source: DomHandle) -> Option<DomHandle> {
+    let target = element_for_hit_source(runtime, source)?;
+    (runtime.dom_host().is_connected(target) && !runtime.dom_host().is_inert_in_document(target))
+        .then_some(target)
 }
