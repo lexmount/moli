@@ -107,8 +107,11 @@ fn set_curve<'s>(
             return false;
         }
         let curve: Vec<_> = bytes
-            .chunks_exact(size_of::<f32>())
-            .map(|value| f32::from_ne_bytes(value.try_into().expect("Float32Array element")))
+            .as_chunks::<{ size_of::<f32>() }>()
+            .0
+            .iter()
+            .copied()
+            .map(f32::from_ne_bytes)
             .collect();
         let middle = curve.len() / 2;
         let zero_output = if curve.len() % 2 == 1 {

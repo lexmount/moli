@@ -2754,8 +2754,9 @@ fn trusted_types_directive_filters_policy_names() {
 fn trusted_types_csp_name_grammar_matches_only_valid_tokens() {
     // Directive grammar errors and policy delimiters are tested separately: they discard the
     // directive before its tt-policy-name tokens are interpreted.
-    for byte in [b'\t', b'\n', b'\x0c', b'\r']
-        .into_iter()
+    for byte in b"\t\n\x0c\r"
+        .iter()
+        .copied()
         .chain(b' '..=b'~')
         .filter(|byte| !matches!(*byte, b',' | b';'))
     {

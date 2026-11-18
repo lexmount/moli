@@ -1978,13 +1978,11 @@ pub(crate) fn read_web_transport_error_payload(
     deserializer: &dyn v8::ValueDeserializerHelper,
 ) -> Option<WebTransportErrorClonePayload> {
     let bytes = read_raw_vec(deserializer)?;
-    if !bytes.len().is_multiple_of(2) {
+    let (code_units, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
         return None;
     }
-    let message = bytes
-        .chunks_exact(2)
-        .map(|units| u16::from_le_bytes([units[0], units[1]]))
-        .collect();
+    let message = code_units.iter().copied().map(u16::from_le_bytes).collect();
     let source = match read_u32(deserializer)? {
         0 => WebTransportErrorSource::Stream,
         1 => WebTransportErrorSource::Session,

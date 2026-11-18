@@ -145,7 +145,9 @@ document.body.innerHTML = '<div id=title>A</div>';
         let red_pixels = |image: &moli_paint::RasterImage| {
             image
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[0] > 200 && pixel[1] < 50 && pixel[2] < 50)
                 .count()
         };

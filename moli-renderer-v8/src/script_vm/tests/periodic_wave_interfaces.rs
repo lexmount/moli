@@ -15,7 +15,9 @@ fn copied_coefficients<'s>(
     let buffer = v8::Local::<v8::ArrayBuffer>::try_from(value).unwrap();
     buffer
         .get_backing_store()
-        .chunks_exact(size_of::<f32>())
+        .as_chunks::<{ size_of::<f32>() }>()
+        .0
+        .iter()
         .map(|bytes| f32::from_ne_bytes(std::array::from_fn(|i| bytes[i].get())))
         .collect()
 }

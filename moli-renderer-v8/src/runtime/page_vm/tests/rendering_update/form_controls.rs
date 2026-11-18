@@ -72,7 +72,7 @@ document.getElementById('field').focus();
                 }
             }
             let image = moli_paint::raster_snapshot(&snapshot)?;
-            let pixels = image.rgba.chunks_exact(4);
+            let pixels = image.rgba.as_chunks::<4>().0.iter();
             match state {
                 "transparent" | "clipped" => assert!(
                     !pixels
@@ -152,7 +152,7 @@ input,textarea{display:block;box-sizing:border-box;width:220px;height:100px;
                     moli_layout::PaintViewport::new(260, 140, 1.0),
                 )?.expect("placeholder caret layout");
                 let image = moli_paint::raster_snapshot(&snapshot)?;
-                let red_pixels = image.rgba.chunks_exact(4).enumerate().filter_map(|(index, pixel)| {
+                let red_pixels = image.rgba.as_chunks::<4>().0.iter().enumerate().filter_map(|(index, pixel)| {
                     (pixel[0] > 200 && pixel[1] < 50 && pixel[2] < 50 && pixel[3] > 200)
                         .then_some((index as u32 % image.width, index as u32 / image.width))
                 }).collect::<Vec<_>>();
@@ -291,7 +291,9 @@ async fn contenteditable_atomic_inlines_paint_carets_without_glyphs() {
             assert!(
                 image
                     .rgba
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|p| p[0] > 200 && p[1] < 50 && p[2] < 50),
                 "{label}: visible red caret pixels"
             );
@@ -334,7 +336,7 @@ async fn contenteditable_atomic_inline_caret_keeps_effects_and_viewport_culling(
                 .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 140, 1.0))?
                 .expect("atomic caret effects layout");
             let image = moli_paint::raster_snapshot(&snapshot)?;
-            let red = image.rgba.chunks_exact(4).any(|p| {
+            let red = image.rgba.as_chunks::<4>().0.iter().any(|p| {
                 i16::from(p[0]) - i16::from(p[1]) > 20 && i16::from(p[0]) - i16::from(p[2]) > 20
             });
             assert_eq!(red, visible, "{label}: caret compositing");
@@ -502,7 +504,9 @@ fn range_selection_rects(snapshot: &moli_layout::PaintSnapshot) -> Vec<moli_layo
 fn has_selection_pixels(image: &moli_paint::RasterImage) -> bool {
     image
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|p| p[0].abs_diff(180) <= 1 && p[1].abs_diff(213) <= 1 && p[2] >= 254)
 }
 

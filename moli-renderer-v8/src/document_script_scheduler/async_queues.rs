@@ -533,7 +533,6 @@ fn fallback_entry_from_parse_time_entry(entry: ParseTimeAsyncEntry) -> AsyncFall
         Some(PreparedScriptSourceLoadOutcome {
             source_result: Ok(source),
             source_bytes,
-            network_result: _,
             ..
         }) => AsyncFallbackEntry {
             script: prepared_script_with_loaded_source(entry.original, source, source_bytes),

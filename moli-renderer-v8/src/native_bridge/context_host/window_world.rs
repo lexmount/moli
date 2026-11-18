@@ -33,7 +33,7 @@ impl IsolatedWindowWorldId {
     pub(crate) fn allocate() -> anyhow::Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let value = NEXT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| anyhow::anyhow!("isolated Window world identity exhausted"))?;

@@ -607,7 +607,7 @@ async fn inline_svg_chart_can_size_itself_from_group_and_text_client_rects() {
         // antialiased color coverage over white, without requiring axes and
         // glyphs to land on whole pixels in every font rasterizer.
         let color_coverage = |color: [u8; 3]| {
-            raster.rgba.chunks_exact(4).map(|pixel| {
+            raster.rgba.as_chunks::<4>().0.iter().map(|pixel| {
                 let alpha = f64::from(255 - pixel[0]) / f64::from(255 - color[0]);
                 if (1..3).all(|channel| {
                     (f64::from(pixel[channel]) - (255.0 - alpha * f64::from(255 - color[channel]))).abs() < 2.0

@@ -273,7 +273,9 @@ fn transformed_svg_text_matches_equivalent_authored_coordinates() {
     assert!(
         positioned
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[0] < 128)
             .count()
             > 20,

@@ -100,7 +100,9 @@ fn coefficients<'s>(
         .expect("IIRFilterNode should have native coefficients");
     buffer
         .get_backing_store()
-        .chunks_exact(size_of::<f64>())
+        .as_chunks::<{ size_of::<f64>() }>()
+        .0
+        .iter()
         .map(|bytes| {
             let bytes = std::array::from_fn(|index| bytes[index].get());
             f64::from_ne_bytes(bytes)
@@ -332,7 +334,9 @@ fn get_frequency_response<'s>(
     let offset = parsed.frequencies.byte_offset();
     // Snapshot frequency inputs before outputs: legal views may overlap them.
     let frequencies: Vec<_> = frequency_store[offset..offset + parsed.frequencies.byte_length()]
-        .chunks_exact(size_of::<f32>())
+        .as_chunks::<{ size_of::<f32>() }>()
+        .0
+        .iter()
         .map(|bytes| f32::from_ne_bytes(std::array::from_fn(|index| bytes[index].get())))
         .collect();
     let magnitudes = parsed

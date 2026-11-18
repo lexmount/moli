@@ -86,7 +86,7 @@ jobs:
   format:
     name: Format
     runs-on: ubuntu-latest
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -100,7 +100,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -129,7 +129,7 @@ jobs:
     name: Nextest
     runs-on: [self-hosted, moli-nextest]
     container:
-      image: rust:1.96.1-bookworm
+      image: rust:1.100.0-bookworm
       # Docker seeds new named volumes from the pinned image. Keep toolchains
       # and Cargo downloads local to each self-hosted Docker daemon. Bump both
       # volume names when the image or Rust toolchain changes.
@@ -328,7 +328,7 @@ jobs:
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 180
     container:
-      image: rust:1.96.1-bookworm
+      image: rust:1.100.0-bookworm
       volumes:
         - moli-ci-cargo-home-1-96-1-v1:/usr/local/cargo
         - moli-ci-rustup-home-1-96-1-v1:/usr/local/rustup
@@ -384,7 +384,7 @@ jobs:
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 180
     container:
-      image: rust:1.96.1-bookworm
+      image: rust:1.100.0-bookworm
       volumes:
         - moli-ci-cargo-home-1-96-1-v1:/usr/local/cargo
         - moli-ci-rustup-home-1-96-1-v1:/usr/local/rustup
@@ -493,7 +493,7 @@ jobs:
     if: ${{ !cancelled() && needs.resolve-refs.result == 'success' && needs.build-release-head.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -633,7 +633,7 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -674,7 +674,7 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -823,7 +823,7 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 30
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -927,7 +927,7 @@ jobs:
     needs: [resolve-refs, build-release-head, build-release-base]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 60
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -995,7 +995,7 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 20
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1038,7 +1038,7 @@ jobs:
       github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 90
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     env:
       BENCHMARK_OUTPUT: spider-bench-results
     steps:
@@ -1095,7 +1095,7 @@ jobs:
       github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 90
-    container: rust:1.96.1-bookworm
+    container: rust:1.100.0-bookworm
     env:
       BENCHMARK_OUTPUT: sequential-navigation-soak-results
     steps:

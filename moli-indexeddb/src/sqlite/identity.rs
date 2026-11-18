@@ -60,7 +60,7 @@ impl SchemaIds {
 
     fn reserve(counter: &AtomicI64) -> Result<i64, IndexedDbError> {
         counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 if value > 0 {
                     value.checked_add(1)
                 } else {

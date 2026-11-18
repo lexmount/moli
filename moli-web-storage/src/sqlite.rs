@@ -255,13 +255,15 @@ pub(super) fn encode(units: &[u16]) -> Vec<u8> {
     units.iter().flat_map(|u| u.to_le_bytes()).collect()
 }
 fn decode(bytes: Vec<u8>) -> std::result::Result<WebStorageString, WritebackError> {
-    if !bytes.len().is_multiple_of(2) {
+    let (units, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(WritebackError::new("invalid UTF-16LE localStorage row"));
     }
     Ok(WebStorageString::from_utf16_units(
-        bytes
-            .chunks_exact(2)
-            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+        units
+            .iter()
+            .copied()
+            .map(u16::from_le_bytes)
             .collect::<Vec<_>>(),
     ))
 }

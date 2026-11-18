@@ -27,16 +27,15 @@ pub(super) fn encode(name: &IndexedDbName) -> Result<Vec<u8>, IndexedDbError> {
 }
 
 pub(super) fn decode(bytes: &[u8]) -> Result<IndexedDbName, IndexedDbError> {
-    if !bytes.len().is_multiple_of(2) {
+    let (code_units, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(corruption("invalid UTF-16 database name"));
     }
     let mut units = Vec::new();
     units
-        .try_reserve_exact(bytes.len() / 2)
+        .try_reserve_exact(code_units.len())
         .map_err(|_| IndexedDbError::Resource("Unable to allocate IndexedDB name".into()))?;
-    for pair in bytes.chunks_exact(2) {
-        units.push(u16::from_be_bytes([pair[0], pair[1]]));
-    }
+    units.extend(code_units.iter().copied().map(u16::from_be_bytes));
     Ok(IndexedDbName::from_utf16(units))
 }
 

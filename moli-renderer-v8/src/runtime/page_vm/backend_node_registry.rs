@@ -68,7 +68,7 @@ impl RendererBackendNodeRegistry {
         }
 
         let backend_node_id = NEXT_BACKEND_NODE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("renderer backend node id namespace exhausted");
         self.node_ids.insert(key, backend_node_id);
         self.nodes.insert(

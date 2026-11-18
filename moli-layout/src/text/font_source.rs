@@ -83,10 +83,8 @@ fn standalone_face(font: &FontRef<'_>) -> Option<Blob<u8>> {
 }
 
 fn sfnt_checksum(bytes: &[u8]) -> u32 {
-    bytes.chunks_exact(4).fold(0_u32, |sum, word| {
-        sum.wrapping_add(u32::from_be_bytes(
-            word.try_into().expect("four-byte chunk"),
-        ))
+    bytes.as_chunks::<4>().0.iter().fold(0_u32, |sum, &word| {
+        sum.wrapping_add(u32::from_be_bytes(word))
     })
 }
 
