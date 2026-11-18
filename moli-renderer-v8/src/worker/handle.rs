@@ -284,6 +284,7 @@ pub(crate) enum WorkerToParentMessage {
     ServiceWorkerClientsClaim {
         registration_id: crate::runtime::ServiceWorkerRegistrationId,
         version_id: crate::runtime::ServiceWorkerVersionId,
+        request_id: u64,
     },
     /// A Service Worker install-time import fetch produced a script resource record.
     ServiceWorkerImportedScriptLoaded {

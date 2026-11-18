@@ -28,17 +28,50 @@ impl ServiceWorkerRuntimeService {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn finish_worker_clients_claim_requested(
         &self,
         registration_id: ServiceWorkerRegistrationId,
         version_id: ServiceWorkerVersionId,
+    ) {
+        self.claim_clients_for_version(registration_id, version_id, None);
+    }
+
+    pub(super) fn finish_worker_clients_claim_request(
+        &self,
+        registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
+        request_id: u64,
+    ) {
+        let (version_id, run) = owner.into_parts();
+        self.claim_clients_for_version(registration_id, version_id, Some(&run));
+        // Current clients can observe their controller once the registry has
+        // changed. During activation the service records the deferred claim
+        // here so an activate event can await it without waiting on itself.
+        self.finish_client_query(
+            version_id,
+            run,
+            ServiceWorkerClientQueryResult {
+                request_id,
+                clients: Vec::new(),
+            },
+        );
+    }
+
+    fn claim_clients_for_version(
+        &self,
+        registration_id: ServiceWorkerRegistrationId,
+        version_id: ServiceWorkerVersionId,
+        run: Option<&RendererServiceWorkerRunIdentity>,
     ) {
         let progress = {
             let mut state = self.inner.state.lock();
             let Some(version) = state.versions.get(&version_id) else {
                 return;
             };
-            if version.registration_id != registration_id {
+            if version.registration_id != registration_id
+                || run.is_some_and(|run| &version.run != run)
+            {
                 return;
             }
             let Some(registration) = state.registrations.get(&registration_id) else {

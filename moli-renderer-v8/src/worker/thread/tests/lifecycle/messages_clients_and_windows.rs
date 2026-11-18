@@ -612,7 +612,7 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
 }
 
 #[tokio::test]
-async fn service_worker_clients_claim_posts_runtime_request() {
+async fn service_worker_clients_claim_waits_for_runtime_result() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(
         r#"
@@ -630,8 +630,8 @@ async fn service_worker_clients_claim_posts_runtime_request() {
         kind: ServiceWorkerLifecycleEventKind::Activate,
     });
 
-    let mut saw_clients_claim = false;
-    while !saw_clients_claim {
+    let mut acknowledged_claim = false;
+    loop {
         let message = timeout(TIMEOUT, handle.recv())
             .await
             .expect("timed out waiting for service worker clients.claim")
@@ -640,19 +640,33 @@ async fn service_worker_clients_claim_posts_runtime_request() {
             WorkerToParentMessage::ServiceWorkerClientsClaim {
                 registration_id,
                 version_id,
+                request_id,
             } => {
                 assert_eq!(
                     registration_id,
                     ServiceWorkerRegistrationId::from_u64_for_test(1)
                 );
                 assert_eq!(version_id, ServiceWorkerVersionId::from_u64_for_test(1));
-                saw_clients_claim = true;
+                assert!(!acknowledged_claim, "one claim request");
+                handle.dispatch_service_worker_client_query_result(
+                    crate::runtime::ServiceWorkerClientQueryResult {
+                        request_id,
+                        clients: Vec::new(),
+                    },
+                );
+                acknowledged_claim = true;
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(completion) => {
+                assert!(
+                    acknowledged_claim,
+                    "activation must wait for the claim reply"
+                );
                 assert_eq!(
                     completion.event_id,
                     ServiceWorkerEventId::from_u64_for_worker(6)
                 );
+                assert_eq!(completion.result, Ok(()));
+                break;
             }
             WorkerToParentMessage::ServiceWorkerFetchCompleted(_)
             | WorkerToParentMessage::ServiceWorkerFetchStreamStarted(_)
