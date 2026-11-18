@@ -76,7 +76,7 @@ impl LoadedResponse {
                     .map_err(|error| format!("{error:#}"))?;
                 if !bytes.is_empty() {
                     offset += bytes.len();
-                    stream.chunk(bytes)?;
+                    stream.chunk(bytes).await?;
                 }
                 if eof {
                     break;

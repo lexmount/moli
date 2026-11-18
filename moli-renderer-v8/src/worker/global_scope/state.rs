@@ -111,6 +111,7 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) policy_context: crate::types::SubresourcePolicyContext,
     /// Async fetch completions routed back onto the worker event loop.
     pub(in crate::worker) fetch_completion_tx: mpsc::UnboundedSender<WorkerFetchEvent>,
+    pub(in crate::worker) fetch_body_queue_slots: Arc<tokio::sync::Semaphore>,
     /// Promise resolvers pending async fetch completion.
     pub(in crate::worker) pending_fetches: HashMap<u32, PendingWorkerFetch>,
     /// Worker-local pending body sources for headers-first worker fetch.

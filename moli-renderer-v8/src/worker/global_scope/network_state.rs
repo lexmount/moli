@@ -37,6 +37,7 @@ pub(crate) struct WorkerFetchStreamingStarted {
 pub(crate) struct WorkerFetchStreamingChunk {
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) bytes: Vec<u8>,
+    pub(crate) _queue_slot: tokio::sync::OwnedSemaphorePermit,
 }
 
 pub(crate) struct WorkerFetchStreamingFinished {

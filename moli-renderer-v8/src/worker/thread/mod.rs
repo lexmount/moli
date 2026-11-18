@@ -1629,6 +1629,8 @@ async fn worker_main(
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
         mpsc::unbounded_channel::<WorkerFetchEvent>();
+    // One slot holds at most one 64 KiB Worker Fetch chunk.
+    let fetch_body_queue_slots = Arc::new(tokio::sync::Semaphore::new(16));
     let (xhr_completion_tx, mut xhr_completion_rx) =
         mpsc::unbounded_channel::<WorkerXhrCompletion>();
     let (module_graph_fetch_tx, mut module_graph_fetch_rx) =
@@ -1725,6 +1727,7 @@ async fn worker_main(
         network_partition_key: network_policy.network_partition_key,
         policy_context,
         fetch_completion_tx,
+        fetch_body_queue_slots,
         pending_fetches: std::collections::HashMap::new(),
         pending_network_body_sources: std::collections::HashMap::new(),
         pending_network_body_clones: std::collections::HashMap::new(),
