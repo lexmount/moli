@@ -203,7 +203,11 @@ async fn select_disabledness_agrees_across_selectors_focus_and_ax() {
                     <optgroup id="group" label="Choices">
                         <option id="first" tabindex="0" value="first">First</option>
                     </optgroup>
+                    <optgroup disabled label="Unavailable choices">
+                        <option id="group-disabled">Unavailable choice</option>
+                    </optgroup>
                 </select>
+                <select disabled><option id="plain-option">One</option></select>
                 <fieldset disabled>
                     <legend><select><option id="legend">Legend choice</option></select></legend>
                     <select><option id="fieldset">Fieldset choice</option></select>
@@ -219,9 +223,14 @@ async fn select_disabledness_agrees_across_selectors_focus_and_ax() {
                 }})()
             "#))?;
             assert_eq!(selected, r#"["first",1,false]"#);
-            for (id, disabled) in [
-                ("intrinsic", true), ("group", select_disabled), ("first", select_disabled),
-                ("legend", false), ("fieldset", true),
+            for (id, disabled, ax_focusable) in [
+                ("intrinsic", true, false),
+                ("group", select_disabled, false),
+                ("first", select_disabled, true),
+                ("group-disabled", true, false),
+                ("plain-option", true, true),
+                ("legend", false, true),
+                ("fieldset", true, true),
             ] {
                 let state = page.vm_mut().eval(&format!(r#"
                     (() => {{
@@ -243,8 +252,10 @@ async fn select_disabledness_agrees_across_selectors_focus_and_ax() {
                 let node = page.accessibility_node_payload_for_live_handle(handle).expect("AX node");
                 assert_eq!(node["ignored"], false, "{id}");
                 let properties = node["properties"].as_array().expect("AX properties");
-                assert_eq!(properties.iter().any(|property| property["name"] == "disabled"
-                    && property["value"]["value"] == true), disabled, "{id}");
+                let has_true_property = |name| properties.iter().any(|property|
+                    property["name"] == name && property["value"]["value"] == true);
+                assert_eq!(has_true_property("disabled"), disabled, "{id}");
+                assert_eq!(has_true_property("focusable"), ax_focusable, "{id}");
             }
         }
         Ok::<_, anyhow::Error>(())
