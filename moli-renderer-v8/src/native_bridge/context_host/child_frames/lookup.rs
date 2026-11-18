@@ -27,25 +27,6 @@ impl PageScriptHost {
         handles
     }
 
-    pub(crate) fn live_child_browsing_context_owner_snapshots(
-        &self,
-    ) -> Vec<(DomHandle, ChildFrameOwnerSnapshot)> {
-        let mut handles = self
-            .child_browsing_contexts
-            .keys()
-            .copied()
-            .filter(|handle| self.child_browsing_context_host_is_active(*handle))
-            .collect::<Vec<_>>();
-        handles.sort_unstable_by_key(|handle| handle.index());
-        handles
-            .into_iter()
-            .filter_map(|handle| {
-                self.frame_owner_current_child_snapshot(handle)
-                    .map(|owner| (handle, owner))
-            })
-            .collect()
-    }
-
     pub(crate) fn child_browsing_context_popup_owner_id(&self, handle: DomHandle) -> Option<u64> {
         let owner_document = self
             .dom_host()

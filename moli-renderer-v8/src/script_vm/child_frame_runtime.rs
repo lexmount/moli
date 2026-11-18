@@ -253,7 +253,6 @@ impl ScriptVm {
     pub(super) fn sync_child_browsing_context_records(&mut self) {
         self.resync_child_browsing_contexts();
         self.apply_pending_child_document_owner_retirements();
-        self.prune_stale_child_default_execution_contexts();
     }
 
     #[cfg(test)]

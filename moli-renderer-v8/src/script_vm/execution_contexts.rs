@@ -83,23 +83,12 @@ impl ScriptVm {
             .child_frame_realm_store
             .get(&execution_context_id)
             .ok_or_else(|| anyhow!("unknown child frame realm `{execution_context_id}`"))?;
-        let host = self._context_host.borrow();
-        let owner_realm_id = context.owner_realm_id;
-        let owner = host
-            .frame_owner_current_child_snapshot_for_realm(owner_realm_id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "child frame realm `{execution_context_id}` has no current FrameOwnerStore snapshot"
-                )
-            })?;
-        if owner.owner_handle != context.child_handle
-            || owner.frame_id.0.as_str() != context.frame_id
-        {
+        if !self.child_default_context_is_live(context) {
             return Err(anyhow!(
-                "child frame realm `{execution_context_id}` maps to stale owner realm {owner_realm_id:?}"
+                "child frame realm `{execution_context_id}` belongs to a retired owner"
             ));
         }
-        Ok(owner_realm_id)
+        Ok(context.owner_realm_id)
     }
 
     pub(super) fn with_child_frame_realm_context_scope<T>(
@@ -194,12 +183,7 @@ impl ScriptVm {
         })
     }
 
-    pub(crate) fn runtime_realm_inventory(&mut self) -> Vec<RendererRuntimeRealmInfo> {
-        self.prune_stale_child_default_execution_contexts();
-        self.known_runtime_realm_inventory()
-    }
-
-    pub(crate) fn known_runtime_realm_inventory(&self) -> Vec<RendererRuntimeRealmInfo> {
+    pub(crate) fn runtime_realm_inventory(&self) -> Vec<RendererRuntimeRealmInfo> {
         let mut realms = Vec::new();
         realms.extend(self.default_runtime_realm_info());
 
@@ -214,16 +198,7 @@ impl ScriptVm {
                 .filter_map(|context_id| self.isolated_world_runtime_realm_info(context_id)),
         );
 
-        let mut child_context_ids = self
-            .child_frame_realm_store
-            .execution_context_ids()
-            .collect::<Vec<_>>();
-        child_context_ids.sort_unstable();
-        realms.extend(
-            child_context_ids
-                .into_iter()
-                .filter_map(|context_id| self.child_default_runtime_realm_info(context_id)),
-        );
+        realms.extend(self.live_child_default_runtime_realm_inventory());
 
         realms
     }
@@ -281,25 +256,19 @@ impl ScriptVm {
     }
 
     pub(crate) fn child_default_frame_id_for_execution_context_id(
-        &mut self,
+        &self,
         execution_context_id: i64,
     ) -> Option<String> {
-        self.prune_stale_child_default_execution_contexts();
         let context = self.child_frame_realm_store.get(&execution_context_id)?;
-        self._context_host
-            .borrow()
-            .frame_owner_frame_id_for_child_handle(context.child_handle)
-            .map(|frame_id| frame_id.0)
-            .or_else(|| Some(context.frame_id.clone()))
+        self.child_default_context_is_live(context)
+            .then(|| context.frame_id.clone())
     }
 
     pub(crate) fn child_default_execution_context_id_for_frame_id(
-        &mut self,
+        &self,
         frame_id: &str,
     ) -> Option<i64> {
-        self.prune_stale_child_default_execution_contexts();
-        self.child_frame_realm_store
-            .iter_by_execution_context_id()
+        self.live_child_default_contexts()
             .find_map(|(execution_context_id, context)| {
                 (context.frame_id == frame_id).then_some(execution_context_id)
             })
@@ -342,53 +311,48 @@ impl ScriptVm {
         })
     }
 
-    pub(super) fn child_default_runtime_realm_info(
-        &self,
-        context_id: i64,
-    ) -> Option<RendererRuntimeRealmInfo> {
-        let context = self.child_frame_realm_store.get(&context_id)?;
-        let document_url = self
-            ._context_host
-            .borrow()
-            .child_browsing_context_current_url(context.child_handle)
-            .unwrap_or_else(|| self.document_runtime.document_url().clone());
-        Some(RendererRuntimeRealmInfo {
-            context_id,
-            realm_id: context.inspector_execution_context_realm_id.clone(),
-            frame_id: Some(context.frame_id.clone()),
-            origin: moli_url::origin_ascii_serialization(&document_url),
-            name: document_url.as_str().to_owned(),
-            is_default: true,
-            context_type: "default".to_owned(),
-            grant_universal_access: None,
-        })
-    }
-
     pub(crate) fn live_child_default_runtime_realm_inventory(
-        &mut self,
+        &self,
     ) -> Vec<RendererRuntimeRealmInfo> {
-        self.prune_stale_child_default_execution_contexts();
-        let mut child_context_ids = self
-            .child_frame_realm_store
-            .execution_context_ids()
-            .collect::<Vec<_>>();
-        child_context_ids.sort_unstable();
-        child_context_ids
-            .into_iter()
-            .filter_map(|context_id| self.child_default_runtime_realm_info(context_id))
-            .collect()
-    }
-
-    pub(super) fn live_child_default_context_entries(&self) -> Vec<LiveChildDefaultContextEntry> {
-        let host = self._context_host.borrow();
-        host.live_child_browsing_context_owner_snapshots()
-            .into_iter()
-            .map(|(handle, owner)| LiveChildDefaultContextEntry {
-                handle,
-                frame_id: owner.frame_id.0,
-                owner_realm_id: owner.realm_id,
+        self.live_child_default_contexts()
+            .map(|(context_id, context)| {
+                let document_url = self
+                    ._context_host
+                    .borrow()
+                    .child_browsing_context_current_url(context.child_handle)
+                    .unwrap_or_else(|| self.document_runtime.document_url().clone());
+                RendererRuntimeRealmInfo {
+                    context_id,
+                    realm_id: context.inspector_execution_context_realm_id.clone(),
+                    frame_id: Some(context.frame_id.clone()),
+                    origin: moli_url::origin_ascii_serialization(&document_url),
+                    name: document_url.as_str().to_owned(),
+                    is_default: true,
+                    context_type: "default".to_owned(),
+                    grant_universal_access: None,
+                }
             })
             .collect()
+    }
+
+    pub(super) fn live_child_default_contexts(
+        &self,
+    ) -> impl Iterator<Item = (i64, &ChildFrameRealmRecord)> + '_ {
+        self.child_frame_realm_store
+            .iter_by_execution_context_id()
+            .filter(|(_, context)| self.child_default_context_is_live(context))
+    }
+
+    fn child_default_context_is_live(&self, context: &ChildFrameRealmRecord) -> bool {
+        let host = self._context_host.borrow();
+        host.child_browsing_context_is_live(context.child_handle)
+            && host
+                .frame_owner_current_child_snapshot_for_realm(context.owner_realm_id)
+                .is_some_and(|snapshot| {
+                    snapshot.owner_handle == context.child_handle
+                        && snapshot.frame_id.0 == context.frame_id
+                        && snapshot.local_window_id == context.local_window_id
+                })
     }
 
     pub(super) fn create_new_child_default_world(
@@ -409,37 +373,8 @@ impl ScriptVm {
             Some(context) if context.local_window_id == current_owner.local_window_id => {
                 Some(context)
             }
-            Some(mut context) => {
-                let context_ptr = &context.context as *const v8::Global<v8::Context>;
-                self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
-                self.cancel_history_traversals_for_retiring_window(
-                    crate::native_bridge::WindowExecutionContextOwner::Frame(
-                        context.local_window_id,
-                    ),
-                );
-                {
-                    let mut host = self._context_host.borrow_mut();
-                    host.retire_window_realm_resources(context.runtime_observable_context_token);
-                    host.retire_window_execution_contexts_for_context_token(
-                        context.runtime_observable_context_token,
-                    );
-                }
-                let context_ptr = &context.context as *const v8::Global<v8::Context>;
-                let reuses_window_proxy = self
-                    ._context_host
-                    .borrow()
-                    .child_window_proxy_frame_is_current(child_handle, &context.frame_id);
-                self.renderer_document_isolate
-                    .with_entered_renderer_document_isolate(|isolate| {
-                        let scope = pin!(v8::HandleScope::new(isolate));
-                        let scope = &mut scope.init();
-                        let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                        if reuses_window_proxy {
-                            context.detach_global();
-                        }
-                        Ok(())
-                    })?;
-                context.runtime.mark_closed();
+            Some(context) => {
+                self.retire_prebootstrapped_child_default_context(child_handle, context)?;
                 // Cancellation can synchronously install a successor realm or
                 // detach the frame. Resolve both owner and pending context anew.
                 return self.create_new_child_default_world(frame_id, child_handle);
@@ -521,106 +456,70 @@ impl ScriptVm {
         })
     }
 
-    pub(super) fn prune_stale_child_default_execution_contexts(&mut self) {
-        let live = self.live_child_default_context_entries();
-        self.prune_stale_child_default_execution_contexts_for_live_entries(&live);
+    pub(super) fn retire_child_default_context_for_window(
+        &mut self,
+        child_handle: DomHandle,
+        local_window_id: crate::frame_owner_model::LocalWindowId,
+    ) {
+        if let Some(execution_context_id) = self
+            .child_frame_realm_store
+            .context_id_for_local_window_id(local_window_id)
+        {
+            self.destroy_child_default_context(execution_context_id);
+            return;
+        }
+
+        // A Window may have been exposed synchronously before the owner task
+        // promoted it. Remove just the pending context for the retired Window.
+        let retired = {
+            let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
+            if contexts
+                .get(&child_handle)
+                .is_some_and(|context| context.local_window_id == local_window_id)
+            {
+                contexts.remove(&child_handle)
+            } else {
+                None
+            }
+        };
+        if let Some(context) = retired
+            && let Err(error) =
+                self.retire_prebootstrapped_child_default_context(child_handle, context)
+        {
+            tracing::warn!(%error, ?child_handle, ?local_window_id, "failed to retire prebootstrapped child context");
+        }
     }
 
-    pub(super) fn prune_stale_child_default_execution_contexts_for_live_entries(
+    fn retire_prebootstrapped_child_default_context(
         &mut self,
-        live: &[LiveChildDefaultContextEntry],
-    ) {
-        let stale_prebootstrapped_handles = {
-            let host = self._context_host.borrow();
-            self.prebootstrapped_child_default_contexts
-                .borrow()
-                .iter()
-                .filter_map(|(handle, context)| {
-                    (host
-                        .current_child_document_task_owner(*handle)
-                        .map(|owner| owner.local_window_id)
-                        != Some(context.local_window_id))
-                    .then_some(*handle)
-                })
-                .collect::<Vec<_>>()
+        child_handle: DomHandle,
+        mut context: crate::native_bridge::PrebootstrappedChildDefaultContext,
+    ) -> Result<()> {
+        self.clear_context_wrapper_cache_for_context_ptr(&context.context, false);
+        self.cancel_history_traversals_for_retiring_window(
+            crate::native_bridge::WindowExecutionContextOwner::Frame(context.local_window_id),
+        );
+        let reuses_window_proxy = {
+            let mut host = self._context_host.borrow_mut();
+            host.retire_window_realm_resources(context.runtime_observable_context_token);
+            host.retire_window_execution_contexts_for_context_token(
+                context.runtime_observable_context_token,
+            );
+            host.child_window_proxy_frame_is_current(child_handle, &context.frame_id)
         };
-        let mut stale_prebootstrapped_contexts = {
-            let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
-            stale_prebootstrapped_handles
-                .into_iter()
-                .filter_map(|handle| contexts.remove(&handle).map(|context| (handle, context)))
-                .collect::<Vec<_>>()
-        };
-        if !stale_prebootstrapped_contexts.is_empty() {
-            for (_, context) in &stale_prebootstrapped_contexts {
-                let context_ptr = &context.context as *const v8::Global<v8::Context>;
-                self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
-                self.cancel_history_traversals_for_retiring_window(
-                    crate::native_bridge::WindowExecutionContextOwner::Frame(
-                        context.local_window_id,
-                    ),
-                );
-            }
-            {
-                let mut host = self._context_host.borrow_mut();
-                for (_, context) in &stale_prebootstrapped_contexts {
-                    host.retire_window_realm_resources(context.runtime_observable_context_token);
-                    host.retire_window_execution_contexts_for_context_token(
-                        context.runtime_observable_context_token,
-                    );
-                }
-            }
-            let context_host = self._context_host.clone();
-            let _ = self
-                .renderer_document_isolate
+        let result = if reuses_window_proxy {
+            self.renderer_document_isolate
                 .with_entered_renderer_document_isolate(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
-                    for (handle, context) in &stale_prebootstrapped_contexts {
-                        if context_host
-                            .borrow()
-                            .child_window_proxy_frame_is_current(*handle, &context.frame_id)
-                        {
-                            v8::Local::new(scope, &context.context).detach_global();
-                        }
-                    }
+                    v8::Local::new(scope, &context.context).detach_global();
                     Ok(())
-                });
-        }
-        for (_, context) in &mut stale_prebootstrapped_contexts {
-            context.runtime.mark_closed();
-        }
-        let refreshed_live;
-        let live = if stale_prebootstrapped_contexts.is_empty() {
-            live
+                })
         } else {
-            // Retirement callbacks may have materialized successor realms.
-            refreshed_live = self.live_child_default_context_entries();
-            &refreshed_live
+            Ok(())
         };
-        let stale_context_ids = self
-            .child_frame_realm_store
-            .iter_by_execution_context_id()
-            .filter_map(|(context_id, context)| {
-                let live_entry = live
-                    .iter()
-                    .find(|entry| entry.handle == context.child_handle);
-                let is_stale = live_entry
-                    .map(|entry| entry.owner_realm_id != Some(context.owner_realm_id))
-                    .unwrap_or(true)
-                    || live_entry
-                        .map(|entry| entry.frame_id != context.frame_id)
-                        .unwrap_or(true)
-                    || self
-                        .child_frame_realm_store
-                        .context_id_for_owner_realm_id(context.owner_realm_id)
-                        != Some(context_id);
-                is_stale.then_some(context_id)
-            })
-            .collect::<Vec<_>>();
-        for context_id in stale_context_ids {
-            self.destroy_child_default_context(context_id);
-        }
+        context.runtime.mark_closed();
+        result
     }
 
     pub(super) fn destroy_child_default_context(&mut self, execution_context_id: i64) {

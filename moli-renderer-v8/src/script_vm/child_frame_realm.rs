@@ -56,12 +56,6 @@ impl ChildFrameRealmStore {
         self.realms_by_owner_realm_id.get(&realm_id)
     }
 
-    pub(super) fn context_id_for_owner_realm_id(&self, realm_id: FrameRealmId) -> Option<i64> {
-        self.realms_by_owner_realm_id
-            .get(&realm_id)
-            .map(|realm| realm.inspector_execution_context_id)
-    }
-
     pub(super) fn context_id_for_local_window_id(
         &self,
         local_window_id: LocalWindowId,

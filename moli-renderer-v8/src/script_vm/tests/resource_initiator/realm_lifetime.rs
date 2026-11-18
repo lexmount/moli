@@ -63,7 +63,6 @@ fn assert_pending_parent_promise_releases_removed_child(register: bool, known_so
         })
         .unwrap();
     vm.eval("frame.remove(); frame = null;").unwrap();
-    vm.prune_stale_child_default_execution_contexts();
     drop(child);
 
     // No Local or Global handle, callback, or CDP object id roots the iframe.

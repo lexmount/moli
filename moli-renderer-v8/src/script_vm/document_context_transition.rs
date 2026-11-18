@@ -96,7 +96,6 @@ impl ScriptVm {
         // Descendant default worlds also own registrations in the outgoing
         // Inspector. Consume their retirements before either backing is replaced.
         self.apply_pending_child_document_owner_retirements();
-        self.prune_stale_child_default_execution_contexts();
         if self.current_main_document_task_owner() != Some(transition.retired_owner()) {
             return Err(anyhow!(
                 "main Document changed during descendant retirement"

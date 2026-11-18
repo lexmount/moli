@@ -95,23 +95,17 @@ impl ScriptVm {
         Ok(true)
     }
 
-    fn live_navigation_history_realms(&mut self) -> Vec<NavigationHistoryRealm> {
-        self.prune_stale_child_default_execution_contexts();
-
+    fn live_navigation_history_realms(&self) -> Vec<NavigationHistoryRealm> {
         // Isolated worlds share these histories; prune each Window only once.
         let mut realms = vec![NavigationHistoryRealm::TopDefault];
         {
             let host = self._context_host.borrow();
-            realms.extend(
-                self.child_frame_realm_store
-                    .iter_by_execution_context_id()
-                    .map(
-                        |(execution_context_id, realm)| NavigationHistoryRealm::ChildDefault {
-                            execution_context_id,
-                            child_handle: realm.child_handle,
-                        },
-                    ),
-            );
+            realms.extend(self.live_child_default_contexts().map(
+                |(execution_context_id, realm)| NavigationHistoryRealm::ChildDefault {
+                    execution_context_id,
+                    child_handle: realm.child_handle,
+                },
+            ));
             let prebootstrapped = self.prebootstrapped_child_default_contexts.borrow();
             realms.extend(
                 prebootstrapped

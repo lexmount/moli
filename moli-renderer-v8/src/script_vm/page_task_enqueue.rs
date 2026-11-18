@@ -246,7 +246,6 @@ impl ScriptVm {
     /// lifecycle checkpoint.
     pub(super) fn dispatch_window_load_event_body(&mut self) -> Result<()> {
         self.record_main_document_lifecycle_timing(DocumentLifecycleTiming::LoadStart)?;
-        self.prune_stale_child_default_execution_contexts();
         let document = EventTargetHandle::Node(self.document_runtime.document_handle());
         if let Some(event) =
             self.prepare_main_document_event(EventTargetHandle::Window, document, "load")
