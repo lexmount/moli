@@ -79,23 +79,42 @@ fn ensure_popover_connected(
     false
 }
 
-fn ensure_popover_connected_to_document(
+fn can_show_popover(
     scope: &mut v8::PinScope<'_, '_>,
     runtime: &PageScriptHost,
     handle: DomHandle,
     expected_document: Option<DomHandle>,
+    throw_exceptions: bool,
 ) -> bool {
-    if runtime.dom_host().is_connected(handle)
-        && runtime.dom_host().owner_document_handle(handle) == expected_document
-    {
+    if !has_reflected_attribute(runtime, handle, "popover") {
+        if throw_exceptions {
+            ensure_popover_supported(scope, runtime, handle);
+        }
+        return false;
+    }
+    if popover_is_open(runtime, handle) {
+        return false;
+    }
+    if expected_document.is_some_and(|document| {
+        runtime.dom_host().is_connected(handle)
+            && runtime.dom_host().owner_document_handle(handle) == Some(document)
+            && runtime.document_is_fully_active(document)
+            && !runtime
+                .dom_host()
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.dialog_modal())
+    }) {
         return true;
     }
-    throw_dom_exception(
-        scope,
-        "InvalidStateError",
-        11,
-        "A popover being shown must remain connected to its original document.",
-    );
+    if throw_exceptions {
+        throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "A popover must be connected to its original active document and cannot be modal.",
+        );
+    }
     false
 }
 
@@ -105,7 +124,7 @@ pub(crate) fn dispatch_popover_show_events(
     target: DomHandle,
     source_handle: DomHandle,
 ) {
-    let _ = set_popover_open_state(scope, runtime_ptr, target, true, Some(source_handle));
+    let _ = set_popover_open_state(scope, runtime_ptr, target, true, Some(source_handle), false);
 }
 
 pub(crate) fn dispatch_popover_hide_events(
@@ -114,7 +133,14 @@ pub(crate) fn dispatch_popover_hide_events(
     target: DomHandle,
     source_handle: DomHandle,
 ) {
-    let _ = set_popover_open_state(scope, runtime_ptr, target, false, Some(source_handle));
+    let _ = set_popover_open_state(
+        scope,
+        runtime_ptr,
+        target,
+        false,
+        Some(source_handle),
+        false,
+    );
 }
 
 pub(crate) fn dispatch_popover_toggle_events(
@@ -124,7 +150,7 @@ pub(crate) fn dispatch_popover_toggle_events(
     source_handle: DomHandle,
 ) {
     let open = !popover_is_open(unsafe { &*runtime_ptr }, target);
-    let _ = set_popover_open_state(scope, runtime_ptr, target, open, Some(source_handle));
+    let _ = set_popover_open_state(scope, runtime_ptr, target, open, Some(source_handle), false);
 }
 
 fn set_popover_open_state(
@@ -133,13 +159,17 @@ fn set_popover_open_state(
     handle: DomHandle,
     open: bool,
     source: Option<DomHandle>,
+    throw_exceptions: bool,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     let was_open = popover_is_open(runtime, handle);
-    if was_open == open {
-        return open;
-    }
     let owner_document = runtime.dom_host().owner_document_handle(handle);
+    if open && !can_show_popover(scope, runtime, handle, owner_document, throw_exceptions) {
+        return was_open;
+    }
+    if was_open == open {
+        return was_open;
+    }
     let old_style_state = runtime.retained_current_element_state(handle);
     let (old_state, new_state) = if open {
         (
@@ -165,28 +195,18 @@ fn set_popover_open_state(
             return false;
         }
     }
-    if open
-        && !ensure_popover_connected_to_document(
-            scope,
-            unsafe { &*runtime_ptr },
-            handle,
-            owner_document,
-        )
-    {
-        return false;
-    }
-    if open && !is_manual_popover(unsafe { &*runtime_ptr }, handle) {
-        close_open_auto_popovers(scope, runtime_ptr, handle, source);
-    }
-    if open
-        && !ensure_popover_connected_to_document(
-            scope,
-            unsafe { &*runtime_ptr },
-            handle,
-            owner_document,
-        )
-    {
-        return false;
+    if open {
+        let runtime = unsafe { &*runtime_ptr };
+        if !can_show_popover(scope, runtime, handle, owner_document, throw_exceptions) {
+            return popover_is_open(runtime, handle);
+        }
+        if !is_manual_popover(runtime, handle) {
+            close_open_auto_popovers(scope, runtime_ptr, handle, source);
+            let runtime = unsafe { &*runtime_ptr };
+            if !can_show_popover(scope, runtime, handle, owner_document, throw_exceptions) {
+                return popover_is_open(runtime, handle);
+            }
+        }
     }
     if open && !is_manual_popover(unsafe { &*runtime_ptr }, handle) {
         let runtime = unsafe { &*runtime_ptr };
@@ -242,7 +262,7 @@ pub(crate) fn handle_popover_attribute_change(
         return;
     }
     if popover_is_open(unsafe { &*runtime_ptr }, handle) {
-        let _ = set_popover_open_state(scope, runtime_ptr, handle, false, None);
+        let _ = set_popover_open_state(scope, runtime_ptr, handle, false, None, false);
     }
     if new_value.is_none() {
         // Blink drops PopoverData when the attribute is removed. Its task
@@ -409,7 +429,7 @@ fn close_open_auto_popovers(
         {
             continue;
         }
-        let _ = set_popover_open_state(scope, runtime_ptr, candidate, false, None);
+        let _ = set_popover_open_state(scope, runtime_ptr, candidate, false, None, false);
     }
 }
 
@@ -515,20 +535,7 @@ pub(in crate::native_bridge) fn node_show_popover_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    if !ensure_popover_supported(scope, runtime, handle) {
-        rv.set_undefined();
-        return;
-    }
-    if popover_is_open(runtime, handle) {
-        rv.set_undefined();
-        return;
-    }
-    if !ensure_popover_connected(scope, runtime, handle) {
-        rv.set_undefined();
-        return;
-    }
-    let _ = set_popover_open_state(scope, runtime_ptr, handle, true, source);
+    let _ = set_popover_open_state(scope, runtime_ptr, handle, true, source, true);
     rv.set_undefined();
 }
 
@@ -555,7 +562,7 @@ pub(in crate::native_bridge) fn node_hide_popover_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let _ = set_popover_open_state(scope, runtime_ptr, handle, false, None);
+    let _ = set_popover_open_state(scope, runtime_ptr, handle, false, None, false);
     rv.set_undefined();
 }
 
@@ -581,7 +588,7 @@ pub(in crate::native_bridge) fn node_toggle_popover_callback<'s>(
         return;
     }
     let next = force.unwrap_or_else(|| !popover_is_open(unsafe { &*runtime_ptr }, handle));
-    let opened = set_popover_open_state(scope, runtime_ptr, handle, next, source);
+    let opened = set_popover_open_state(scope, runtime_ptr, handle, next, source, true);
     rv.set_bool(opened);
 }
 
@@ -611,7 +618,7 @@ pub(crate) fn perform_popover_invoker_default_action(
         "hide" => false,
         _ => !popover_is_open(runtime, target),
     };
-    let _ = set_popover_open_state(scope, runtime_ptr, target, open, Some(invoker));
+    let _ = set_popover_open_state(scope, runtime_ptr, target, open, Some(invoker), false);
     true
 }
 
