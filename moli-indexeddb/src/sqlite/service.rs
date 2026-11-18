@@ -552,7 +552,7 @@ impl DatabaseClient {
         }
         self.state
             .next_transaction
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map(|value| TransactionHandle::from_raw(value + 1))

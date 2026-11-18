@@ -321,7 +321,7 @@ pub(crate) enum InitialDocumentPageInstallResult {
 #[derive(Debug)]
 pub(crate) enum FailedInitialDocumentPageBuild {
     Build {
-        owner: InitialDocumentPageOwner,
+        owner: Box<InitialDocumentPageOwner>,
         message: String,
     },
     Joined {
@@ -372,7 +372,7 @@ impl PendingInitialDocumentPageBuild {
                     Ok(built) => built,
                     Err(error) => {
                         return Err(FailedInitialDocumentPageBuild::Build {
-                            owner,
+                            owner: Box::new(owner),
                             message: format!("initial document page build failed: {error:#}"),
                         });
                     }

@@ -161,13 +161,12 @@ fn descriptor_values(descriptor: &str) -> Option<(Option<u64>, Option<u64>, Opti
                 return None;
             }
             height = Some(valid_positive_integer(value)?);
-        } else if let Some(value) = token.strip_suffix('x') {
+        } else {
+            let value = token.strip_suffix('x')?;
             if density.is_some() {
                 return None;
             }
             density = Some(valid_positive_float(value)?);
-        } else {
-            return None;
         }
     }
     match (width, height, density) {

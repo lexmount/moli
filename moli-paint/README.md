@@ -28,7 +28,7 @@ The entry points and shared code are organized by responsibility:
 The dependency uses a fixed Git revision with only `raster-images` enabled;
 `simple-text` remains disabled because Parley already performs shaping. Krilla's
 own `pdf-writer` Git pin (`fdf0901`) is recorded in `Cargo.lock`. This revision
-requires Rust 1.92; the repository toolchain is 1.96.1. Krilla and the adapter now
+requires Rust 1.92; the repository toolchain is 1.100.0. Krilla and the adapter now
 share `skrifa` 0.44 with Parley, Vello and usvg. The adapter uses `skrifa::raw`
 instead of declaring a separate `read-fonts` dependency. Moli's root
 `[patch.crates-io]` also aligns `subsetter` with `skrifa` 0.44 and `write-fonts`

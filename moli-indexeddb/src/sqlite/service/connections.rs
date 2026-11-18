@@ -197,7 +197,7 @@ impl DatabaseClient {
         }
         let raw = self
             .next_connection
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| IndexedDbError::Resource("SQL connection handles exhausted".into()))?

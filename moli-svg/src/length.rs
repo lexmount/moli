@@ -111,12 +111,8 @@ pub fn parse_point_list(raw: &str) -> Option<Vec<(f64, f64)>> {
         let raw = raw.trim_end();
         parse_number_list(raw.strip_suffix(',')?)
     })?;
-    Some(
-        values
-            .chunks_exact(2)
-            .map(|point| (point[0], point[1]))
-            .collect(),
-    )
+    let (points, _) = values.as_chunks::<2>();
+    Some(points.iter().map(|&[x, y]| (x, y)).collect())
 }
 
 fn svg_length(length: SvgTypesLength) -> SvgLength {

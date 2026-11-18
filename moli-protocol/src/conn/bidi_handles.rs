@@ -66,7 +66,7 @@ pub(crate) enum BidiHandleRelease {
 fn next_reference(kind: &str) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let id = NEXT
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("BiDi reference identity exhausted");
     format!("moli-bidi-{kind}-{id}")
 }

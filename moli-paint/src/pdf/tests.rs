@@ -105,7 +105,7 @@ fn pagination_and_ranges_do_not_duplicate_or_leak_text() {
     let selected = document(
         &snapshot,
         &PdfOptions {
-            page_ranges: vec![1..=1],
+            page_ranges: std::iter::once(1..=1).collect(),
             ..options()
         },
     );
@@ -115,7 +115,7 @@ fn pagination_and_ranges_do_not_duplicate_or_leak_text() {
         pdf_snapshot(
             &snapshot,
             &PdfOptions {
-                page_ranges: vec![100..=usize::MAX],
+                page_ranges: std::iter::once(100..=usize::MAX).collect(),
                 ..options()
             }
         ),
@@ -137,7 +137,7 @@ fn selected_page_of_a_large_document_preserves_text() {
     let doc = document(
         &snapshot,
         &PdfOptions {
-            page_ranges: vec![last_page..=last_page],
+            page_ranges: std::iter::once(last_page..=last_page).collect(),
             ..options()
         },
     );
@@ -455,7 +455,7 @@ fn repeated_images_fill_the_clipped_pdf_region() {
         .filter(|bytes| bytes.len() == 64 * 32 * 3)
         .collect();
     assert_eq!(repeated_images.len(), 1, "one bounded RGB image in the PDF");
-    for (index, pixel) in repeated_images[0].chunks_exact(3).enumerate() {
+    for (index, &pixel) in repeated_images[0].as_chunks::<3>().0.iter().enumerate() {
         let expected = if ((index % 64) / 2).is_multiple_of(2) {
             [255, 0, 0]
         } else {
@@ -894,7 +894,7 @@ fn expanded_pdf_only_embeds_glyphs_visible_on_the_selected_page() {
         let doc = document(
             &snapshot,
             &PdfOptions {
-                page_ranges: vec![page_index..=page_index],
+                page_ranges: std::iter::once(page_index..=page_index).collect(),
                 ..options()
             },
         );
@@ -1399,7 +1399,9 @@ fn filtered_wide_text_stroke_retains_all_rasterized_ink() {
         let reference = crate::raster_snapshot(&snapshot).unwrap();
         let expected_ink = reference
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[3] > 0)
             .count();
         assert!(expected_ink > 0);
@@ -1528,7 +1530,12 @@ fn filtered_fixture_glyph(bytes: &[u8], ch: char, stroke: Option<f32>) -> PaintS
 // catches losing a color layer even when the base glyph remains visible.
 fn glyph_ink_counts(pixels: &[u8]) -> [usize; 3] {
     let mut counts = [0; 3];
-    for pixel in pixels.chunks_exact(4).filter(|pixel| pixel[3] > 0) {
+    for pixel in pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[3] > 0)
+    {
         counts[0] += 1;
         counts[1] += usize::from(pixel[2] > 200 && pixel[0] < 60 && pixel[1] < 120);
         counts[2] += usize::from(pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60);
@@ -1573,7 +1580,9 @@ fn assert_filtered_fixture_ink(snapshot: &PaintSnapshot, label: &str) -> [usize;
         .unwrap();
     assert_eq!(rgb.len(), alpha.len() * 3);
     let pixels: Vec<_> = rgb
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .zip(alpha)
         .flat_map(|(rgb, alpha)| [rgb[0], rgb[1], rgb[2], alpha])
         .collect();

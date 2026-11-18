@@ -273,16 +273,13 @@ impl Decoder<'_> {
             }
             STRING => {
                 let bytes = self.variable()?;
-                if bytes.len() % 2 != 0 {
+                let (code_units, remainder) = bytes.as_chunks::<2>();
+                if !remainder.is_empty() {
                     return Err(corruption("incomplete UTF-16 code unit"));
                 }
                 let mut units = Vec::new();
-                self.reserve(&mut units, bytes.len() / 2, true)?;
-                units.extend(
-                    bytes
-                        .chunks_exact(2)
-                        .map(|unit| u16::from_be_bytes([unit[0], unit[1]])),
-                );
+                self.reserve(&mut units, code_units.len(), true)?;
+                units.extend(code_units.iter().copied().map(u16::from_be_bytes));
                 Ok(Key::String(units))
             }
             BINARY => Ok(Key::Binary(self.variable()?)),
