@@ -1774,18 +1774,14 @@ pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
         );
         return;
     }
-    // Convert the required Promise before the method's active-event check.
-    // Web IDL creates a new intrinsic capability and observes the input's then.
+    // Match the binding's Promise conversion: adopt thenables, but observe a
+    // native Promise directly so the lifetime closes on its settlement turn.
     let Some(parsed) = crate::webidl::parse_args::<ServiceWorkerWaitUntilArgs>(scope, &args) else {
         return;
     };
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+    let Some(promise) = promise_resolve_value(scope, parsed.promise) else {
         return;
     };
-    if resolver.resolve(scope, parsed.promise) != Some(true) {
-        return;
-    }
-    let promise = resolver.get_promise(scope);
     // Script redispatch clears trust even while the original native event
     // still has pending lifetime promises. Its private dispatch ID is not enough.
     if !crate::context_bootstrap::event_trusted(scope, event) {
