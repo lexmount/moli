@@ -1,148 +1,232 @@
-use super::*;
-use crate::network_host::fetch_surface::{response_slot_value, set_response_slot_value};
-use crate::util::get_private_value;
-use moli_fetch::RequestMode;
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+
+use moli_fetch::{RequestMode, ResponseHead};
 use moli_fetch_types::{FetchResponseMetadata, FetchResponseType};
 use moli_url::WebOrigin;
-use moli_webapi_declare::WebApiObject;
+use url::Url;
+
+use crate::{
+    network_host::fetch_surface::{response_slot_value, set_response_slot_value},
+    types::AsyncSubresourceFetchResponseFilter,
+    util::{get_private_value, set_private_value, v8_string},
+};
 
 pub(in crate::network_host) const RESPONSE_METADATA_SLOT: &str = "__moliResponseMetadata";
-const TYPE_SLOT: &str = "__moliResponseMetadataType";
-const URL_LIST_SLOT: &str = "__moliResponseMetadataUrls";
-const TIMING_SLOT: &str = "__moliResponseMetadataTiming";
-const REDIRECTED_SLOT: &str = "__moliResponseMetadataRedirected";
+const METADATA_ID_SLOT: &str = "__moliResponseMetadataId";
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct ResponseMetadataDeclaration<'scope> {
-    #[webapi(slot = TYPE_SLOT)]
-    response_type: &'static str,
-    #[webapi(slot = URL_LIST_SLOT)]
-    url_list: v8::Local<'scope, v8::Array>,
-    #[webapi(slot = TIMING_SLOT)]
-    timing_allow_passed: bool,
-    #[webapi(slot = REDIRECTED_SLOT)]
-    redirected: bool,
+pub(super) struct ResponseObjectMetadata {
+    pub(super) response: Arc<FetchResponseMetadata>,
+    pub(super) preload_redirect_url: Option<Url>,
 }
 
-/// Install one immutable metadata snapshot. Clone can share it; native
-/// consumers always materialize the complete typed value through this module.
+impl From<Arc<FetchResponseMetadata>> for ResponseObjectMetadata {
+    fn from(response: Arc<FetchResponseMetadata>) -> Self {
+        Self {
+            response,
+            preload_redirect_url: None,
+        }
+    }
+}
+
+type MetadataStore = Rc<RefCell<ResponseMetadataEntries>>;
+
+#[derive(Default)]
+struct ResponseMetadataEntries {
+    next_id: u64,
+    entries: HashMap<u64, (v8::Weak<v8::Object>, Rc<ResponseObjectMetadata>)>,
+}
+
 pub(crate) fn set_response_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
-    metadata: &FetchResponseMetadata,
+    metadata: Arc<FetchResponseMetadata>,
 ) {
-    // Defining own elements must not invoke Array.prototype setters: these
-    // URLs can be private even when a page owns the surrounding Response.
-    let values: Vec<v8::Local<'s, v8::Value>> = metadata
-        .url_list
-        .iter()
-        .map(|url| {
-            v8_string(scope, url.as_str())
-                .expect("Response URL should fit a V8 string")
-                .into()
-        })
-        .collect();
-    let urls = v8::Array::new_with_elements(scope, &values);
-    let value = ResponseMetadataDeclaration::new(
-        metadata.response_type.as_str(),
-        urls,
-        metadata.timing_allow_passed,
-        metadata.redirected,
-    )
-    .bind(scope)
-    .expect("Response metadata declaration should bind");
-    set_response_slot_value(scope, response, RESPONSE_METADATA_SLOT, value.into());
+    install_response_metadata(scope, response, metadata.into());
 }
 
-pub(crate) fn response_metadata<'s>(
+pub(super) fn install_response_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    metadata: ResponseObjectMetadata,
+) {
+    let store = if let Some(store) = scope.get_slot::<MetadataStore>() {
+        Rc::clone(store)
+    } else {
+        let store = MetadataStore::default();
+        scope.set_slot(Rc::clone(&store));
+        store
+    };
+    let id = {
+        let mut store = store.borrow_mut();
+        store.next_id = store
+            .next_id
+            .checked_add(1)
+            .expect("Response metadata identity exhausted");
+        store.next_id
+    };
+
+    // Clones share the private anchor. Its weak handle keeps the native
+    // snapshot alive while any Response refers to it, even across realms.
+    let anchor = v8::Object::new(scope);
+    let id_value = v8::BigInt::new_from_u64(scope, id);
+    set_private_value(scope, anchor, METADATA_ID_SLOT, id_value.into());
+    let weak_store = Rc::downgrade(&store);
+    let weak = v8::Weak::with_finalizer(
+        scope,
+        anchor,
+        Box::new(move |_| {
+            if let Some(store) = weak_store.upgrade() {
+                store.borrow_mut().entries.remove(&id);
+            }
+        }),
+    );
+    store
+        .borrow_mut()
+        .entries
+        .insert(id, (weak, Rc::new(metadata)));
+    set_response_slot_value(scope, response, RESPONSE_METADATA_SLOT, anchor.into());
+}
+
+fn response_object_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+) -> Option<Rc<ResponseObjectMetadata>> {
+    let anchor = response_slot_value(scope, response, RESPONSE_METADATA_SLOT)?;
+    let anchor = v8::Local::<v8::Object>::try_from(anchor).ok()?;
+    let id = get_private_value(scope, anchor, METADATA_ID_SLOT)?;
+    let id = v8::Local::<v8::BigInt>::try_from(id).ok()?.u64_value().0;
+    let store = scope.get_slot::<MetadataStore>()?.borrow();
+    store
+        .entries
+        .get(&id)
+        .map(|(_, metadata)| Rc::clone(metadata))
+}
+
+pub(super) fn response_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
 ) -> Option<FetchResponseMetadata> {
-    let metadata = response_slot_value(scope, response, RESPONSE_METADATA_SLOT)?;
-    let metadata = v8::Local::<v8::Object>::try_from(metadata).ok()?;
-    let response_type = get_private_value(scope, metadata, TYPE_SLOT)?
-        .to_rust_string_lossy(scope)
-        .parse()
-        .ok()?;
-    let urls = get_private_value(scope, metadata, URL_LIST_SLOT)?;
-    let urls = v8::Local::<v8::Array>::try_from(urls).ok()?;
-    let url_list = (0..urls.length())
-        .map(|index| {
-            urls.get_index(scope, index)?
-                .to_rust_string_lossy(scope)
-                .parse()
-                .ok()
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(FetchResponseMetadata {
-        response_type,
-        url_list,
-        timing_allow_passed: get_private_value(scope, metadata, TIMING_SLOT)?.boolean_value(scope),
-        redirected: get_private_value(scope, metadata, REDIRECTED_SLOT)?.boolean_value(scope),
-    })
+    Some((*response_object_metadata(scope, response)?.response).clone())
 }
 
-/// Public accessors project the same private snapshot without reparsing URLs
-/// or constructing another Rust copy of the entire response.
 pub(in crate::network_host) fn response_metadata_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
     attribute: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let metadata = response_slot_value(scope, response, RESPONSE_METADATA_SLOT)?;
-    let metadata = v8::Local::<v8::Object>::try_from(metadata).ok()?;
-    let kind = get_private_value(scope, metadata, TYPE_SLOT)?;
-    if attribute == RESPONSE_TYPE_SLOT {
-        return Some(kind);
+    let snapshot = response_object_metadata(scope, response)?;
+    let metadata = &snapshot.response;
+    match attribute {
+        "type" => v8_string(scope, metadata.response_type.as_str()).map(Into::into),
+        "redirected" => Some(
+            v8::Boolean::new(
+                scope,
+                metadata.response_type.is_readable() && metadata.redirected,
+            )
+            .into(),
+        ),
+        "url" => {
+            let url = metadata
+                .final_url()
+                .filter(|_| metadata.response_type != FetchResponseType::Opaque)
+                .map(|url| {
+                    snapshot
+                        .preload_redirect_url
+                        .as_ref()
+                        .unwrap_or(url)
+                        .as_str()
+                })
+                .unwrap_or_default();
+            let url = url.split_once('#').map_or(url, |(url, _)| url);
+            v8_string(scope, url).map(Into::into)
+        }
+        _ => None,
     }
-    let kind: FetchResponseType = kind.to_rust_string_lossy(scope).parse().ok()?;
-    if attribute == RESPONSE_REDIRECTED_SLOT {
-        return if kind.is_readable() {
-            get_private_value(scope, metadata, REDIRECTED_SLOT)
-        } else {
-            Some(v8::Boolean::new(scope, false).into())
-        };
-    }
-    if attribute == RESPONSE_URL_SLOT {
-        let urls = get_private_value(scope, metadata, URL_LIST_SLOT)?;
-        let urls = v8::Local::<v8::Array>::try_from(urls).ok()?;
-        let url = if kind == FetchResponseType::Opaque || urls.length() == 0 {
-            String::new()
-        } else if let Some(url) = response_slot_value(scope, response, RESPONSE_URL_SLOT) {
-            // Navigation preload's manual redirect surface keeps its request URL.
-            url.to_rust_string_lossy(scope)
-        } else {
-            urls.get_index(scope, urls.length() - 1)?
-                .to_rust_string_lossy(scope)
-        };
-        let url = url.split_once('#').map_or(url.as_str(), |(url, _)| url);
-        return v8_string(scope, url).map(Into::into);
-    }
-    None
 }
 
-pub(crate) fn fetch_response_metadata(
-    origin: &WebOrigin,
-    head: &moli_fetch::ResponseHead,
-    mode: RequestMode,
-    delivery: Option<&crate::types::AsyncSubresourceFetchResponseFilter>,
-    web_security_disabled: bool,
-) -> FetchResponseMetadata {
-    if let Some(metadata) = delivery.and_then(|delivery| delivery.service_worker_metadata()) {
-        let mut metadata = metadata.clone();
-        if metadata.response_type == FetchResponseType::Default {
-            metadata.response_type = FetchResponseType::Basic;
+/// The response's filtering and timing permission travel together. A Service
+/// Worker delivery also suppresses transfer accounting for this request.
+pub(crate) struct FetchResponseDelivery {
+    pub(crate) metadata: Arc<FetchResponseMetadata>,
+    pub(crate) from_service_worker: bool,
+}
+
+impl FetchResponseDelivery {
+    pub(crate) fn for_request(
+        origin: &WebOrigin,
+        head: &ResponseHead,
+        mode: RequestMode,
+        filter: Option<&AsyncSubresourceFetchResponseFilter>,
+        web_security_disabled: bool,
+    ) -> Self {
+        let service_worker_metadata = filter.and_then(|filter| filter.service_worker_metadata());
+        let metadata = if let Some(metadata) = service_worker_metadata {
+            let mut metadata = metadata.clone();
+            if metadata.response_type == FetchResponseType::Default {
+                metadata.response_type = FetchResponseType::Basic;
+            }
+            if metadata.url_list.is_empty() {
+                metadata.url_list = head.url_list().to_vec();
+            }
+            metadata.redirected |= head.redirected;
+            metadata
+        } else {
+            let mut metadata =
+                head.fetch_metadata_with_web_security(origin, mode, web_security_disabled);
+            if let Some(filter) = filter {
+                metadata.response_type = filter.response_type();
+            }
+            metadata
+        };
+        Self {
+            metadata: Arc::new(metadata),
+            from_service_worker: service_worker_metadata.is_some(),
         }
-        if metadata.url_list.is_empty() {
-            metadata.url_list = head.url_list().to_vec();
-        }
-        metadata.redirected |= head.redirected;
-        return metadata;
     }
-    let mut metadata = head.fetch_metadata_with_web_security(origin, mode, web_security_disabled);
-    if let Some(delivery) = delivery {
-        metadata.response_type = delivery.response_type();
+
+    pub(crate) fn block_opaque_response(&mut self) {
+        let metadata = Arc::make_mut(&mut self.metadata);
+        metadata.response_type = FetchResponseType::Opaque;
+        metadata.timing_allow_passed = false;
     }
-    metadata
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_metadata_lives_until_the_last_anchor_reference_is_collected() {
+        moli_v8_test_util::ensure_v8();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let (metadata, clone) = {
+            let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let response = v8::Object::new(scope);
+            let metadata = Arc::new(FetchResponseMetadata {
+                response_type: FetchResponseType::Opaque,
+                url_list: vec![Url::parse("https://cross.test/private#fragment").unwrap()],
+                timing_allow_passed: true,
+                redirected: true,
+            });
+            let weak_metadata = Arc::downgrade(&metadata);
+            set_response_metadata(scope, response, metadata);
+            let clone = v8::Object::new(scope);
+            let anchor = response_slot_value(scope, response, RESPONSE_METADATA_SLOT).unwrap();
+            set_response_slot_value(scope, clone, RESPONSE_METADATA_SLOT, anchor);
+            assert_eq!(
+                response_metadata(scope, clone).unwrap(),
+                *weak_metadata.upgrade().unwrap()
+            );
+            (weak_metadata, v8::Global::new(scope, clone))
+        };
+
+        isolate.low_memory_notification();
+        assert!(metadata.upgrade().is_some());
+        drop(clone);
+        isolate.low_memory_notification();
+        assert!(metadata.upgrade().is_none());
+    }
 }

@@ -358,7 +358,7 @@ fn register_pending_window_fetch_for_test(
     );
 
     if !matches!(stage, PendingWindowFetchTestStage::Pending) {
-        let mut pending = host
+        let pending = host
             .take_pending_subresource_fetch(internal_id)
             .expect("test Fetch should move from pending into its requested stage");
         match stage {
@@ -390,19 +390,16 @@ fn register_pending_window_fetch_for_test(
                     cache_state: Default::default(),
                     negotiated_http_version: None,
                 };
-                let metadata = head.fetch_metadata_with_web_security(
+                let delivery = crate::network_host::FetchResponseDelivery::for_request(
                     &pending.request_origin,
+                    &head,
                     pending.request_mode,
+                    None,
                     pending.load.request_client().web_security_disabled(),
                 );
-                if let crate::types::PendingSubresourceContinuation::Fetch(fetch) =
-                    &mut pending.continuation
-                {
-                    fetch.response_metadata = Some(metadata);
-                }
                 host.record_streaming_subresource_fetch(
                     crate::types::StreamingSubresourceFetchState {
-                        response_filter: None,
+                        fetch_response: Some(delivery),
                         pending,
                         request_url: url.clone(),
                         request_method: "GET".to_owned(),

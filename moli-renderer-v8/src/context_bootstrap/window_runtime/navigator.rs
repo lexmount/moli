@@ -2772,7 +2772,11 @@ fn build_storage_bucket_cached_response_object<'s>(
         .get(scope, v8str(scope, "Response").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     let response_obj = constructor.new_instance(scope, &[body, init.into_value()])?;
-    crate::network_host::set_response_metadata(scope, response_obj, &head.metadata);
+    crate::network_host::set_response_metadata(
+        scope,
+        response_obj,
+        std::sync::Arc::new(head.metadata),
+    );
     Some(response_obj)
 }
 

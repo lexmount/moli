@@ -214,7 +214,6 @@ impl PendingSubresourceContinuation {
 
 pub(super) struct PendingWindowFetchContinuation {
     pub(super) intercepted_request: Option<Box<moli_fetch::Request>>,
-    pub(super) response_metadata: Option<moli_fetch_types::FetchResponseMetadata>,
     promise: PendingWindowFetchPromise,
     resource_timing: crate::context_bootstrap::FetchResourceTiming,
     keepalive: bool,
@@ -239,7 +238,6 @@ impl PendingWindowFetchContinuation {
     ) -> Self {
         Self {
             intercepted_request: None,
-            response_metadata: None,
             promise: PendingWindowFetchPromise::Active(resolver),
             resource_timing,
             keepalive,
@@ -1111,7 +1109,7 @@ impl StreamingSubresourceBody {
 }
 
 pub(super) struct StreamingSubresourceFetchState {
-    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+    pub(super) fetch_response: Option<crate::network_host::FetchResponseDelivery>,
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
@@ -1133,13 +1131,14 @@ pub(super) struct EventSourceStreamingChunkDelivery<'s> {
 }
 
 pub(super) struct XhrStreamingResponseState {
+    pub(super) skip_cors_header_filter: bool,
     pending_utf8_bytes: Vec<u8>,
     loaded: usize,
     total: Option<usize>,
 }
 
 impl XhrStreamingResponseState {
-    pub(super) fn new(headers: &[(String, Vec<u8>)]) -> Self {
+    pub(super) fn new(headers: &[(String, Vec<u8>)], skip_cors_header_filter: bool) -> Self {
         let total = headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
@@ -1150,6 +1149,7 @@ impl XhrStreamingResponseState {
                     .ok()
             });
         Self {
+            skip_cors_header_filter,
             pending_utf8_bytes: Vec::new(),
             loaded: 0,
             total,

@@ -1,6 +1,6 @@
 use super::ResourcePerformanceEntry;
-use crate::types::AsyncSubresourceFetchResponseFilter;
-use moli_fetch::{FetchResponseMetadata, ResponseCacheState, ResponseHead};
+use crate::network_host::FetchResponseDelivery;
+use moli_fetch::{ResponseCacheState, ResponseHead};
 use moli_url::WebOrigin;
 use url::Url;
 
@@ -25,9 +25,9 @@ impl FetchResourceTiming {
         url: &Url,
         head: &ResponseHead,
         body_size: usize,
-        metadata: &FetchResponseMetadata,
-        delivery: Option<&AsyncSubresourceFetchResponseFilter>,
+        response: &FetchResponseDelivery,
     ) -> ResourcePerformanceEntry {
+        let metadata = &response.metadata;
         let readable = metadata.response_type.is_readable();
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
             url.as_str(),
@@ -45,7 +45,7 @@ impl FetchResourceTiming {
             entry.response_status = 0.0;
             entry.content_type.clear();
         }
-        if delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some()) {
+        if response.from_service_worker {
             // Bytes delivered by a Service Worker are not a network transfer
             // to this global, even when respondWith forwards a fetched body.
             entry.transfer_size = 0.0;
@@ -71,9 +71,10 @@ impl FetchResourceTiming {
 mod tests {
     use super::*;
     use moli_fetch::FetchResponseType::{Basic, Opaque};
+    use moli_fetch_types::FetchResponseMetadata;
 
     #[test]
-    fn completed_uses_the_response_snapshot_and_keeps_delivery_separate() {
+    fn completed_uses_the_response_delivery_snapshot() {
         let timing = FetchResourceTiming {
             start_unix_millis: 42.0,
             initiator_url: "https://page.test/script.js".to_owned(),
@@ -95,7 +96,6 @@ mod tests {
             cache_state: Default::default(),
             negotiated_http_version: None,
         };
-        let delivered = AsyncSubresourceFetchResponseFilter::service_worker(Default::default());
         for (kind, tao, service_worker, transfer, size, status) in [
             (Basic, true, false, 309.0, 9.0, 200.0),
             (Opaque, true, false, 309.0, 9.0, 0.0),
@@ -111,13 +111,11 @@ mod tests {
                 timing_allow_passed: tao,
                 ..Default::default()
             };
-            let entry = timing.completed(
-                &url,
-                &head,
-                9,
-                &metadata,
-                service_worker.then_some(&delivered),
-            );
+            let response = FetchResponseDelivery {
+                metadata: metadata.into(),
+                from_service_worker: service_worker,
+            };
+            let entry = timing.completed(&url, &head, 9, &response);
             assert_eq!(entry.transfer_size, transfer);
             assert_eq!(entry.encoded_body_size, size);
             assert_eq!(entry.decoded_body_size, size);

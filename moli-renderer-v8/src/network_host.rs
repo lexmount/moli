@@ -102,8 +102,7 @@ pub(crate) use self::fetch_surface::{
 };
 pub(crate) use self::fetch_surface::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_OK_SLOT,
-    RESPONSE_REDIRECTED_SLOT, RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT,
-    RESPONSE_URL_SLOT, is_branded_response_object,
+    RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
     consume_webassembly_streaming_response_value, install_request_bindings,
@@ -254,7 +253,7 @@ fn cross_origin_request_modes(
     }
 }
 
-pub(crate) use response::{fetch_response_metadata, set_response_metadata};
+pub(crate) use response::{FetchResponseDelivery, set_response_metadata};
 
 #[cfg(test)]
 pub(crate) use response::build_fetch_response_object_from_stream_for_request_mode;

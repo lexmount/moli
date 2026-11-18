@@ -32,12 +32,9 @@ pub(in crate::network_host) const REQUEST_IS_RELOAD_NAVIGATION_SLOT: &str =
     "__lmRequestIsReloadNavigation";
 pub(in crate::network_host) const REQUEST_BODY_SLOT: &str = "__lmRequestBody";
 pub(in crate::network_host) const REQUEST_BODY_USED_SLOT: &str = "__lmRequestBodyUsed";
-pub(crate) const RESPONSE_TYPE_SLOT: &str = "__lmResponseType";
-pub(crate) const RESPONSE_URL_SLOT: &str = "__lmResponseUrl";
 pub(crate) const RESPONSE_INTERNAL_STATUS_SLOT: &str = "__lmResponseInternalStatus";
 pub(crate) const RESPONSE_INTERNAL_STATUS_TEXT_SLOT: &str = "__lmResponseInternalStatusText";
 pub(crate) const RESPONSE_INTERNAL_HEADERS_SLOT: &str = "__lmResponseInternalHeadersObject";
-pub(crate) const RESPONSE_REDIRECTED_SLOT: &str = "__lmResponseRedirected";
 pub(crate) const RESPONSE_STATUS_SLOT: &str = "__lmResponseStatus";
 pub(crate) const RESPONSE_OK_SLOT: &str = "__lmResponseOk";
 pub(crate) const RESPONSE_STATUS_TEXT_SLOT: &str = "__lmResponseStatusText";
@@ -448,7 +445,8 @@ fn request_slot_attribute_getter_callback<'s>(
     let Some(this) = require_request_receiver(scope, args.this()) else {
         return;
     };
-    let Some(slot) = callback_data_item(scope, &args, SLOT_ACCESSOR_SLOTS, "slot accessor slots")
+    let Some(slot) =
+        callback_data_item(scope, &args, FETCH_ACCESSOR_FIELDS, "fetch accessor fields")
     else {
         rv.set_undefined();
         return;
@@ -472,7 +470,8 @@ fn response_slot_attribute_getter_callback<'s>(
     let Some(this) = require_response_receiver(scope, args.this()) else {
         return;
     };
-    let Some(slot) = callback_data_item(scope, &args, SLOT_ACCESSOR_SLOTS, "slot accessor slots")
+    let Some(slot) =
+        callback_data_item(scope, &args, FETCH_ACCESSOR_FIELDS, "fetch accessor fields")
     else {
         rv.set_undefined();
         return;
@@ -483,10 +482,7 @@ fn response_slot_attribute_getter_callback<'s>(
         rv.set(v8::Boolean::new(scope, body_used).into());
         return;
     }
-    if matches!(
-        slot,
-        RESPONSE_TYPE_SLOT | RESPONSE_URL_SLOT | RESPONSE_REDIRECTED_SLOT
-    ) {
+    if matches!(slot, "type" | "url" | "redirected") {
         let value = super::response::response_metadata_attribute(scope, this, slot)
             .unwrap_or_else(|| v8::undefined(scope).into());
         rv.set(value);
@@ -497,7 +493,7 @@ fn response_slot_attribute_getter_callback<'s>(
     rv.set(value);
 }
 
-const SLOT_ACCESSOR_SLOTS: &[&str] = &[
+const FETCH_ACCESSOR_FIELDS: &[&str] = &[
     REQUEST_METHOD_SLOT,
     REQUEST_URL_SLOT,
     REQUEST_HEADERS_SLOT,
@@ -516,9 +512,9 @@ const SLOT_ACCESSOR_SLOTS: &[&str] = &[
     REQUEST_IS_RELOAD_NAVIGATION_SLOT,
     REQUEST_BODY_SLOT,
     REQUEST_BODY_USED_SLOT,
-    RESPONSE_TYPE_SLOT,
-    RESPONSE_URL_SLOT,
-    RESPONSE_REDIRECTED_SLOT,
+    "type",
+    "url",
+    "redirected",
     RESPONSE_STATUS_SLOT,
     RESPONSE_OK_SLOT,
     RESPONSE_STATUS_TEXT_SLOT,
@@ -563,11 +559,11 @@ fn response_static_error_callback<'s>(
     super::response::set_response_metadata(
         scope,
         response,
-        &moli_fetch_types::FetchResponseMetadata {
+        std::sync::Arc::new(moli_fetch_types::FetchResponseMetadata {
             response_type: moli_fetch_types::FetchResponseType::Error,
             timing_allow_passed: false,
             ..Default::default()
-        },
+        }),
     );
     if let Some(headers) = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT) {
         mark_headers_immutable(scope, headers);
@@ -876,7 +872,6 @@ fn copy_response_surface_slots<'s>(
         RESPONSE_STATUS_SLOT,
         RESPONSE_STATUS_TEXT_SLOT,
         RESPONSE_OK_SLOT,
-        RESPONSE_URL_SLOT,
         RESPONSE_INTERNAL_STATUS_SLOT,
         RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
         super::response::RESPONSE_METADATA_SLOT,
@@ -976,7 +971,7 @@ pub(in crate::network_host) fn body_already_used<'s>(
     object: v8::Local<'s, v8::Object>,
     slot: &str,
 ) -> bool {
-    if is_response_slot(slot) {
+    if slot == RESPONSE_BODY_USED_SLOT {
         return response_slot_bool(scope, object, slot)
             || body_stream_is_disturbed(scope, object, RESPONSE_BODY_SLOT, true);
     }
@@ -996,19 +991,4 @@ fn body_stream_is_disturbed<'s>(
         request_slot_object(scope, object, body_slot)
     };
     body.is_some_and(|stream| readable_stream_disturbed(scope, stream))
-}
-
-fn is_response_slot(slot: &str) -> bool {
-    matches!(
-        slot,
-        RESPONSE_TYPE_SLOT
-            | RESPONSE_URL_SLOT
-            | RESPONSE_REDIRECTED_SLOT
-            | RESPONSE_STATUS_SLOT
-            | RESPONSE_OK_SLOT
-            | RESPONSE_STATUS_TEXT_SLOT
-            | RESPONSE_HEADERS_SLOT
-            | RESPONSE_BODY_SLOT
-            | RESPONSE_BODY_USED_SLOT
-    )
 }

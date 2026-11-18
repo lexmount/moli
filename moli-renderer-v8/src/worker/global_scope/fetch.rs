@@ -1062,7 +1062,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         &method,
         started.head,
         started.body_source_id,
-        &started.metadata,
+        started.metadata,
     );
     let resolver = v8::Local::new(scope, &resolver);
     let _ = resolver.resolve(scope, response.into());
@@ -1130,7 +1130,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     &pending.request_method,
                     response.head,
                     response.body,
-                    &response.metadata,
+                    response.metadata,
                 );
             let _ = resolver.resolve(scope, response_obj.into());
         }

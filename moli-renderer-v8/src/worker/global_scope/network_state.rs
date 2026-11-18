@@ -48,7 +48,7 @@ pub(crate) struct WorkerFetchStreamingFinished {
 pub(crate) struct WorkerFetchResponse {
     pub(crate) head: ResponseHead,
     pub(crate) body: ResponseBody,
-    pub(crate) metadata: moli_fetch_types::FetchResponseMetadata,
+    pub(crate) metadata: Arc<moli_fetch_types::FetchResponseMetadata>,
     pub(crate) resource_timing: crate::context_bootstrap::ResourcePerformanceEntry,
 }
 

@@ -613,7 +613,7 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
-                response_filter: started.response_filter,
+                fetch_response: None,
                 pending,
                 request_url: started.request_url,
                 request_method: started.request_method,
@@ -964,10 +964,12 @@ impl ScriptVm {
             }
 
             let mut observable_head = started.head.clone();
+            let skip_cors_header_filter =
+                started.response_filter.as_ref().is_some_and(|filter| filter.is_readable());
             if matches!(
                 pending.info.resource_type,
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) && !started.response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
+            ) && !skip_cors_header_filter {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
                     &pending.request_origin,
                     &observable_head,
@@ -1007,11 +1009,12 @@ impl ScriptVm {
                 let disk_pool = pending.load.request_client().disk_pool();
                 let xhr_response = crate::types::XhrStreamingResponseState::new(
                     &observable_head.headers,
+                    skip_cors_header_filter,
                 );
                 self._context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
-                        response_filter: started.response_filter,
+                        fetch_response: None,
                         pending,
                         request_url: started.request_url.clone(),
                         request_method: started.request_method.clone(),
@@ -1052,28 +1055,28 @@ impl ScriptVm {
 
             let mut event_source_parser = None;
             let mut event_source_to_open = None;
+            let mut fetch_response = None;
             match &mut pending.continuation {
                 PendingSubresourceContinuation::Fetch(fetch) => {
                     let resolver = fetch
                         .resolver()
                         .expect("detached keepalive stream is handled before V8 entry");
                     let resolver = v8::Local::new(scope, resolver);
-                    let metadata = fetch.response_metadata.insert(
-                        crate::network_host::fetch_response_metadata(
-                            &pending.request_origin,
-                            &started.head,
-                            pending.request_mode,
-                            started.response_filter.as_ref(),
-                            pending.load.request_client().web_security_disabled(),
-                        ),
+                    let delivery = crate::network_host::FetchResponseDelivery::for_request(
+                        &pending.request_origin,
+                        &started.head,
+                        pending.request_mode,
+                        started.response_filter.as_ref(),
+                        pending.load.request_client().web_security_disabled(),
                     );
                     let response_obj = crate::network_host::build_fetch_response_object_from_stream_with_metadata(
                         scope,
                         &started.request_method,
                         observable_head,
                         started.body_source_id,
-                        metadata,
+                        delivery.metadata.clone(),
                     );
+                    fetch_response = Some(delivery);
                     resolver.resolve(scope, response_obj.into());
                 }
                 PendingSubresourceContinuation::Image {
@@ -1171,7 +1174,7 @@ impl ScriptVm {
             let disk_pool = pending.load.request_client().disk_pool();
             self._context_host.borrow_mut().record_streaming_subresource_fetch(
                 StreamingSubresourceFetchState {
-                        response_filter: started.response_filter,
+                    fetch_response,
                     pending,
                     request_url: started.request_url.clone(),
                     request_method: started.request_method.clone(),
@@ -1890,8 +1893,7 @@ impl ScriptVm {
                                     fetch.initial_request_url(&streaming.pending.info.url),
                                     &streaming.head,
                                     response_body_size,
-                                    fetch.response_metadata.as_ref().expect("Fetch stream has response metadata"),
-                                    streaming.response_filter.as_ref(),
+                                    streaming.fetch_response.as_ref().expect("active Fetch stream has response metadata"),
                                 ),
                             );
                         }
@@ -1919,8 +1921,8 @@ impl ScriptVm {
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;
                             if !streaming
-                                .response_filter.as_ref()
-                                .is_some_and(|filter| filter.is_readable())
+                                .xhr_response.as_ref()
+                                .is_some_and(|response| response.skip_cors_header_filter)
                             {
                                 observable_head.headers =
                                     crate::network_host::filter_cors_exposed_response_headers(

@@ -2437,7 +2437,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                 context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
-                        response_filter: None,
+                        fetch_response: None,
                         pending: super::PendingSubresourceFetchState {
                             dispatch: None,
                             redirect_headers: None,
@@ -2735,7 +2735,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                 context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
-                        response_filter: None,
+                        fetch_response: None,
                         pending: super::PendingSubresourceFetchState {
                             dispatch: None,
                             redirect_headers: None,
@@ -2889,9 +2889,11 @@ fn install_streaming_fetch_response_fixture(
                 negotiated_http_version: None,
             };
             let request_origin = moli_url::WebOrigin::from_url(&document_url);
-            let metadata = head.fetch_metadata_with_web_security(
+            let delivery = crate::network_host::FetchResponseDelivery::for_request(
                 &request_origin,
+                &head,
                 moli_fetch::RequestMode::Cors,
+                None,
                 load_client.web_security_disabled(),
             );
             let response =
@@ -2900,20 +2902,16 @@ fn install_streaming_fetch_response_fixture(
                     "GET",
                     head.clone(),
                     body_source_id,
-                    &metadata,
+                    delivery.metadata.clone(),
                 );
             let global = context.global(scope);
             let _ = global.set(scope, v8str(scope, global_name).into(), response.into());
-            let mut continuation =
-                pending_fetch_continuation(scope, resolver, &context_host.borrow());
-            if let super::PendingSubresourceContinuation::Fetch(fetch) = &mut continuation {
-                fetch.response_metadata = Some(metadata);
-            }
+            let continuation = pending_fetch_continuation(scope, resolver, &context_host.borrow());
 
             context_host
                 .borrow_mut()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
-                    response_filter: None,
+                    fetch_response: Some(delivery),
                     pending: super::PendingSubresourceFetchState {
                         dispatch: None,
                         redirect_headers: None,
@@ -3008,7 +3006,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                 context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
-                        response_filter: None,
+                        fetch_response: None,
                         pending: super::PendingSubresourceFetchState {
                             dispatch: None,
                             redirect_headers: None,
@@ -3664,7 +3662,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
             context_host
                 .borrow_mut()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
-                    response_filter: None,
+                    fetch_response: None,
                     pending: super::PendingSubresourceFetchState {
                         dispatch: None,
                         redirect_headers: None,

@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use crate::{
     context_bootstrap::FetchResourceTiming,
     network::{ResourceInterceptionBody, interception_output::ResourceInterceptionContext},
+    network_host::FetchResponseDelivery,
     types::{
         NetworkBodySourceId, PendingSubresourceFetchInfo, ScriptNetworkOutputItem,
         SubresourceBodyFinished, SubresourceDataReceived, SubresourceNetworkRequestHandle,
@@ -39,7 +40,7 @@ struct StreamedFetchResponse {
     handle: SubresourceNetworkRequestHandle,
     head: ResponseHead,
     body: ResourceInterceptionBody,
-    metadata: Arc<moli_fetch_types::FetchResponseMetadata>,
+    delivery: FetchResponseDelivery,
 }
 
 impl ControlledFetchStream {
@@ -126,13 +127,13 @@ impl ControlledFetchStream {
             ));
         let body_source_id = super::super::new_network_body_source_id();
         self.body_source_id = Some(body_source_id);
-        let metadata = Arc::new(super::super::fetch_response_metadata(
+        let delivery = FetchResponseDelivery::for_request(
             &self.request_origin,
             &head,
             self.mode,
             None,
             self.load.request_client().web_security_disabled(),
-        ));
+        );
         let mut observable_head = head.clone();
         observable_head.headers = super::super::filter_cors_exposed_response_headers(
             &self.request_origin,
@@ -145,14 +146,14 @@ impl ControlledFetchStream {
                 fetch_id: self.fetch_id,
                 body_source_id,
                 head: observable_head,
-                metadata: Arc::clone(&metadata),
+                metadata: Arc::clone(&delivery.metadata),
             },
         ));
         self.response = Some(Box::new(StreamedFetchResponse {
             handle,
             head,
             body,
-            metadata,
+            delivery,
         }));
         Ok(())
     }
@@ -207,8 +208,7 @@ impl ControlledFetchStream {
                         &self.request_url,
                         &response.head,
                         body.len(),
-                        &response.metadata,
-                        None,
+                        &response.delivery,
                     )
                 }),
             },
@@ -305,7 +305,7 @@ impl super::ControlledResourceLoad {
         self.publish_completed();
         // A manual response remains an opaque redirect even if interception
         // removed Location. Select the delivery once before creating metadata.
-        let delivery = self.response_filter.take().or_else(|| {
+        let filter = self.response_filter.take().or_else(|| {
             (self.request.redirect_mode() == moli_fetch::RequestRedirectMode::Manual
                 && record
                     .result
@@ -316,28 +316,22 @@ impl super::ControlledResourceLoad {
         let result = record.result.map(|response| {
             let body_size = response.body_bytes().len();
             let (mut head, body) = response.into_body();
-            let mut metadata = super::super::fetch_response_metadata(
+            let mut delivery = FetchResponseDelivery::for_request(
                 &request_origin,
                 &head,
                 self.request.request_mode,
-                delivery.as_ref(),
+                filter.as_ref(),
                 web_security_disabled,
             );
             let body = if blocked_opaque {
-                metadata.response_type = crate::types::FetchResponseType::Opaque;
-                metadata.timing_allow_passed = false;
+                delivery.block_opaque_response();
                 moli_fetch::ResponseBody::materialized_bytes(Vec::new())
             } else {
                 body
             };
-            let resource_timing = resource_timing.completed(
-                &request_url,
-                &head,
-                body_size,
-                &metadata,
-                delivery.as_ref(),
-            );
-            if !delivery.as_ref().is_some_and(|filter| filter.is_readable()) {
+            let resource_timing =
+                resource_timing.completed(&request_url, &head, body_size, &delivery);
+            if !filter.as_ref().is_some_and(|filter| filter.is_readable()) {
                 head.headers = super::super::filter_cors_exposed_response_headers(
                     &request_origin,
                     &head,
@@ -348,7 +342,7 @@ impl super::ControlledResourceLoad {
             crate::worker::WorkerFetchResponse {
                 head,
                 body,
-                metadata,
+                metadata: delivery.metadata,
                 resource_timing,
             }
         });

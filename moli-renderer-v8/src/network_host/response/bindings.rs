@@ -83,7 +83,7 @@ pub(crate) fn response_constructor_callback<'s>(
         .initialize(scope, obj)
         .expect("Response instance declaration should initialize");
 
-    super::metadata::set_response_metadata(scope, obj, &Default::default());
+    super::metadata::set_response_metadata(scope, obj, Default::default());
 
     let default_content_type = body.as_ref().and_then(|body| body.content_type.as_deref());
     install_response_headers(scope, obj, &init.headers, default_content_type);

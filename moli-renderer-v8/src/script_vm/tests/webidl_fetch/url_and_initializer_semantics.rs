@@ -1057,7 +1057,12 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
-                    &moli_fetch_types::FetchResponseMetadata { response_type: filter, url_list: vec![final_url.clone()], timing_allow_passed: false, redirected: false },
+                    moli_fetch_types::FetchResponseMetadata {
+                        response_type: filter,
+                        url_list: vec![final_url.clone()],
+                        timing_allow_passed: false,
+                        redirected: false,
+                    }.into(),
                 );
                 let global = context.global(scope);
                 let _ = global.set(
@@ -1556,13 +1561,13 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                             "bytes" => crate::network_host::build_fetch_response_object_from_body_source_with_metadata(
                                 scope, request.method, head,
                                 moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
-                                &metadata,
+                                metadata.into(),
                             ),
                             "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                                 scope, &document_url, request, head, id,
                             ),
                             "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_with_metadata(
-                                scope, &document_url, request.method, head, id, &metadata,
+                                scope, &document_url, request.method, head, id, metadata.into(),
                             ),
                             _ => unreachable!(),
                         };
