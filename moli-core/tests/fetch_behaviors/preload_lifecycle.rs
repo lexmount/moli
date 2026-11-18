@@ -69,9 +69,7 @@ async fn ordinary_preloads_do_not_delay_window_load_or_lose_late_events() -> Res
                     })()"#,
                 )
                 .await?;
-                let successful =
-                    status == Some("200 OK") || (status.is_some() && destination != "style");
-                let event = if successful { "load" } else { "error" };
+                let event = if status.is_some() { "load" } else { "error" };
                 assert_eq!(
                     after,
                     serde_json::json!({

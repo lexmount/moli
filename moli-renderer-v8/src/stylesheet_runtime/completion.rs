@@ -134,7 +134,7 @@ impl DocumentRuntime {
                 continue;
             };
             let handle = load.owner();
-            let successful = terminal.is_ready();
+            let successful = load.resource_completion_successful(&terminal);
             let settlement = self
                 .stylesheet_lifecycle
                 .owner_states
