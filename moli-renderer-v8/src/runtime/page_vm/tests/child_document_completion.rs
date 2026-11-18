@@ -190,6 +190,91 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn null_body_child_navigation_reports_network_without_replacing_document() {
+    run_page_vm_async_test(async move {
+        for (status, status_line, tao_status_line) in [
+            (204, "HTTP/1.1 204 No Content", "HTTP/1.1 204 No Content\r\nTiming-Allow-Origin: *"),
+            (205, "HTTP/1.1 205 Reset Content", "HTTP/1.1 205 Reset Content\r\nTiming-Allow-Origin: *"),
+        ] {
+            for same_origin in [true, false] {
+                for tao in [false, true] {
+                    let (base_url, server) = spawn_path_response_http_server(vec![(
+                        "/no-document",
+                        if tao { tao_status_line } else { status_line },
+                        String::new(),
+                        Duration::ZERO,
+                    )])
+                    .await;
+                    let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+                        .expect("loader");
+                    let page_url = if same_origin {
+                        format!("{base_url}/page.html")
+                    } else {
+                        "https://embedding-origin.test/page.html".to_owned()
+                    };
+                    let (mut page_vm, mut queue, mut wake_rx) =
+                        owner_attached_page_vm(&loader, Url::parse(&page_url)?);
+                    let child_url = format!("{base_url}/no-document");
+                    let (handle, _) = start_external_child_document_load(
+                        &mut page_vm, "no-document-frame", &child_url,
+                    )
+                    .await;
+                    page_vm.vm_mut().eval(r#"
+                        globalThis.__retainedFrame = document.getElementById('no-document-frame');
+                        globalThis.__retainedDocument = __retainedFrame.contentDocument;
+                        globalThis.__retainedWindow = __retainedFrame.contentWindow;
+                        globalThis.__retainedURL = __retainedDocument.URL;
+                        globalThis.__retainedHistoryLength = __retainedWindow.history.length;
+                        globalThis.__unexpectedFrameEvent = false;
+                        __retainedFrame.onload = __retainedFrame.onerror = () => {
+                            __unexpectedFrameEvent = true;
+                        };
+                    "#)?;
+                    let _ = page_vm.take_completed_child_frame_navigation_loads();
+                    wait_for_page_resource_completion(&mut queue, &mut wake_rx, "null-body child fetch").await;
+                    let outcome = page_vm
+                        .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
+                        .expect("null-body terminal must consume its authorized turn");
+                    assert_eq!(outcome.action.document_effect,
+                        PageResourceCompletionDocumentEffect::AppliedToCurrentOwner);
+                    assert_eq!(page_vm.vm().current_child_document_navigation_fetch_target(handle), None);
+                    assert_eq!(page_vm.vm_mut().eval(r#"String(
+                        __retainedFrame.contentDocument === __retainedDocument &&
+                        __retainedFrame.contentWindow === __retainedWindow &&
+                        __retainedDocument.URL === __retainedURL &&
+                        __retainedWindow.history.length === __retainedHistoryLength &&
+                        !__unexpectedFrameEvent
+                    )"#)?, "true", "a completed fetch must not commit a Document, history entry, or load event");
+                    assert!(page_vm.take_completed_child_frame_navigation_loads().is_empty());
+                    let network = page_vm.take_completed_child_document_networks();
+                    assert_eq!(network.len(), 1, "the real response must still reach Network exactly once");
+                    assert_eq!(network[0].snapshot.status, status);
+                    assert_eq!(network[0].snapshot.request_url, child_url);
+                    let timing: serde_json::Value = serde_json::from_str(&page_vm.vm_mut().eval(
+                        &format!("JSON.stringify(performance.getEntriesByName({child_url:?}, 'resource').map(entry => entry.toJSON()))")
+                    )?)?;
+                    let entries = timing.as_array().expect("Resource Timing JSON array");
+                    assert_eq!(entries.len(), usize::from(same_origin || tao));
+                    if let Some(entry) = entries.first() {
+                        assert_eq!(entry["initiatorType"], "iframe");
+                        assert_eq!(entry["responseStatus"], if same_origin { status } else { 0 });
+                        assert_eq!(entry["contentType"], "");
+                        assert_eq!(entry["encodedBodySize"], 0);
+                        assert_eq!(entry["decodedBodySize"], 0);
+                        assert_eq!(entry["transferSize"], 300);
+                    }
+                    assert!(!queue.has_ready_completion());
+                    server.await.expect("null-body response server should finish");
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("null-body navigation test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn child_document_response_frame_ancestors_gates_commit() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![

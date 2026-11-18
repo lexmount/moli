@@ -312,6 +312,24 @@ impl ResourcePerformanceEntry {
         )
     }
 
+    pub(crate) fn from_child_frame_no_content(
+        name: String,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response_status: u16,
+        cache_state: moli_fetch::ResponseCacheState,
+    ) -> Self {
+        Self::from_response_parts(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response_status,
+            &[],
+            0.0,
+            cache_state,
+        )
+    }
+
     pub(crate) fn from_network_failure(
         name: impl Into<String>,
         initiator_type: &'static str,
