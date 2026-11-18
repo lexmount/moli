@@ -130,22 +130,31 @@ pub(super) async fn drain_service_worker_test_turn(
 ) -> bool {
     browser_context_runtime.drain_service_worker_service_lane();
 
-    let applied_page_task = page
+    if page
         .run_one_oldest_ready_page_task_executor_turn(loader)
         .await
-        .expect("typed ServiceWorker fixture Page task should apply");
-    if !applied_page_task {
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            page.wait_for_task_executor_work_arrival(),
-        )
-        .await;
-        return page
+        .expect("typed ServiceWorker fixture Page task should apply")
+    {
+        return true;
+    }
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        let wake =
+            tokio::time::timeout_at(deadline, page.wait_for_task_executor_work_arrival()).await;
+        if page
             .run_one_oldest_ready_page_task_executor_turn(loader)
             .await
-            .expect("woken ServiceWorker fixture Page task should apply");
+            .expect("woken ServiceWorker fixture Page task should apply")
+        {
+            return true;
+        }
+        // The wake channel can still contain notifications for tasks we applied
+        // before entering this wait. Consume them within one idle interval.
+        if !matches!(wake, Ok(true)) || tokio::time::Instant::now() >= deadline {
+            return false;
+        }
     }
-    true
 }
 
 pub(super) async fn drain_service_worker_test_until_popup_loads_settle(
