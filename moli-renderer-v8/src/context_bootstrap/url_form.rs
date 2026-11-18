@@ -4,7 +4,6 @@ use super::exposed_interfaces::TemplateBuildProfile;
 use super::*;
 use crate::util::{get_private_value, throw_type_error, v8_string};
 use crate::{blob, web_api_interfaces, webidl};
-pub(super) use moli_webapi::url_api::callback_value_string;
 use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "URL.revokeObjectURL")]

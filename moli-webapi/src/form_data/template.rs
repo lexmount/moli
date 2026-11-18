@@ -4,7 +4,7 @@ use super::callbacks::{
     form_data_get_callback, form_data_has_callback, form_data_keys_callback,
     form_data_set_callback, form_data_values_callback,
 };
-use crate::web_api_interfaces;
+use crate::interfaces as web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 
 #[derive(WebApiFunctionTemplate)]
@@ -49,7 +49,7 @@ struct FormDataTemplateDeclaration {
     for_each: (),
 }
 
-pub(in crate::context_bootstrap) fn build_form_data_constructor_template<'s>(
+pub fn build_form_data_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
     FormDataTemplateDeclaration::build(scope)

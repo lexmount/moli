@@ -1,12 +1,7 @@
+use super::BlobReadMode;
 use super::{array_buffer_from_bytes, blob_data_from_object, new_uint8_array_from_bytes};
 use crate::context_bootstrap::{FileReadingTask, queue_file_reading_task};
 use crate::util::v8_string;
-
-pub(super) enum BlobReadMode {
-    Text,
-    ArrayBuffer,
-    Bytes,
-}
 
 enum BlobReadRecipient {
     Promise {

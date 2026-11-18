@@ -1,29 +1,23 @@
-use super::url_form::callback_value_string;
 use super::*;
 
 mod callbacks;
-mod iterators;
 mod multipart_parse;
 mod request_body;
 mod serialize;
-mod storage;
-mod template;
+use moli_webapi::form_data::storage;
 
 pub(crate) use callbacks::construct_form_data_entries_for_form;
+pub(super) use moli_webapi::form_data::{build_form_data_constructor_template, new_world_wrapper};
 pub(crate) use multipart_parse::form_data_object_from_multipart_bytes;
 pub(crate) use request_body::{form_data_entries_multipart_body, form_data_request_body};
 pub(crate) use serialize::form_data_entries_to_string_pairs;
-pub(in crate::context_bootstrap) use storage::form_data_is_object;
-pub(super) use template::build_form_data_constructor_template;
 
-pub(super) fn new_world_wrapper<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor =
-        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "FormData")
-            .ok()?;
-    constructor.new_instance(scope, &[])
-}
+pub(super) const RUNTIME: moli_webapi::form_data::FormDataRuntime =
+    moli_webapi::form_data::FormDataRuntime {
+        entries_for_form: callbacks::entries_for_form,
+        object_owner: super::world_wrappers::owner,
+        value_in_realm: super::platform_object_worlds::in_realm,
+    };
 
 pub(crate) fn form_data_object_from_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,

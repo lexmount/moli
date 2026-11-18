@@ -16,11 +16,10 @@ pub type WebIdlCallbackInvocation<'s> = for<'i> fn(
 pub struct RealmCallbacks {
     /// Writes a live SVG point back to its owner; ordinary points need no action.
     pub point_mutated: for<'s, 'i> fn(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>),
-    pub runtime: Option<RealmRuntime>,
+    pub runtime: Option<&'static RealmRuntime>,
 }
 
 /// Capabilities needed by bindings that interact with the owning execution context.
-#[derive(Clone, Copy)]
 pub struct RealmRuntime {
     pub abort_signal_owner:
         for<'s, 'i> fn(
@@ -43,6 +42,8 @@ pub struct RealmRuntime {
         &[v8::Local<'s, v8::Value>],
         WebIdlCallbackInvocation<'s>,
     ) -> Option<WebIdlCallbackResult<'s>>,
+    pub blob: crate::blob::BlobRuntime,
+    pub form_data: crate::form_data::FormDataRuntime,
 }
 
 /// Installs the runtime's native capabilities before author code can use this realm.
@@ -54,7 +55,7 @@ pub(crate) fn realm_callbacks(scope: &mut v8::PinScope<'_, '_>) -> Option<Rc<Rea
     scope.get_current_context().get_slot::<RealmCallbacks>()
 }
 
-pub(crate) fn realm_runtime(scope: &mut v8::PinScope<'_, '_>) -> Option<RealmRuntime> {
+pub(crate) fn realm_runtime(scope: &mut v8::PinScope<'_, '_>) -> Option<&'static RealmRuntime> {
     realm_callbacks(scope)?.runtime
 }
 

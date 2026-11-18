@@ -291,7 +291,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         scope,
         moli_webapi::RealmCallbacks {
             point_mutated: crate::context_bootstrap::svg_runtime::reflect_svg_point_mutation,
-            runtime: Some(moli_webapi::RealmRuntime {
+            runtime: Some(&moli_webapi::RealmRuntime {
                 abort_signal_owner: crate::abort_signal_route::resolve_abort_signal_owner,
                 structured_clone_value: crate::context_bootstrap::structured_clone_value,
                 owner_terminating: crate::worker::worker_termination_requested,
@@ -302,6 +302,8 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
                     .into_object()
                 },
                 invoke_traced_callback: crate::webidl_callback_execution::invoke_traced_callback,
+                blob: crate::blob::RUNTIME,
+                form_data: super::super::form_data_runtime::RUNTIME,
             }),
         },
     );
