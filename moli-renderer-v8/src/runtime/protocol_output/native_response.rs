@@ -4,6 +4,7 @@
 //! metadata here. Internal queries continue to return their typed values to
 //! their continuation; they never acquire this frontend publication capability.
 
+use crate::runtime::RendererDevToolsPageCommand;
 use std::convert::Infallible;
 
 use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
@@ -240,7 +241,7 @@ impl RendererNativeOperation {
         + 'static,
     ) -> Self {
         let nested_dispatch = match &command {
-            RendererPageCommand::Inspector(envelope)
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope))
                 if envelope.runtime_binding_removal_name().is_some() =>
             {
                 RendererDevToolsMainNestedDispatch::NativeInspectorSession
@@ -314,7 +315,9 @@ enum NativeReadyReply {
 
 impl RendererCdpCall {
     pub(crate) fn runtime_binding_removal_name(&self) -> &str {
-        let RendererPageCommand::Inspector(envelope) = self.operation.command.as_ref() else {
+        let RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) =
+            self.operation.command.as_ref()
+        else {
             unreachable!("nested native Inspector dispatch requires an Inspector payload")
         };
         envelope
@@ -326,16 +329,20 @@ impl RendererCdpCall {
         mut self,
         output: Result<crate::runtime::RendererRuntimeCommandOutput, String>,
     ) -> RendererPageCommand {
-        let RendererPageCommand::Inspector(envelope) = *self.operation.command else {
+        let RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) =
+            *self.operation.command
+        else {
             unreachable!("nested native Inspector dispatch requires an Inspector payload")
         };
-        self.operation.command = Box::new(RendererPageCommand::Inspector(
-            envelope.into_runtime_binding_removal_commit(output),
+        self.operation.command = Box::new(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::Inspector(
+                envelope.into_runtime_binding_removal_commit(output),
+            ),
         ));
         self.operation.nested_dispatch = RendererDevToolsMainNestedDispatch::PageAgent;
         // Keep the original response lease and terminal projection. Neither
         // the V8 response capture nor the adapter can publish another reply.
-        RendererPageCommand::Native(self)
+        RendererPageCommand::DevTools(RendererDevToolsPageCommand::Native(self))
     }
 
     pub(crate) fn dispatch(

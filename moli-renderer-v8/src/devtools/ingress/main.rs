@@ -1,3 +1,4 @@
+use crate::runtime::RendererDevToolsPageCommand;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -443,7 +444,7 @@ impl RendererInspectorMainIngress {
             page_token,
             agent_token,
             RendererDevToolsMainCommandEnvelope::from_protocol_command(
-                RendererPageCommand::Inspector(envelope),
+                RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)),
             ),
             RendererPageStateCapturePolicy::ProtocolTurn,
         )
@@ -460,7 +461,7 @@ impl RendererInspectorMainIngress {
             page_token,
             agent_token,
             RendererDevToolsMainCommandEnvelope::from_protocol_command(
-                RendererPageCommand::Inspector(envelope),
+                RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)),
             ),
             capture_policy,
         )
@@ -1267,8 +1268,9 @@ mod tests {
     fn owner_only_main_command_blocks_its_session_lane_from_pause_claim() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
-        let crate::runtime::RendererPageCommand::Inspector(envelope) =
-            crate::runtime::RendererPageCommand::runtime_enable_events(None)
+        let crate::runtime::RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(
+            envelope,
+        )) = crate::runtime::RendererPageCommand::runtime_enable_events(None)
         else {
             panic!("Runtime.enable events must be a Main Inspector envelope");
         };

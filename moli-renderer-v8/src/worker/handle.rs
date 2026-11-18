@@ -1,8 +1,6 @@
 //! Worker-side message types and parent-facing handle.
 
 use crate::protocol_types::SubresourceNetworkRecord;
-#[cfg(feature = "devtools")]
-use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::runtime::WorkerInspectorError;
 use crate::runtime::{
     RendererRuntimeInspectorMessage, ServiceWorkerClientFocus, ServiceWorkerClientFocusResult,
@@ -45,7 +43,11 @@ use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::mpsc::error::TryRecvError;
 #[cfg(any(test, feature = "devtools"))]
+#[cfg(test)]
 use tokio::sync::oneshot;
+
+#[cfg(feature = "devtools")]
+mod devtools;
 use url::Url;
 
 /// How to determine a worker's secure-context state during startup.
@@ -545,17 +547,16 @@ impl WorkerRuntimeEvent {
     }
 }
 
-/// Handle held by the parent (main-frame) context to communicate with a
-/// running worker.
+/// Shared handle for worker startup, termination and network cancellation.
 #[derive(Clone, Debug)]
-pub(crate) struct WorkerDevToolsHandle {
+pub(crate) struct WorkerControlHandle {
     network_cancel: moli_fetch::FetchCancelHandle,
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     worker_tx: mpsc::UnboundedSender<WorkerMessage>,
     inspector_tasks: WorkerInspectorTaskRunner,
 }
 
-impl WorkerDevToolsHandle {
+impl WorkerControlHandle {
     pub(crate) fn new(
         wake_tx: mpsc::UnboundedSender<WorkerMessage>,
         isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
@@ -576,54 +577,25 @@ impl WorkerDevToolsHandle {
         &self.inspector_tasks
     }
 
-    #[cfg(feature = "devtools")]
-    pub(crate) fn dispatch_runtime_protocol_message(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
-    ) -> bool {
-        self.inspector_tasks.append_protocol_message(
-            inspector_session_id,
-            raw_json,
-            deferred_response,
-            response_tx,
-        )
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn attach_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.inspector_tasks.append_attach(inspector_session_id)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn detach_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> tokio::sync::oneshot::Receiver<anyhow::Result<()>> {
-        self.inspector_tasks.append_detach(inspector_session_id)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn run_if_waiting_for_debugger(&self) -> bool {
-        self.inspector_tasks.append_run_if_waiting_for_debugger()
-    }
-
-    pub(crate) fn dispose(&self, error: WorkerInspectorError) {
+    fn dispose(&self, error: WorkerInspectorError) {
         self.network_cancel.cancel();
         self.inspector_tasks.dispose(error);
     }
 
-    pub(crate) fn terminate_for_devtools(&self) -> bool {
+    pub(crate) fn terminate(&self) -> bool {
+        self.terminate_with_error(WorkerInspectorError::Closed)
+    }
+
+    fn terminate_with_error(&self, error: WorkerInspectorError) -> bool {
         if let Some(handle) = self.isolate_handle.lock().as_ref() {
             handle.terminate_execution();
         }
-        self.dispose(WorkerInspectorError::Closed);
+        self.dispose(error);
         self.worker_tx.send(WorkerMessage::Terminate).is_ok()
+    }
+
+    fn start(&self) -> bool {
+        self.worker_tx.send(WorkerMessage::Start).is_ok()
     }
 }
 
@@ -634,9 +606,8 @@ pub(crate) struct WorkerHandle {
     rx: Option<mpsc::UnboundedReceiver<WorkerToParentMessage>>,
     /// Join handle for the worker OS thread.
     join_handle: Option<std::thread::JoinHandle<()>>,
-    isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     termination_requested: Arc<AtomicBool>,
-    devtools: WorkerDevToolsHandle,
+    control: WorkerControlHandle,
 }
 
 impl WorkerHandle {
@@ -664,38 +635,22 @@ impl WorkerHandle {
         isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
         termination_requested: Arc<AtomicBool>,
     ) -> Self {
-        let devtools = WorkerDevToolsHandle::new(tx.clone(), Arc::clone(&isolate_handle));
-        Self::new_with_termination_requested_and_devtools(
-            tx,
-            rx,
-            join_handle,
-            isolate_handle,
-            termination_requested,
-            devtools,
-        )
+        let control = WorkerControlHandle::new(tx.clone(), Arc::clone(&isolate_handle));
+        Self::new_with_control(rx, join_handle, termination_requested, control)
     }
 
-    pub(crate) fn new_with_termination_requested_and_devtools(
-        tx: mpsc::UnboundedSender<WorkerMessage>,
+    pub(crate) fn new_with_control(
         rx: mpsc::UnboundedReceiver<WorkerToParentMessage>,
         join_handle: std::thread::JoinHandle<()>,
-        isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
         termination_requested: Arc<AtomicBool>,
-        devtools: WorkerDevToolsHandle,
+        control: WorkerControlHandle,
     ) -> Self {
         Self {
-            tx,
+            tx: control.worker_tx.clone(),
             rx: Some(rx),
             join_handle: Some(join_handle),
-            isolate_handle,
             termination_requested,
-            devtools,
-        }
-    }
-
-    fn terminate_execution_if_ready(&self) {
-        if let Some(handle) = self.isolate_handle.lock().as_ref() {
-            handle.terminate_execution();
+            control,
         }
     }
 
@@ -704,13 +659,13 @@ impl WorkerHandle {
         // event loop can then reject an already-selected task without relying
         // on ordering between cloned mpsc senders.
         self.termination_requested.store(true, Ordering::Release);
-        self.terminate_execution_if_ready();
-        self.devtools.dispose(WorkerInspectorError::Terminated);
-        let _ = self.tx.send(WorkerMessage::Terminate);
+        let _ = self
+            .control
+            .terminate_with_error(WorkerInspectorError::Terminated);
     }
 
     pub(crate) fn start_evaluation(&self) -> bool {
-        self.tx.send(WorkerMessage::Start).is_ok()
+        self.control.start()
     }
 
     /// Send a message to the worker (`postMessage`).
@@ -732,47 +687,8 @@ impl WorkerHandle {
         }
     }
 
-    #[cfg(feature = "devtools")]
-    pub(crate) fn dispatch_runtime_protocol_message(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
-    ) -> bool {
-        self.devtools.dispatch_runtime_protocol_message(
-            inspector_session_id,
-            raw_json,
-            deferred_response,
-            response_tx,
-        )
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn attach_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.devtools
-            .attach_runtime_inspector_session(inspector_session_id)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn detach_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> tokio::sync::oneshot::Receiver<anyhow::Result<()>> {
-        self.devtools
-            .detach_runtime_inspector_session(inspector_session_id)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
-        self.devtools.run_if_waiting_for_debugger()
-    }
-
-    pub(crate) fn devtools_handle(&self) -> WorkerDevToolsHandle {
-        self.devtools.clone()
+    pub(crate) fn control_handle(&self) -> WorkerControlHandle {
+        self.control.clone()
     }
 
     pub(crate) fn set_extra_http_headers(&self, headers: &moli_fetch::RequestHeaders) {

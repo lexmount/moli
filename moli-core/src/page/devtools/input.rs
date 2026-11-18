@@ -1,6 +1,7 @@
+use crate::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use anyhow::Result;
 
-use super::{
+use crate::page::{
     CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnCompletion,
     RendererDragData, RendererInputDispatchOutcome, RendererPageCommand, RendererPageReply,
     RendererPointerEventProperties, RendererTouchPoint,
@@ -14,7 +15,7 @@ fn decode_input_dispatch_outcome_reply(
         reply,
         operation,
         "an input dispatch outcome reply",
-        RendererPageReply::InputDispatchOutcome(value) => Ok(value),
+        RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(value)) => Ok(value),
     )
 }
 
@@ -281,19 +282,21 @@ impl PageInputExt for Page {
         modifiers: u8,
         intercept_drags: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DispatchMouseEventAtPoint {
-            x,
-            y,
-            event_name: event_name.to_owned(),
-            button,
-            buttons,
-            click_count,
-            delta_x,
-            delta_y,
-            pointer,
-            modifiers,
-            intercept_drags,
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                x,
+                y,
+                event_name: event_name.to_owned(),
+                button,
+                buttons,
+                click_count,
+                delta_x,
+                delta_y,
+                pointer,
+                modifiers,
+                intercept_drags,
+            },
+        ))
     }
 
     fn finish_dispatch_mouse_event_at_point_with_outcome(
@@ -345,11 +348,13 @@ impl PageInputExt for Page {
         event_name: &str,
         activate: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DispatchTouchEvent {
-            points,
-            event_name: event_name.to_owned(),
-            activate,
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchTouchEvent {
+                points,
+                event_name: event_name.to_owned(),
+                activate,
+            },
+        ))
     }
 
     fn finish_dispatch_touch_event_at_point_with_outcome(
@@ -393,13 +398,15 @@ impl PageInputExt for Page {
         data: RendererDragData,
         modifiers: u8,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DispatchDragEventAtPoint {
-            x,
-            y,
-            event_name: event_name.to_owned(),
-            data,
-            modifiers,
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchDragEventAtPoint {
+                x,
+                y,
+                event_name: event_name.to_owned(),
+                data,
+                modifiers,
+            },
+        ))
     }
 
     fn finish_dispatch_drag_event_at_point_with_outcome(
@@ -415,11 +422,15 @@ impl PageInputExt for Page {
     }
 
     fn start_clear_active_drag_data_transfer(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ClearActiveDragDataTransfer)
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::ClearActiveDragDataTransfer,
+        ))
     }
 
     fn start_cancel_dragging(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::CancelDragging)
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::CancelDragging,
+        ))
     }
 
     fn finish_clear_active_drag_data_transfer(
@@ -440,8 +451,8 @@ impl PageInputExt for Page {
     }
 
     fn start_insert_text_into_active_control(&self, text: &str) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::InsertTextIntoActiveControl(
-            text.to_owned(),
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::InsertTextIntoActiveControl(text.to_owned()),
         ))
     }
 
@@ -544,16 +555,19 @@ impl Page {
 
     pub fn start_dispatch_prepared_element_click(
         &self,
-        click: super::RendererPreparedPointerClick,
+        click: crate::page::RendererPreparedPointerClick,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DispatchPreparedElementClick(click))
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchPreparedElementClick(click),
+        ))
     }
 }
 
 #[doc(hidden)]
 pub fn decode_element_click_preparation_completion(
     completion: RendererCommandTurnCompletion,
-) -> Result<Result<super::RendererElementClickTarget, super::RendererElementClickError>> {
+) -> Result<Result<crate::page::RendererElementClickTarget, crate::page::RendererElementClickError>>
+{
     expect_page_reply!(settled_input_reply(completion)?, "prepare element click", "element click preparation",
         RendererPageReply::ElementClickPreparation(preparation) => Ok(preparation))
 }
@@ -561,9 +575,9 @@ pub fn decode_element_click_preparation_completion(
 #[doc(hidden)]
 pub fn decode_element_click_dispatch_completion(
     completion: RendererCommandTurnCompletion,
-) -> Result<Result<RendererInputDispatchOutcome, super::RendererElementClickError>> {
+) -> Result<Result<RendererInputDispatchOutcome, crate::page::RendererElementClickError>> {
     expect_page_reply!(settled_input_reply(completion)?, "dispatch element click", "element click dispatch",
-        RendererPageReply::ElementClickDispatch(outcome) => Ok(outcome))
+        RendererPageReply::DevTools(RendererDevToolsPageReply::ElementClickDispatch(outcome)) => Ok(outcome))
 }
 
 impl Page {
@@ -580,15 +594,203 @@ impl Page {
         should_insert_text: bool,
         location: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DispatchKeyEvent {
-            event_name: event_name.to_owned(),
-            key: key.to_owned(),
-            code: code.to_owned(),
-            text: text.to_owned(),
-            modifiers,
-            auto_repeat,
-            should_insert_text,
-            location,
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchKeyEvent {
+                event_name: event_name.to_owned(),
+                key: key.to_owned(),
+                code: code.to_owned(),
+                text: text.to_owned(),
+                modifiers,
+                auto_repeat,
+                should_insert_text,
+                location,
+            },
+        ))
+    }
+}
+
+impl Page {
+    pub(crate) async fn dispatch_mouse_event_at_point_async(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        delta_x: f64,
+        delta_y: f64,
+    ) -> Result<bool> {
+        Ok(self
+            .dispatch_mouse_event_at_point_with_outcome_async(
+                x, y, event_name, button, buttons, delta_x, delta_y,
+            )
+            .await?
+            .handled)
+    }
+
+    pub(crate) async fn dispatch_mouse_event_at_point_with_outcome_async(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        delta_x: f64,
+        delta_y: f64,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let command =
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                x,
+                y,
+                event_name: event_name.to_owned(),
+                button,
+                buttons,
+                click_count: 0,
+                delta_x,
+                delta_y,
+                pointer: RendererPointerEventProperties::default(),
+                modifiers: 0,
+                intercept_drags: false,
+            });
+        let reply = self.dispatch_page_command_async(command).await?;
+        decode_input_dispatch_outcome_reply(reply, "mouse event page command")
+    }
+
+    pub(crate) async fn dispatch_touch_event_at_point_async(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        activate: bool,
+    ) -> Result<bool> {
+        Ok(self
+            .dispatch_touch_event_at_point_with_outcome_async(x, y, event_name, activate)
+            .await?
+            .handled)
+    }
+
+    pub(crate) async fn dispatch_drag_event_at_point_async(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        data: RendererDragData,
+        modifiers: u8,
+    ) -> Result<bool> {
+        Ok(self
+            .dispatch_drag_event_at_point_with_outcome_async(x, y, event_name, data, modifiers)
+            .await?
+            .handled)
+    }
+
+    pub(crate) async fn dispatch_touch_event_at_point_with_outcome_async(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        activate: bool,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let command =
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::DispatchTouchEvent {
+                points: vec![RendererTouchPoint { id: 0, x, y }],
+                event_name: event_name.to_owned(),
+                activate,
+            });
+        let reply = self.dispatch_page_command_async(command).await?;
+        decode_input_dispatch_outcome_reply(reply, "touch event page command")
+    }
+
+    pub(crate) async fn dispatch_drag_event_at_point_with_outcome_async(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        data: RendererDragData,
+        modifiers: u8,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let command =
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::DispatchDragEventAtPoint {
+                x,
+                y,
+                event_name: event_name.to_owned(),
+                data,
+                modifiers,
+            });
+        let reply = self.dispatch_page_command_async(command).await?;
+        decode_input_dispatch_outcome_reply(reply, "drag event page command")
+    }
+
+    pub(crate) async fn clear_active_drag_data_transfer_async(&mut self) -> Result<()> {
+        let reply = self
+            .dispatch_page_command_async(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::ClearActiveDragDataTransfer,
+            ))
+            .await?;
+        expect_page_reply!(
+            reply,
+            "clear active drag data transfer page command",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
+    pub(crate) async fn insert_text_into_active_control_async(
+        &mut self,
+        text: &str,
+    ) -> Result<bool> {
+        let command = RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::InsertTextIntoActiveControl(text.to_owned()),
+        );
+        let reply = self.dispatch_page_command_async(command).await?;
+        decode_insert_text_reply(reply)
+    }
+
+    pub(crate) async fn dispatch_key_event_async(
+        &mut self,
+        event_name: &str,
+        key: &str,
+        code: &str,
+        text: &str,
+        modifiers: u8,
+        auto_repeat: bool,
+        should_insert_text: bool,
+    ) -> Result<bool> {
+        Ok(self
+            .dispatch_key_event_with_outcome_async(
+                event_name,
+                key,
+                code,
+                text,
+                modifiers,
+                auto_repeat,
+                should_insert_text,
+            )
+            .await?
+            .handled)
+    }
+
+    pub(crate) async fn dispatch_key_event_with_outcome_async(
+        &mut self,
+        event_name: &str,
+        key: &str,
+        code: &str,
+        text: &str,
+        modifiers: u8,
+        auto_repeat: bool,
+        should_insert_text: bool,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let command =
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::DispatchKeyEvent {
+                event_name: event_name.to_owned(),
+                key: key.to_owned(),
+                code: code.to_owned(),
+                text: text.to_owned(),
+                modifiers,
+                location: 0,
+                auto_repeat,
+                should_insert_text,
+            });
+        let reply = self.dispatch_page_command_async(command).await?;
+        decode_input_dispatch_outcome_reply(reply, "key event page command")
     }
 }

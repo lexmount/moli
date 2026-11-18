@@ -2,16 +2,104 @@
 //! operations. They are independent of who owns the terminal response.
 
 use super::RendererDevToolsMainNestedDispatch;
-use crate::runtime::RendererPageCommand;
+use crate::runtime::{RendererDevToolsPageCommand, RendererPageCommand};
 
 impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
-        use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
+        use RendererDevToolsMainNestedDispatch::{OwnerOnly, PageAgent};
         match self {
-            Self::WebMcp { .. } => OwnerOnly,
             #[cfg(feature = "ace-protocol")]
             Self::AcePageTask(..) => OwnerOnly,
             Self::ForDocument { command, .. } => command.nested_dispatch(),
+            Self::DevTools(command) => command.nested_dispatch(),
+            // These handlers read native document/agent state without entering
+            // a new V8 scope. They can use the existing pause callback boundary.
+            Self::HasPendingLocationNavigation
+            | Self::AccessibilityTreeNodes { .. }
+            | Self::OuterHtmlForDocument { .. }
+            | Self::OuterHtmlForNode { .. }
+            | Self::SerializeDocument { .. }
+            | Self::LayoutMetrics
+            | Self::PublishLayout
+            | Self::CaptureScreenshot(..)
+            | Self::BlobBytesForUuid { .. }
+            | Self::DocumentStorageKeySnapshot
+            | Self::ChildFrameTreeSnapshot
+            | Self::PendingSubresourceRequestCount
+            | Self::SetExtraHttpHeaders(..)
+            | Self::SetNetworkRequestPolicy { .. }
+            | Self::SetPermissionOverrides(..)
+            | Self::SetScriptExecutionDisabled(..)
+            | Self::SetBypassContentSecurityPolicy(..)
+            | Self::SetNetworkOffline(..)
+            | Self::SetBypassServiceWorker(..)
+            | Self::SetBlockedUrlPatterns(..)
+            | Self::MsToNextTimeout => PageAgent,
+
+            // These handlers enter V8, run script/lifecycle continuations, or
+            // own work whose nested execution has no supported entry point.
+            // Keep this match exhaustive: a new backend command must declare
+            // its entry requirement instead of inheriting PageAgent by default.
+            Self::EvaluateExpression { .. }
+            | Self::EvaluateExpressionByValue { .. }
+            | Self::EvaluateExpressionAndFollowPendingNavigation { .. }
+            | Self::EvaluateExpressionInExecutionContext { .. }
+            | Self::EvaluateExpressionInExecutionContextAndFollowPendingNavigation { .. }
+            | Self::WaitForSelector { .. }
+            | Self::WaitForScriptTruthy { .. }
+            | Self::WaitForSubresourceResponse { .. }
+            | Self::CompleteChildFrameLifecycleWorkBestEffort { .. }
+            | Self::SetDocumentContent { .. }
+            | Self::NavigateChildFrame { .. }
+            | Self::NavigateTopLevelSameDocument { .. }
+            | Self::RefreshFullPageState
+            | Self::PageDiagnosticsSnapshot
+            | Self::QueueTopLevelHistoryTraversalByDelta(..)
+            | Self::RunPageSurfaceOverrideScript { .. }
+            | Self::DefaultExecutionContextId
+            | Self::DefaultOrInitialExecutionContextId
+            | Self::HasIsolatedWorldNamed { .. }
+            | Self::HasIsolatedExecutionContextId(..)
+            | Self::RuntimeRealmInventory
+            | Self::LiveChildDefaultRuntimeRealmInventory
+            | Self::ChildFrameIdForDefaultExecutionContextId(..)
+            | Self::ChildDefaultExecutionContextIdForFrameId(..)
+            | Self::RuntimeConsoleMessagesWithContext
+            | Self::RuntimeHeapUsage
+            | Self::StopDocumentLifecycle
+            | Self::ResetNavigationHistory
+            | Self::RenderMarkdown { .. }
+            | Self::PrintToPdf(..)
+            | Self::ReplaceBrowserResourceRuntime { .. }
+            | Self::RetireDocumentResourceAuthorities
+            | Self::ApplyDocumentCookieFacadeOverrides(..)
+            | Self::ClearDocumentCookieFacadeOverrides
+            | Self::DocumentCookieTelemetrySnapshot
+            | Self::DocumentCookieOwnerSnapshot
+            | Self::PrepareAppManifestLoad
+            | Self::PublishAppManifestLoad(..)
+            | Self::SetIdleOverride(..)
+            | Self::SetNavigatorOverrides(..)
+            | Self::SetNavigatorAndDocumentActivity { .. }
+            | Self::SetDocumentActivity(..)
+            | Self::SetEmulatedMedia(..)
+            | Self::SetScrollbarsHidden(..)
+            | Self::SetViewportSurface(..) => OwnerOnly,
+
+            #[cfg(test)]
+            Self::SetStoredDocumentStartScripts(..) | Self::TakeDocumentLifecycleEvents => {
+                OwnerOnly
+            }
+            #[cfg(debug_assertions)]
+            Self::PanicForTesting => OwnerOnly,
+        }
+    }
+}
+
+impl RendererDevToolsPageCommand {
+    fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
+        use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
+        match self {
             Self::Native(command) => command.operation.nested_dispatch(),
             Self::Inspector(envelope)
                 if envelope.can_dispatch_at_nested_inspector_session_boundary() =>
@@ -20,10 +108,7 @@ impl RendererPageCommand {
             }
             Self::Inspector(envelope) if envelope.is_runtime_binding_removal_commit() => PageAgent,
             Self::Inspector(_) => OwnerOnly,
-            // These handlers read native document/agent state without entering
-            // a new V8 scope. They can use the existing pause callback boundary.
-            Self::HasPendingLocationNavigation
-            | Self::DomDebuggerConfigureEventListenerBreakpoint { .. }
+            Self::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | Self::DomDebuggerConfigureXhrBreakpoint { .. }
             | Self::DomDebuggerConfigureDomBreakpoint { .. }
             | Self::ComputedStyleProperties { .. }
@@ -54,7 +139,6 @@ impl RendererPageCommand {
             | Self::DocumentNodeAttributes { .. }
             | Self::DocumentNodeText { .. }
             | Self::DocumentNodeProperty { .. }
-            | Self::AccessibilityTreeNodes { .. }
             | Self::AccessibilityTreePayloadsForDocument { .. }
             | Self::AccessibilityNodePayloadForDocument
             | Self::AccessibilityTreePayloadsForNode { .. }
@@ -67,49 +151,12 @@ impl RendererPageCommand {
             | Self::StyleSheetPayloadForStyleSheetId { .. }
             | Self::StyleSheetInventoryForDocument { .. }
             | Self::ResetCssAgentSession { .. }
-            | Self::OuterHtmlForDocument { .. }
-            | Self::OuterHtmlForNode { .. }
-            | Self::SerializeDocument { .. }
-            | Self::LayoutMetrics
-            | Self::PublishLayout
-            | Self::CaptureScreenshot(..)
             | Self::CaptureScreencastFrame(..)
-            | Self::BlobBytesForUuid { .. }
             | Self::DocumentFrontendNodeIdsForBackendNodeIds { .. }
-            | Self::DocumentStorageKeySnapshot
-            | Self::ChildFrameTreeSnapshot
             | Self::ChildFrameOwnerNodeReference { .. }
             | Self::ChildFrameDocumentRootNodeReference { .. }
-            | Self::PendingSubresourceRequestCount
-            | Self::SetFetchSubresourceInterception { .. }
-            | Self::SetExtraHttpHeaders(..)
-            | Self::SetNetworkRequestPolicy { .. }
-            | Self::SetPermissionOverrides(..)
-            | Self::SetScriptExecutionDisabled(..)
-            | Self::SetBypassContentSecurityPolicy(..)
-            | Self::SetNetworkOffline(..)
-            | Self::SetBypassServiceWorker(..)
-            | Self::SetBlockedUrlPatterns(..)
-            | Self::MsToNextTimeout => PageAgent,
-
-            // These handlers enter V8, run script/lifecycle continuations, or
-            // own work whose nested execution has no supported entry point.
-            // Keep this match exhaustive: a new backend command must declare
-            // its entry requirement instead of inheriting PageAgent by default.
-            Self::EvaluateExpression { .. }
-            | Self::EvaluateExpressionByValue { .. }
-            | Self::EvaluateExpressionAndFollowPendingNavigation { .. }
-            | Self::EvaluateExpressionInExecutionContext { .. }
-            | Self::EvaluateExpressionInExecutionContextAndFollowPendingNavigation { .. }
-            | Self::WaitForSelector { .. }
-            | Self::WaitForScriptTruthy { .. }
-            | Self::WaitForSubresourceResponse { .. }
-            | Self::CompleteChildFrameLifecycleWorkBestEffort { .. }
-            | Self::SetDocumentContent { .. }
-            | Self::NavigateChildFrame { .. }
-            | Self::NavigateTopLevelSameDocument { .. }
-            | Self::RefreshFullPageState
-            | Self::PageDiagnosticsSnapshot
+            | Self::SetFetchSubresourceInterception { .. } => PageAgent,
+            Self::WebMcp { .. }
             | Self::DispatchPreparedElementClick(..)
             | Self::DispatchMouseEventAtPoint { .. }
             | Self::DispatchTouchEvent { .. }
@@ -123,27 +170,14 @@ impl RendererPageCommand {
             | Self::InstallRuntimeBinding { .. }
             | Self::RemoveRuntimeBinding(..)
             | Self::RemoveDefaultRuntimeBinding(..)
-            | Self::QueueTopLevelHistoryTraversalByDelta(..)
-            | Self::RunPageSurfaceOverrideScript { .. }
             | Self::AddDocumentStartScriptRuntimeActivity { .. }
             | Self::RemoveDocumentStartScriptByRegistryKey(..)
             | Self::SetRuntimeBindingState { .. }
-            | Self::DefaultExecutionContextId
-            | Self::DefaultOrInitialExecutionContextId
-            | Self::HasIsolatedWorldNamed { .. }
-            | Self::HasIsolatedExecutionContextId(..)
             | Self::EnsureIsolatedWorldsAttachedToInspector
             | Self::InspectorExecutionContextIdForIsolatedContext(..)
             | Self::IsolatedExecutionContextIdForInspectorContext(..)
-            | Self::RuntimeRealmInventory
-            | Self::LiveChildDefaultRuntimeRealmInventory
-            | Self::ChildFrameIdForDefaultExecutionContextId(..)
-            | Self::ChildDefaultExecutionContextIdForFrameId(..)
-            | Self::RuntimeConsoleMessagesWithContext
-            | Self::RuntimeHeapUsage
             | Self::PerformanceMetricSnapshot
             | Self::RuntimeCollectGarbage
-            | Self::StopDocumentLifecycle
             | Self::SetInlineStyleSheetTextForStyleSheetId { .. }
             | Self::ScrollNodeIntoViewIfNeeded { .. }
             | Self::RemoveDocumentNode { .. }
@@ -151,10 +185,7 @@ impl RendererPageCommand {
             | Self::EditDocumentNode { .. }
             | Self::FocusDocumentNode { .. }
             | Self::TriggerAutofill(..)
-            | Self::ResetNavigationHistory
             | Self::SetFileInputFilesForBackendNodeId { .. }
-            | Self::RenderMarkdown { .. }
-            | Self::PrintToPdf(..)
             | Self::SearchResourceByLines(..)
             | Self::ContinuePendingSubresourceFetch { .. }
             | Self::ContinuePendingSubresourceAuth { .. }
@@ -168,29 +199,7 @@ impl RendererPageCommand {
             | Self::ReceiveSyntheticWebSocketText { .. }
             | Self::ReceiveSyntheticWebSocketBinary { .. }
             | Self::CloseSyntheticWebSocketFromServer { .. }
-            | Self::ReplaceBrowserResourceRuntime { .. }
-            | Self::RetireDocumentResourceAuthorities
-            | Self::ApplyDocumentCookieFacadeOverrides(..)
-            | Self::ClearDocumentCookieFacadeOverrides
-            | Self::DocumentCookieTelemetrySnapshot
-            | Self::DocumentCookieOwnerSnapshot
-            | Self::PrepareNetworkResourceLoad { .. }
-            | Self::PrepareAppManifestLoad
-            | Self::PublishAppManifestLoad(..)
-            | Self::SetIdleOverride(..)
-            | Self::SetNavigatorOverrides(..)
-            | Self::SetNavigatorAndDocumentActivity { .. }
-            | Self::SetDocumentActivity(..)
-            | Self::SetEmulatedMedia(..)
-            | Self::SetScrollbarsHidden(..)
-            | Self::SetViewportSurface(..) => OwnerOnly,
-
-            #[cfg(test)]
-            Self::SetStoredDocumentStartScripts(..) | Self::TakeDocumentLifecycleEvents => {
-                OwnerOnly
-            }
-            #[cfg(debug_assertions)]
-            Self::PanicForTesting => OwnerOnly,
+            | Self::PrepareNetworkResourceLoad { .. } => OwnerOnly,
         }
     }
 }

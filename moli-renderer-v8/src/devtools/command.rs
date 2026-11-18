@@ -1,5 +1,6 @@
 //! Typed metadata and payloads crossing the renderer DevTools ingress boundary.
 
+use crate::runtime::RendererDevToolsPageCommand;
 use moli_command_types::InspectorPauseEffect as RendererInspectorPauseCommandEffect;
 
 mod nested;
@@ -304,7 +305,9 @@ impl RendererDevToolsMainCommandEnvelope {
         inspector_session_id: Option<String>,
     ) -> Self {
         let ticket = match &command {
-            RendererPageCommand::Inspector(envelope) => envelope.ticket().clone(),
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) => {
+                envelope.ticket().clone()
+            }
             _ => RendererInspectorIngressTicket::new(
                 None,
                 inspector_session_id,
@@ -330,7 +333,9 @@ impl RendererDevToolsMainCommandEnvelope {
     #[cfg(feature = "devtools")]
     pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
         match self.payload.as_ref() {
-            RendererPageCommand::Inspector(envelope) => Some(envelope),
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) => {
+                Some(envelope)
+            }
             _ => None,
         }
     }
@@ -347,7 +352,9 @@ impl RendererDevToolsMainCommandEnvelope {
             RendererDevToolsMainNestedDispatch::InspectorSession,
             "only a session-boundary Inspector command may enter nested V8 dispatch"
         );
-        let RendererPageCommand::Inspector(envelope) = *self.payload else {
+        let RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) =
+            *self.payload
+        else {
             unreachable!("nested Inspector dispatch kind requires an Inspector payload")
         };
         envelope

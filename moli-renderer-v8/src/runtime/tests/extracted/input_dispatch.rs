@@ -61,22 +61,26 @@ async fn mouse_input_completion_publishes_handler_navigation_once() {
         );
         output_rx.drain();
         let (reply, _) = page
-            .run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
-                x: 30.0,
-                y: 30.0,
-                event_name: event_name.to_owned(),
-                button: if event_name == "mousedown" { 0 } else { -1 },
-                buttons: Some(if event_name == "mousedown" { 1 } else { 0 }),
-                click_count: 1,
-                delta_x: 0.0,
-                delta_y: 0.0,
-                pointer: RendererPointerEventProperties::default(),
-                modifiers: 0,
-                intercept_drags: false,
-            })
+            .run_async_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                    x: 30.0,
+                    y: 30.0,
+                    event_name: event_name.to_owned(),
+                    button: if event_name == "mousedown" { 0 } else { -1 },
+                    buttons: Some(if event_name == "mousedown" { 1 } else { 0 }),
+                    click_count: 1,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                    intercept_drags: false,
+                },
+            ))
             .await
             .expect("input command");
-        let RendererPageReply::InputDispatchOutcome(outcome) = reply else {
+        let RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome)) =
+            reply
+        else {
             panic!("expected input outcome");
         };
         assert_eq!(
@@ -209,22 +213,26 @@ async fn mouse_input_completion_preserves_standalone_and_child_navigation_scope(
 
         output_rx.drain();
         let (reply, _) = page
-            .run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
-                x: 30.0,
-                y: 30.0,
-                event_name: "mousedown".to_owned(),
-                button: 0,
-                buttons: Some(1),
-                click_count: 1,
-                delta_x: 0.0,
-                delta_y: 0.0,
-                pointer: RendererPointerEventProperties::default(),
-                modifiers: 0,
-                intercept_drags: false,
-            })
+            .run_async_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                    x: 30.0,
+                    y: 30.0,
+                    event_name: "mousedown".to_owned(),
+                    button: 0,
+                    buttons: Some(1),
+                    click_count: 1,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                    intercept_drags: false,
+                },
+            ))
             .await
             .expect("scope input command");
-        let RendererPageReply::InputDispatchOutcome(outcome) = reply else {
+        let RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(outcome)) =
+            reply
+        else {
             panic!("expected input outcome");
         };
         assert_eq!(

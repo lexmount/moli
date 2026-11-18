@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-#[cfg(feature = "devtools")]
-use crate::worker::WorkerDevToolsHandle;
 use crate::worker::{
     WorkerGlobalKind, WorkerMessage, WorkerSpawnOptions, spawn_worker_with_options,
 };
@@ -143,20 +141,6 @@ impl RendererSharedWorkerHost {
         match &*state {
             RendererSharedWorkerHostState::Running { tx, .. } => Some(tx.clone()),
             RendererSharedWorkerHostState::Loading { .. }
-            | RendererSharedWorkerHostState::Closed => None,
-        }
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn running_devtools_handle(&self) -> Option<WorkerDevToolsHandle> {
-        let state = self.state.lock();
-        match &*state {
-            RendererSharedWorkerHostState::Running {
-                handle: Some(handle),
-                ..
-            } => Some(handle.devtools_handle()),
-            RendererSharedWorkerHostState::Loading { .. }
-            | RendererSharedWorkerHostState::Running { handle: None, .. }
             | RendererSharedWorkerHostState::Closed => None,
         }
     }

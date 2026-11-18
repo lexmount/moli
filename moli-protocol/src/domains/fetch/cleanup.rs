@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_core::RendererDevToolsPageCommand;
 
 use super::{DrainedFetchRequests, navigation::NavigationTermination};
 use crate::conn::{
@@ -484,15 +485,17 @@ fn admit_subresource_cleanup(
             }
             (
                 Some(&request.residence),
-                RendererPageCommand::ContinuePendingSubresourceFetch {
-                    internal_id: request.internal_id,
-                    url,
-                    method,
-                    body,
-                    headers,
-                    intercept_response: response_candidate,
-                    handle_auth_requests,
-                },
+                RendererPageCommand::DevTools(
+                    RendererDevToolsPageCommand::ContinuePendingSubresourceFetch {
+                        internal_id: request.internal_id,
+                        url,
+                        method,
+                        body,
+                        headers,
+                        intercept_response: response_candidate,
+                        handle_auth_requests,
+                    },
+                ),
             )
         }
         CleanupSubresource::Request(request) => {
@@ -502,39 +505,49 @@ fn admit_subresource_cleanup(
             }
             (
                 Some(&request.residence),
-                RendererPageCommand::FailPendingSubresourceFetch {
-                    internal_id: request.internal_id,
-                    error_text: reason.to_owned(),
-                },
+                RendererPageCommand::DevTools(
+                    RendererDevToolsPageCommand::FailPendingSubresourceFetch {
+                        internal_id: request.internal_id,
+                        error_text: reason.to_owned(),
+                    },
+                ),
             )
         }
         CleanupSubresource::Auth(request) => (
             Some(&request.residence),
-            RendererPageCommand::FailPendingSubresourceAuth {
-                internal_id: request.internal_id,
-                error_text: reason.to_owned(),
-            },
+            RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::FailPendingSubresourceAuth {
+                    internal_id: request.internal_id,
+                    error_text: reason.to_owned(),
+                },
+            ),
         ),
         CleanupSubresource::ContinueAuth { pending, .. } => (
             Some(&pending.residence),
-            RendererPageCommand::CancelPendingSubresourceAuth {
-                internal_id: pending.internal_id,
-            },
+            RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::CancelPendingSubresourceAuth {
+                    internal_id: pending.internal_id,
+                },
+            ),
         ),
         CleanupSubresource::ContinueResponse(request) => (
             Some(&request.residence),
-            RendererPageCommand::ContinuePendingSubresourceResponse {
-                internal_id: request.internal_id,
-                response_code: None,
-                response_headers: None,
-            },
+            RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::ContinuePendingSubresourceResponse {
+                    internal_id: request.internal_id,
+                    response_code: None,
+                    response_headers: None,
+                },
+            ),
         ),
         CleanupSubresource::Response(request) => (
             Some(&request.residence),
-            RendererPageCommand::FailPendingSubresourceResponse {
-                internal_id: request.internal_id,
-                error_text: reason.to_owned(),
-            },
+            RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::FailPendingSubresourceResponse {
+                    internal_id: request.internal_id,
+                    error_text: reason.to_owned(),
+                },
+            ),
         ),
     };
     let target = target?;

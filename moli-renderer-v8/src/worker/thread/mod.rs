@@ -89,10 +89,10 @@ use super::global_scope::{
     prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
 use super::handle::{
-    WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
-    WorkerDevToolsHandle, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
-    WorkerHandle, WorkerMessage, WorkerNetworkPolicy, WorkerParentErrorEventKind,
-    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerToParentMessage,
+    WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess, WorkerControlHandle,
+    WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType, WorkerHandle, WorkerMessage,
+    WorkerNetworkPolicy, WorkerParentErrorEventKind, WorkerRuntimeInspectorMessageBatch,
+    WorkerScriptResource, WorkerToParentMessage,
 };
 use super::inspector_task_runner::{
     WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
@@ -1381,10 +1381,10 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
     let worker_wake_tx = parent_to_worker_tx.clone();
     let isolate_handle = Arc::new(Mutex::new(None));
     let worker_isolate_handle = Arc::clone(&isolate_handle);
-    let devtools =
-        WorkerDevToolsHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
-    let worker_inspector_tasks = devtools.inspector_tasks().clone();
-    let network_cancel = devtools.network_cancel_handle();
+    let control =
+        WorkerControlHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
+    let worker_inspector_tasks = control.inspector_tasks().clone();
+    let network_cancel = control.network_cancel_handle();
     let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
 
@@ -1437,13 +1437,11 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         })
         .expect("failed to spawn worker thread");
 
-    WorkerHandle::new_with_termination_requested_and_devtools(
-        parent_to_worker_tx,
+    WorkerHandle::new_with_control(
         worker_to_parent_rx,
         join_handle,
-        isolate_handle,
         termination_requested,
-        devtools,
+        control,
     )
 }
 

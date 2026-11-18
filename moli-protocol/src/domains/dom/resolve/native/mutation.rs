@@ -12,24 +12,30 @@ pub(super) fn prepare(
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let operation = match action {
         DomAction::Disable => Ok(Operation::new(
-            Command::DiscardDomAgentFrontendBindings {
-                inspector_session_id: session,
-            },
+            Command::DevTools(
+                RendererDevToolsPageCommand::DiscardDomAgentFrontendBindings {
+                    inspector_session_id: session,
+                },
+            ),
             |reply| unit(reply, "Could not disable DOM agent"),
         )),
         DomAction::RemoveNode => {
             let params =
                 build_cdp_remove_node_command(conn, cmd)?.ok_or_else(StartError::invalid_params)?;
             Ok(Operation::new(
-                Command::RemoveDocumentNode {
+                Command::DevTools(RendererDevToolsPageCommand::RemoveDocumentNode {
                     reference: params.reference.into_renderer_reference(session),
-                },
+                }),
                 |reply| match reply {
-                    Ok(Reply::OptionalBool(Some(true))) => Response::success(json!({})),
-                    Ok(Reply::OptionalBool(Some(false))) => {
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalBool(Some(true)))) => {
+                        Response::success(json!({}))
+                    }
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalBool(Some(false)))) => {
                         Response::error(-32000, "Could not remove node")
                     }
-                    Ok(Reply::OptionalBool(None)) => node_not_found(),
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalBool(None))) => {
+                        node_not_found()
+                    }
                     Err(error) => {
                         Response::error(-32000, format!("Could not remove node: {error}"))
                     }
@@ -63,9 +69,9 @@ pub(super) fn prepare(
                     "No node found for given backend id"
                 };
                 Ok(Operation::new(
-                    Command::FocusDocumentNode {
+                    Command::DevTools(RendererDevToolsPageCommand::FocusDocumentNode {
                         reference: reference.into_renderer_reference(session),
-                    },
+                    }),
                     move |reply| focus(reply, missing),
                 ))
             }
@@ -97,11 +103,11 @@ pub(super) fn prepare(
             };
             let id = id.ok_or_else(StartError::invalid_params)?;
             Ok(Operation::new(
-                Command::MutateDocumentNodeAttribute {
+                Command::DevTools(RendererDevToolsPageCommand::MutateDocumentNodeAttribute {
                     reference: DevToolsDomNodeReference::FrontendNodeId(id)
                         .into_renderer_reference(session),
                     mutation,
-                },
+                }),
                 attribute,
             ))
         }
@@ -112,10 +118,10 @@ pub(super) fn prepare(
         | DomAction::SetOuterHtml => {
             let edit = crate::domains::dom::edit::renderer_dom_edit_from_cdp(cmd, action)?;
             Ok(Operation::new(
-                Command::EditDocumentNode {
+                Command::DevTools(RendererDevToolsPageCommand::EditDocumentNode {
                     inspector_session_id: session,
                     edit,
-                },
+                }),
                 project_edit,
             ))
         }
@@ -139,10 +145,10 @@ pub(super) fn prepare(
                 )
                 .ok_or_else(StartError::node_not_found)?;
                 Ok(Operation::new(
-                    Command::ScrollNodeIntoViewIfNeeded {
+                    Command::DevTools(RendererDevToolsPageCommand::ScrollNodeIntoViewIfNeeded {
                         reference: reference.into_renderer_reference(session),
                         rect,
-                    },
+                    }),
                     scroll,
                 ))
             }
@@ -152,24 +158,26 @@ pub(super) fn prepare(
             let top_frame_id =
                 top_frame_id_for_owner(conn, &owner).ok_or_else(StartError::no_document_loaded)?;
             Ok(Operation::new(
-                Command::DocumentHitTest {
+                Command::DevTools(RendererDevToolsPageCommand::DocumentHitTest {
                     inspector_session_id: session,
                     x: params.x,
                     y: params.y,
                     include_user_agent_shadow_dom: params.include_user_agent_shadow_dom,
                     ignore_pointer_events_none: params.ignore_pointer_events_none,
-                },
+                }),
                 move |reply| match reply {
-                    Ok(Reply::OptionalDocumentHitTest(Some(hit))) => Response::success(
-                        get_node_for_location_result_value(&DevToolsGetNodeForLocationResult {
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalDocumentHitTest(
+                        Some(hit),
+                    ))) => Response::success(get_node_for_location_result_value(
+                        &DevToolsGetNodeForLocationResult {
                             backend_node_id: hit.node.backend_node_id,
                             frame_id: DevToolsFrameId::from(hit.frame_id.unwrap_or(top_frame_id)),
                             node_id: (hit.node.node_id != 0).then_some(hit.node.node_id),
-                        }),
-                    ),
-                    Ok(Reply::OptionalDocumentHitTest(None)) => {
-                        Response::error(-32000, "No node found at given location")
-                    }
+                        },
+                    )),
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalDocumentHitTest(
+                        None,
+                    ))) => Response::error(-32000, "No node found at given location"),
                     Err(error) => {
                         Response::error(-32000, format!("Could not hit test document: {error}"))
                     }
@@ -188,12 +196,16 @@ pub(super) fn prepare(
                 .flatten()
                 .ok_or_else(StartError::invalid_params)?;
             Ok(Operation::new(
-                Command::DocumentSetNodeStackTracesEnabled {
-                    inspector_session_id: session,
-                    enabled: params.enable,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::DocumentSetNodeStackTracesEnabled {
+                        inspector_session_id: session,
+                        enabled: params.enable,
+                    },
+                ),
                 |reply| match reply {
-                    Ok(Reply::DocumentNodeStackTracesEnabled) => Response::success(json!({})),
+                    Ok(Reply::DevTools(
+                        RendererDevToolsPageReply::DocumentNodeStackTracesEnabled,
+                    )) => Response::success(json!({})),
                     Err(error) => Response::error(
                         -32000,
                         format!("Could not configure DOM node stack traces: {error}"),
@@ -214,24 +226,26 @@ pub(super) fn prepare(
                 .flatten()
                 .ok_or_else(StartError::invalid_params)?;
             Ok(Operation::new(
-                Command::DocumentNodeStackTrace {
+                Command::DevTools(RendererDevToolsPageCommand::DocumentNodeStackTrace {
                     inspector_session_id: session,
                     frontend_node_id: params.node_id,
-                },
+                }),
                 |reply| {
                     use moli_core::page::RendererDomNodeStackTraceResolution as Trace;
                     match reply {
-                        Ok(Reply::DocumentNodeStackTrace(Trace::Found(Some(trace)))) => {
-                            Response::success(
-                                json!({"creation": {"callFrames": trace.call_frames.into_iter().map(|frame| json!({
+                        Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentNodeStackTrace(
+                            Trace::Found(Some(trace)),
+                        ))) => Response::success(
+                            json!({"creation": {"callFrames": trace.call_frames.into_iter().map(|frame| json!({
                         "functionName": frame.function_name, "scriptId": frame.script_id, "url": frame.url, "lineNumber": frame.line_number, "columnNumber": frame.column_number,
                     })).collect::<Vec<_>>()}}),
-                            )
-                        }
-                        Ok(Reply::DocumentNodeStackTrace(Trace::Found(None))) => {
-                            Response::success(json!({}))
-                        }
-                        Ok(Reply::DocumentNodeStackTrace(Trace::MissingNode)) => node_not_found(),
+                        ),
+                        Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentNodeStackTrace(
+                            Trace::Found(None),
+                        ))) => Response::success(json!({})),
+                        Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentNodeStackTrace(
+                            Trace::MissingNode,
+                        ))) => node_not_found(),
                         Err(error) => Response::error(
                             -32000,
                             format!("Could not get DOM node stack traces: {error}"),
@@ -256,18 +270,18 @@ fn unit(reply: anyhow::Result<Reply>, prefix: &str) -> Response {
 
 fn focus(reply: anyhow::Result<Reply>, missing: &str) -> Response {
     match reply {
-        Ok(Reply::DomFocusOutcome(RendererDomFocusOutcome::Focused)) => {
-            Response::success(json!({}))
-        }
-        Ok(Reply::DomFocusOutcome(RendererDomFocusOutcome::NodeNotFound)) => {
-            Response::error(-32000, missing)
-        }
-        Ok(Reply::DomFocusOutcome(RendererDomFocusOutcome::NodeNotElement)) => {
-            Response::error(-32000, "Node is not an Element")
-        }
-        Ok(Reply::DomFocusOutcome(RendererDomFocusOutcome::ElementNotFocusable)) => {
-            Response::error(-32000, "Element is not focusable")
-        }
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomFocusOutcome(
+            RendererDomFocusOutcome::Focused,
+        ))) => Response::success(json!({})),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomFocusOutcome(
+            RendererDomFocusOutcome::NodeNotFound,
+        ))) => Response::error(-32000, missing),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomFocusOutcome(
+            RendererDomFocusOutcome::NodeNotElement,
+        ))) => Response::error(-32000, "Node is not an Element"),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomFocusOutcome(
+            RendererDomFocusOutcome::ElementNotFocusable,
+        ))) => Response::error(-32000, "Element is not focusable"),
         Err(error) => Response::error(-32000, format!("Could not focus node: {error}")),
         _ => unreachable!("DOM focus reply"),
     }
@@ -275,18 +289,18 @@ fn focus(reply: anyhow::Result<Reply>, missing: &str) -> Response {
 
 fn attribute(reply: anyhow::Result<Reply>) -> Response {
     match reply {
-        Ok(Reply::DomAttributeMutationOutcome(RendererDomAttributeMutationOutcome::Applied {
-            ..
-        })) => Response::success(json!({})),
-        Ok(Reply::DomAttributeMutationOutcome(
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomAttributeMutationOutcome(
+            RendererDomAttributeMutationOutcome::Applied { .. },
+        ))) => Response::success(json!({})),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomAttributeMutationOutcome(
             RendererDomAttributeMutationOutcome::NodeNotFound,
-        )) => node_not_found(),
-        Ok(Reply::DomAttributeMutationOutcome(
+        ))) => node_not_found(),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomAttributeMutationOutcome(
             RendererDomAttributeMutationOutcome::NodeNotElement,
-        )) => Response::error(-32000, "Node is not an Element"),
-        Ok(Reply::DomAttributeMutationOutcome(
+        ))) => Response::error(-32000, "Node is not an Element"),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomAttributeMutationOutcome(
             RendererDomAttributeMutationOutcome::InvalidName { name },
-        )) => Response::error(
+        ))) => Response::error(
             -32000,
             format!("InvalidCharacterError '{name}' is not a valid attribute name."),
         ),
@@ -298,37 +312,43 @@ fn attribute(reply: anyhow::Result<Reply>) -> Response {
 fn project_edit(reply: anyhow::Result<Reply>) -> Response {
     use RendererDomEditOutcome as Edit;
     match reply {
-        Ok(Reply::DomEditOutcome(Edit::Applied {
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(Edit::Applied {
             result_frontend_node_id: None,
-        })) => Response::success(json!({})),
-        Ok(Reply::DomEditOutcome(Edit::Applied {
+        }))) => Response::success(json!({})),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(Edit::Applied {
             result_frontend_node_id: Some(node_id),
-        })) => Response::success(json!({"nodeId": node_id})),
-        Ok(Reply::DomEditOutcome(Edit::NodeNotFound)) => node_not_found(),
-        Ok(Reply::DomEditOutcome(Edit::NodeNotElement)) => {
+        }))) => Response::success(json!({"nodeId": node_id})),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(Edit::NodeNotFound))) => {
+            node_not_found()
+        }
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(Edit::NodeNotElement))) => {
             Response::error(-32000, "Node is not an Element")
         }
-        Ok(Reply::DomEditOutcome(Edit::NodeValueUnsupported)) => Response::error(
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(
+            Edit::NodeValueUnsupported,
+        ))) => Response::error(
             -32000,
             "Can only set value of text nodes or processing instructions",
         ),
-        Ok(Reply::DomEditOutcome(Edit::MoveIntoSelfOrDescendant)) => {
-            Response::error(-32000, "Unable to move node into self or descendant")
-        }
-        Ok(Reply::DomEditOutcome(Edit::AnchorNotChildOfTarget)) => {
-            Response::error(-32000, "Anchor node must be child of the target element")
-        }
-        Ok(Reply::DomEditOutcome(Edit::DetachedNode)) => {
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(
+            Edit::MoveIntoSelfOrDescendant,
+        ))) => Response::error(-32000, "Unable to move node into self or descendant"),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(
+            Edit::AnchorNotChildOfTarget,
+        ))) => Response::error(-32000, "Anchor node must be child of the target element"),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(Edit::DetachedNode))) => {
             Response::error(-32000, "Cannot edit detached node")
         }
-        Ok(Reply::DomEditOutcome(Edit::InvalidName { name })) => Response::error(
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(Edit::InvalidName {
+            name,
+        }))) => Response::error(
             -32000,
             format!("InvalidCharacterError '{name}' is not a valid node name."),
         ),
-        Ok(Reply::DomEditOutcome(Edit::CouldNotParseAttributes)) => {
-            Response::error(-32000, "Could not parse value as attributes")
-        }
-        Ok(Reply::DomEditOutcome(Edit::MutationFailed)) => {
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(
+            Edit::CouldNotParseAttributes,
+        ))) => Response::error(-32000, "Could not parse value as attributes"),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DomEditOutcome(Edit::MutationFailed))) => {
             Response::error(-32000, "Could not edit node")
         }
         Err(error) => Response::error(-32000, format!("Could not edit node: {error}")),
@@ -338,7 +358,9 @@ fn project_edit(reply: anyhow::Result<Reply>) -> Response {
 
 fn scroll(reply: anyhow::Result<Reply>) -> Response {
     let result = match reply {
-        Ok(Reply::ScrollIntoViewResult(outcome)) => Ok(outcome),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::ScrollIntoViewResult(outcome))) => {
+            Ok(outcome)
+        }
         Err(error) => Err(error),
         _ => unreachable!("DOM scroll reply"),
     };

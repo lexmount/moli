@@ -66,7 +66,7 @@ def runtime_fingerprint(moli):
     digest = hashlib.sha256()
     for name in sorted(set(paths)):
         path = moli / name
-        if path.suffix == '.rs' or path.name in ('Cargo.toml', 'Cargo.lock'):
+        if path.is_file() and (path.suffix == '.rs' or path.name in ('Cargo.toml', 'Cargo.lock')):
             digest.update(name.encode() + b'\0' + path.read_bytes() + b'\0')
     return digest.hexdigest()
 
@@ -156,22 +156,22 @@ fn main() {
 }''',
         'devtools-api-contract': '''fn main() {
     let _ = moli_core::RendererCdpCall::new;
-    let _ = moli_core::RendererPageCommand::Inspector;
-    let _ = moli_core::RendererPageCommand::Native;
+    let _ = moli_core::RendererDevToolsPageCommand::Inspector;
+    let _ = moli_core::RendererDevToolsPageCommand::Native;
     let _ = moli_core::RendererPageCommand::dispatch_runtime_protocol_message;
     let _ = moli_core::page::Page::start_runtime_protocol_message;
 }''',
         'devtools-dom-contract': '''fn main() {
-    let _ = moli_core::RendererPageCommand::DocumentBidiNodeBinding {
+    let _ = moli_core::RendererPageCommand::DevTools(moli_core::RendererDevToolsPageCommand::DocumentBidiNodeBinding {
         inspector_session_id: None,
         shared_id: String::new(),
-    };
-    let _ = moli_core::RendererPageCommand::DocumentPerformSearch {
+    });
+    let _ = moli_core::RendererPageCommand::DevTools(moli_core::RendererDevToolsPageCommand::DocumentPerformSearch {
         inspector_session_id: None,
         query: String::new(),
         include_user_agent_shadow_dom: false,
         include_whitespace: false,
-    };
+    });
 }''',
         'devtools-worker-contract': '''struct Handles;
 impl moli_command_types::devtools::WorkerCommandHandles for Handles {
@@ -186,8 +186,11 @@ fn main() {
     }
     removed_apis = {
         'native-call': ('moli_core::RendererCdpCall::new', 'RendererCdpCall'),
-        'inspector-command': ('moli_core::RendererPageCommand::Inspector', 'Inspector'),
-        'native-command': ('moli_core::RendererPageCommand::Native', 'Native'),
+        'command-group': ('moli_core::RendererPageCommand::DevTools', 'DevTools'),
+        'reply-group': ('moli_core::RendererPageReply::DevTools', 'DevTools'),
+        'devtools-reply-type': ('moli_core::RendererDevToolsPageReply::NativeCommandPublished', 'RendererDevToolsPageReply'),
+        'inspector-command': ('moli_core::RendererDevToolsPageCommand::Inspector', 'RendererDevToolsPageCommand'),
+        'native-command': ('moli_core::RendererDevToolsPageCommand::Native', 'RendererDevToolsPageCommand'),
         'raw-dispatch': ('moli_core::RendererPageCommand::dispatch_runtime_protocol_message', 'dispatch_runtime_protocol_message'),
         'page-dispatch': ('moli_core::page::Page::start_runtime_protocol_message', 'start_runtime_protocol_message'),
         'input': ('moli_core::page::Page::start_dispatch_key_event_with_location_outcome', 'start_dispatch_key_event_with_location_outcome'),

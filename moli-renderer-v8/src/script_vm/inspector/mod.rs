@@ -3,6 +3,8 @@ mod agent_sessions;
 mod context_registration;
 mod context_registry;
 mod document_backend;
+#[cfg(feature = "devtools")]
+mod frontend;
 mod input_state;
 mod outbound;
 mod remote_objects;
@@ -13,14 +15,17 @@ pub(crate) use self::agent::{
     RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause,
     RendererInspectorObjectWrapper,
 };
+#[cfg(not(feature = "devtools"))]
 pub(super) use self::agent_sessions::PageInspectorSessionTarget;
-#[cfg(feature = "devtools")]
-use self::agent_sessions::inspector_session_key;
 use self::context_registration::DocumentInspectorContextRegistrations;
 #[cfg(test)]
 use self::context_registry::DocumentInspectorContextGroupId;
 pub(in crate::script_vm) use self::context_registry::DocumentInspectorContextRegistrationId;
 use self::document_backend::DocumentInspectorBackendState;
+#[cfg(feature = "devtools")]
+pub(super) use self::frontend::PageInspectorSessionTarget;
+#[cfg(feature = "devtools")]
+use self::frontend::inspector_session_key;
 #[cfg(feature = "devtools")]
 pub(super) use self::input_state::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,

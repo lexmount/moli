@@ -128,7 +128,7 @@ impl PageVm {
         self.runtime_bindings = env.runtime_bindings.clone();
         #[cfg(feature = "devtools")]
         {
-            self.runtime_inspector_protocol_configurations =
+            self.devtools.inspector_protocol_configurations =
                 env.inspector_protocol_configurations();
         }
         self.extra_http_headers = env.extra_http_headers.clone();

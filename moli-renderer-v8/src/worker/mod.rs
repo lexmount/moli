@@ -65,7 +65,7 @@ pub(crate) use handle::{
     WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
 };
 pub(crate) use handle::{
-    WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy, WorkerSecureContextPolicy,
+    WorkerControlHandle, WorkerHandle, WorkerNetworkPolicy, WorkerSecureContextPolicy,
 };
 pub(crate) use module_mime::{
     ensure_worker_css_module_mime, ensure_worker_json_module_mime, ensure_worker_wasm_module_mime,

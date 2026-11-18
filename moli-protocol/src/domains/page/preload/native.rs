@@ -3,6 +3,7 @@
 //! and initial navigation remain explicitly Browser-owned composite tasks.
 use super::*;
 use crate::domains::native::{self, NativeCommandStep};
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
     RendererPageCommand as Command, RendererPageReply as Reply,
@@ -39,14 +40,16 @@ pub(in crate::domains::page) fn try_start(
             let child = task.params.frame_id != task.target_id;
             let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
             Ok(Operation::new(
-                Command::CreateIsolatedWorldRuntimeActivity {
-                    inspector_session_id: session,
-                    frame_id: child.then_some(task.params.frame_id),
-                    name: task.params.world_name,
-                    grant_universal_access: task.params.grant_universal_access,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::CreateIsolatedWorldRuntimeActivity {
+                        inspector_session_id: session,
+                        frame_id: child.then_some(task.params.frame_id),
+                        name: task.params.world_name,
+                        grant_universal_access: task.params.grant_universal_access,
+                    },
+                ),
                 move |reply| match reply {
-                    Ok(Reply::ExecutionContextId(id)) => {
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::ExecutionContextId(id))) => {
                         Response::success(json!({"executionContextId": id}))
                     }
                     Err(error) => Response::error(
@@ -98,11 +101,13 @@ fn add(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, CommandOutp
         return Err(add_preload_script_result_plan(identifier));
     }
     Ok(Operation::new(
-        Command::AddDocumentStartScriptRuntimeActivity {
-            inspector_session_id: session,
-            script: recorded.script,
-            run_immediately: command.run_immediately,
-        },
+        Command::DevTools(
+            RendererDevToolsPageCommand::AddDocumentStartScriptRuntimeActivity {
+                inspector_session_id: session,
+                script: recorded.script,
+                run_immediately: command.run_immediately,
+            },
+        ),
         move |reply| match reply {
             Ok(Reply::DocumentStartScriptResult(_)) => {
                 Response::success(add_preload_script_result(identifier))
@@ -127,7 +132,9 @@ fn remove(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, CommandO
     let registry_key = remove_preload_script_registration(conn, cmd.session_id, command)?
         .ok_or_else(CommandOutputPlan::success)?;
     Ok(Operation::new(
-        Command::RemoveDocumentStartScriptByRegistryKey(registry_key),
+        Command::DevTools(
+            RendererDevToolsPageCommand::RemoveDocumentStartScriptByRegistryKey(registry_key),
+        ),
         |reply| match reply {
             Ok(Reply::Unit) => Response::success(json!({})),
             Err(error) => Response::error(-32000, error.to_string()),

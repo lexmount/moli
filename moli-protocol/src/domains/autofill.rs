@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 
 use chromiumoxide_cdp::cdp::browser_protocol::autofill::TriggerParams;
 use moli_core::page::{
@@ -171,18 +172,23 @@ pub(crate) fn try_start_native_command(
         RendererPageReply as Reply,
     };
     Some(match prepare_request(conn, cmd) {
-        Ok(request) => {
-            super::native::start(conn, cmd, Command::TriggerAutofill(request), |reply| {
+        Ok(request) => super::native::start(
+            conn,
+            cmd,
+            Command::DevTools(RendererDevToolsPageCommand::TriggerAutofill(request)),
+            |reply| {
                 let outcome = match reply {
-                    Ok(Reply::AutofillTriggerOutcome(outcome)) => Ok(outcome),
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::AutofillTriggerOutcome(
+                        outcome,
+                    ))) => Ok(outcome),
                     Err(error) => Err(error),
                     _ => unreachable!("Autofill trigger reply"),
                 };
                 project_outcome(outcome)
                     .map(|()| Response::success(serde_json::json!({})))
                     .unwrap_or_else(|(code, message)| Response::error(code, message))
-            })
-        }
+            },
+        ),
         Err(plan) => super::native::NativeCommandStep::Complete(plan),
     })
 }

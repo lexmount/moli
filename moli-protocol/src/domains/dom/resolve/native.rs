@@ -1,6 +1,7 @@
 use super::*;
 use crate::domains::native::{self, NativeCommandStep, with_backend_node as with_backend};
 use moli_core::page::RendererDomSearchResultsResolution;
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
     RendererNativeProtocolNotification as Notification, RendererNativeProtocolResponse as Response,
@@ -77,12 +78,14 @@ fn prepare(
             };
             let params = build_cdp_get_document_command(conn, cmd, kind)?;
             Ok(Operation::new(
-                Command::DocumentNodeSnapshotForDocument {
-                    inspector_session_id: session,
-                    include_whitespace: whitespace,
-                    depth: params.depth.unwrap_or(if flattened { -1 } else { 2 }),
-                    pierce: params.pierce,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::DocumentNodeSnapshotForDocument {
+                        inspector_session_id: session,
+                        include_whitespace: whitespace,
+                        depth: params.depth.unwrap_or(if flattened { -1 } else { 2 }),
+                        pierce: params.pierce,
+                    },
+                ),
                 move |reply| match reply {
                     Ok(Reply::OptionalDocumentNodeObjectSnapshot(snapshot)) => match *snapshot {
                         Some(snapshot) => {
@@ -121,18 +124,18 @@ fn prepare(
         DomAction::GetAttributes => {
             let params = build_cdp_get_attributes_command(conn, cmd)?;
             Ok(Operation::new(
-                Command::DocumentNodeAttributes {
+                Command::DevTools(RendererDevToolsPageCommand::DocumentNodeAttributes {
                     reference: params.reference.into_renderer_reference(session),
-                },
+                }),
                 |reply| match reply {
-                    Ok(Reply::DocumentNodeAttributesResolution(resolution)) => {
-                        match attributes_result_from_renderer_resolution(resolution) {
-                            Ok(result) => Response::success(json!({
-                                "attributes": flatten_dom_attributes(result.attributes),
-                            })),
-                            Err(error) => Response::error(error.code, error.message),
-                        }
-                    }
+                    Ok(Reply::DevTools(
+                        RendererDevToolsPageReply::DocumentNodeAttributesResolution(resolution),
+                    )) => match attributes_result_from_renderer_resolution(resolution) {
+                        Ok(result) => Response::success(json!({
+                            "attributes": flatten_dom_attributes(result.attributes),
+                        })),
+                        Err(error) => Response::error(error.code, error.message),
+                    },
                     Err(error) => Response::error(-32000, error.to_string()),
                     _ => unreachable!("DOM attributes reply"),
                 },
@@ -145,33 +148,37 @@ fn prepare(
             let multiple = params.multiple;
             Ok(match params.root {
                 None => Operation::new(
-                    Command::DocumentQuerySelectorForDocument {
-                        inspector_session_id: session,
-                        include_whitespace: whitespace,
-                        selector,
-                        multiple,
-                    },
+                    Command::DevTools(
+                        RendererDevToolsPageCommand::DocumentQuerySelectorForDocument {
+                            inspector_session_id: session,
+                            include_whitespace: whitespace,
+                            selector,
+                            multiple,
+                        },
+                    ),
                     move |reply| project_query(reply, multiple, top_frame),
                 ),
                 Some(reference) => {
                     let frontend = matches!(reference, DevToolsDomNodeReference::FrontendNodeId(_));
                     let root = reference.into_renderer_reference(session.clone());
                     let command = if frontend {
-                        Command::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
+                        Command::DevTools(RendererDevToolsPageCommand::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
                             inspector_session_id: session,
                             include_whitespace: whitespace,
                             root,
                             selector,
                             multiple,
-                        }
+                        })
                     } else {
-                        Command::DocumentQuerySelectorForNode {
-                            inspector_session_id: session,
-                            include_whitespace: whitespace,
-                            root,
-                            selector,
-                            multiple,
-                        }
+                        Command::DevTools(
+                            RendererDevToolsPageCommand::DocumentQuerySelectorForNode {
+                                inspector_session_id: session,
+                                include_whitespace: whitespace,
+                                root,
+                                selector,
+                                multiple,
+                            },
+                        )
                     };
                     Operation::new(command, move |reply| {
                         project_query(reply, multiple, top_frame)
@@ -187,13 +194,15 @@ fn prepare(
                 params.depth
             };
             Ok(Operation::new(
-                Command::DocumentChildNodeSnapshotEventsForNode {
-                    reference: params.reference.into_renderer_reference(session.clone()),
-                    inspector_session_id: session,
-                    include_whitespace: whitespace,
-                    depth,
-                    pierce: params.pierce,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::DocumentChildNodeSnapshotEventsForNode {
+                        reference: params.reference.into_renderer_reference(session.clone()),
+                        inspector_session_id: session,
+                        include_whitespace: whitespace,
+                        depth,
+                        pierce: params.pierce,
+                    },
+                ),
                 move |reply| match reply {
                     Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(Some(snapshots))) => {
                         let mut response = Response::success(json!({}));
@@ -216,10 +225,10 @@ fn prepare(
         DomAction::GetFrameOwner => {
             let params = build_cdp_get_frame_owner_command(conn, cmd)?;
             Ok(Operation::new(
-                Command::ChildFrameOwnerNodeReference {
+                Command::DevTools(RendererDevToolsPageCommand::ChildFrameOwnerNodeReference {
                     frame_id: params.frame_id.into_string(),
                     inspector_session_id: session,
-                },
+                }),
                 |reply| match reply {
                     Ok(Reply::OptionalDocumentNodeReference(Some(node))) => {
                         Response::success(get_frame_owner_result_value(
@@ -267,13 +276,13 @@ fn prepare(
                 )
                 .ok_or_else(StartError::node_not_found)?;
                 Ok(Operation::new(
-                    Command::DocumentNodeSnapshotForNodeInInspectorSession {
+                    Command::DevTools(RendererDevToolsPageCommand::DocumentNodeSnapshotForNodeInInspectorSession {
                         reference: reference.into_renderer_reference(session.clone()),
                         inspector_session_id: session,
                         include_whitespace: whitespace,
                         depth: params.depth,
                         pierce: params.pierce,
-                    },
+                    }),
                     project,
                 ))
             }
@@ -367,15 +376,15 @@ fn prepare(
                 DevToolsDomGeometryOperation::GetContentQuads
             };
             let project = move |reply| match reply {
-                Ok(Reply::OptionalDocumentNodeGeometry(Some(value))) => {
-                    match devtools_dom_geometry_result_from_renderer(geometry, value) {
-                        Ok(result) => {
-                            Response::success(devtools_dom_geometry_result_value(&result))
-                        }
-                        Err(error) => Response::error(-32000, error.message),
-                    }
-                }
-                Ok(Reply::OptionalDocumentNodeGeometry(None)) => node_not_found(),
+                Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalDocumentNodeGeometry(
+                    Some(value),
+                ))) => match devtools_dom_geometry_result_from_renderer(geometry, value) {
+                    Ok(result) => Response::success(devtools_dom_geometry_result_value(&result)),
+                    Err(error) => Response::error(-32000, error.message),
+                },
+                Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalDocumentNodeGeometry(
+                    None,
+                ))) => node_not_found(),
                 Err(error) => {
                     Response::error(-32000, format!("Could not resolve node geometry: {error}"))
                 }
@@ -392,9 +401,9 @@ fn prepare(
                     devtools_node_reference_from_ids(params.node_id, params.backend_node_id)
                         .ok_or_else(StartError::node_not_found)?;
                 Ok(Operation::new(
-                    Command::DocumentGeometryForNode {
+                    Command::DevTools(RendererDevToolsPageCommand::DocumentGeometryForNode {
                         reference: reference.into_renderer_reference(session),
-                    },
+                    }),
                     project,
                 ))
             }
@@ -402,19 +411,21 @@ fn prepare(
         DomAction::PushNodesByBackendIdsToFrontend => {
             let params = build_cdp_push_nodes_by_backend_ids_command(conn, cmd)?;
             Ok(Operation::new(
-                Command::DocumentFrontendNodeIdsForBackendNodeIds {
-                    inspector_session_id: session,
-                    backend_node_ids: params.backend_node_ids,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::DocumentFrontendNodeIdsForBackendNodeIds {
+                        inspector_session_id: session,
+                        backend_node_ids: params.backend_node_ids,
+                    },
+                ),
                 |reply| match reply {
-                    Ok(Reply::DocumentFrontendNodeIds(
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentFrontendNodeIds(
                         RendererDocumentFrontendNodeIdsResolution::Found(ids),
-                    )) => Response::success(
+                    ))) => Response::success(
                         json!({"nodeIds": ids.into_iter().map(|id| id.unwrap_or(0)).collect::<Vec<_>>()}),
                     ),
-                    Ok(Reply::DocumentFrontendNodeIds(
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentFrontendNodeIds(
                         RendererDocumentFrontendNodeIdsResolution::DocumentNotBound,
-                    )) => Response::error(-32000, "Document needs to be requested first"),
+                    ))) => Response::error(-32000, "Document needs to be requested first"),
                     Err(error) => Response::error(
                         -32000,
                         format!("Could not resolve backend node ids: {error}"),
@@ -426,14 +437,16 @@ fn prepare(
         DomAction::PerformSearch => {
             let params = search::build_cdp_perform_search_command(conn, cmd)?;
             Ok(Operation::new(
-                Command::DocumentPerformSearch {
+                Command::DevTools(RendererDevToolsPageCommand::DocumentPerformSearch {
                     inspector_session_id: session,
                     query: params.query,
                     include_user_agent_shadow_dom: params.include_user_agent_shadow_dom,
                     include_whitespace: whitespace,
-                },
+                }),
                 |reply| match reply {
-                    Ok(Reply::DocumentPerformSearch(search)) => Response::success(
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentPerformSearch(
+                        search,
+                    ))) => Response::success(
                         json!({"searchId": search.search_id, "resultCount": search.result_count}),
                     ),
                     Err(error) => {
@@ -446,17 +459,17 @@ fn prepare(
         DomAction::GetSearchResults => {
             let params = search::build_cdp_get_search_results_command(conn, cmd)?;
             Ok(Operation::new(
-                Command::DocumentGetSearchResults {
+                Command::DevTools(RendererDevToolsPageCommand::DocumentGetSearchResults {
                     inspector_session_id: session,
                     search_id: params.search_id,
                     from_index: params.from_index,
                     to_index: params.to_index,
-                },
+                }),
                 move |reply| match reply {
-                    Ok(Reply::DocumentSearchResults {
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentSearchResults {
                         resolution,
                         child_node_snapshot_events,
-                    }) => {
+                    })) => {
                         let mut response = match resolution {
                             RendererDomSearchResultsResolution::Found(nodes) => Response::success(
                                 json!({"nodeIds": nodes.into_iter().map(|node| node.frontend_node_id).collect::<Vec<_>>()}),
@@ -484,12 +497,14 @@ fn prepare(
             let params = search::build_cdp_discard_search_results_command(conn, cmd)
                 .ok_or_else(StartError::invalid_params)?;
             Ok(Operation::new(
-                Command::DocumentDiscardSearchResults {
+                Command::DevTools(RendererDevToolsPageCommand::DocumentDiscardSearchResults {
                     inspector_session_id: session,
                     search_id: params.search_id,
-                },
+                }),
                 |reply| match reply {
-                    Ok(Reply::DocumentSearchResultsDiscarded) => Response::success(json!({})),
+                    Ok(Reply::DevTools(
+                        RendererDevToolsPageReply::DocumentSearchResultsDiscarded,
+                    )) => Response::success(json!({})),
                     Err(error) => Response::error(
                         -32000,
                         format!("Could not discard DOM search results: {error}"),
@@ -556,8 +571,12 @@ fn project_query(
     top_frame: Option<String>,
 ) -> Response {
     let (resolution, snapshots) = match reply {
-        Ok(Reply::DocumentQuerySelectorResolution(resolution)) => (resolution, None),
-        Ok(Reply::DocumentQuerySelectorWithChildNodeSnapshotEvents(result)) => (
+        Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentQuerySelectorResolution(
+            resolution,
+        ))) => (resolution, None),
+        Ok(Reply::DevTools(
+            RendererDevToolsPageReply::DocumentQuerySelectorWithChildNodeSnapshotEvents(result),
+        )) => (
             result.query_selector_resolution,
             result.child_node_snapshot_events,
         ),

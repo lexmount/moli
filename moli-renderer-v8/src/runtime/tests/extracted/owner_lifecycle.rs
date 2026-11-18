@@ -54,19 +54,21 @@ document.getElementById("drop").addEventListener("drop", event => {
     };
     for event_name in ["dragenter", "dragover", "drop"] {
         let (reply, _) = page
-            .run_async_command(RendererPageCommand::DispatchDragEventAtPoint {
-                x: 10.0,
-                y: 10.0,
-                event_name: event_name.to_owned(),
-                data: data.clone(),
-                modifiers: 0,
-            })
+            .run_async_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::DispatchDragEventAtPoint {
+                    x: 10.0,
+                    y: 10.0,
+                    event_name: event_name.to_owned(),
+                    data: data.clone(),
+                    modifiers: 0,
+                },
+            ))
             .await
             .expect("directory drop command should run");
         assert!(
             matches!(
                 reply,
-                RendererPageReply::InputDispatchOutcome(ref outcome) if outcome.handled
+                RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(ref outcome)) if outcome.handled
             ),
             "directory drop command should dispatch to the target"
         );
@@ -2884,14 +2886,19 @@ async fn owner_scheduler_dispatches_universal_isolated_world_broadcast_channel_t
     .await;
 
     let (world_reply, _) = page
-        .run_async_command(RendererPageCommand::CreateIsolatedWorld {
-            name: "universal-broadcast-channel".to_owned(),
-            grant_universal_access: true,
-            frame_id: None,
-        })
+        .run_async_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::CreateIsolatedWorld {
+                name: "universal-broadcast-channel".to_owned(),
+                grant_universal_access: true,
+                frame_id: None,
+            },
+        ))
         .await
         .expect("universal isolated world should be created");
-    let RendererPageReply::ExecutionContextId(world_context_id) = world_reply else {
+    let RendererPageReply::DevTools(RendererDevToolsPageReply::ExecutionContextId(
+        world_context_id,
+    )) = world_reply
+    else {
         panic!("CreateIsolatedWorld should return its execution context id");
     };
 

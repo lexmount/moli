@@ -4,6 +4,7 @@ use crate::conn::{
     NavigationLoadOutcome, ResponseCommitReady,
 };
 use crate::domains::page::BackgroundNavigationCompletion;
+use moli_core::RendererDevToolsPageCommand;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -1299,12 +1300,12 @@ async fn verify_unprojected_request_policy(replace_existing: bool, policy: LateR
             );
             assert!(failures.is_empty(), "{context}: {failures:?}");
             native
-                .start(
-                    moli_core::RendererPageCommand::FailPendingSubresourceFetch {
+                .start(moli_core::RendererPageCommand::DevTools(
+                    RendererDevToolsPageCommand::FailPendingSubresourceFetch {
                         internal_id: pauses[0],
                         error_text: "test cleanup".into(),
                     },
-                )
+                ))
                 .unwrap()
                 .wait()
                 .await

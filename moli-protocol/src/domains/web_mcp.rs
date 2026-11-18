@@ -2,6 +2,7 @@ use crate::{
     conn::{CdpConnection, Cmd, CommandOwnerScope},
     domains::{actions::WebMcpAction, command_output::CommandOutputPlan},
 };
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_page_types::{DevToolsSessionKey, RendererWebMcpCommand, RendererWebMcpError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -91,9 +92,9 @@ pub(crate) fn try_start_native_command(
     Some(super::native::start(
         conn,
         cmd,
-        Command::WebMcp { session, command },
+        Command::DevTools(RendererDevToolsPageCommand::WebMcp { session, command }),
         move |reply| match reply {
-            Ok(Reply::WebMcp(Ok(id))) => {
+            Ok(Reply::DevTools(RendererDevToolsPageReply::WebMcp(Ok(id)))) => {
                 let mut response = Response::success(
                     id.map_or_else(|| json!({}), |id| json!({"invocationId": id.to_string()})),
                 );
@@ -102,7 +103,7 @@ pub(crate) fn try_start_native_command(
                 }
                 response
             }
-            Ok(Reply::WebMcp(Err(error))) => match error {
+            Ok(Reply::DevTools(RendererDevToolsPageReply::WebMcp(Err(error)))) => match error {
                 RendererWebMcpError::NotEnabled => {
                     Response::error(-32000, "WebMCP domain is not enabled")
                 }

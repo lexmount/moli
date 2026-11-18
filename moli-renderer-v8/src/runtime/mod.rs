@@ -82,6 +82,8 @@ mod page_context_cancel;
 mod page_creation_progress;
 #[cfg(feature = "devtools")]
 mod page_css;
+#[cfg(feature = "devtools")]
+mod page_devtools;
 pub(crate) mod page_dom;
 #[cfg(feature = "devtools")]
 mod page_dom_snapshot;
@@ -335,6 +337,10 @@ pub(crate) use self::page_context_cancel::{
     RendererPageContextCancelReason, RendererPageContextCancelReceiver,
     RendererPageContextCancelSender, renderer_page_context_cancel_channel,
 };
+#[cfg(feature = "devtools")]
+pub(crate) use self::page_devtools::RendererInspectorPageCommand;
+#[cfg(feature = "devtools")]
+pub use self::page_devtools::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 pub use self::page_print::{
     RendererPdfOptions, RendererPrintToPdfReply, RendererPrintToPdfRequest,
 };
@@ -350,8 +356,6 @@ pub(crate) use self::page_state::RendererPageSlotHandle;
 pub use self::page_state::{RendererPageState, RendererPageStateRevision};
 #[cfg(feature = "devtools")]
 pub(crate) use self::page_surface::RendererDevToolsSessionOutputHost;
-#[cfg(feature = "devtools")]
-pub(crate) use self::page_surface::RendererInspectorPageCommand;
 use self::page_surface::RendererPageTable;
 #[cfg(feature = "devtools")]
 pub(crate) use self::page_surface::RendererRuntimeInspectorSessionResponseSettlement;

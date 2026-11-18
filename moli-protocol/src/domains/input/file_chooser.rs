@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use moli_core::RendererDevToolsPageCommand;
 
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererDocumentLifecycleIdentity,
@@ -228,12 +229,12 @@ impl PreparedFileChooserActivation {
                 .as_ref()
                 .context(NoDocumentLoaded)
                 .and_then(|target| {
-                    target.start(
-                        moli_core::RendererPageCommand::DocumentBidiNodeSharedIdForBackendNodeId {
+                    target.start(moli_core::RendererPageCommand::DevTools(
+                        RendererDevToolsPageCommand::DocumentBidiNodeSharedIdForBackendNodeId {
                             inspector_session_id: inspector,
                             backend_node_id: self.backend_node_id,
                         },
-                    )
+                    ))
                 }),
         )
     }
@@ -263,13 +264,13 @@ impl PreparedFileChooserActivation {
         self.command_target
             .as_ref()
             .context(NoDocumentLoaded)?
-            .start(
-                moli_core::RendererPageCommand::RegisterDocumentBidiNodeBinding {
+            .start(moli_core::RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::RegisterDocumentBidiNodeBinding {
                     inspector_session_id,
                     shared_id,
                     backend_node_id: self.backend_node_id,
                 },
-            )
+            ))
     }
 
     pub(crate) fn finish_binding(

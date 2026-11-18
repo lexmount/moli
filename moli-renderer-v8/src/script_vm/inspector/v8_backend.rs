@@ -4,6 +4,8 @@ use super::context_registry::{
     DocumentInspectorContextGroupId, DocumentInspectorContextRegistrationId,
     DocumentInspectorContextRegistry,
 };
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererDevToolsPageCommand;
 mod interrupt;
 #[cfg(test)]
 mod page_target_tests;
@@ -365,7 +367,8 @@ impl RendererInspectorSessionExecutorLocal {
     ) {
         let mut first_dispatch = self.target.main_ref().first_dispatch_guard(&mut command);
         let (page_command, reply_tx) = command.into_nested_agent_parts();
-        let RendererPageCommand::Native(call) = page_command else {
+        let RendererPageCommand::DevTools(RendererDevToolsPageCommand::Native(call)) = page_command
+        else {
             unreachable!("native Inspector dispatch must retain its native terminal")
         };
         first_dispatch.release();

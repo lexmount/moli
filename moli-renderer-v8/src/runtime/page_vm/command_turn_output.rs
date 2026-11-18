@@ -67,7 +67,10 @@ impl PageVm {
         let mut scope = RendererCommandTurnOutputScope {
             recorder: Some(recorder.clone()),
             #[cfg(feature = "devtools")]
-            pending_dom_mutation_batch_start: self.pending_dom_mutation_event_batches.len(),
+            pending_dom_mutation_batch_start: self
+                .devtools
+                .pending_dom_mutation_event_batches
+                .len(),
             document_lifecycle: self.document_lifecycle.clone(),
             document_lifecycle_registered: false,
             script_vm_scope: None,
@@ -86,11 +89,13 @@ impl PageVm {
         self.flush_pending_dom_mutation_event_batches();
         #[cfg(feature = "devtools")]
         assert!(
-            scope.pending_dom_mutation_batch_start <= self.pending_dom_mutation_event_batches.len(),
+            scope.pending_dom_mutation_batch_start
+                <= self.devtools.pending_dom_mutation_event_batches.len(),
             "renderer command cannot drain the pre-command DOM mutation backlog"
         );
         #[cfg(feature = "devtools")]
         let dom_mutation_batches = self
+            .devtools
             .pending_dom_mutation_event_batches
             .split_off(scope.pending_dom_mutation_batch_start);
         let records = scope.finish(

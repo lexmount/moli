@@ -37,7 +37,8 @@ pub use moli_renderer_v8::{
 };
 #[cfg(feature = "devtools")]
 pub use moli_renderer_v8::{
-    RendererCdpCall, RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
+    RendererCdpCall, RendererDevToolsPageCommand, RendererDevToolsPageReply,
+    RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
     RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
     RendererNativeProtocolError, RendererNativeProtocolNotification,
     RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate,

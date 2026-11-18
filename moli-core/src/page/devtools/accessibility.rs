@@ -1,41 +1,21 @@
-use super::Page;
-#[cfg(feature = "devtools")]
-use super::{CompletedPageCommand, PendingPageCommand};
-#[cfg(feature = "devtools")]
-use crate::renderer::{RendererAccessibilityPayloadsForObjectId, RendererDomNodeReference};
-use crate::renderer::{RendererPageCommand, RendererPageReply};
-#[cfg(feature = "devtools")]
+use crate::page::CompletedPageCommand;
+use crate::page::Page;
+use crate::page::PendingPageCommand;
+use crate::renderer::RendererAccessibilityPayloadsForObjectId;
+use crate::renderer::RendererDomNodeReference;
+use crate::renderer::RendererPageCommand;
+use crate::renderer::RendererPageReply;
+use crate::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use serde_json::Value;
 
-impl Page {
-    /// Observe the same live AX tree as the protocol without materializing a
-    /// JSON object for every node. `frame_id` selects a child Document.
-    pub async fn accessibility_tree_nodes_async(
-        &mut self,
-        frame_id: Option<String>,
-    ) -> anyhow::Result<Option<Vec<moli_dom::accessibility::AccessibilityNode>>> {
-        let pending =
-            self.start_page_command(RendererPageCommand::AccessibilityTreeNodes { frame_id })?;
-        let completion = pending.wait().await?;
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "accessibility tree nodes page command",
-            "optional accessibility nodes",
-            RendererPageReply::OptionalAccessibilityNodes(nodes) => Ok(nodes),
-        )
-    }
-}
-
-#[cfg(feature = "devtools")]
 impl Page {
     pub fn start_accessibility_tree_payloads_for_document(
         &self,
         max_depth: Option<i32>,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AccessibilityTreePayloadsForDocument {
-            max_depth,
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityTreePayloadsForDocument { max_depth },
+        ))
     }
 
     pub fn finish_accessibility_tree_payloads(
@@ -56,7 +36,7 @@ impl Page {
             reply,
             "accessibility tree payloads page command",
             "optional accessibility payloads",
-            RendererPageReply::OptionalAccessibilityPayloads(payloads) => Ok(payloads),
+            RendererPageReply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayloads(payloads)) => Ok(payloads),
         )
     }
 
@@ -72,7 +52,9 @@ impl Page {
     pub fn start_accessibility_node_payload_for_document(
         &self,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AccessibilityNodePayloadForDocument)
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityNodePayloadForDocument,
+        ))
     }
 
     pub fn finish_accessibility_node_payload(
@@ -84,7 +66,7 @@ impl Page {
             reply,
             "accessibility node payload page command",
             "an optional accessibility payload",
-            RendererPageReply::OptionalAccessibilityPayload(payload) => Ok(payload),
+            RendererPageReply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayload(payload)) => Ok(payload),
         )
     }
 
@@ -93,10 +75,12 @@ impl Page {
         reference: RendererDomNodeReference,
         max_depth: Option<i32>,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AccessibilityTreePayloadsForNode {
-            reference,
-            max_depth,
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityTreePayloadsForNode {
+                reference,
+                max_depth,
+            },
+        ))
     }
 
     pub fn start_accessibility_tree_payloads_for_backend_node_id(
@@ -114,7 +98,9 @@ impl Page {
         &self,
         reference: RendererDomNodeReference,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AccessibilityNodePayloadForNode { reference })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityNodePayloadForNode { reference },
+        ))
     }
 
     pub fn start_accessibility_node_payload_for_backend_node_id(
@@ -130,9 +116,9 @@ impl Page {
         &self,
         reference: RendererDomNodeReference,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForNode { reference },
-        )
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityNodeAndAncestorPayloadsForNode { reference },
+        ))
     }
 
     pub fn start_accessibility_node_and_ancestor_payloads_for_backend_node_id(
@@ -148,9 +134,9 @@ impl Page {
         &self,
         reference: RendererDomNodeReference,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AccessibilityChildNodePayloadsForNode {
-            reference,
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityChildNodePayloadsForNode { reference },
+        ))
     }
 
     pub fn start_accessibility_child_node_payloads_for_backend_node_id(
@@ -167,12 +153,12 @@ impl Page {
         reference: RendererDomNodeReference,
         fetch_relatives: bool,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::AccessibilityPartialTreePayloadsForNode {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityPartialTreePayloadsForNode {
                 reference,
                 fetch_relatives,
             },
-        )
+        ))
     }
 
     pub fn start_accessibility_partial_tree_payloads_for_backend_node_id(
@@ -195,7 +181,7 @@ impl Page {
             reply,
             "accessibility payloads for backend node id page command",
             "optional accessibility payloads for backend node id",
-            RendererPageReply::OptionalAccessibilityPayloadsForObjectId(payloads) => Ok(payloads),
+            RendererPageReply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayloadsForObjectId(payloads)) => Ok(payloads),
         )
     }
 
@@ -249,7 +235,7 @@ impl Page {
             reply,
             "accessibility payloads for object id page command",
             "optional accessibility payloads for object id",
-            RendererPageReply::OptionalAccessibilityPayloadsForObjectId(payloads) => Ok(payloads),
+            RendererPageReply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayloadsForObjectId(payloads)) => Ok(payloads),
         )
     }
 
@@ -268,12 +254,12 @@ impl Page {
         frame_id: &str,
         max_depth: Option<i32>,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::AccessibilityTreePayloadsForChildFrame {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityTreePayloadsForChildFrame {
                 frame_id: frame_id.to_owned(),
                 max_depth,
             },
-        )
+        ))
     }
 
     pub fn finish_child_frame_accessibility_tree_payloads(
@@ -295,7 +281,7 @@ impl Page {
             reply,
             "child-frame accessibility payloads page command",
             "optional child-frame accessibility payloads",
-            RendererPageReply::OptionalAccessibilityPayloadsForObjectId(payloads) => Ok(payloads),
+            RendererPageReply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayloadsForObjectId(payloads)) => Ok(payloads),
         )
     }
 
@@ -303,9 +289,11 @@ impl Page {
         &self,
         frame_id: &str,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AccessibilityNodePayloadForChildFrame {
-            frame_id: frame_id.to_owned(),
-        })
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AccessibilityNodePayloadForChildFrame {
+                frame_id: frame_id.to_owned(),
+            },
+        ))
     }
 
     pub fn finish_child_frame_accessibility_node_payload(

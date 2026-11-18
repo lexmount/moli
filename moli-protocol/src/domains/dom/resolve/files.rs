@@ -6,6 +6,7 @@ use crate::conn::{
     CommandWorkflowContext, PreparedCommandWorkflow, ProtocolWorkflowDriver, RuntimePageScope,
 };
 use crate::domains::native::{self, NativeCommandStep, with_backend_node as with_backend};
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
     RendererNativeProtocolResponse as Response, RendererPageCommand as Command,
@@ -98,15 +99,20 @@ pub(super) fn start_native(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> NativeCom
             FileInputTarget::Node(reference) => {
                 Ok(with_backend(session, reference, move |backend_node_id| {
                     Operation::then(
-                        Command::DocumentNodeExistsForBackendNodeId { backend_node_id },
-                        move |reply| match reply {
+                        Command::DevTools(
+                            RendererDevToolsPageCommand::DocumentNodeExistsForBackendNodeId {
+                                backend_node_id,
+                            },
+                        ),
+                        move |reply| {
+                            match reply {
                             Ok(Reply::Bool(true)) => match files {
                                 Ok(files) => Step::Continue(Operation::new(
-                                    Command::SetFileInputFilesForBackendNodeId {
+                                    Command::DevTools(RendererDevToolsPageCommand::SetFileInputFilesForBackendNodeId {
                                         backend_node_id,
                                         files,
                                         append: false,
-                                    },
+                                    }),
                                     project,
                                 )),
                                 Err(error) => {
@@ -119,6 +125,7 @@ pub(super) fn start_native(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> NativeCom
                                 format!("Could not preflight file input node: {error}"),
                             )),
                             _ => unreachable!("DOM file input preflight reply"),
+                        }
                         },
                     )
                 }))
@@ -129,9 +136,13 @@ pub(super) fn start_native(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> NativeCom
 
 fn project(reply: anyhow::Result<Reply>) -> Response {
     match reply {
-        Ok(Reply::OptionalBool(Some(true))) => Response::success(json!({})),
-        Ok(Reply::OptionalBool(Some(false))) => Response::error(-32000, "UnableToSetFileInput"),
-        Ok(Reply::OptionalBool(None)) => node_not_found(),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalBool(Some(true)))) => {
+            Response::success(json!({}))
+        }
+        Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalBool(Some(false)))) => {
+            Response::error(-32000, "UnableToSetFileInput")
+        }
+        Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalBool(None))) => node_not_found(),
         Err(error) => Response::error(-32000, format!("Could not set file input files: {error}")),
         _ => unreachable!("DOM file input reply"),
     }

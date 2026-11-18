@@ -5,6 +5,7 @@
 //! include resolved computed styles plus lightweight geometry for automation clients.
 
 use anyhow::Result;
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 
 use moli_core::page::{
     CompletedPageCommand, Page, PendingPageCommand, RendererDomSnapshotCaptureOptions,
@@ -36,17 +37,17 @@ pub(crate) fn try_start_native_command(
     Some(super::native::start(
         conn,
         cmd,
-        RendererPageCommand::DomSnapshotCapture {
+        RendererPageCommand::DevTools(RendererDevToolsPageCommand::DomSnapshotCapture {
             top_frame_id: frame_id,
             options: params.into(),
-        },
+        }),
         |reply| match reply {
-            Ok(RendererPageReply::OptionalDomSnapshotCapturePayload(Some(payload))) => {
-                Response::success(payload.into_protocol_payload())
-            }
-            Ok(RendererPageReply::OptionalDomSnapshotCapturePayload(None)) => {
-                Response::error(-32000, "NoDocumentLoaded")
-            }
+            Ok(RendererPageReply::DevTools(
+                RendererDevToolsPageReply::OptionalDomSnapshotCapturePayload(Some(payload)),
+            )) => Response::success(payload.into_protocol_payload()),
+            Ok(RendererPageReply::DevTools(
+                RendererDevToolsPageReply::OptionalDomSnapshotCapturePayload(None),
+            )) => Response::error(-32000, "NoDocumentLoaded"),
             Ok(_) => unreachable!("DOM snapshot backend returned a different result"),
             Err(error) => {
                 Response::error(-32000, format!("Could not capture DOM snapshot: {error}"))
