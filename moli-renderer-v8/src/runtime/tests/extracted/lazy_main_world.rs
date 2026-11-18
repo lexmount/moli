@@ -464,6 +464,140 @@ async fn document_start_script_initializes_main_world_before_parser_script() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_preload_timing_is_available_to_the_first_parser_script() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = url::Url::parse(&format!(
+        "http://{}/page.html",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let resource_url = url.join("/preload.css").unwrap();
+    let (release_gate, gate) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut blocked_script = None;
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let mut buffer = [0; 4096];
+                let size = socket.read(&mut buffer).await.unwrap();
+                assert!(size != 0 && request.len() < 65536);
+                request.extend_from_slice(&buffer[..size]);
+            }
+            if request.starts_with(b"GET /gate.js ") {
+                assert!(blocked_script.replace(socket).is_none());
+            } else {
+                assert!(request.starts_with(b"GET /preload.css "));
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: 7\r\nConnection: close\r\n\r\nbody {}").await.unwrap();
+            }
+        }
+        gate.await.unwrap();
+        let script = "globalThis.preloadCountInFirstScript = performance.getEntriesByName(new URL('/preload.css',location.href).href).length;";
+        blocked_script.unwrap().write_all(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{script}", script.len(),
+        ).as_bytes()).await.unwrap();
+    });
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let mut config = moli_fetch::FetchConfig::default();
+    config.set_http_no_proxy(Some("*".to_owned()));
+    let loader = ResourceRequestClient::new(&config).unwrap();
+    loader.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let (body_tx, body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+    body_tx
+        .send(
+            br#"<!doctype html><head>
+<script src=/gate.js></script>
+<link rel=preload as=style href=/preload.css>
+</head><body>parser preload"#
+                .to_vec(),
+        )
+        .await
+        .unwrap();
+    let prepared = tokio::time::timeout(
+        Duration::from_secs(5),
+        prepare_test_external_raw_document_with_content_type_and_reply_boundary(
+            &runtime,
+            &loader,
+            url,
+            "text/html",
+            body,
+            RendererReplyBoundary::DocumentCommit,
+        ),
+    )
+    .await
+    .expect("the real streaming Document must prepare before parser continuation");
+    let permit = prepared.issue_commit_permit();
+    let (mut page, _, _, _, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        prepared.start_commit(permit, None).unwrap(),
+    )
+    .await
+    .expect("the native Document must commit before waiting for the external script")
+    .unwrap();
+    page.take_committed_document_post_response_continuation()
+        .expect("DocumentCommit must retain its parser continuation")
+        .release();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(publication) = output_rx.recv().await {
+            if !publication_is_for_page(&publication, &page) { continue; }
+            let mut completed = false;
+            for record in publication.records() {
+                match record.item() {
+                    RendererOutputItem::Observation(RendererProtocolObservation::Network {
+                        item: moli_page_types::ScriptNetworkOutputItem::SubresourceNetworkRecord(network), ..
+                    }) if network.url() == &resource_url => {
+                        assert!(matches!(network.outcome(), moli_page_types::SubresourceNetworkOutcome::Success { status: 200, .. }));
+                        completed = true;
+                    }
+                    RendererOutputItem::Observation(RendererProtocolObservation::RuntimeLifecycleError { text, .. }) => panic!("cold preload lifecycle error: {text}"),
+                    _ => {}
+                }
+            }
+            if completed { return; }
+        }
+        panic!("renderer output closed before the real preload completed");
+    }).await.expect("the scanner's preload must finish while the parser waits for its first external script");
+    release_gate.send(()).unwrap();
+    drop(body_tx);
+    completion_tx.send(Ok(())).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(publication) = output_rx.recv().await {
+            if publication_is_for_page(&publication, &page)
+                && publication_document_lifecycle_events(&publication).any(|event| {
+                    matches!(
+                        event.kind,
+                        RendererDocumentLifecycleEventKind::Milestone(
+                            RendererDocumentLifecycleMilestone::Load
+                        )
+                    )
+                })
+            {
+                return;
+            }
+        }
+        panic!("renderer output closed before Load");
+    })
+    .await
+    .expect("releasing the script and the stream must finish the real Document");
+    assert_eq!(
+        evaluate_lazy_test(&page, "preloadCountInFirstScript").await,
+        1
+    );
+    let expression = format!(
+        "JSON.stringify(performance.getEntriesByName({}).map(entry => entry.initiatorType))",
+        serde_json::to_string(resource_url.as_str()).unwrap(),
+    );
+    assert_eq!(evaluate_lazy_test(&page, &expression).await, r#"["link"]"#);
+    assert_eq!(evaluate_lazy_test(&page, &expression).await, r#"["link"]"#);
+    assert_main_world_count(&page, 1).await;
+    server.await.unwrap();
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_scriptless_document_keeps_main_world_lazy() {
     let runtime = JsRuntime::initialize();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
