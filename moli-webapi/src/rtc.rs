@@ -38,7 +38,7 @@ pub fn install_template_bindings<'s>(
         "RTCSessionDescription" => {
             session_description::install_session_description_template_bindings(scope, template)
         }
-        "RTCPeerConnection" | "RTCDataChannel" | "RTCRtpReceiver" => {
+        "RTCPeerConnection" | "RTCDataChannel" | "RTCRtpSender" | "RTCRtpReceiver" => {
             peer_connection::install_template_bindings(scope, template, interface)
         }
         _ => {}
