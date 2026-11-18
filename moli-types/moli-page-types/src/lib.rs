@@ -331,7 +331,7 @@ pub struct NavigationResponse {
     pub from_cache: bool,
     pub cache_state: moli_fetch::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
-    network_request_headers: Option<Vec<(String, String)>>,
+    network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
 
 impl Clone for NavigationResponse {
@@ -352,7 +352,7 @@ impl Clone for NavigationResponse {
             from_cache: self.from_cache,
             cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
-            network_request_headers: self.network_request_headers.clone(),
+            network_request_extra_info: self.network_request_extra_info.clone(),
         }
     }
 }
@@ -428,15 +428,34 @@ impl NavigationResponse {
     /// `None` distinguishes local, cached, and synthetic responses from a
     /// response observed at the network transport boundary.
     pub fn with_network_request_headers(
-        mut self,
+        self,
         network_request_headers: Option<Vec<(String, String)>>,
     ) -> Self {
-        self.network_request_headers = network_request_headers;
+        let report = self.request_cookie_report.clone().unwrap_or_default();
+        self.with_network_request_extra_info(network_request_headers.map(|headers| {
+            NetworkRequestExtraInfo {
+                headers,
+                cookie_report: report,
+            }
+        }))
+    }
+
+    pub fn with_network_request_extra_info(
+        mut self,
+        extra_info: Option<NetworkRequestExtraInfo>,
+    ) -> Self {
+        self.network_request_extra_info = extra_info;
         self
     }
 
+    pub fn network_request_extra_info(&self) -> Option<&NetworkRequestExtraInfo> {
+        self.network_request_extra_info.as_ref()
+    }
+
     pub fn network_request_headers(&self) -> Option<&[(String, String)]> {
-        self.network_request_headers.as_deref()
+        self.network_request_extra_info
+            .as_ref()
+            .map(|info| info.headers.as_slice())
     }
 
     pub fn from_head_and_materialized_body(head: ResponseHead, body: ResponseBody) -> Self {
@@ -456,7 +475,7 @@ impl NavigationResponse {
             from_cache: head.from_cache,
             cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
-            network_request_headers: None,
+            network_request_extra_info: None,
         }
     }
 
@@ -500,7 +519,7 @@ impl NavigationResponse {
         head.status = status;
         head.headers = headers;
         Self::from_head_and_materialized_body(head, source.materialized_body())
-            .with_network_request_headers(source.network_request_headers.clone())
+            .with_network_request_extra_info(source.network_request_extra_info.clone())
     }
 
     pub fn into_parts(self) -> (ResponseHead, String, Vec<u8>) {
@@ -561,28 +580,20 @@ impl NavigationResponse {
 
 impl From<Response> for NavigationResponse {
     fn from(value: Response) -> Self {
-        let network_request_headers = value
-            .network_request_extra_info()
-            .map(|extra_info| extra_info.headers.clone());
+        let extra_info = value.network_request_extra_info().cloned();
         let (head, body) = value.into_body();
         Self::from_head_and_materialized_body(head, body)
-            .with_network_request_headers(network_request_headers)
+            .with_network_request_extra_info(extra_info)
     }
 }
 
 impl From<NavigationResponse> for Response {
     fn from(value: NavigationResponse) -> Self {
-        let network_request_headers = value.network_request_headers.clone();
-        let request_cookie_report = value.request_cookie_report.clone().unwrap_or_default();
+        let extra_info = value.network_request_extra_info.clone();
         let (head, body) = value.into_body();
         Self::from_head_and_materialized_body(head, body)
             .expect("NavigationResponse body should remain materialized at Response boundary")
-            .with_network_request_extra_info(network_request_headers.map(|headers| {
-                NetworkRequestExtraInfo {
-                    headers,
-                    cookie_report: request_cookie_report,
-                }
-            }))
+            .with_network_request_extra_info(extra_info)
     }
 }
 
@@ -611,7 +622,7 @@ pub struct ScriptExecutionReport {
 
 #[derive(Debug, Clone, Default)]
 struct StagedSubresourceReportState {
-    requests: BTreeMap<u64, SubresourceRequestStarted>,
+    requests: BTreeMap<u64, SubresourceRequestSnapshot>,
     responses: BTreeMap<u64, SubresourceResponseStarted>,
     bodies: BTreeMap<u64, SubresourceBodyFinished>,
     completed_handles: BTreeSet<u64>,
@@ -625,7 +636,8 @@ pub struct ScriptNetworkOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptNetworkOutputItem {
     SubresourceNetworkRecord(Box<SubresourceNetworkRecord>),
-    SubresourceRequestStarted(Box<SubresourceRequestStarted>),
+    SubresourceRequestStarted(Box<SubresourceRequestSnapshot>),
+    SubresourceRequestUpdated(Box<SubresourceRequestSnapshot>),
     SubresourceResponseStarted(Box<SubresourceResponseStarted>),
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
@@ -994,6 +1006,14 @@ impl ScriptExecutionReport {
                 state.requests.insert(handle, *request);
                 self.try_materialize_staged_subresource_record(handle);
             }
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(request) => {
+                let handle = request.handle().get();
+                let state = self.staged_subresource_report_state_mut();
+                if let Some(current) = state.requests.get_mut(&handle) {
+                    *current = *request;
+                    self.try_materialize_staged_subresource_record(handle);
+                }
+            }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
                 let handle = response.handle().get();
                 let state = self.staged_subresource_report_state_mut();
@@ -1140,7 +1160,7 @@ impl SubresourceNetworkRequestHandle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubresourceRequestStarted {
+pub struct SubresourceRequestSnapshot {
     redirect: Option<Box<NavigationRedirect>>,
     handle: SubresourceNetworkRequestHandle,
     frame_id: Option<String>,
@@ -1154,7 +1174,6 @@ pub struct SubresourceRequestStarted {
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
-    request_extra_info_deferred: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1167,7 +1186,7 @@ pub struct SubresourceResponseStarted {
     response_headers: Vec<(String, Vec<u8>)>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
     from_cache: bool,
-    network_request_headers: Option<Vec<(String, String)>>,
+    network_request_extra_info: Option<NetworkRequestExtraInfo>,
     negotiated_http_version: Option<NegotiatedHttpVersion>,
 }
 
@@ -1229,7 +1248,7 @@ impl PartialEq for SubresourceNetworkRecord {
 
 impl Eq for SubresourceNetworkRecord {}
 
-impl SubresourceRequestStarted {
+impl SubresourceRequestSnapshot {
     pub fn new(
         handle: SubresourceNetworkRequestHandle,
         frame_id: Option<String>,
@@ -1257,7 +1276,6 @@ impl SubresourceRequestStarted {
             resource_type,
             request_initiator_type,
             request_cookie_report,
-            request_extra_info_deferred: false,
         }
     }
 
@@ -1282,17 +1300,6 @@ impl SubresourceRequestStarted {
     pub fn with_keepalive(mut self, keepalive: bool) -> Self {
         self.keepalive = keepalive;
         self
-    }
-
-    /// Admission has browser cookie/header metadata, while CDP ExtraInfo must
-    /// still come from the later transport observation.
-    pub fn with_deferred_request_extra_info(mut self) -> Self {
-        self.request_extra_info_deferred = true;
-        self
-    }
-
-    pub fn request_extra_info_deferred(&self) -> bool {
-        self.request_extra_info_deferred
     }
 
     pub fn frame_id(&self) -> Option<&str> {
@@ -1358,7 +1365,7 @@ impl SubresourceResponseStarted {
             response_headers,
             cookie_set_reports,
             from_cache: false,
-            network_request_headers: None,
+            network_request_extra_info: None,
             negotiated_http_version: None,
         }
     }
@@ -1373,12 +1380,16 @@ impl SubresourceResponseStarted {
         self
     }
 
-    pub fn with_network_request_headers(
+    pub fn with_network_request_extra_info(
         mut self,
-        network_request_headers: Option<Vec<(String, String)>>,
+        extra_info: Option<NetworkRequestExtraInfo>,
     ) -> Self {
-        self.network_request_headers = network_request_headers;
+        self.network_request_extra_info = extra_info;
         self
+    }
+
+    pub fn network_request_extra_info(&self) -> Option<&NetworkRequestExtraInfo> {
+        self.network_request_extra_info.as_ref()
     }
 
     pub fn with_negotiated_http_version(
@@ -1422,7 +1433,9 @@ impl SubresourceResponseStarted {
     }
 
     pub fn network_request_headers(&self) -> Option<&[(String, String)]> {
-        self.network_request_headers.as_deref()
+        self.network_request_extra_info
+            .as_ref()
+            .map(|info| info.headers.as_slice())
     }
 
     pub fn negotiated_http_version(&self) -> Option<NegotiatedHttpVersion> {
@@ -2164,7 +2177,7 @@ fn json_value_matches_regex(value: &Value, regex: &Regex) -> bool {
 
 impl SubresourceNetworkRecord {
     fn from_staged_lifecycle(
-        request: &SubresourceRequestStarted,
+        request: &SubresourceRequestSnapshot,
         response: Option<&SubresourceResponseStarted>,
         body: &SubresourceBodyFinished,
     ) -> Option<Self> {
@@ -2185,7 +2198,10 @@ impl SubresourceNetworkRecord {
                     request.request_headers.clone(),
                     request.request_body.clone(),
                     request.resource_type,
-                    request.request_cookie_report.clone(),
+                    response
+                        .network_request_extra_info()
+                        .map(|info| info.cookie_report.clone())
+                        .or_else(|| request.request_cookie_report.clone()),
                     response.redirect_chain.clone(),
                     response.final_url.clone(),
                     response.status,
@@ -2197,7 +2213,7 @@ impl SubresourceNetworkRecord {
                 .with_request_body_bytes(request.request_body_bytes.clone())
                 .with_request_initiator_type(request.request_initiator_type)
                 .with_from_cache(response.from_cache)
-                .with_network_request_headers(response.network_request_headers.clone())
+                .with_network_request_headers(response.network_request_headers().map(<[_]>::to_vec))
                 .with_negotiated_http_version(response.negotiated_http_version);
                 if let Some(status_text) = response.status_text.clone() {
                     record = record.with_response_status_text(status_text);
@@ -2219,7 +2235,10 @@ impl SubresourceNetworkRecord {
                         request_body_bytes: request.request_body_bytes.clone(),
                         resource_type: request.resource_type,
                         request_initiator_type: request.request_initiator_type,
-                        request_cookie_report: request.request_cookie_report.clone(),
+                        request_cookie_report: response
+                            .and_then(|response| response.network_request_extra_info())
+                            .map(|info| info.cookie_report.clone())
+                            .or_else(|| request.request_cookie_report.clone()),
                         outcome: SubresourceNetworkOutcome::Failure {
                             error_text: error_text.clone(),
                         },
@@ -2227,8 +2246,9 @@ impl SubresourceNetworkRecord {
                             .map(|response| response.cookie_set_reports.clone())
                             .unwrap_or_default(),
                         from_cache: response.is_some_and(|response| response.from_cache),
-                        network_request_headers: response
-                            .and_then(|response| response.network_request_headers.clone()),
+                        network_request_headers: response.and_then(|response| {
+                            response.network_request_headers().map(<[_]>::to_vec)
+                        }),
                         negotiated_http_version: response
                             .and_then(|response| response.negotiated_http_version),
                     }),
@@ -4243,10 +4263,94 @@ mod tests {
     }
 
     #[test]
+    fn navigation_response_round_trip_preserves_transport_cookie_report() {
+        let url = test_url("/script.js");
+        let mut jar = moli_cookie_jar::BrowserCookieStore::default();
+        jar.set_document_cookie(&url, "transport=observed; Path=/");
+        let report = jar.cookie_access_report_for_request(
+            &url,
+            moli_cookie_jar::NetworkCookieRequestContext::subresource("GET")
+                .with_initiator_url(&url, &url),
+        );
+        assert_eq!(report.included_cookies.len(), 1);
+        let extra = NetworkRequestExtraInfo {
+            headers: vec![("Cookie".into(), "transport=observed".into())],
+            cookie_report: report,
+        };
+        let navigation = NavigationResponse::from_text_body(url, 200, Vec::new(), "source".into())
+            .with_network_request_extra_info(Some(extra.clone()));
+        assert!(navigation.request_cookie_report.is_none());
+        let response: Response = navigation.into();
+        assert_eq!(response.network_request_extra_info(), Some(&extra));
+        let restored: NavigationResponse = response.into();
+        assert_eq!(restored.network_request_extra_info(), Some(&extra));
+    }
+
+    #[test]
+    fn staged_request_updates_change_final_report_without_rewriting_history() {
+        let handle = SubresourceNetworkRequestHandle::new(43);
+        let snapshot = |body: &str| {
+            SubresourceRequestSnapshot::new(
+                handle,
+                None,
+                test_url("/"),
+                test_url("/upload"),
+                "POST".into(),
+                Default::default(),
+                Some(body.into()),
+                SubresourceResourceType::Fetch,
+                SubresourceRequestInitiatorType::Script,
+                None,
+            )
+        };
+        let initial = snapshot("before");
+        let mut report = ScriptExecutionReport::default();
+        report.extend_network_output(ScriptNetworkOutput::from_items([
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(Box::new(snapshot("orphan"))),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(initial.clone())),
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(Box::new(snapshot("after"))),
+            ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(
+                SubresourceResponseStarted::new(
+                    handle,
+                    Vec::new(),
+                    test_url("/upload"),
+                    200,
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            )),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(
+                SubresourceBodyFinished::ready(
+                    handle,
+                    SubresourceResponseBody::from_bytes(Vec::new()),
+                ),
+            )),
+        ]));
+        assert_eq!(initial.request_body(), Some("before"));
+        let [record] = report.subresource_network_records() else {
+            panic!("one request must produce one report record")
+        };
+        assert_eq!(
+            record.request_body_bytes().map(|bytes| bytes.as_ref()),
+            Some(b"after".as_slice())
+        );
+        report.extend_network_output(ScriptNetworkOutput::from_items([
+            ScriptNetworkOutputItem::SubresourceRequestUpdated(Box::new(snapshot("late"))),
+        ]));
+        let [record] = report.subresource_network_records() else {
+            panic!("late update must not create a record")
+        };
+        assert_eq!(
+            record.request_body_bytes().map(|bytes| bytes.as_ref()),
+            Some(b"after".as_slice())
+        );
+    }
+
+    #[test]
     fn staged_subresource_network_output_materializes_settled_report_record() {
         let handle = SubresourceNetworkRequestHandle::new(42);
         let document_url = test_url("/");
-        let request = SubresourceRequestStarted::new(
+        let request = SubresourceRequestSnapshot::new(
             handle,
             Some("FRAME".to_owned()),
             document_url,

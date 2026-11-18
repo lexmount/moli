@@ -1341,7 +1341,7 @@ fetch('/data')
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn page_fetch_events_include_synthesized_cookie_header() {
+async fn page_fetch_cookie_headers_are_published_in_transport_extra_info() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1428,9 +1428,10 @@ fetch('/api')
         fetch_request["params"]["request"]["headers"]["x-cdp-test"],
         "works-fetch-cookie"
     );
-    assert_eq!(
-        fetch_request["params"]["request"]["headers"]["Cookie"],
-        "sid=1"
+    assert!(
+        fetch_request["params"]["request"]["headers"]
+            .get("Cookie")
+            .is_none()
     );
 
     let fetch_request_id = fetch_request["params"]["requestId"]
@@ -3220,77 +3221,8 @@ fetch('{start_url}', {{ credentials: 'include' }})
     assert_eq!(fetch_requests[1]["params"]["request"]["url"], final_url);
     assert_eq!(
         fetch_requests[1]["params"]["redirectHasExtraInfo"],
-        json!(false)
+        json!(true)
     );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["cookie"]["name"],
-        "strict"
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["warningReasons"],
-        json!(["SameSiteContextDowngradedByRedirect"])
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextDowngradeType"],
-        json!("StrictToCross")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextDowngradeType"],
-        json!("StrictToCross")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextHttpMethod"],
-        json!("GET")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextHttpMethod"],
-        json!("GET")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextRedirectType"],
-        json!("CrossSiteRedirect")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextRedirectType"],
-        json!("CrossSiteRedirect")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContext"],
-        json!("CrossSite")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContext"],
-        json!("CrossSite")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["siteForCookiesUrl"],
-        json!(page_url)
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["siteForCookiesSource"],
-        json!("RequestContext")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["topFrameOriginUrl"],
-        json!(page_url)
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["topFrameOriginSource"],
-        json!("RequestContext")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["storageAccessStatus"],
-        json!("None")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["storageAccessStatusSource"],
-        json!("RequestContext")
-    );
-    assert_eq!(
-        fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["siteContextBasis"],
-        json!("SiteForCookies")
-    );
-
     let fetch_extra_infos = messages
         .iter()
         .filter(|message| {
@@ -3303,22 +3235,84 @@ fetch('{start_url}', {{ credentials: 'include' }})
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(fetch_extra_infos.len(), 2);
-    let redirected_fetch_extra_info = fetch_extra_infos
-        .iter()
-        .find(|message| message["params"]["requestId"] == fetch_requests[1]["params"]["requestId"])
-        .expect("redirected fetch should emit requestWillBeSentExtraInfo");
     assert_eq!(
-        redirected_fetch_extra_info["params"]["requestId"],
+        fetch_requests[0]["params"]["requestId"],
         fetch_requests[1]["params"]["requestId"]
     );
+    let redirected_fetch_extra_info = &fetch_extra_infos[1];
     assert_eq!(
         redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["cookie"]
             ["name"],
         "strict"
     );
     assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["warningReasons"],
+        json!(["SameSiteContextDowngradedByRedirect"])
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextDowngradeType"],
+        json!("StrictToCross")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextDowngradeType"],
+        json!("StrictToCross")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextHttpMethod"],
+        json!("GET")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextHttpMethod"],
+        json!("GET")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContextRedirectType"],
+        json!("CrossSiteRedirect")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContextRedirectType"],
+        json!("CrossSiteRedirect")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["sameSiteContext"],
+        json!("CrossSite")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["schemefulSameSiteContext"],
+        json!("CrossSite")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["siteForCookiesUrl"],
+        json!(page_url)
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["siteForCookiesSource"],
+        json!("RequestContext")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["topFrameOriginUrl"],
+        json!(page_url)
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["topFrameOriginSource"],
+        json!("RequestContext")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["storageAccessStatus"],
+        json!("None")
+    );
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["storageAccessStatusSource"],
+        json!("RequestContext")
+    );
+    assert_eq!(
         redirected_fetch_extra_info["params"]["cookieAccessReport"]["excludedCookies"][0]["siteContextBasis"],
         json!("SiteForCookies")
+    );
+
+    assert_eq!(
+        redirected_fetch_extra_info["params"]["requestId"],
+        fetch_requests[1]["params"]["requestId"]
     );
 
     let response = messages
@@ -3335,6 +3329,7 @@ fetch('{start_url}', {{ credentials: 'include' }})
         .find(|message| {
             message["method"] == json!("Network.responseReceivedExtraInfo")
                 && message["params"]["requestId"] == response["params"]["requestId"]
+                && message["params"]["statusCode"] == 200
         })
         .expect("fetch should emit responseReceivedExtraInfo");
     assert_eq!(
@@ -3449,14 +3444,18 @@ fetch('{target_url}', {{ credentials: 'include' }})
                 && message["params"]["type"] == json!("Fetch")
         })
         .expect("fetch request should emit requestWillBeSent");
+    let extra_info = messages
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.requestWillBeSentExtraInfo"
+                && message["params"]["requestId"] == fetch_request["params"]["requestId"]
+        })
+        .expect("observed HTTP request publishes ExtraInfo");
     assert_eq!(
-        fetch_request["params"]["cookieAccessReport"]["includedCookies"][0]["cookie"]["name"],
+        extra_info["params"]["cookieAccessReport"]["includedCookies"][0]["cookie"]["name"],
         "sid"
     );
-    assert_eq!(
-        fetch_request["params"]["request"]["headers"]["Cookie"],
-        "sid=1"
-    );
+    assert_eq!(extra_info["params"]["headers"]["Cookie"], "sid=1");
 
     server.abort();
 }
@@ -3542,12 +3541,19 @@ fetch('{target_url}')
                 && message["params"]["type"] == json!("Fetch")
         })
         .expect("fetch request should emit requestWillBeSent");
+    let extra_info = messages
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.requestWillBeSentExtraInfo"
+                && message["params"]["requestId"] == fetch_request["params"]["requestId"]
+        })
+        .expect("observed HTTP request publishes ExtraInfo");
     assert_eq!(
-        fetch_request["params"]["cookieAccessReport"]["includedCookies"][0]["cookie"]["name"],
+        extra_info["params"]["cookieAccessReport"]["includedCookies"][0]["cookie"]["name"],
         "sid"
     );
     assert_eq!(
-        fetch_request["params"]["cookieAccessReport"]["includedCookies"][0]["warningReasons"],
+        extra_info["params"]["cookieAccessReport"]["includedCookies"][0]["warningReasons"],
         json!(["SecureAccessGrantedNonCryptographic"])
     );
 

@@ -1745,7 +1745,7 @@ mod tests {
         page::{
             RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch,
             ScriptNetworkOutputItem, SubresourceNetworkRecord, SubresourceRequestInitiatorType,
-            SubresourceRequestStarted, SubresourceResourceType, WebSocketFrameDirection,
+            SubresourceRequestSnapshot, SubresourceResourceType, WebSocketFrameDirection,
             WebSocketFrameOpcode, WebSocketNetworkEvent,
         },
     };
@@ -1873,7 +1873,7 @@ mod tests {
         let request_url =
             Url::parse("https://old.example/keepalive").expect("request URL should parse");
         let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
-            SubresourceRequestStarted::new(
+            SubresourceRequestSnapshot::new(
                 handle,
                 None,
                 document_url,

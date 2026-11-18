@@ -35,7 +35,8 @@ use crate::{
     planning::{PreparedScript, ScriptSource},
     types::{
         ChildClassicScriptLoadCompletion, ChildClassicScriptNetworkAttribution,
-        SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+        SubresourceRequestInitiatorType, SubresourceRequestSnapshot, SubresourceRequestStart,
+        SubresourceResourceType,
     },
 };
 
@@ -727,21 +728,18 @@ impl PageScriptHost {
             let (request_headers, cookie_report) = loader
                 .request_client()
                 .prepare_subresource_request_observation(request);
-            self.record_subresource_request_started(
-                SubresourceRequestStarted::new(
-                    request_handle,
-                    network_attribution.frame_id.clone(),
-                    network_attribution.document_url.clone(),
-                    network_attribution.request_url.clone(),
-                    "GET".to_owned(),
-                    request_headers,
-                    None,
-                    SubresourceResourceType::Script,
-                    SubresourceRequestInitiatorType::Script,
-                    cookie_report,
-                )
-                .with_deferred_request_extra_info(),
-            );
+            self.record_subresource_request_started(SubresourceRequestSnapshot::new(
+                request_handle,
+                network_attribution.frame_id.clone(),
+                network_attribution.document_url.clone(),
+                network_attribution.request_url.clone(),
+                "GET".to_owned(),
+                request_headers,
+                None,
+                SubresourceResourceType::Script,
+                SubresourceRequestInitiatorType::Script,
+                cookie_report,
+            ));
             network_attribution.request_handle = Some(request_handle);
             self.pending_child_classic_script_network_loads
                 .insert(request_handle, load.clone());
@@ -912,14 +910,17 @@ impl PageScriptHost {
             return;
         }
         if let Some(network_result) = completion.network_result.as_deref() {
-            self.record_get_subresource_network_result_with_handle(
+            self.record_get_subresource_network_result(
                 completion.network_attribution.frame_id.clone(),
                 completion.network_attribution.document_url.clone(),
                 completion.network_attribution.request_url.clone(),
                 SubresourceResourceType::Script,
                 SubresourceRequestInitiatorType::Script,
                 network_result,
-                completion.network_attribution.request_handle,
+                match completion.network_attribution.request_handle {
+                    Some(handle) => SubresourceRequestStart::Recorded(handle),
+                    None => SubresourceRequestStart::Unrecorded(None),
+                },
             );
         }
     }

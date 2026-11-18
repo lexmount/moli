@@ -271,41 +271,45 @@ impl ControlledResourceLoad {
         }
         self.sync_info();
         if request_changed && self.interception.is_worker() {
-            // The request ID is already announced before its Fetch pause. An
-            // updated snapshot refreshes body capture and subsequent response
-            // metadata; Network's existing announcement claim suppresses a
-            // second requestWillBeSent for this hop.
-            self.publish_worker_request(None);
+            self.interception.publish_network(
+                crate::types::ScriptNetworkOutputItem::SubresourceRequestUpdated(Box::new(
+                    self.worker_request_snapshot(None),
+                )),
+            );
         }
     }
 
     fn publish_worker_request(&self, redirect: Option<crate::types::NavigationRedirect>) {
-        let handle = self
-            .info
-            .network_request_handle
-            .expect("native resource load has a handle");
         self.interception.publish_network(
             crate::types::ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
-                crate::types::SubresourceRequestStarted::new(
-                    handle,
-                    self.info.frame_id.clone(),
-                    self.info.document_url.clone(),
-                    self.info.url.clone(),
-                    self.info.method.clone(),
-                    self.info.request_headers.clone(),
-                    self.info.request_body.clone(),
-                    self.info.resource_type,
-                    self.request_initiator_type,
-                    self.info.request_cookie_report.clone(),
-                )
-                .with_request_body_bytes(self.info.request_body_bytes.clone())
-                .with_redirect(redirect)
-                .with_keepalive(
-                    self.load.disposition()
-                        == crate::network::loads::ResourceLoadDisposition::Keepalive,
-                ),
+                self.worker_request_snapshot(redirect),
             )),
         );
+    }
+
+    fn worker_request_snapshot(
+        &self,
+        redirect: Option<crate::types::NavigationRedirect>,
+    ) -> crate::types::SubresourceRequestSnapshot {
+        crate::types::SubresourceRequestSnapshot::new(
+            self.info
+                .network_request_handle
+                .expect("native resource load has a handle"),
+            self.info.frame_id.clone(),
+            self.info.document_url.clone(),
+            self.info.url.clone(),
+            self.info.method.clone(),
+            self.info.request_headers.clone(),
+            self.info.request_body.clone(),
+            self.info.resource_type,
+            self.request_initiator_type,
+            self.info.request_cookie_report.clone(),
+        )
+        .with_request_body_bytes(self.info.request_body_bytes.clone())
+        .with_redirect(redirect)
+        .with_keepalive(
+            self.load.disposition() == crate::network::loads::ResourceLoadDisposition::Keepalive,
+        )
     }
 
     fn check_request(&mut self) -> Result<(), String> {

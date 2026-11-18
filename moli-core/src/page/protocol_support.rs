@@ -17,7 +17,7 @@ pub use crate::protocol_types::{
     SubresourceBodyFinishedResult, SubresourceDataReceived, SubresourceEventSourceMessageReceived,
     SubresourceInterceptionClasses, SubresourceJsonPathEquals, SubresourceJsonPathRegex,
     SubresourceNetworkOutcome, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-    SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+    SubresourceRequestInitiatorType, SubresourceRequestSnapshot, SubresourceResourceType,
     SubresourceResponseBody, SubresourceResponseStarted, SubresourceResponseWaitCriteria,
     ViewportSurface, WebSocketFrameDirection, WebSocketFrameOpcode, WebSocketLifecycleEvent,
     WebSocketLifecycleKind, WebSocketNetworkEvent, extract_subresource_auth_challenge,

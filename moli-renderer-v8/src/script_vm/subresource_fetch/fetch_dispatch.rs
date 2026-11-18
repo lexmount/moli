@@ -260,10 +260,8 @@ impl ScriptVm {
                                         .with_negotiated_http_version(
                                             response.negotiated_http_version,
                                         )
-                                        .with_network_request_headers(
-                                            response
-                                                .network_request_headers()
-                                                .map(|headers| headers.to_vec()),
+                                        .with_network_request_extra_info(
+                                            response.network_request_extra_info().cloned(),
                                         ),
                                     );
                             }

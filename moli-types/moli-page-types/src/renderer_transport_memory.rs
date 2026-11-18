@@ -66,7 +66,9 @@ impl ScriptNetworkOutputItem {
     pub fn renderer_transport_charge_bytes(&self) -> usize {
         match self {
             Self::SubresourceNetworkRecord(record) => network_record_charge(record),
-            Self::SubresourceRequestStarted(request) => request_started_charge(request),
+            Self::SubresourceRequestStarted(request) | Self::SubresourceRequestUpdated(request) => {
+                request_snapshot_charge(request)
+            }
             Self::SubresourceResponseStarted(response) => response_started_charge(response),
             Self::SubresourceDataReceived(_) => 0,
             Self::SubresourceEventSourceMessageReceived(message) => [
@@ -282,7 +284,7 @@ pub fn transport_headers_charge_bytes<V: AsRef<[u8]>>(headers: &[(String, V)]) -
 
 use self::transport_headers_charge_bytes as headers_charge;
 
-fn request_started_charge(request: &SubresourceRequestStarted) -> usize {
+fn request_snapshot_charge(request: &SubresourceRequestSnapshot) -> usize {
     request
         .frame_id
         .as_deref()
@@ -324,9 +326,17 @@ fn response_started_charge(response: &SubresourceResponseStarted) -> usize {
         .saturating_add(headers_charge(&response.response_headers))
         .saturating_add(
             response
-                .network_request_headers
-                .as_deref()
-                .map(headers_charge)
+                .network_request_extra_info
+                .as_ref()
+                .map(|info| {
+                    headers_charge(&info.headers).saturating_add(
+                        info.cookie_report
+                            .included_cookies
+                            .len()
+                            .saturating_add(info.cookie_report.excluded_cookies.len())
+                            .saturating_mul(256),
+                    )
+                })
                 .unwrap_or(0),
         )
         .saturating_add(response.cookie_set_reports.len().saturating_mul(256))

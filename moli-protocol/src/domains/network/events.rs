@@ -5,7 +5,8 @@ use crate::automation::{
 };
 use moli_cookie_jar::StoredCookieSetReport;
 use moli_core::page::{
-    SubresourceRequestInitiatorType, WebSocketFrameDirection, WebSocketFrameOpcode,
+    NavigationRedirect, SubresourceRequestInitiatorType, WebSocketFrameDirection,
+    WebSocketFrameOpcode,
 };
 use moli_protocol_cdp_defs::LocalCdpEvent;
 use moli_web_mime::response_header_value;
@@ -449,20 +450,18 @@ pub(crate) fn emit_redirect_response_received_extra_info(
     out: &mut impl CdpNetworkAutomationEventSink,
     session_id: Option<&str>,
     request_id: &str,
-    response_headers: &[(String, Vec<u8>)],
-    status: u16,
-    cookie_set_reports: &[StoredCookieSetReport],
+    redirect: &NavigationRedirect,
 ) {
-    if cookie_set_reports.is_empty() {
+    if !redirect.redirect_has_extra_info {
         return;
     }
     emit_response_received_extra_info(
         out,
         session_id,
         request_id,
-        response_headers,
-        status,
-        cookie_set_reports,
+        &redirect.headers,
+        redirect.status,
+        &redirect.cookie_set_reports,
     );
 }
 
