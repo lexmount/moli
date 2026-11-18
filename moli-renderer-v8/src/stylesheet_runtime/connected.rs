@@ -17,6 +17,28 @@ use crate::stylesheet_blocking::{
 use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourceResourceType};
 use moli_fetch::{FetchPriorityHint, RequestCredentialsMode, RequestResourceType};
 
+fn preload_like_resource_initiator_type(resource_type: SubresourceResourceType) -> &'static str {
+    match resource_type {
+        SubresourceResourceType::Script => "link",
+        SubresourceResourceType::Image => "img",
+        SubresourceResourceType::Audio => "audio",
+        SubresourceResourceType::Media => "video",
+        SubresourceResourceType::Video => "video",
+        SubresourceResourceType::TextTrack => "track",
+        SubresourceResourceType::Document
+        | SubresourceResourceType::Fetch
+        | SubresourceResourceType::EventSource
+        | SubresourceResourceType::Font
+        | SubresourceResourceType::Ping
+        | SubresourceResourceType::CspReport
+        | SubresourceResourceType::Dictionary
+        | SubresourceResourceType::Manifest
+        | SubresourceResourceType::Xhr
+        | SubresourceResourceType::WebSocket
+        | SubresourceResourceType::Stylesheet => "link",
+    }
+}
+
 struct ConnectedLinkReadinessFetchResponse {
     response: crate::protocol_types::NavigationResponse,
     origin_clean: bool,
@@ -1104,6 +1126,9 @@ impl DocumentRuntime {
                         .is_ok_and(|response| response.load_event_successful),
                     network_results: vec![ConnectedLoadNetworkResult {
                         network_observed: false,
+                        resource_timing_initiator_type: preload_like_resource_initiator_type(
+                            resource_type,
+                        ),
                         stylesheet_fetch: None,
                         blocking_operation: None,
                         source_operation: None,

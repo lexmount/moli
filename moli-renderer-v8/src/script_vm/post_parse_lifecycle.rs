@@ -51,28 +51,6 @@ use crate::types::{
 };
 use crate::types::{ScriptKind, ScriptMode, ScriptSourceKind, SubresourceRequestInitiatorType};
 
-fn preload_like_resource_initiator_type(resource_type: SubresourceResourceType) -> &'static str {
-    match resource_type {
-        SubresourceResourceType::Script => "link",
-        SubresourceResourceType::Image => "img",
-        SubresourceResourceType::Audio => "audio",
-        SubresourceResourceType::Media => "video",
-        SubresourceResourceType::Video => "video",
-        SubresourceResourceType::TextTrack => "track",
-        SubresourceResourceType::Document
-        | SubresourceResourceType::Fetch
-        | SubresourceResourceType::EventSource
-        | SubresourceResourceType::Font
-        | SubresourceResourceType::Ping
-        | SubresourceResourceType::CspReport
-        | SubresourceResourceType::Dictionary
-        | SubresourceResourceType::Manifest
-        | SubresourceResourceType::Xhr
-        | SubresourceResourceType::WebSocket
-        | SubresourceResourceType::Stylesheet => "link",
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeScriptFailureTerminalBodySettlement {
     activity: crate::script_vm::ScriptTerminalBodyActivity,
@@ -2498,6 +2476,7 @@ impl ScriptVm {
         for network_result in results {
             let crate::document_runtime::ConnectedLoadNetworkResult {
                 network_observed,
+                resource_timing_initiator_type,
                 stylesheet_fetch,
                 blocking_operation: _,
                 source_operation: _,
@@ -2526,7 +2505,7 @@ impl ScriptVm {
             performance_entries.push(
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                     request_url.as_str(),
-                    preload_like_resource_initiator_type(resource_type),
+                    resource_timing_initiator_type,
                     start_unix_millis,
                     &result,
                 ),
