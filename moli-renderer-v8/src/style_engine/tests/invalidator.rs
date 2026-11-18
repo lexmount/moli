@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "invalidator/child_list.rs"]
 mod child_list;
+#[path = "invalidator/deferred_structural.rs"]
+mod deferred_structural;
 #[path = "invalidator/invalidation_lifecycle.rs"]
 mod invalidation_lifecycle;
 #[path = "invalidator/relative_selectors.rs"]
