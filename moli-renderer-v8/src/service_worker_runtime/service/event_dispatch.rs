@@ -5,7 +5,6 @@ use crate::service_worker_runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerFetchRequest,
     ServiceWorkerNavigationPreloadFailure, ServiceWorkerNavigationPreloadResponseStarted,
     ServiceWorkerNavigationPreloadStreamChunk, ServiceWorkerNavigationPreloadStreamFinished,
-    ServiceWorkerRequestDestination,
 };
 
 const NAVIGATION_PRELOAD_CANCELLED_BEFORE_SETTLED_MESSAGE: &str = "The service worker navigation preload request was cancelled before 'preloadResponse' settled. \
@@ -27,11 +26,7 @@ struct ServiceWorkerNavigationPreloadDispatch {
 }
 
 fn service_worker_fetch_event_can_use_navigation_preload(job: &ServiceWorkerFetchJob) -> bool {
-    job.request.request_mode == moli_fetch::RequestMode::Navigate
-        && matches!(
-            job.destination,
-            ServiceWorkerRequestDestination::Document | ServiceWorkerRequestDestination::Iframe
-        )
+    job.request.request_mode == moli_fetch::RequestMode::Navigate && job.destination.is_navigation()
 }
 
 fn navigation_preload_request_for_job(
@@ -301,6 +296,9 @@ impl ServiceWorkerRuntimeService {
         response_delivery: super::super::state::ServiceWorkerFetchResponseDelivery,
     ) -> bool {
         let request = dispatch.request.clone();
+        if request.destination.bypasses_service_worker() {
+            return false;
+        }
         // Synthetic redirects advance this retained request before a network
         // fallback can bind the owner's cookie scope on its transport copy.
         let native_request = dispatch
@@ -362,12 +360,11 @@ impl ServiceWorkerRuntimeService {
                 Some(client) => (client.document_url.clone(), client.storage_key.clone()),
                 None => return Err(Box::new(fetch_job)),
             };
-            let registration_match_url =
-                if service_worker_fetch_request_is_navigation_destination(request.destination) {
-                    &request.url
-                } else {
-                    &document_url
-                };
+            let registration_match_url = if request.destination.is_navigation() {
+                &request.url
+            } else {
+                &document_url
+            };
             let Some(registration_id) = state
                 .registrations
                 .values()
@@ -1593,13 +1590,4 @@ impl ServiceWorkerRuntimeService {
             result: Err("service worker message dispatch failed: worker is not running".to_owned()),
         });
     }
-}
-
-fn service_worker_fetch_request_is_navigation_destination(
-    destination: ServiceWorkerRequestDestination,
-) -> bool {
-    matches!(
-        destination,
-        ServiceWorkerRequestDestination::Document | ServiceWorkerRequestDestination::Iframe
-    )
 }

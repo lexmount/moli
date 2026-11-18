@@ -1,3 +1,4 @@
+mod embedded_destinations;
 use super::*;
 
 mod window_container;
