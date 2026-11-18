@@ -7597,6 +7597,7 @@ html/semantics/embedded-content/the-img-element/srcset/select-an-image-source.ht
 html/semantics/embedded-content/the-img-element/srcset/srcset-media-dynamic.html
 html/semantics/embedded-content/the-img-element/update-media.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
+html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/fail-to-resolve.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/not-broken-while-load-task-scheduled.html
@@ -8426,6 +8427,7 @@ html/semantics/tabular-data/historical.html
 html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
+html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
 html/semantics/tabular-data/the-table-element/createTBody.html
