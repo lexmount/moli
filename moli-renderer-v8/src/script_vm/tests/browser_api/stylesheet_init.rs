@@ -31,3 +31,37 @@ fn stylesheet_constructor_derives_options_and_uses_native_media_list_state() {
         "true"
     );
 }
+
+#[tokio::test]
+async fn stylesheet_resource_timing_distinguishes_links_from_imports() {
+    let server = StaticHttpServer::spawn_with_responder(
+        2,
+        "Content-Type: text/css\r\nCache-Control: no-store\r\n",
+        |_, request| match request.target.as_str() {
+            "/outer.css" => "@import '/inner.css'; p { color: blue; }".to_owned(),
+            "/inner.css" => "p { color: red; }".to_owned(),
+            path => panic!("unexpected stylesheet request {path}"),
+        },
+    )
+    .await;
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let document = server.base_url().join("document.html").unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(document.as_str(), &loader);
+    page.eval(
+        r#"
+        const sheet = document.createElement('link');
+        sheet.rel = 'stylesheet';
+        sheet.href = '/outer.css';
+        (document.head || document.documentElement).appendChild(sheet);
+    "#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "['/outer.css', '/inner.css'].map(path => performance.getEntriesByName(new URL(path, location.href).href)[0]?.initiatorType).join(',')",
+        "link,css",
+        "linked root and imported stylesheet timing",
+    ).await;
+    assert_eq!(server.finish_targets().await, ["/outer.css", "/inner.css"]);
+}

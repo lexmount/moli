@@ -415,6 +415,11 @@ impl DocumentRuntime {
                 let physical_result = result.terminal.physical().as_result();
                 ConnectedLoadNetworkResult {
                     network_observed: result.terminal.network_was_observed(),
+                    resource_timing_initiator_type: if result.blocking_operation.is_some() {
+                        "css"
+                    } else {
+                        "link"
+                    },
                     stylesheet_fetch: result.fetch,
                     blocking_operation: result.blocking_operation,
                     source_operation: None,
