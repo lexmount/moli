@@ -2,6 +2,7 @@ use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWi
 use super::{PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
+    dom::native::Node,
     page_task_queue::{
         RendererPageElementToggleEventCancellation, RendererPageElementToggleEventData,
         RendererPageElementToggleEventKind, RendererPageElementToggleEventState,
@@ -11,7 +12,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub(super) struct PendingElementToggleEventPayload {
-    element: DomHandle,
+    coalescing_element: Option<DomHandle>,
     original_old_state: RendererPageElementToggleEventState,
     cancellation: RendererPageElementToggleEventCancellation,
 }
@@ -77,9 +78,26 @@ impl PageScriptHost {
         new_state: RendererPageElementToggleEventState,
         source: Option<DomHandle>,
     ) -> bool {
-        let existing_index = self
-            .element_toggle_events
-            .find_slot_index(target, kind, |pending| pending.element == element);
+        // The opening task still fires if focusing steps closed the popover.
+        // In that case it cannot replace the closing task.
+        let coalescing_element = if kind == RendererPageElementToggleEventKind::Popover
+            && new_state == RendererPageElementToggleEventState::Open
+            && !self
+                .dom_host()
+                .node(element)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.popover_open())
+        {
+            None
+        } else {
+            Some(element)
+        };
+        let existing_index = coalescing_element.and_then(|element| {
+            self.element_toggle_events
+                .find_slot_index(target, kind, |pending| {
+                    pending.coalescing_element == Some(element)
+                })
+        });
         let original_old_state = existing_index
             .map(|index| {
                 self.element_toggle_events
@@ -122,7 +140,7 @@ impl PageScriptHost {
             target,
             kind,
             PendingElementToggleEventPayload {
-                element,
+                coalescing_element,
                 original_old_state,
                 cancellation,
             },
@@ -139,27 +157,23 @@ impl PageScriptHost {
         true
     }
 
-    pub(crate) fn cancel_element_toggle_event(
+    pub(crate) fn clear_popover_toggle_task_tracker(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        kind: RendererPageElementToggleEventKind,
         element: DomHandle,
-    ) -> bool {
+    ) {
         let Some(target) = self.window_document_task_target_for_node(scope, element) else {
-            return false;
+            return;
         };
-        let Some(index) = self
-            .element_toggle_events
-            .find_slot_index(target, kind, |pending| pending.element == element)
-        else {
-            return false;
-        };
-        self.element_toggle_events
-            .remove_at(index)
-            .into_payload()
-            .cancellation
-            .cancel();
-        true
+        if let Some(index) = self.element_toggle_events.find_slot_index(
+            target,
+            RendererPageElementToggleEventKind::Popover,
+            |pending| pending.coalescing_element == Some(element),
+        ) {
+            self.element_toggle_events
+                .payload_at_mut(index)
+                .coalescing_element = None;
+        }
     }
 
     pub(crate) fn current_pending_element_toggle_event_task(

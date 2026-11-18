@@ -13,9 +13,7 @@ use super::super::node::{
 };
 use super::super::throw_dom_exception;
 use super::focus::{focus_element, is_focusable, update_focus};
-use super::toggle_event::{
-    cancel_element_toggle_event, construct_toggle_event_with_source, queue_element_toggle_event,
-};
+use super::toggle_event::{construct_toggle_event_with_source, queue_element_toggle_event};
 use super::{
     PageScriptHost, dispatch_public_event, has_reflected_attribute, reflected_attribute,
     remove_reflected_attribute, set_reflected_attribute,
@@ -31,10 +29,93 @@ fn canonical_popover_state(raw: &str) -> &'static str {
     }
 }
 
-fn is_manual_popover(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    reflected_attribute(runtime, handle, "popover")
-        .as_deref()
-        .is_some_and(|value| canonical_popover_state(value) == "manual")
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PopoverStack {
+    Auto,
+    Hint,
+}
+
+#[derive(Default)]
+pub(in crate::native_bridge) struct DocumentPopovers {
+    auto: Vec<DomHandle>,
+    hint: Vec<DomHandle>,
+    hint_parent: Option<DomHandle>,
+    showing: bool,
+    hiding: Vec<DomHandle>,
+}
+
+impl DocumentPopovers {
+    fn stack(&self, kind: PopoverStack) -> &[DomHandle] {
+        match kind {
+            PopoverStack::Auto => &self.auto,
+            PopoverStack::Hint => &self.hint,
+        }
+    }
+
+    fn stack_mut(&mut self, kind: PopoverStack) -> &mut Vec<DomHandle> {
+        match kind {
+            PopoverStack::Auto => &mut self.auto,
+            PopoverStack::Hint => &mut self.hint,
+        }
+    }
+
+    fn kind(&self, handle: DomHandle) -> Option<PopoverStack> {
+        [PopoverStack::Auto, PopoverStack::Hint]
+            .into_iter()
+            .find(|&kind| self.stack(kind).contains(&handle))
+    }
+
+    fn remove(&mut self, handle: DomHandle) {
+        if let Some(kind) = self.kind(handle) {
+            self.stack_mut(kind).retain(|&entry| entry != handle);
+        }
+        if self.hint_parent == Some(handle) || self.hint.is_empty() {
+            self.hint_parent = None;
+        }
+    }
+}
+
+impl PageScriptHost {
+    pub(in crate::native_bridge) fn retire_document_popovers(&mut self, document: DomHandle) {
+        let Some(state) = self.document_popovers.remove(&document) else {
+            return;
+        };
+        for handle in state.auto.into_iter().chain(state.hint) {
+            self.take_popover_focus_restore_target(handle);
+            if self.dom_host().owner_document_handle(handle) == Some(document) {
+                self.dom_host_mut().set_popover_open(handle, false);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HidePopover {
+    restore_focus: bool,
+    fire_events: bool,
+}
+
+impl HidePopover {
+    const DIRECT: Self = Self {
+        restore_focus: true,
+        fire_events: true,
+    };
+    const DISMISS: Self = Self {
+        restore_focus: false,
+        fire_events: true,
+    };
+    const SILENT: Self = Self {
+        restore_focus: false,
+        fire_events: false,
+    };
+}
+
+fn popover_stack_kind(runtime: &PageScriptHost, handle: DomHandle) -> Option<PopoverStack> {
+    match canonical_popover_state(&reflected_attribute(runtime, handle, "popover")?) {
+        "auto" => Some(PopoverStack::Auto),
+        "hint" => Some(PopoverStack::Hint),
+        _ => None,
+    }
 }
 
 pub(super) fn popover_is_open(runtime: &PageScriptHost, handle: DomHandle) -> bool {
@@ -161,87 +242,337 @@ fn set_popover_open_state(
     source: Option<DomHandle>,
     throw_exceptions: bool,
 ) -> bool {
-    let runtime = unsafe { &*runtime_ptr };
-    let was_open = popover_is_open(runtime, handle);
-    let owner_document = runtime.dom_host().owner_document_handle(handle);
-    if open && !can_show_popover(scope, runtime, handle, owner_document, throw_exceptions) {
-        return was_open;
-    }
-    if was_open == open {
-        return was_open;
-    }
-    let old_style_state = runtime.retained_current_element_state(handle);
-    let (old_state, new_state) = if open {
-        (
-            RendererPageElementToggleEventState::Closed,
-            RendererPageElementToggleEventState::Open,
-        )
+    if open {
+        show_popover(scope, runtime_ptr, handle, source, throw_exceptions);
     } else {
-        (
-            RendererPageElementToggleEventState::Open,
-            RendererPageElementToggleEventState::Closed,
-        )
+        hide_popover(scope, runtime_ptr, handle, source, HidePopover::DIRECT);
+    }
+    popover_is_open(unsafe { &*runtime_ptr }, handle)
+}
+
+fn show_popover(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    source: Option<DomHandle>,
+    throw_exceptions: bool,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    let owner_document = runtime.dom_host().owner_document_handle(handle);
+    if owner_document
+        .and_then(|document| runtime.document_popovers.get(&document))
+        .is_some_and(|state| state.showing || !state.hiding.is_empty())
+    {
+        if throw_exceptions {
+            throw_dom_exception(
+                scope,
+                "InvalidStateError",
+                11,
+                "A popover transition is already in progress in this document.",
+            );
+        }
+        return;
+    }
+    if !can_show_popover(scope, runtime, handle, owner_document, throw_exceptions) {
+        return;
+    }
+    let Some(document) = owner_document else {
+        return;
     };
-    if let Some(event) = construct_toggle_event_with_source(
+    unsafe { &mut *runtime_ptr }
+        .document_popovers
+        .entry(document)
+        .or_default()
+        .showing = true;
+    show_popover_steps(
+        scope,
+        runtime_ptr,
+        handle,
+        document,
+        source,
+        throw_exceptions,
+    );
+    let runtime = unsafe { &mut *runtime_ptr };
+    if let Some(state) = runtime.document_popovers.get_mut(&document) {
+        state.showing = false;
+    }
+    discard_idle_popover_state(runtime, document);
+}
+
+fn show_popover_steps(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    document: DomHandle,
+    source: Option<DomHandle>,
+    throw_exceptions: bool,
+) {
+    if !dispatch_popover_beforetoggle(scope, runtime_ptr, handle, true, source) {
+        return;
+    }
+    let runtime = unsafe { &*runtime_ptr };
+    if !can_show_popover(scope, runtime, handle, Some(document), throw_exceptions) {
+        return;
+    }
+    let original_kind = popover_stack_kind(runtime, handle);
+    let mut stack_kind = original_kind;
+    let mut ancestor = None;
+    if let Some(kind) = original_kind {
+        ancestor = topmost_popover_ancestor(runtime, document, handle, source);
+        if kind == PopoverStack::Auto
+            && ancestor.is_some_and(|(_, kind)| kind == PopoverStack::Hint)
+        {
+            stack_kind = Some(PopoverStack::Hint);
+        }
+        let endpoint = ancestor.map(|(ancestor, _)| ancestor);
+        hide_popover_stack_until(
+            scope,
+            runtime_ptr,
+            document,
+            endpoint,
+            PopoverStack::Hint,
+            HidePopover::DISMISS,
+        );
+        if stack_kind == Some(PopoverStack::Auto) {
+            hide_popover_stack_until(
+                scope,
+                runtime_ptr,
+                document,
+                endpoint,
+                PopoverStack::Auto,
+                HidePopover::DISMISS,
+            );
+        }
+        let runtime = unsafe { &*runtime_ptr };
+        if popover_stack_kind(runtime, handle) != original_kind {
+            if throw_exceptions {
+                throw_dom_exception(
+                    scope,
+                    "InvalidStateError",
+                    11,
+                    "The popover mode changed while it was showing.",
+                );
+            }
+            return;
+        }
+        if !can_show_popover(scope, runtime, handle, Some(document), throw_exceptions) {
+            return;
+        }
+    }
+
+    let runtime = unsafe { &mut *runtime_ptr };
+    if !update_popover_visibility(runtime, handle, true) {
+        return;
+    }
+    if let Some(kind) = stack_kind {
+        let state = runtime.document_popovers.entry(document).or_default();
+        let first = state.auto.is_empty() && state.hint.is_empty();
+        if let (PopoverStack::Hint, Some((parent, PopoverStack::Auto))) = (kind, ancestor)
+            && state.auto.contains(&parent)
+        {
+            state.hint_parent = Some(parent);
+        }
+        state.stack_mut(kind).push(handle);
+        if first {
+            let previous = runtime
+                .active_element_handle()
+                .or_else(|| runtime.document_focus_fallback_handle());
+            runtime.set_popover_focus_restore_target(handle, previous);
+        }
+    }
+    autofocus_popover_descendant(scope, runtime_ptr, handle);
+    queue_popover_toggle(scope, runtime_ptr, handle, true, source);
+}
+
+fn hide_popover(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    source: Option<DomHandle>,
+    mut options: HidePopover,
+) {
+    let runtime = unsafe { &mut *runtime_ptr };
+    if !popover_is_open(runtime, handle) {
+        return;
+    }
+    let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
+        return;
+    };
+    let state = runtime.document_popovers.entry(document).or_default();
+    options.fire_events &= !state.hiding.contains(&handle);
+    state.hiding.push(handle);
+    hide_dependent_popovers(scope, runtime_ptr, document, handle, options);
+    if popover_is_open_in_document(unsafe { &*runtime_ptr }, document, handle) {
+        if options.fire_events {
+            dispatch_popover_beforetoggle(scope, runtime_ptr, handle, false, source);
+        }
+        let runtime = unsafe { &mut *runtime_ptr };
+        if popover_is_open_in_document(runtime, document, handle)
+            && update_popover_visibility(runtime, handle, false)
+        {
+            if let Some(state) = runtime.document_popovers.get_mut(&document) {
+                state.remove(handle);
+            }
+            if options.fire_events {
+                queue_popover_toggle(scope, runtime_ptr, handle, false, source);
+            }
+            if options.restore_focus {
+                restore_popover_focus_if_needed(scope, runtime_ptr, handle);
+            } else {
+                unsafe { &mut *runtime_ptr }.take_popover_focus_restore_target(handle);
+            }
+        }
+    }
+    let runtime = unsafe { &mut *runtime_ptr };
+    if let Some(state) = runtime.document_popovers.get_mut(&document) {
+        let hidden = state.hiding.pop();
+        debug_assert_eq!(hidden, Some(handle));
+    }
+    discard_idle_popover_state(runtime, document);
+}
+
+fn popover_is_open_in_document(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    handle: DomHandle,
+) -> bool {
+    popover_is_open(runtime, handle)
+        && runtime.dom_host().owner_document_handle(handle) == Some(document)
+}
+
+fn hide_dependent_popovers(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    document: DomHandle,
+    handle: DomHandle,
+    options: HidePopover,
+) {
+    let Some(state) = (unsafe { &*runtime_ptr }).document_popovers.get(&document) else {
+        return;
+    };
+    let hide_hint_stack = state.hint_parent == Some(handle);
+    let kind = state.kind(handle);
+    if hide_hint_stack || kind == Some(PopoverStack::Hint) {
+        let endpoint = if hide_hint_stack { None } else { Some(handle) };
+        hide_popover_stack_until(
+            scope,
+            runtime_ptr,
+            document,
+            endpoint,
+            PopoverStack::Hint,
+            options,
+        );
+    }
+    if kind == Some(PopoverStack::Auto) {
+        hide_popover_stack_until(
+            scope,
+            runtime_ptr,
+            document,
+            Some(handle),
+            PopoverStack::Auto,
+            options,
+        );
+    }
+}
+
+fn update_popover_visibility(runtime: &mut PageScriptHost, handle: DomHandle, open: bool) -> bool {
+    let old_style_state = runtime.retained_current_element_state(handle);
+    if !runtime.dom_host_mut().set_popover_open(handle, open) {
+        return false;
+    }
+    runtime.note_element_state_style_activity_with_old_state(
+        handle,
+        StyloElementState::POPOVER_OPEN,
+        old_style_state,
+    );
+    runtime.invalidate_layout_after_interaction_state_change();
+    true
+}
+
+fn dispatch_popover_beforetoggle(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    open: bool,
+    source: Option<DomHandle>,
+) -> bool {
+    let (old_state, new_state) = toggle_states(open);
+    construct_toggle_event_with_source(
         scope,
         "beforetoggle",
         old_state.as_str(),
         new_state.as_str(),
         open,
         source,
-    ) {
-        let outcome = dispatch_public_event(scope, runtime_ptr, handle, event);
-        if open && !outcome.allows_default() {
-            return false;
-        }
+    )
+    .is_none_or(|event| dispatch_public_event(scope, runtime_ptr, handle, event).allows_default())
+}
+
+fn queue_popover_toggle(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    open: bool,
+    source: Option<DomHandle>,
+) {
+    let (old_state, new_state) = toggle_states(open);
+    queue_element_toggle_event(
+        scope,
+        runtime_ptr,
+        RendererPageElementToggleEventKind::Popover,
+        handle,
+        old_state,
+        new_state,
+        source,
+    );
+}
+
+fn toggle_states(
+    open: bool,
+) -> (
+    RendererPageElementToggleEventState,
+    RendererPageElementToggleEventState,
+) {
+    use RendererPageElementToggleEventState::{Closed, Open};
+    if open { (Closed, Open) } else { (Open, Closed) }
+}
+
+fn discard_idle_popover_state(runtime: &mut PageScriptHost, document: DomHandle) {
+    if runtime
+        .document_popovers
+        .get(&document)
+        .is_some_and(|state| {
+            state.auto.is_empty()
+                && state.hint.is_empty()
+                && !state.showing
+                && state.hiding.is_empty()
+        })
+    {
+        runtime.document_popovers.remove(&document);
     }
-    if open {
-        let runtime = unsafe { &*runtime_ptr };
-        if !can_show_popover(scope, runtime, handle, owner_document, throw_exceptions) {
-            return popover_is_open(runtime, handle);
-        }
-        if !is_manual_popover(runtime, handle) {
-            close_open_auto_popovers(scope, runtime_ptr, handle, source);
-            let runtime = unsafe { &*runtime_ptr };
-            if !can_show_popover(scope, runtime, handle, owner_document, throw_exceptions) {
-                return popover_is_open(runtime, handle);
-            }
-        }
+}
+
+pub(crate) fn remove_popover_stack_entry(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+) {
+    let runtime = unsafe { &mut *runtime_ptr };
+    runtime.take_popover_focus_restore_target(handle);
+    // Adoption can change nodeDocument before the removal effects are delivered.
+    let document = runtime
+        .document_popovers
+        .iter()
+        .find_map(|(document, state)| state.kind(handle).map(|_| *document));
+    let Some(document) = document else {
+        return;
+    };
+    hide_dependent_popovers(scope, runtime_ptr, document, handle, HidePopover::SILENT);
+    let runtime = unsafe { &mut *runtime_ptr };
+    if let Some(state) = runtime.document_popovers.get_mut(&document) {
+        state.remove(handle);
     }
-    if open && !is_manual_popover(unsafe { &*runtime_ptr }, handle) {
-        let runtime = unsafe { &*runtime_ptr };
-        let restore_target = runtime
-            .active_element_handle()
-            .or_else(|| runtime.document_focus_fallback_handle());
-        unsafe { &mut *runtime_ptr }.set_popover_focus_restore_target(handle, restore_target);
-    }
-    let changed = unsafe { &mut *runtime_ptr }
-        .dom_host_mut()
-        .set_popover_open(handle, open);
-    if changed {
-        let runtime = unsafe { &mut *runtime_ptr };
-        runtime.note_element_state_style_activity_with_old_state(
-            handle,
-            StyloElementState::POPOVER_OPEN,
-            old_style_state,
-        );
-        runtime.invalidate_layout_after_interaction_state_change();
-        if open {
-            autofocus_popover_descendant(scope, runtime_ptr, handle);
-        } else if !is_manual_popover(unsafe { &*runtime_ptr }, handle) {
-            restore_popover_focus_if_needed(scope, runtime_ptr, handle);
-        }
-        queue_element_toggle_event(
-            scope,
-            runtime_ptr,
-            RendererPageElementToggleEventKind::Popover,
-            handle,
-            old_state,
-            new_state,
-            source,
-        );
-    }
-    open
+    discard_idle_popover_state(runtime, document);
 }
 
 pub(crate) fn handle_popover_attribute_change(
@@ -263,16 +594,12 @@ pub(crate) fn handle_popover_attribute_change(
     }
     if popover_is_open(unsafe { &*runtime_ptr }, handle) {
         let _ = set_popover_open_state(scope, runtime_ptr, handle, false, None, false);
+    } else {
+        remove_popover_stack_entry(scope, runtime_ptr, handle);
     }
-    if new_value.is_none() {
-        // Blink drops PopoverData when the attribute is removed. Its task
-        // handle owns and cancels any coalesced toggle event at that point.
-        cancel_element_toggle_event(
-            scope,
-            runtime_ptr,
-            RendererPageElementToggleEventKind::Popover,
-            handle,
-        );
+    let runtime = unsafe { &mut *runtime_ptr };
+    if new_value.is_none() && !has_reflected_attribute(runtime, handle, "popover") {
+        runtime.clear_popover_toggle_task_tracker(scope, handle);
     }
 }
 
@@ -325,7 +652,11 @@ fn restore_popover_focus_if_needed(
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
-    let restore_target = unsafe { &mut *runtime_ptr }.take_popover_focus_restore_target(handle);
+    let Some(restore_target) =
+        (unsafe { &mut *runtime_ptr }).take_popover_focus_restore_target(handle)
+    else {
+        return;
+    };
     let runtime = unsafe { &*runtime_ptr };
     let Some(active) = runtime.active_element_handle() else {
         return;
@@ -333,7 +664,7 @@ fn restore_popover_focus_if_needed(
     if !shadow_including_tree_contains(runtime, handle, active) {
         return;
     }
-    let next = restore_target.filter(|target| {
+    let next = Some(restore_target).filter(|target| {
         runtime
             .dom_host()
             .node(*target)
@@ -406,30 +737,69 @@ fn popover_flat_tree_parent(runtime: &PageScriptHost, handle: DomHandle) -> Opti
     Some(parent)
 }
 
-fn close_open_auto_popovers(
+fn topmost_popover_ancestor(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    handle: DomHandle,
+    source: Option<DomHandle>,
+) -> Option<(DomHandle, PopoverStack)> {
+    let state = runtime.document_popovers.get(&document)?;
+    for stack in [PopoverStack::Hint, PopoverStack::Auto] {
+        if let Some(ancestor) = state.stack(stack).iter().rev().find(|&&candidate| {
+            candidate != handle
+                && popover_is_open_in_document(runtime, document, candidate)
+                && (popover_flat_tree_contains(runtime, candidate, handle)
+                    || source.is_some_and(|source| {
+                        popover_flat_tree_contains(runtime, candidate, source)
+                    }))
+        }) {
+            return Some((*ancestor, stack));
+        }
+    }
+    None
+}
+
+fn hide_popover_stack_until(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
-    opening: DomHandle,
-    source: Option<DomHandle>,
+    document: DomHandle,
+    endpoint: Option<DomHandle>,
+    stack: PopoverStack,
+    options: HidePopover,
 ) {
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(root) = runtime.dom_host().root_node_handle(opening) else {
-        return;
+    let stack_snapshot = |runtime: &PageScriptHost| {
+        runtime
+            .document_popovers
+            .get(&document)
+            .map(|state| state.stack(stack).to_vec())
+            .unwrap_or_default()
     };
-    let candidates = runtime.dom_host().elements_by_tag_name(root, "*", true);
-    for candidate in candidates {
-        if candidate == opening || is_manual_popover(runtime, candidate) {
-            continue;
+    let current = stack_snapshot(unsafe { &*runtime_ptr });
+    let keep = endpoint
+        .and_then(|endpoint| current.iter().position(|&handle| handle == endpoint))
+        .map_or(0, |position| position + 1);
+    if keep == current.len() {
+        return;
+    }
+    let (remaining, dismissed) = current.split_at(keep);
+    for &handle in dismissed.iter().rev() {
+        hide_popover(scope, runtime_ptr, handle, None, options);
+    }
+    // Event handlers can mutate the tree during dismissal. Reconcile against the
+    // original prefix without firing a second round of author callbacks.
+    for handle in stack_snapshot(unsafe { &*runtime_ptr }).into_iter().rev() {
+        if !remaining.contains(&handle) {
+            hide_popover(
+                scope,
+                runtime_ptr,
+                handle,
+                None,
+                HidePopover {
+                    fire_events: false,
+                    ..options
+                },
+            );
         }
-        if !popover_is_open(runtime, candidate) {
-            continue;
-        }
-        if popover_flat_tree_contains(runtime, candidate, opening)
-            || source.is_some_and(|source| popover_flat_tree_contains(runtime, candidate, source))
-        {
-            continue;
-        }
-        let _ = set_popover_open_state(scope, runtime_ptr, candidate, false, None, false);
     }
 }
 
@@ -535,7 +905,7 @@ pub(in crate::native_bridge) fn node_show_popover_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let _ = set_popover_open_state(scope, runtime_ptr, handle, true, source, true);
+    show_popover(scope, runtime_ptr, handle, source, true);
     rv.set_undefined();
 }
 

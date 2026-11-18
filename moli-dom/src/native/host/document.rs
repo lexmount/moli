@@ -3011,8 +3011,14 @@ impl DomHost {
                     ));
                 }
             }
-            if self.shadow_root_handle(handle).is_some() {
+            if let Some(shadow_root) = self.shadow_root_handle(handle) {
                 context.shadow_hosts.push(handle);
+                let open_in_shadow = self.shadow_including_subtree(shadow_root).filter(|&node| {
+                    self.node(node)
+                        .and_then(Node::as_element)
+                        .is_some_and(|element| element.popover_open())
+                });
+                context.open_popovers.extend(open_in_shadow);
             }
             stack.extend(self.child_handles_reversed(handle));
         }

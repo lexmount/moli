@@ -204,13 +204,22 @@ fn removing_open_popover_clears_internal_open_state_before_reinsertion() {
               const disconnected = popover.matches(":popover-open");
               body.appendChild(popover);
               const reinserted = popover.matches(":popover-open");
-              return [before, disconnected, reinserted].join("|");
+              const host = body.appendChild(document.createElement("div"));
+              const shadow = host.attachShadow({mode: "closed"});
+              const shadowPopover = shadow.appendChild(document.createElement("div"));
+              shadowPopover.popover = "auto";
+              shadowPopover.showPopover();
+              const shadowBefore = shadowPopover.matches(":popover-open");
+              host.remove();
+              body.appendChild(host);
+              const shadowReinserted = shadowPopover.matches(":popover-open");
+              return [before, disconnected, reinserted, shadowBefore, shadowReinserted].join("|");
             })()
             "#,
         )
         .expect("popover removal state probe should evaluate");
 
-    assert_eq!(result, "true|false|false");
+    assert_eq!(result, "true|false|false|true|false");
 }
 #[test]
 fn moving_open_popover_between_documents_clears_internal_open_state() {
@@ -242,6 +251,61 @@ fn moving_open_popover_between_documents_clears_internal_open_state() {
         .expect("popover cross-document move probe should evaluate");
 
     assert_eq!(result, "true|false|true");
+}
+#[test]
+fn popover_stack_orders_dismissal_and_rejects_reentrant_showing() {
+    let mut vm = new_storage_test_vm("https://popover-stack.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  const make = (parent, mode) => {
+    const element = document.createElement('div');
+    element.popover = mode;
+    parent.append(element);
+    return element;
+  };
+  const auto = make(body, 'auto');
+  const sourced = make(body, 'auto');
+  const hint = make(auto, 'hint');
+  const nested = make(hint, 'auto');
+  const manual = make(auto, 'manual');
+  const unrelated = make(body, 'auto');
+  auto.showPopover();
+  auto.setAttribute("popover", "AUTO");
+  sourced.showPopover({source: auto});
+  hint.showPopover();
+  nested.showPopover();
+  manual.showPopover();
+  const open = element => element.matches(':popover-open');
+  const wasOpen = [auto, sourced, hint, nested, manual].every(open);
+  const order = [];
+  for (const [name, element] of [['auto', auto], ['sourced', sourced], ['hint', hint], ['nested', nested]]) {
+    element.addEventListener('beforetoggle', () => order.push(name));
+  }
+  let reentrantError;
+  nested.addEventListener('beforetoggle', () => {
+    try {
+      unrelated.showPopover();
+    } catch (error) {
+      reentrantError = error.name;
+    }
+  });
+  auto.hidePopover();
+  return JSON.stringify({wasOpen, order, reentrantError, manualOpen: open(manual),
+                         closed: [auto, sourced, hint, nested, unrelated].every(element => !open(element))});
+})()
+"#,
+        )
+        .expect("popover stack operations should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"wasOpen":true,"order":["nested","hint","sourced","auto"],"reentrantError":"InvalidStateError","manualOpen":true,"closed":true}"#
+    );
 }
 #[test]
 fn showing_autofocus_popover_uses_focus_delegation() {

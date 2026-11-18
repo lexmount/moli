@@ -2084,9 +2084,9 @@ pub(super) fn finish_runtime_mutation_effects(
         finish_runtime_script_start_candidate(runtime, scope, host_ptr, candidate);
     }
 
+    // Native removal already hid these popovers. Clean up their stack entries.
     for popover in removed_open_popovers {
-        // Native tree mutation already cleared the open state.
-        unsafe { &mut *host_ptr }.take_popover_focus_restore_target(popover);
+        crate::native_bridge::element::remove_popover_stack_entry(scope, host_ptr, popover);
     }
     unsafe { &mut *host_ptr }.queue_slotchange_events(scope, &changed_slots);
 
