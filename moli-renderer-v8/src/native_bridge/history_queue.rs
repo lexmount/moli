@@ -92,6 +92,31 @@ pub(crate) enum PendingHistoryTraversalAction {
     },
     SameDocument(PendingHistoryTraversal),
     CrossDocument(Box<PendingCrossDocumentTraversal>),
+    CompleteTopLevelHandoff {
+        target: WindowTaskTarget,
+    },
+}
+
+impl PendingHistoryTraversalAction {
+    fn target_and_kind(&self) -> (WindowTaskTarget, RendererPageHistoryTraversalTaskKind) {
+        match self {
+            Self::ByDelta { target, .. } => {
+                (*target, RendererPageHistoryTraversalTaskKind::ByDelta)
+            }
+            Self::SameDocument(pending) => (
+                pending.target,
+                RendererPageHistoryTraversalTaskKind::SameDocument,
+            ),
+            Self::CrossDocument(pending) => (
+                pending.target,
+                RendererPageHistoryTraversalTaskKind::CrossDocument,
+            ),
+            Self::CompleteTopLevelHandoff { target } => (
+                *target,
+                RendererPageHistoryTraversalTaskKind::CompleteTopLevelHandoff,
+            ),
+        }
+    }
 }
 
 pub(crate) struct QueuedHistoryTraversalTask {
@@ -142,7 +167,8 @@ impl HistoryQueueState {
                 }
                 PendingHistoryTraversalAction::ByDelta { .. }
                 | PendingHistoryTraversalAction::SameDocument(_)
-                | PendingHistoryTraversalAction::CrossDocument(_) => None,
+                | PendingHistoryTraversalAction::CrossDocument(_)
+                | PendingHistoryTraversalAction::CompleteTopLevelHandoff { .. } => None,
             })
     }
 
@@ -458,6 +484,37 @@ impl PageScriptHost {
         ))
     }
 
+    pub(crate) fn queue_top_level_history_handoff_completion(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<RendererPageHistoryTraversalProducer> {
+        let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
+        let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
+        let target = WindowTaskTarget::new(
+            execution_context.dispatch_scope(),
+            execution_context.owner(),
+        );
+        let task_id = self.history_queue.next_history_traversal_task_id;
+        self.history_queue.next_history_traversal_task_id = task_id
+            .checked_next()
+            .expect("history-traversal task id overflow");
+        self.history_queue
+            .pending_history_traversal_tasks
+            .push_back(QueuedHistoryTraversalTask {
+                task_id,
+                execution_context,
+                relevant_context,
+                action: PendingHistoryTraversalAction::CompleteTopLevelHandoff { target },
+            });
+        self.retain_active_history_delta_position(None);
+        Some(self.page_history_traversal_sender().bind_task(
+            execution_context,
+            target,
+            task_id,
+            RendererPageHistoryTraversalTaskKind::CompleteTopLevelHandoff,
+        ))
+    }
+
     pub(crate) fn replace_active_history_delta_position(
         &mut self,
         position: Option<Rc<RefCell<HistoryTraversalPosition>>>,
@@ -527,7 +584,23 @@ impl PageScriptHost {
             PendingHistoryTraversalAction::CrossDocument(traversal) => self
                 .session_histories
                 .popup_for_owner(traversal.target.dispatch_scope()),
+            PendingHistoryTraversalAction::CompleteTopLevelHandoff { .. } => None,
         }
+    }
+
+    fn history_traversal_is_blocked(&self, popup: Option<u64>) -> bool {
+        self.session_histories.has_pending_traversal(popup)
+            || (popup.is_none()
+                && self
+                    .history_queue
+                    .pending_history_traversal_tasks
+                    .iter()
+                    .any(|queued| {
+                        matches!(
+                            queued.action,
+                            PendingHistoryTraversalAction::CompleteTopLevelHandoff { .. }
+                        )
+                    }))
     }
 
     pub(crate) fn defer_queued_history_traversal_task(
@@ -551,7 +624,7 @@ impl PageScriptHost {
             .iter()
             .take(index)
             .any(|queued| self.history_traversal_popup(&queued.action) == popup);
-        if !earlier_task && !self.session_histories.has_pending_traversal(popup) {
+        if !earlier_task && !self.history_traversal_is_blocked(popup) {
             return false;
         }
         let queued = self
@@ -570,7 +643,11 @@ impl PageScriptHost {
         queued: QueuedHistoryTraversalTask,
     ) -> Option<QueuedHistoryTraversalTask> {
         let popup = self.history_traversal_popup(&queued.action);
-        if self.session_histories.has_pending_traversal(popup) {
+        if !matches!(
+            queued.action,
+            PendingHistoryTraversalAction::CompleteTopLevelHandoff { .. }
+        ) && self.history_traversal_is_blocked(popup)
+        {
             self.history_queue
                 .deferred_traversals
                 .push_back((popup, queued));
@@ -618,18 +695,7 @@ impl PageScriptHost {
                 retained.push_back((root, queued));
                 continue;
             }
-            let (target, kind) = match &queued.action {
-                PendingHistoryTraversalAction::ByDelta { target, .. } => {
-                    (*target, RendererPageHistoryTraversalTaskKind::ByDelta)
-                }
-                PendingHistoryTraversalAction::SameDocument(t) => {
-                    (t.target, RendererPageHistoryTraversalTaskKind::SameDocument)
-                }
-                PendingHistoryTraversalAction::CrossDocument(t) => (
-                    t.target,
-                    RendererPageHistoryTraversalTaskKind::CrossDocument,
-                ),
-            };
+            let (target, kind) = queued.action.target_and_kind();
             queued.task_id = self.history_queue.next_history_traversal_task_id;
             self.history_queue.next_history_traversal_task_id = queued
                 .task_id
@@ -896,19 +962,7 @@ impl PageScriptHost {
         if !self.window_execution_context_identity_is_current(queued.execution_context) {
             return None;
         }
-        let (target, kind) = match &queued.action {
-            PendingHistoryTraversalAction::ByDelta { target, .. } => {
-                (*target, RendererPageHistoryTraversalTaskKind::ByDelta)
-            }
-            PendingHistoryTraversalAction::SameDocument(pending) => (
-                pending.target,
-                RendererPageHistoryTraversalTaskKind::SameDocument,
-            ),
-            PendingHistoryTraversalAction::CrossDocument(pending) => (
-                pending.target,
-                RendererPageHistoryTraversalTaskKind::CrossDocument,
-            ),
-        };
+        let (target, kind) = queued.action.target_and_kind();
         if self.current_window_execution_context_owner(target.dispatch_scope())
             != Some(target.owner())
         {
@@ -925,19 +979,7 @@ impl PageScriptHost {
         kind: RendererPageHistoryTraversalTaskKind,
     ) -> Option<QueuedHistoryTraversalTask> {
         let queued = self.history_queue.pending_history_traversal_task(task_id)?;
-        let (queued_target, queued_kind) = match &queued.action {
-            PendingHistoryTraversalAction::ByDelta { target, .. } => {
-                (*target, RendererPageHistoryTraversalTaskKind::ByDelta)
-            }
-            PendingHistoryTraversalAction::SameDocument(pending) => (
-                pending.target,
-                RendererPageHistoryTraversalTaskKind::SameDocument,
-            ),
-            PendingHistoryTraversalAction::CrossDocument(pending) => (
-                pending.target,
-                RendererPageHistoryTraversalTaskKind::CrossDocument,
-            ),
-        };
+        let (queued_target, queued_kind) = queued.action.target_and_kind();
         if queued.execution_context != execution_context
             || queued_target != target
             || queued_kind != kind

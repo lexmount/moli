@@ -292,12 +292,65 @@ pub struct RendererPendingSameDocumentNavigation {
     pub navigation_type: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererPendingTopLevelHistoryTraversal {
     pub delta: i64,
     /// Known renderer destinations have already checked the outgoing tree;
     /// unresolved browser-history fallbacks still need that check.
     pub beforeunload_checked: bool,
+    completion: Option<RendererTopLevelHistoryTraversalCompletion>,
+}
+
+impl RendererPendingTopLevelHistoryTraversal {
+    pub const fn new(delta: i64, beforeunload_checked: bool) -> Self {
+        Self {
+            delta,
+            beforeunload_checked,
+            completion: None,
+        }
+    }
+
+    pub(crate) fn with_completion(
+        mut self,
+        producer: crate::page_task_queue::RendererPageHistoryTraversalProducer,
+    ) -> Self {
+        self.completion = Some(RendererTopLevelHistoryTraversalCompletion(
+            std::sync::Arc::new(TopLevelHistoryTraversalCompletion(Some(producer))),
+        ));
+        self
+    }
+
+    pub fn take_completion(&mut self) -> Option<RendererTopLevelHistoryTraversalCompletion> {
+        self.completion.take()
+    }
+}
+
+/// Keeps the originating Page's traversal queue waiting while the browser
+/// owns this request. On completion, the exact Page can resume its queue.
+#[derive(Debug, Clone)]
+pub struct RendererTopLevelHistoryTraversalCompletion(
+    std::sync::Arc<TopLevelHistoryTraversalCompletion>,
+);
+
+impl PartialEq for RendererTopLevelHistoryTraversalCompletion {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RendererTopLevelHistoryTraversalCompletion {}
+
+#[derive(Debug)]
+struct TopLevelHistoryTraversalCompletion(
+    Option<crate::page_task_queue::RendererPageHistoryTraversalProducer>,
+);
+
+impl Drop for TopLevelHistoryTraversalCompletion {
+    fn drop(&mut self) {
+        if let Some(producer) = self.0.take() {
+            let _ = producer.send();
+        }
+    }
 }
 
 /// A same-Document navigation captured together with the exact Document that

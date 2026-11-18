@@ -174,7 +174,7 @@ fn apply_history_traversal_by_delta(
                 // It must resolve a destination before checking beforeunload:
                 // an out-of-range request must not fire events or let a
                 // beforeunload handler perpetually enqueue another traversal.
-                host.record_pending_top_level_history_traversal(delta, false);
+                let _ = host.record_pending_top_level_history_traversal(scope, delta, false);
             }
             return;
         }
@@ -386,8 +386,7 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
                     host.top_level_navigation_history()
                         .select_joint_traversal(key, step);
                 }
-                host.record_pending_top_level_history_traversal(delta, true);
-                return true;
+                return host.record_pending_top_level_history_traversal(scope, delta, true);
             }
             let Ok(url) = url::Url::parse(&target_url) else {
                 reject_cross_document_traversal(scope, &traversal);
@@ -442,6 +441,7 @@ pub(crate) fn apply_authorized_history_traversal_task(
                 },
             );
         }
+        PendingHistoryTraversalAction::CompleteTopLevelHandoff { .. } => {}
     }
     resume_pending_history_traversals(scope, host, popup);
 }

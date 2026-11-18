@@ -513,26 +513,34 @@ impl PageScriptHost {
 
     pub(crate) fn record_pending_top_level_history_traversal(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         delta: i64,
         beforeunload_checked: bool,
-    ) {
+    ) -> bool {
+        let has_output = self.command_turn_output.is_some() || self.output_journal.is_some();
+        let mut traversal =
+            RendererPendingTopLevelHistoryTraversal::new(delta, beforeunload_checked);
+        if has_output {
+            let Some(completion) = self.queue_top_level_history_handoff_completion(scope) else {
+                return false;
+            };
+            traversal = traversal.with_completion(completion);
+        }
         // An unresolved browser fallback can be out of range. It must not
         // discard a Location request before the browser selects a target.
         if beforeunload_checked {
             self.clear_pending_top_level_navigation();
         }
-        let traversal = RendererPendingTopLevelHistoryTraversal {
-            delta,
-            beforeunload_checked,
-        };
-        if self.append_live_turn_owner_action(
-            crate::runtime::RendererOwnerAction::TopLevelHistoryTraversal(traversal),
-        ) {
-            return;
+        if has_output {
+            assert!(self.append_live_turn_owner_action(
+                crate::runtime::RendererOwnerAction::TopLevelHistoryTraversal(traversal),
+            ));
+            return true;
         }
         #[cfg(test)]
         {
             self.recorded_top_level_history_traversal = Some(traversal);
+            true
         }
         #[cfg(not(test))]
         panic!("a production history traversal must have a concrete renderer output sink");

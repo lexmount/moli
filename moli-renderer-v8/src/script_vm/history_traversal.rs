@@ -122,7 +122,8 @@ impl ScriptVm {
             .borrow()
             .history_traversal_popup(&queued.action);
         let results = match queued.action {
-            PendingHistoryTraversalAction::ByDelta { .. } => Vec::new(),
+            PendingHistoryTraversalAction::ByDelta { .. }
+            | PendingHistoryTraversalAction::CompleteTopLevelHandoff { .. } => Vec::new(),
             PendingHistoryTraversalAction::SameDocument(traversal) => traversal.results,
             PendingHistoryTraversalAction::CrossDocument(traversal) => traversal.results,
         };

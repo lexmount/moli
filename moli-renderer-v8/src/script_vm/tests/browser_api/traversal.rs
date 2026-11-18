@@ -276,6 +276,77 @@ async fn top_level_history_back_delegates_to_the_browser_history_controller() {
 }
 
 #[tokio::test]
+async fn top_level_history_queue_waits_for_browser_handoff_completion() {
+    use crate::runtime::{
+        PageId, RendererOutputItem, RendererOutputStreamIdentity, RendererOwnerAction,
+        RendererTurnOutputJournal,
+    };
+
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://browser-history-handoff.test/current",
+        &loader,
+    );
+    let journal = RendererTurnOutputJournal::new(
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(2729)),
+    );
+    vm._context_host
+        .borrow_mut()
+        .bind_output_journal(journal.clone());
+    let take_traversal = || {
+        journal
+            .settle()
+            .into_iter()
+            .flat_map(|publication| publication.into_records())
+            .find_map(|record| match record.into_parts().1 {
+                RendererOutputItem::OwnerAction(RendererOwnerAction::TopLevelHistoryTraversal(
+                    traversal,
+                )) => Some(traversal),
+                _ => None,
+            })
+    };
+
+    vm.eval("history.back(); history.forward();").unwrap();
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    let mut traversal = take_traversal().expect("first traversal should reach the browser");
+    assert_eq!(traversal.delta, -1);
+    let completion = traversal
+        .take_completion()
+        .expect("browser owns the completion");
+    assert!(
+        !vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert!(take_traversal().is_none());
+
+    // The browser found no destination and kept the same Document.
+    drop(completion);
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert!(
+        take_traversal().is_none(),
+        "completion only resumes the queue"
+    );
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        take_traversal().expect("resumed forward traversal").delta,
+        1
+    );
+}
+
+#[tokio::test]
 async fn top_level_history_fallback_preserves_location_until_browser_resolves_destination() {
     let url = "https://browser-owned-history.test/current";
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

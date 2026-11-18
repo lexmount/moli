@@ -7,6 +7,7 @@ use moli_core::page::{
     RendererDocumentLifecycleWaiter, RendererDocumentToken, RendererFrameToken,
     RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
     RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
+    RendererTopLevelHistoryTraversalCompletion,
 };
 use tokio::sync::watch;
 
@@ -96,6 +97,7 @@ pub(crate) struct PendingNavigationRequest {
     background_work: BackgroundWorkState,
     background_task: Option<crate::conn::OwnedProtocolWaitTask>,
     renderer_commit: Option<PendingRendererDocumentCommit>,
+    history_traversal_completion: Option<RendererTopLevelHistoryTraversalCompletion>,
     committed: bool,
     page_adoption: crate::conn::CommandWaitLifetimeOwner,
 }
@@ -109,6 +111,7 @@ impl PendingNavigationRequest {
             background_work: BackgroundWorkState::NotStarted,
             background_task: None,
             renderer_commit: None,
+            history_traversal_completion: None,
             committed: false,
             page_adoption: Default::default(),
         }
@@ -773,6 +776,29 @@ impl TargetPageSlot {
             .as_ref()
             .filter(|request| request.matches(token) && !request.committed)
             .and_then(PendingNavigationRequest::cancellation_handle)
+    }
+
+    pub(crate) fn retain_history_traversal_completion(
+        &mut self,
+        token: &DocumentNavigationToken,
+        completion: RendererTopLevelHistoryTraversalCompletion,
+    ) -> Option<RendererTopLevelHistoryTraversalCompletion> {
+        let Some(request) = self.pending_navigation_request.as_mut().filter(|request| {
+            request.matches(token)
+                && !request.committed
+                && request.history_traversal_completion.is_none()
+        }) else {
+            return Some(completion);
+        };
+        request.history_traversal_completion = Some(completion);
+        None
+    }
+
+    pub(crate) fn pending_document_navigation_token(&self) -> Option<&DocumentNavigationToken> {
+        self.pending_navigation_request
+            .as_ref()
+            .filter(|request| !request.committed)
+            .map(|request| &request.token)
     }
 
     pub(crate) fn add_document_navigation_cancellation(

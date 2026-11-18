@@ -3517,10 +3517,7 @@ async fn initial_document_navigation_noop_history_preserves_accepted_location() 
                     crate::conn::TopLevelNavigationOwnerAction::history(
                         owner.clone(),
                         page,
-                        moli_core::page::RendererPendingTopLevelHistoryTraversal {
-                            delta,
-                            beforeunload_checked: false,
-                        },
+                        moli_core::page::RendererPendingTopLevelHistoryTraversal::new(delta, false),
                     ),
                 )
             });
@@ -3594,10 +3591,7 @@ async fn initial_document_navigation_valid_history_supersedes_older_admission() 
                 crate::conn::TopLevelNavigationOwnerAction::history(
                     owner.clone(),
                     page,
-                    moli_core::page::RendererPendingTopLevelHistoryTraversal {
-                        delta: -1,
-                        beforeunload_checked: false,
-                    },
+                    moli_core::page::RendererPendingTopLevelHistoryTraversal::new(-1, false),
                 ),
             )
             .expect("a traversal with an existing destination must remain admissible")

@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Result};
-use moli_core::page::PendingPageCommand;
+use moli_core::page::{PendingPageCommand, RendererTopLevelHistoryTraversalCompletion};
 
 use crate::conn::{
     BackgroundNavigationLoadJob, CdpConnection, CommandOwnerScope, CommandWorkflowContext,
@@ -33,6 +33,9 @@ pub(crate) struct PreparedRendererNavigation {
     source: Option<RendererNavigationSource>,
     owner: CommandOwnerScope,
     prefix: CommandOutputPlan,
+    // Same-document and immediate results have no pending document request
+    // to own their acknowledgement.
+    _history_completion: Option<RendererTopLevelHistoryTraversalCompletion>,
 }
 
 enum RendererNavigationWork {
@@ -200,6 +203,7 @@ impl PreparedRendererNavigation {
                     },
                     source: None,
                     prefix: CommandOutputPlan::default(),
+                    _history_completion: None,
                 });
             }
         }
@@ -207,11 +211,31 @@ impl PreparedRendererNavigation {
         if !conn.target_page_output_residence_is_current(&page) {
             return None;
         }
+        let mut history_completion = None;
         let step = match request {
-            crate::conn::TopLevelNavigationRequest::History(traversal) => {
-                super::navigation::start_session_owner_history_traversal_from_renderer(
+            crate::conn::TopLevelNavigationRequest::History(mut traversal) => {
+                history_completion = traversal.take_completion();
+                let previous_navigation = conn
+                    .runtime_session_owner_slot_for_owner(&owner)
+                    .and_then(|slot| slot.pending_document_navigation_token())
+                    .cloned();
+                let step = super::navigation::start_session_owner_history_traversal_from_renderer(
                     conn, &owner, traversal,
-                )
+                );
+                // Background loading and Fetch interception can outlive an
+                // immediate command result. An unresolved delta can also
+                // leave a previously pending request in place.
+                if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&owner)
+                    && let Some(token) = slot
+                        .pending_document_navigation_token()
+                        .filter(|token| Some(*token) != previous_navigation.as_ref())
+                        .cloned()
+                    && let Some(completion) = history_completion.take()
+                {
+                    history_completion =
+                        slot.retain_history_traversal_completion(&token, completion);
+                }
+                step
             }
             crate::conn::TopLevelNavigationRequest::Location(navigation) => {
                 let navigation_history = url::Url::parse(navigation.url())
@@ -278,7 +302,9 @@ impl PreparedRendererNavigation {
                 )
             }
         };
-        Some(Self::prepare(conn, owner, step))
+        let mut prepared = Self::prepare(conn, owner, step);
+        prepared._history_completion = history_completion;
+        Some(prepared)
     }
 
     pub(crate) fn prepare(
@@ -332,6 +358,7 @@ impl PreparedRendererNavigation {
             source,
             owner,
             prefix,
+            _history_completion: None,
         }
     }
 
@@ -361,6 +388,7 @@ impl PreparedRendererNavigation {
             source: Some(navigation),
             owner,
             prefix: CommandOutputPlan::default(),
+            _history_completion: None,
         }
     }
 
