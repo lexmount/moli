@@ -19,13 +19,21 @@ pub(crate) struct InputSurfaceHit {
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputHitTestMode {
+    #[cfg(feature = "devtools")]
+    Dom,
+    Mouse,
+    Wheel,
+}
+
 #[cfg(feature = "devtools")]
 pub(crate) fn observable_input_hit_test(
     runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_surface_hit_test(runtime, document, point, false, false)?.target)
+    Ok(input_surface_hit_test(runtime, document, point, false, InputHitTestMode::Dom)?.target)
 }
 
 /// Hit tests within an already routed frame. The mouse press can keep that
@@ -59,9 +67,11 @@ pub(crate) fn observable_scrollbar_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
-    input_surface_hit_test(runtime, document, point, false, true).map(|hit| match hit.control {
-        Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
-        Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
+    input_surface_hit_test(runtime, document, point, false, InputHitTestMode::Mouse).map(|hit| {
+        match hit.control {
+            Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
+            Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
+        }
     })
 }
 
@@ -72,7 +82,7 @@ pub(crate) fn input_surface_hit_test(
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
-    include_scrollbars: bool,
+    mode: InputHitTestMode,
 ) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
         let target =
@@ -91,7 +101,7 @@ pub(crate) fn input_surface_hit_test(
                 point,
                 LayoutTransform2D::IDENTITY,
                 ignore_pointer_events_none,
-                include_scrollbars,
+                mode,
                 0,
             )
         })
@@ -105,7 +115,14 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_surface_hit_test(runtime, document, point, ignore_pointer_events_none, false)?.target)
+    Ok(input_surface_hit_test(
+        runtime,
+        document,
+        point,
+        ignore_pointer_events_none,
+        InputHitTestMode::Dom,
+    )?
+    .target)
 }
 
 fn input_hit_test_via_documents(
@@ -142,10 +159,10 @@ fn input_surface_hit_test_in_tree(
     point: LayoutPoint,
     root_to_frame: LayoutTransform2D,
     ignore_pointer_events_none: bool,
-    include_scrollbars: bool,
+    mode: InputHitTestMode,
     depth: usize,
 ) -> Result<InputSurfaceHit, LayoutError> {
-    let live_dom_hit = if include_scrollbars {
+    let live_dom_hit = if mode == InputHitTestMode::Mouse {
         let mut live_dom_hit = None;
         for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
             match surface {
@@ -192,7 +209,11 @@ fn input_surface_hit_test_in_tree(
         live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
     };
     let Some((layout_hit, target)) = live_dom_hit else {
-        return Ok(InputSurfaceHit::default());
+        // Wheel scrolling still belongs to this viewport when its DOM is inert.
+        return Ok(InputSurfaceHit {
+            target: (mode == InputHitTestMode::Wheel).then_some(tree.source_root()),
+            control: None,
+        });
     };
     let target_hit = InputSurfaceHit {
         target: Some(target),
@@ -224,7 +245,7 @@ fn input_surface_hit_test_in_tree(
         frame_to_child.map_point(point),
         frame_to_child.concatenate(root_to_frame),
         ignore_pointer_events_none,
-        include_scrollbars,
+        mode,
         depth + 1,
     )?;
     if child_hit.target.is_some() || child_hit.control.is_some() {

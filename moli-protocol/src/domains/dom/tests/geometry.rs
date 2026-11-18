@@ -1615,6 +1615,67 @@ async fn get_node_for_location_mock_policy_uses_compatibility_geometry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn mock_hit_testing_skips_inert_candidates() {
+    let mut ctx = TestContext::new_with_layout_policy(LayoutPolicy::Mock);
+    load_bc(&mut ctx, "BID-A");
+    navigate_to_data_html_async(
+        &mut ctx,
+        1,
+        "<!doctype html><main id='under'><button id='over'>Action</button></main>",
+    )
+    .await;
+    let under = renderer_backend_node_id_for_live_expression(
+        &mut ctx,
+        2,
+        3,
+        "document.getElementById('under')",
+    )
+    .await;
+    let over = renderer_backend_node_id_for_live_expression(
+        &mut ctx,
+        4,
+        5,
+        "document.getElementById('over')",
+    )
+    .await;
+
+    ctx.process_async(json!({
+        "id": 6,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": r#"
+                document.getElementById('over').inert = true;
+                [document.elementFromPoint(50, 10)?.id,
+                 document.elementsFromPoint(50, 10).map(element => element.id || element.localName)]
+            "#,
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, 6);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!(["under", ["under", "html"]]),
+        "{response}"
+    );
+
+    for (id, ignore_pointer_events_none, expected) in [(7, false, under), (8, true, over)] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "DOM.getNodeForLocation",
+            "params": { "x": 50, "y": 10, "ignorePointerEventsNone": ignore_pointer_events_none }
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, id);
+        assert_eq!(
+            response["result"]["backendNodeId"],
+            json!(expected),
+            "{response}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn get_node_for_location_negative_coordinates_report_no_hit() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");

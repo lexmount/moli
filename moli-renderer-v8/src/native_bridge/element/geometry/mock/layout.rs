@@ -5,6 +5,7 @@ use std::time::Instant;
 use super::super::super::super::PageScriptHost;
 use super::super::super::styles::{ComputedStyleRead, iframe_handle_viewport};
 use super::super::client_rect::{ClientRect, zero_client_rect};
+use super::super::provider::is_live_hit_source;
 use crate::native_bridge::element::raw_inline_style_property_value;
 
 const MOCK_FLOW_STEP_PX: f64 = 24.0;
@@ -588,8 +589,25 @@ pub(crate) fn mock_hit_test_handle(
     document_handle: DomHandle,
     x: f64,
     y: f64,
+    ignore_pointer_events_none: bool,
 ) -> Option<DomHandle> {
-    mock_hit_test_handle_with_child_frames(runtime, document_handle, x, y, 0)
+    mock_hit_test_handle_with_child_frames(
+        runtime,
+        document_handle,
+        x,
+        y,
+        ignore_pointer_events_none,
+        0,
+    )
+}
+
+fn mock_rect_contains_point(rect: ClientRect, x: f64, y: f64) -> bool {
+    rect.width > 0.0
+        && rect.height > 0.0
+        && x >= rect.left
+        && x <= rect.right
+        && y >= rect.top
+        && y <= rect.bottom
 }
 
 fn hit_test_shadow_root_handle(
@@ -597,40 +615,40 @@ fn hit_test_shadow_root_handle(
     shadow_root: DomHandle,
     x: f64,
     y: f64,
+    ignore_pointer_events_none: bool,
     depth: usize,
 ) -> Option<DomHandle> {
     if depth >= HIT_TEST_CHILD_FRAME_DEPTH_LIMIT {
         return None;
     }
-    let mut children = runtime
+    let children = runtime
         .dom_host()
         .child_handles(shadow_root)
         .collect::<Vec<_>>();
-    children.reverse();
-    for child in children {
-        let Some(node) = runtime.dom_host().node(child) else {
-            continue;
-        };
-        if !node.is_element() {
-            continue;
-        }
-        let rect = mock_client_rect(runtime, child);
-        if rect.width <= 0.0
-            || rect.height <= 0.0
-            || x < rect.left
-            || x > rect.right
-            || y < rect.top
-            || y > rect.bottom
+    for child in children.into_iter().rev() {
+        if !runtime
+            .dom_host()
+            .node(child)
+            .is_some_and(|node| node.is_element())
+            || !mock_rect_contains_point(mock_client_rect(runtime, child), x, y)
         {
             continue;
         }
         if let Some(nested_shadow_root) = runtime.dom_host().shadow_root_handle(child)
-            && let Some(hit) =
-                hit_test_shadow_root_handle(runtime, nested_shadow_root, x, y, depth + 1)
+            && let Some(hit) = hit_test_shadow_root_handle(
+                runtime,
+                nested_shadow_root,
+                x,
+                y,
+                ignore_pointer_events_none,
+                depth + 1,
+            )
         {
             return Some(hit);
         }
-        return Some(child);
+        if is_live_hit_source(runtime, child, ignore_pointer_events_none) {
+            return Some(child);
+        }
     }
     None
 }
@@ -640,41 +658,49 @@ fn mock_hit_test_handle_with_child_frames(
     document_handle: DomHandle,
     x: f64,
     y: f64,
+    ignore_pointer_events_none: bool,
     depth: usize,
 ) -> Option<DomHandle> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
-    let hit = document_elements_in_hit_order(runtime, document_handle)
-        .into_iter()
-        .rev()
-        .find(|element| {
-            let rect = mock_client_rect(runtime, *element);
-            rect.width > 0.0
-                && rect.height > 0.0
-                && x >= rect.left
-                && x <= rect.right
-                && y >= rect.top
-                && y <= rect.bottom
-        })?;
-    if depth < HIT_TEST_CHILD_FRAME_DEPTH_LIMIT
-        && let Some(child_document) = runtime.child_browsing_context_document_handle(hit)
-    {
-        let rect = mock_client_rect(runtime, hit);
-        if let Some(child_hit) = mock_hit_test_handle_with_child_frames(
-            runtime,
-            child_document,
-            x - rect.left,
-            y - rect.top,
-            depth + 1,
-        ) {
+    let elements = document_elements_in_hit_order(runtime, document_handle);
+    for element in elements.into_iter().rev() {
+        let rect = mock_client_rect(runtime, element);
+        if !mock_rect_contains_point(rect, x, y) {
+            continue;
+        }
+        let eligible = is_live_hit_source(runtime, element, ignore_pointer_events_none);
+        if eligible
+            && depth < HIT_TEST_CHILD_FRAME_DEPTH_LIMIT
+            && let Some(child_document) = runtime.child_browsing_context_document_handle(element)
+            && let Some(child_hit) = mock_hit_test_handle_with_child_frames(
+                runtime,
+                child_document,
+                x - rect.left,
+                y - rect.top,
+                ignore_pointer_events_none,
+                depth + 1,
+            )
+        {
             return Some(child_hit);
         }
+        // An active modal in a shadow tree can escape its host's inertness.
+        if let Some(shadow_root) = runtime.dom_host().shadow_root_handle(element)
+            && let Some(shadow_hit) = hit_test_shadow_root_handle(
+                runtime,
+                shadow_root,
+                x,
+                y,
+                ignore_pointer_events_none,
+                depth + 1,
+            )
+        {
+            return Some(shadow_hit);
+        }
+        if eligible {
+            return Some(element);
+        }
     }
-    if let Some(shadow_root) = runtime.dom_host().shadow_root_handle(hit)
-        && let Some(shadow_hit) = hit_test_shadow_root_handle(runtime, shadow_root, x, y, depth + 1)
-    {
-        return Some(shadow_hit);
-    }
-    Some(hit)
+    None
 }
