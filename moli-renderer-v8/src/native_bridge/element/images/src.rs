@@ -1011,10 +1011,7 @@ fn selected_srcset_candidate(
         });
     }
 
-    let source_size = if candidates
-        .iter()
-        .any(|candidate| candidate.descriptor.width.is_some())
-    {
+    let source_size = if has_width {
         source_size_for_sizes_attribute(
             sizes,
             auto_source_size,
@@ -1329,7 +1326,7 @@ mod tests {
         StyleViewport::new(Some(1_280.0), Some(720.0)).with_device_pixel_ratio(Some(1.0));
 
     fn select(srcset: &str, sizes: Option<&str>) -> Option<String> {
-        selected_srcset_candidate(srcset, sizes, None, false, TEST_VIEWPORT, None)
+        selected_srcset_candidate(srcset, None, sizes, None, false, TEST_VIEWPORT, None)
             .map(|candidate| candidate.url)
     }
 
@@ -1405,10 +1402,7 @@ mod tests {
 
     #[test]
     fn src_fills_a_missing_one_x_candidate_in_density_source_sets() {
-        let high_dpr = ImageSelectionViewport {
-            device_pixel_ratio: 2.0,
-            ..TEST_VIEWPORT
-        };
+        let high_dpr = TEST_VIEWPORT.with_device_pixel_ratio(Some(2.0));
         for (srcset, viewport, url, density) in [
             ("large.png 99x", TEST_VIEWPORT, "default.png", 1.0),
             ("large.png 2x", high_dpr, "large.png", 2.0),
@@ -1424,6 +1418,7 @@ mod tests {
                 None,
                 false,
                 viewport,
+                None,
             )
             .expect("a selected image source");
             assert_eq!(candidate.url, url, "{srcset}");
@@ -1473,6 +1468,7 @@ mod tests {
             "normal.png 1x, retina.png 2x",
             None,
             None,
+            None,
             false,
             high_dpr,
             None,
@@ -1487,6 +1483,7 @@ mod tests {
     fn srcset_zero_source_size_produces_infinite_density() {
         let selected = selected_srcset_candidate(
             "image.png 256w",
+            None,
             Some("0px"),
             None,
             false,
@@ -1504,6 +1501,7 @@ mod tests {
         for sizes in ["0", "-0", "+0", "-0px", "-0e-0px", "calc(-0px)"] {
             let selected = selected_srcset_candidate(
                 "image.png 256w",
+                None,
                 Some(sizes),
                 None,
                 false,
