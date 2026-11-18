@@ -25,10 +25,7 @@ pub(in crate::native_bridge::context_host) struct PendingFrameOwnerResourceTimin
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::native_bridge::context_host) struct CompletedFrameOwnerResourceTiming {
     child_owner: FrameDocumentTaskOwner,
-    target: FrameOwnerDocumentTarget,
-    request_url: String,
-    initiator_type: &'static str,
-    start_unix_millis_bits: u64,
+    timing: PendingFrameOwnerResourceTiming,
     network: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
 }
 
@@ -40,18 +37,9 @@ impl PendingFrameOwnerResourceTiming {
     ) -> CompletedFrameOwnerResourceTiming {
         CompletedFrameOwnerResourceTiming {
             child_owner,
-            target: self.target,
-            request_url: self.request_url,
-            initiator_type: self.initiator_type,
-            start_unix_millis_bits: self.start_unix_millis_bits,
+            timing: self,
             network,
         }
-    }
-}
-
-impl CompletedFrameOwnerResourceTiming {
-    pub(in crate::native_bridge::context_host) fn child_owner(&self) -> FrameDocumentTaskOwner {
-        self.child_owner
     }
 
     fn parent_dispatch_scope(&self) -> OwnerDispatchScope {
@@ -74,11 +62,21 @@ impl CompletedFrameOwnerResourceTiming {
         }
     }
 
+    fn start_unix_millis(&self) -> f64 {
+        f64::from_bits(self.start_unix_millis_bits)
+    }
+}
+
+impl CompletedFrameOwnerResourceTiming {
+    pub(in crate::native_bridge::context_host) fn child_owner(&self) -> FrameDocumentTaskOwner {
+        self.child_owner
+    }
+
     fn performance_entry(&self) -> ResourcePerformanceEntry {
         ResourcePerformanceEntry::from_child_frame_document_network(
-            self.request_url.clone(),
-            self.initiator_type,
-            Some(f64::from_bits(self.start_unix_millis_bits)),
+            self.timing.request_url.clone(),
+            self.timing.initiator_type,
+            Some(self.timing.start_unix_millis()),
             &self.network,
         )
     }
@@ -120,8 +118,41 @@ impl PageScriptHost {
         else {
             return;
         };
+        if self.record_frame_owner_resource_timing(
+            scope,
+            &timing.timing,
+            timing.performance_entry(),
+        ) && let Some(entry) = self.child_browsing_contexts.get_mut(&action.child_handle())
+        {
+            entry.clear_frame_owner_resource_timing_if_owner(action.owner());
+        }
+    }
+
+    pub(in crate::native_bridge::context_host) fn record_no_content_frame_owner_resource_timing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        timing: &PendingFrameOwnerResourceTiming,
+        network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+        response_status: u16,
+    ) {
+        let entry = ResourcePerformanceEntry::from_child_frame_no_content(
+            timing.request_url.clone(),
+            timing.initiator_type,
+            Some(timing.start_unix_millis()),
+            response_status,
+            network.cache_state,
+        );
+        self.record_frame_owner_resource_timing(scope, timing, entry);
+    }
+
+    fn record_frame_owner_resource_timing(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        timing: &PendingFrameOwnerResourceTiming,
+        entry: ResourcePerformanceEntry,
+    ) -> bool {
         if !timing.parent_owner_is_current(self) {
-            return;
+            return false;
         }
         let dispatch_scope = timing.parent_dispatch_scope();
         let execution_context_owner =
@@ -129,15 +160,11 @@ impl PageScriptHost {
         let Some((_, context)) =
             self.window_execution_context(scope, execution_context_owner, dispatch_scope)
         else {
-            return;
+            return false;
         };
-        {
-            let scope = &mut v8::ContextScope::new(scope, context);
-            record_resource_performance_entry(scope, timing.performance_entry());
-        }
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&action.child_handle()) {
-            entry.clear_frame_owner_resource_timing_if_owner(action.owner());
-        }
+        let scope = &mut v8::ContextScope::new(scope, context);
+        record_resource_performance_entry(scope, entry);
+        true
     }
 
     fn frame_owner_resource_initiator_type(&self, handle: DomHandle) -> Option<&'static str> {

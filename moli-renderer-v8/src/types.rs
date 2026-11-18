@@ -1687,7 +1687,10 @@ pub(super) struct ChildDocumentDownload {
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation(Box<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>),
+    IgnoredNavigation {
+        network: Box<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
+        resource_timing_status: Option<u16>,
+    },
     Download(Box<ChildDocumentDownload>),
     Redirect(Box<crate::native_bridge::ChildDocumentFetch>),
 }
@@ -1787,7 +1790,7 @@ impl ChildDocumentLoadCompletion {
     ) -> Option<&crate::protocol_types::ChildFrameDocumentNetworkSnapshot> {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation { network, .. }) => Some(network),
             Ok(ChildDocumentLoadOutcome::Download(download)) => Some(&download.network),
             Ok(ChildDocumentLoadOutcome::Redirect(_)) | Err(_) => None,
         }

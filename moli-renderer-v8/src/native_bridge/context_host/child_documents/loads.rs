@@ -549,17 +549,32 @@ impl PageScriptHost {
                 unreachable!("redirects retain the pending navigation")
             }
             Ok(
-                outcome @ (ChildDocumentLoadOutcome::IgnoredNavigation(_)
+                outcome @ (ChildDocumentLoadOutcome::IgnoredNavigation { .. }
                 | ChildDocumentLoadOutcome::Download(_)),
             ) => {
-                let (network, download) = match outcome {
-                    ChildDocumentLoadOutcome::IgnoredNavigation(network) => (*network, None),
+                let (network, download, timing_status) = match outcome {
+                    ChildDocumentLoadOutcome::IgnoredNavigation {
+                        network,
+                        resource_timing_status,
+                    } => (*network, None, resource_timing_status),
                     ChildDocumentLoadOutcome::Download(download) => {
                         let ChildDocumentDownload { network, response } = *download;
-                        (network, Some(response))
+                        (network, Some(response), None)
                     }
                     _ => unreachable!("only non-committing outcomes enter this branch"),
                 };
+                if let Some((timing, response_status)) = pending
+                    .frame_owner_resource_timing
+                    .take()
+                    .zip(timing_status)
+                {
+                    self.record_no_content_frame_owner_resource_timing(
+                        scope,
+                        &timing,
+                        &network,
+                        response_status,
+                    );
+                }
                 self.record_child_document_load_network(&network_attribution, network);
                 if let Some(response) = download {
                     self.record_pending_download_activation(
@@ -1336,6 +1351,23 @@ impl ChildDocumentFetch {
         }
         let navigation_url = request.navigation_url(&head);
         let request = request.request();
+        let resource_timing_status = if matches!(head.status, 204 | 205) {
+            request.request_origin().and_then(|origin| {
+                let mut timing_head = head.clone();
+                if timing_head.redirect_chain.len() < request.redirect_chain().len() {
+                    timing_head.redirect_chain = request.redirect_chain().to_vec();
+                }
+                timing_head.timing_allow_passed(origin).then(|| {
+                    if timing_head.url_list().has_cross_origin_url(origin) {
+                        0
+                    } else {
+                        timing_head.status
+                    }
+                })
+            })
+        } else {
+            None
+        };
         child_document_load_outcome_from_response(
             request.url.as_str().to_owned(),
             request.method.clone(),
@@ -1346,6 +1378,7 @@ impl ChildDocumentFetch {
             &self.parent_character_set,
             self.download_policy,
             self.response_body.take(),
+            resource_timing_status,
         )
         .map(Some)
     }
@@ -1411,6 +1444,7 @@ fn child_document_load_outcome_from_response(
     parent_character_set: &str,
     download_policy: ChildNavigationDownloadPolicy,
     download_body: Option<crate::network::ResourceInterceptionBody>,
+    resource_timing_status: Option<u16>,
 ) -> Result<ChildDocumentLoadOutcome, String> {
     let bytes = body
         .try_into_materialized_bytes()
@@ -1433,18 +1467,20 @@ fn child_document_load_outcome_from_response(
         if let Some(body) = download_body {
             body.cancel();
         }
-        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
-            network,
-        )));
+        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation {
+            network: Box::new(network),
+            resource_timing_status,
+        });
     }
     if moli_web_mime::response_headers_indicate_attachment_download(&head.headers) {
         if !download_policy.allows_response(&policy_container) {
             if let Some(body) = download_body {
                 body.cancel();
             }
-            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
-                network,
-            )));
+            return Ok(ChildDocumentLoadOutcome::IgnoredNavigation {
+                network: Box::new(network),
+                resource_timing_status: None,
+            });
         }
         let body = download_body
             .map(crate::runtime::RendererDownloadBody::Network)
@@ -1466,9 +1502,10 @@ fn child_document_load_outcome_from_response(
     let response_body = SubresourceResponseBody::from_bytes(bytes);
     network.response_body = Some(response_body.clone());
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
-        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(Box::new(
-            network,
-        )));
+        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation {
+            network: Box::new(network),
+            resource_timing_status: None,
+        });
     }
     let content_type = child_document_content_type_from_headers(&head.headers)
         .or_else(|| child_document_content_type_for_url(&navigation_url));
@@ -1679,6 +1716,7 @@ mod tests {
                 bypass_response_csp: false,
             },
             None,
+            None,
         )
         .expect("child document response should load");
         let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
@@ -1797,6 +1835,7 @@ mod tests {
                     bypass_response_csp,
                 },
                 None,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -1842,6 +1881,7 @@ mod tests {
                     bypass_response_csp: false,
                 },
                 None,
+                None,
             )
             .unwrap();
             if status == 200 {
@@ -1861,7 +1901,7 @@ mod tests {
                 );
             } else {
                 assert!(
-                    matches!(outcome, ChildDocumentLoadOutcome::IgnoredNavigation(_)),
+                    matches!(outcome, ChildDocumentLoadOutcome::IgnoredNavigation { .. }),
                     "204/205 must not create a download"
                 );
             }
