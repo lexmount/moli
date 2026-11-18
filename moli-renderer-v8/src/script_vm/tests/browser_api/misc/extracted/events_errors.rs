@@ -465,6 +465,52 @@ async fn removing_open_popover_dispatches_forced_close_events() {
         "beforetoggle:open->closed:false|toggle:open->closed:false"
     );
 }
+#[test]
+fn opening_popover_revalidates_attributes_document_and_modal_state() {
+    let mut vm = new_storage_test_vm("https://popover-open-validation.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+    const html = document.documentElement || document.appendChild(document.createElement('html'));
+    const body = document.body || html.appendChild(document.createElement('body'));
+    const frame = body.appendChild(document.createElement('iframe'));
+    const observe = (tag, willOpen) => {
+        const node = body.appendChild(document.createElement(tag));
+        node.setAttribute('popover', 'auto');
+        let beforeCount = 0;
+        node.addEventListener('beforetoggle', () => { beforeCount++; willOpen?.(node); });
+        return {node, beforeCount: () => beforeCount};
+    };
+    const result = (probe, operation) => {
+        const before = probe.beforeCount();
+        let error = null;
+        try { operation(probe.node); } catch (caught) { error = caught.name; }
+        return [error, probe.node.matches(':popover-open'), probe.beforeCount() - before];
+    };
+    const removed = observe('div', node => node.removeAttribute('popover'));
+    const adopted = observe('div', node => frame.contentDocument.body.appendChild(node));
+    const modal = observe('dialog', null);
+    modal.node.showModal();
+    const rows = [
+        result(removed, node => node.showPopover()),
+        result(adopted, node => node.togglePopover(true)),
+        result(modal, node => node.showPopover()),
+        adopted.node.ownerDocument === frame.contentDocument,
+        modal.node.open,
+    ];
+    modal.node.close();
+    return JSON.stringify(rows);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        r#"[["NotSupportedError",false,1],["InvalidStateError",false,1],["InvalidStateError",false,0],true,true]"#
+    );
+}
+
 #[tokio::test]
 async fn popover_toggle_events_coalesce_within_one_task() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
