@@ -351,10 +351,29 @@ async fn accessibility_uses_published_scroll_ranges_without_layout() {
         assert_eq!(clipped["ignored"], true);
         assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
 
-        page.vm_mut().eval(r#"
-            document.getElementById('vertical').style.overflow = 'auto';
-            document.getElementById('tall').style.height = '1px';
+        page.vm_mut().publish_layout_for_test()?;
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
+        let outcome = page.vm_mut().eval(r#"
+            (() => {
+                const scroller = document.getElementById('vertical');
+                scroller.blur();
+                scroller.style.overflow = 'auto';
+                scroller.focus({preventScroll:true});
+                return document.activeElement.id;
+            })()
         "#)?;
+        assert_eq!(outcome, "vertical", "focus must use live overflow with a published hidden scroll range");
+        let reopened = page.accessibility_node_payload_for_live_handle(vertical).expect("reopened AX node");
+        assert_eq!(reopened["ignored"], false);
+        assert_eq!(reopened["role"]["value"], "generic");
+        assert!(reopened["properties"].as_array().is_some_and(|properties|
+            properties.iter().any(|property| property["name"] == "focusable"
+                && property["value"]["value"] == true)));
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(page.vm().layout_snapshot_cache_observability_for_test().2, publishes);
+
+        page.vm_mut().eval("document.getElementById('tall').style.height = '1px'")?;
         page.vm_mut().publish_layout_for_test()?;
         let passes = page.vm().layout_pass_observability_for_test().1;
         let resized = page.accessibility_node_payload_for_live_handle(vertical).expect("resized AX node");

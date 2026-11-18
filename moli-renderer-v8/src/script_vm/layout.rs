@@ -39,7 +39,10 @@ impl AccessibilityStyleSource for AccessibilityObservation<'_> {
                                     .filter_map(|layout_box| {
                                         Some((
                                             layout_box.principal_source?,
-                                            ScrollFocusAxes::for_extent(&layout_box.scroll_extent)?,
+                                            ScrollFocusAxes::for_extent(
+                                                &layout_box.scroll_extent,
+                                                layout_box.id == tree.root_box,
+                                            )?,
                                         ))
                                     })
                                     .collect()

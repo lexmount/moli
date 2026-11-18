@@ -209,11 +209,16 @@ impl ScrollFocusAxes {
         })
     }
 
-    pub(crate) fn for_extent(extent: &moli_layout::LayoutScrollExtent) -> Option<Self> {
-        let horizontal =
-            extent.allows_user_scroll_x && extent.maximum_offset.x > extent.minimum_offset.x;
-        let vertical =
-            extent.allows_user_scroll_y && extent.maximum_offset.y > extent.minimum_offset.y;
+    pub(crate) fn for_extent(
+        extent: &moli_layout::LayoutScrollExtent,
+        is_viewport: bool,
+    ) -> Option<Self> {
+        // Live overflow governs element scroll permission. Published viewport permissions
+        // also reflect embedder policy.
+        let horizontal = extent.maximum_offset.x > extent.minimum_offset.x
+            && (!is_viewport || extent.allows_user_scroll_x);
+        let vertical = extent.maximum_offset.y > extent.minimum_offset.y
+            && (!is_viewport || extent.allows_user_scroll_y);
         (extent.is_scroll_container && (horizontal || vertical)).then_some(Self {
             horizontal,
             vertical,
@@ -249,7 +254,12 @@ fn element_is_scrollable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
                 .iter()
                 .rev()
                 .find(|layout_box| layout_box.principal_source == Some(handle))
-                .and_then(|layout_box| ScrollFocusAxes::for_extent(&layout_box.scroll_extent))
+                .and_then(|layout_box| {
+                    ScrollFocusAxes::for_extent(
+                        &layout_box.scroll_extent,
+                        layout_box.id == tree.root_box,
+                    )
+                })
                 .is_some_and(|extent| axes.intersects(extent))
         })
         .unwrap_or(false)
