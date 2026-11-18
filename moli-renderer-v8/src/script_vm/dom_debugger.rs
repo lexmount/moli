@@ -28,7 +28,6 @@ struct RootedEventListenerSnapshot {
 }
 
 impl ScriptVm {
-    #[cfg(feature = "devtools")]
     pub(crate) fn dom_debugger_event_listeners(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -153,7 +152,6 @@ impl ScriptVm {
     }
 }
 
-#[cfg(feature = "devtools")]
 fn rooted_event_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
@@ -208,7 +206,6 @@ fn rooted_event_listener_snapshots<'s>(
     rooted_simple_event_listener_snapshots(scope, snapshots, source_context)
 }
 
-#[cfg(feature = "devtools")]
 fn rooted_node_event_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &mut PageScriptHost,
@@ -253,7 +250,6 @@ fn rooted_node_event_listener_snapshots<'s>(
     snapshots
 }
 
-#[cfg(feature = "devtools")]
 fn host_listener_snapshots(
     host: &PageScriptHost,
     target: EventTargetHandle,
@@ -268,7 +264,6 @@ fn host_listener_snapshots(
     }
 }
 
-#[cfg(feature = "devtools")]
 fn rooted_registered_event_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &PageScriptHost,
@@ -301,7 +296,6 @@ fn rooted_registered_event_listener_snapshots<'s>(
         .collect()
 }
 
-#[cfg(feature = "devtools")]
 fn rooted_simple_event_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     snapshots: Vec<SimpleObjectEventListenerInspectorSnapshot<'s>>,
@@ -327,7 +321,6 @@ fn rooted_simple_event_listener_snapshots<'s>(
         .collect()
 }
 
-#[cfg(feature = "devtools")]
 fn effective_listener_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     snapshot: &RootedEventListenerSnapshot,
@@ -345,7 +338,6 @@ fn effective_listener_function<'s>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(feature = "devtools")]
 fn wrap_inspector_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
@@ -413,7 +405,6 @@ fn wrap_inspector_value<'s>(
         .ok_or_else(|| anyhow!("internal Runtime.callFunctionOn `{call_id}` returned no object"))
 }
 
-#[cfg(feature = "devtools")]
 fn next_internal_frontend_inspector_call_id(
     next_call_id: &Cell<i32>,
     outbound: &super::inspector::InspectorOutbound,
@@ -435,7 +426,6 @@ fn next_internal_frontend_inspector_call_id(
     ))
 }
 
-#[cfg(feature = "devtools")]
 fn inspector_error_message(error: v8::UniquePtr<v8::inspector::StringBuffer>) -> String {
     error
         .as_ref()

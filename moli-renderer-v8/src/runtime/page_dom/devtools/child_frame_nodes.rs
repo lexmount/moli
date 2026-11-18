@@ -1,9 +1,6 @@
-#[cfg(feature = "devtools")]
 use crate::document_runtime::DomHandle;
-#[cfg(feature = "devtools")]
 use crate::dom::native::DomHost;
 
-#[cfg(feature = "devtools")]
 pub(super) fn child_frame_document_contains_live_handle(
     dom_host: &DomHost,
     document_handle: DomHandle,
@@ -14,8 +11,7 @@ pub(super) fn child_frame_document_contains_live_handle(
         .any(|handle| handle == target)
 }
 
-#[cfg(feature = "devtools")]
-pub(super) fn collect_shadow_including_document_handles(
+pub(in crate::runtime::page_dom) fn collect_shadow_including_document_handles(
     dom_host: &DomHost,
     document_handle: DomHandle,
 ) -> Vec<DomHandle> {
@@ -35,7 +31,7 @@ pub(super) fn collect_shadow_including_document_handles(
     handles
 }
 
-#[cfg(all(test, feature = "devtools"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::dom::native::DomHost;

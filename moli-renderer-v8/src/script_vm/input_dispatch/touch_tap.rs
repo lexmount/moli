@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(feature = "devtools")]
 fn hit_after_callbacks(
     host: &crate::native_bridge::PageScriptHost,
     x: f64,
@@ -15,7 +14,6 @@ fn hit_after_callbacks(
     )?)
 }
 
-#[cfg(feature = "devtools")]
 fn coordinates(
     hit: crate::native_bridge::element::InputHit,
     x: f64,
@@ -27,7 +25,6 @@ fn coordinates(
     InputEventCoordinates::from_root(x, y).with_client(f64::from(point.x), f64::from(point.y))
 }
 
-#[cfg(feature = "devtools")]
 fn transition(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
@@ -54,7 +51,6 @@ fn transition(
     );
 }
 
-#[cfg(feature = "devtools")]
 pub(super) fn dispatch_touch_tap_activation(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,

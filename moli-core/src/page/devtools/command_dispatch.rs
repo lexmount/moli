@@ -133,6 +133,22 @@ impl Page {
         ))
     }
 
+    /// Admit a frontend terminal, distinct from an internal renderer query.
+    /// The returned guard must live with the adapter continuation until the
+    /// producer has settled; dropping it earlier cancels the publication.
+    pub fn start_cdp_call(
+        &self,
+        command_id: u64,
+        frontend_session_id: Option<&str>,
+        operation: crate::RendererNativeOperation,
+    ) -> Result<(
+        PendingPageCommand,
+        crate::RendererNativeCommandResponseGuard,
+    )> {
+        let (admission, guard) = self.prepare_cdp_call(command_id, frontend_session_id)?;
+        Ok((admission.start(operation)?, guard))
+    }
+
     fn pending_runtime_inspector_command_dispatch(
         kind: PendingRuntimeInspectorCommandDispatchKind,
     ) -> PendingRuntimeInspectorCommandDispatch {
