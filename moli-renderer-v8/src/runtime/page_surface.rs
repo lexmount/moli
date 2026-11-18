@@ -5135,7 +5135,17 @@ impl RendererPageCommand {
     /// never abandon the queued command: the caller keeps the dispatch alive
     /// and applies its result once the renderer frees up.
     pub(crate) fn settles_after_javascript_dialog(&self) -> bool {
-        matches!(self, Self::SetRuntimeBindingState { .. })
+        #[cfg(feature = "devtools")]
+        {
+            matches!(
+                self,
+                Self::DevTools(RendererDevToolsPageCommand::SetRuntimeBindingState { .. })
+            )
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            false
+        }
     }
 
     pub(crate) fn cdp_nav_timing_label(&self) -> Option<&'static str> {

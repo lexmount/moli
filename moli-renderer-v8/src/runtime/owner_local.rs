@@ -170,8 +170,12 @@ impl RendererPageProtocolCommandTarget {
             RendererPageStateCapturePolicy::ProtocolTurn,
         );
         Ok(RendererPageCommandPending {
-            dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+            dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::pin(
+                route.wait_for_completion(),
+            )),
             javascript_dialog_watch,
+            #[cfg(feature = "devtools")]
+            inspector_io_hold: None,
         })
     }
 }
@@ -265,6 +269,8 @@ enum RendererPageJavaScriptDialogWatch {
 pub struct RendererPageCommandPending {
     dispatch: RendererPageCommandPendingDispatch,
     javascript_dialog_watch: Option<RendererPageJavaScriptDialogWatch>,
+    #[cfg(feature = "devtools")]
+    inspector_io_hold: Option<crate::devtools::ingress::io::RendererInspectorIoSessionHold>,
 }
 
 impl RendererPageCommandPending {
@@ -272,6 +278,8 @@ impl RendererPageCommandPending {
         Self {
             dispatch: RendererPageCommandPendingDispatch::Owner(reply),
             javascript_dialog_watch: None,
+            #[cfg(feature = "devtools")]
+            inspector_io_hold: None,
         }
     }
 }
@@ -279,7 +287,12 @@ impl RendererPageCommandPending {
 enum RendererPageCommandPendingDispatch {
     Owner(oneshot::Receiver<anyhow::Result<RendererOwnerReply>>),
     #[cfg(feature = "devtools")]
-    InspectorMain(Box<RendererRuntimeInspectorMainCommandRoute>),
+    InspectorMain(
+        futures_util::future::BoxFuture<
+            'static,
+            Result<RendererRuntimeInspectorMainCommandCompletion>,
+        >,
+    ),
 }
 
 #[derive(Clone)]
@@ -433,6 +446,19 @@ impl RendererPageHandle {
 
     pub fn take_pending_modal_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
         self.javascript_dialog_broker.take_pending()
+    }
+
+    #[cfg(feature = "devtools")]
+    pub fn hold_runtime_inspector_io_until_settled(
+        &self,
+        mut pending: RendererPageCommandPending,
+        inspector_session_id: Option<&str>,
+    ) -> RendererPageCommandPending {
+        pending.inspector_io_hold = Some(self.devtools_target.io_ref().hold_session(
+            self.devtools_agent_token,
+            DevToolsSessionKey::from_wire_session_id(inspector_session_id),
+        ));
+        pending
     }
 
     #[cfg(feature = "devtools")]
@@ -707,8 +733,12 @@ impl RendererPageHandle {
                     capture_policy,
                 );
             return Ok(RendererPageCommandPending {
-                dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+                dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::pin(
+                    route.wait_for_completion(),
+                )),
                 javascript_dialog_watch,
+                #[cfg(feature = "devtools")]
+                inspector_io_hold: None,
             });
         }
         let command = match command {
@@ -721,8 +751,12 @@ impl RendererPageHandle {
                     capture_policy,
                 );
                 return Ok(RendererPageCommandPending {
-                    dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+                    dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::pin(
+                        route.wait_for_completion(),
+                    )),
                     javascript_dialog_watch,
+                    #[cfg(feature = "devtools")]
+                    inspector_io_hold: None,
                 });
             }
             command => command,
@@ -745,6 +779,8 @@ impl RendererPageHandle {
         Ok(RendererPageCommandPending {
             dispatch: RendererPageCommandPendingDispatch::Owner(reply_rx),
             javascript_dialog_watch,
+            #[cfg(feature = "devtools")]
+            inspector_io_hold: None,
         })
     }
 
@@ -899,8 +935,9 @@ fn decode_owner_page_command_reply(
     }
 }
 
+#[cfg(feature = "devtools")]
 fn decode_inspector_main_page_command_completion(
-    completion: anyhow::Result<RendererRuntimeInspectorMainCommandCompletion>,
+    completion: Result<RendererRuntimeInspectorMainCommandCompletion>,
 ) -> Result<RendererCommandTurnOutput> {
     match completion? {
         RendererRuntimeInspectorMainCommandCompletion::Owner(output) => Ok(*output),
@@ -922,6 +959,8 @@ impl RendererPageCommandPending {
         let RendererPageCommandPending {
             dispatch,
             javascript_dialog_watch,
+            #[cfg(feature = "devtools")]
+            inspector_io_hold,
         } = self;
         let wait_for_dispatch = async move {
             match dispatch {
@@ -930,7 +969,7 @@ impl RendererPageCommandPending {
                 }
                 #[cfg(feature = "devtools")]
                 RendererPageCommandPendingDispatch::InspectorMain(route) => {
-                    decode_inspector_main_page_command_completion(route.wait_for_completion().await)
+                    decode_inspector_main_page_command_completion(route.await)
                 }
             }
         };
@@ -954,6 +993,8 @@ impl RendererPageCommandPending {
                 wait_for_dispatch.await?
             }
         };
+        #[cfg(feature = "devtools")]
+        drop(inspector_io_hold);
         Ok(reply)
     }
 
@@ -974,6 +1015,8 @@ impl RendererPageCommandPending {
         let Self {
             dispatch,
             javascript_dialog_watch,
+            #[cfg(feature = "devtools")]
+            inspector_io_hold,
         } = self;
         let Some(RendererPageJavaScriptDialogWatch::Deferred(watch)) = javascript_dialog_watch
         else {
@@ -982,6 +1025,8 @@ impl RendererPageCommandPending {
             return Ok(Self {
                 dispatch,
                 javascript_dialog_watch: None,
+                #[cfg(feature = "devtools")]
+                inspector_io_hold,
             }
             .wait()
             .await);
@@ -1005,21 +1050,24 @@ impl RendererPageCommandPending {
                     OwnerSettle::DialogOpened => Err(Self {
                         dispatch: RendererPageCommandPendingDispatch::Owner(reply_rx),
                         javascript_dialog_watch: None,
+                        #[cfg(feature = "devtools")]
+                        inspector_io_hold,
                     }),
                 }
             }
+            #[cfg(feature = "devtools")]
             RendererPageCommandPendingDispatch::InspectorMain(route) => {
                 enum MainSettle {
                     Completion(anyhow::Result<RendererRuntimeInspectorMainCommandCompletion>),
                     DialogOpened,
                 }
+                // Preserve the entire wait, including already-consumed claim
+                // and reply channels, when handing it to a later waiter.
                 let mut route = route;
                 let raced = {
-                    let completion = route.wait_for_completion_by_ref();
-                    tokio::pin!(completion);
                     tokio::select! {
                         biased;
-                        completion = &mut completion => MainSettle::Completion(completion),
+                        completion = &mut route => MainSettle::Completion(completion),
                         () = watch.wait_until_open() => MainSettle::DialogOpened,
                     }
                 };
@@ -1030,6 +1078,8 @@ impl RendererPageCommandPending {
                     MainSettle::DialogOpened => Err(Self {
                         dispatch: RendererPageCommandPendingDispatch::InspectorMain(route),
                         javascript_dialog_watch: None,
+                        #[cfg(feature = "devtools")]
+                        inspector_io_hold,
                     }),
                 }
             }
@@ -1223,6 +1273,8 @@ mod deferred_settle_tests {
             javascript_dialog_watch: Some(RendererPageJavaScriptDialogWatch::Deferred(
                 broker.watch(),
             )),
+            #[cfg(feature = "devtools")]
+            inspector_io_hold: None,
         }
     }
 
@@ -1251,6 +1303,64 @@ mod deferred_settle_tests {
             ),
             Ok(_) => panic!("the test reply carries an apply error"),
         }
+    }
+
+    #[cfg(feature = "devtools")]
+    #[tokio::test]
+    async fn dialog_handoff_preserves_an_already_consumed_main_claim() {
+        use crate::devtools::{
+            ingress::main::RendererInspectorMainIngress, pause::RendererInspectorPauseBridge,
+            route::RendererInspectorSessionExecutorRouteId,
+        };
+        use futures_util::FutureExt as _;
+        let runtime = RendererJavaScriptDialogRuntime::default();
+        let pause = RendererInspectorPauseBridge::default();
+        let main = RendererInspectorMainIngress::new(
+            RendererInspectorSessionExecutorRouteId::new(91),
+            pause.pause_loop_wake(),
+        );
+        let route = main.enqueue_protocol_page_command(
+            RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(91)),
+            RendererDevToolsAgentToken::allocate(),
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::SetRuntimeBindingState {
+                inspector_session_id: Some("session-binding-init".to_owned()),
+                stored_runtime_bindings: Vec::new(),
+                session_runtime_bindings: Vec::new(),
+            }),
+            Some("session-binding-init".to_owned()),
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        let command = main
+            .claim_for_owner()
+            .expect("Main owner claims initialization");
+        let (_, _, _, mut first_dispatch, reply_tx) =
+            main.prepare_owner_dispatch(command).into_parts();
+        first_dispatch.release();
+        let pending = RendererPageCommandPending {
+            dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::pin(
+                route.wait_for_completion(),
+            )),
+            javascript_dialog_watch: Some(RendererPageJavaScriptDialogWatch::Deferred(
+                runtime.broker().watch(),
+            )),
+            inspector_io_hold: None,
+        };
+        let mut waiting = Box::pin(pending.wait_until_settled_or_dialog_open());
+        assert!(
+            waiting.as_mut().now_or_never().is_none(),
+            "claim is consumed but the owner reply is still pending"
+        );
+        let (_, modal) = runtime.begin_modal(pending_dialog("opens after Main claim"));
+        let pending = match waiting.await {
+            Err(pending) => pending,
+            Ok(_) => panic!("the unresolved dispatch must be handed back"),
+        };
+        send_test_reply(reply_tx);
+        let settled = tokio::time::timeout(SETTLE_TIMEOUT, pending.wait())
+            .await
+            .expect("resume the same Main wait after its claim was consumed");
+        assert_settled_with_test_error(Ok(settled));
+        modal.cancel();
     }
 
     #[tokio::test]

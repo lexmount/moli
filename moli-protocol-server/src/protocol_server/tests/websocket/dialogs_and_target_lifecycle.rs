@@ -2160,6 +2160,18 @@ async fn websocket_cdp_attach_to_dialog_blocked_target_responds_and_settles_bind
         "the attach must not park behind the modal: {attach_elapsed:?}"
     );
 
+    // This is B's first command: no Runtime.enable or Main command can
+    // initialize its Inspector session on the side. IO must wait behind the
+    // exact deferred initialization while A still owns the dialog.
+    send_cdp_command_without_wait(
+        &mut second,
+        2,
+        "Runtime.terminateExecution",
+        Some(&session_b),
+        json!({}),
+    )
+    .await;
+
     // Resolve the dialog from the first session.
     let resolved = send_cdp_command(
         &mut first,
@@ -2180,19 +2192,12 @@ async fn websocket_cdp_attach_to_dialog_blocked_target_responds_and_settles_bind
     // session gets the stored binding state. Stored bindings keep their
     // owning session's delivery route, so a call made on the new session is
     // captured and delivered to the session that added the binding.
-    let runtime_enabled = send_cdp_command(
-        &mut second,
-        2,
-        "Runtime.enable",
-        Some(&session_b),
-        json!({}),
-    )
-    .await;
+    let first_io = recv_until_match(&mut second, |message| message["id"] == json!(2_u64)).await;
     assert!(
-        runtime_enabled
+        first_io
             .iter()
             .any(|message| message["id"] == json!(2_u64) && message["result"] == json!({})),
-        "Runtime.enable on the new session must work after attach: {runtime_enabled:#?}"
+        "first IO command must wait for Inspector initialization: {first_io:#?}"
     );
     send_cdp_command_without_wait(
         &mut second,

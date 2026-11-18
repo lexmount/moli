@@ -4527,13 +4527,6 @@ async fn attach_with_open_javascript_dialog_responds_and_defers_binding_apply() 
                 );
             });
 
-            // The scheduler normally owns this channel; the test applies the deferred
-            // completion itself.
-            let (completion_tx, mut completion_rx) = tokio::sync::mpsc::unbounded_channel();
-            ctx.with_fixture(|conn| {
-                conn.set_deferred_attachment_binding_completion_sender(completion_tx)
-            });
-
             ctx.process_async(json!({
                 "id": 306_902,
                 "method": "Target.attachToTarget",
@@ -4546,16 +4539,8 @@ async fn attach_with_open_javascript_dialog_responds_and_defers_binding_apply() 
                 .to_owned();
             ctx.expect_event("Target.attachedToTarget", None);
 
-            // The deferred apply settles on the free renderer and hands its result to
-            // the scheduler channel.
-            let deferred =
-                tokio::time::timeout(std::time::Duration::from_secs(2), completion_rx.recv())
-                    .await
-                    .expect("deferred binding completion must arrive")
-                    .expect("deferred completion channel stays open");
-            let applied = ctx.with_fixture(|conn| deferred.finish(conn));
-            applied.expect("deferred binding apply must succeed");
-
+            // TestContext services ProtocolTaskPrepared through the same owned
+            // workflow completion as the production scheduler.
             // Settled bindings are live for the new session even though the dialog is
             // still open.
             ctx.process_async(json!({
@@ -4584,78 +4569,6 @@ async fn attach_with_open_javascript_dialog_responds_and_defers_binding_apply() 
 
             // Resolving the dialog still works normally afterwards.
             assert!(dialog_completion.finish(false, String::new()));
-        })
-        .await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn deferred_attachment_binding_apply_settles_and_surfaces_failures() {
-    tokio::task::LocalSet::new()
-        .run_until(async {
-            let mut ctx = TestContext::new();
-            load_bc_with_titled_page_async(
-                &mut ctx,
-                "BID-3069-DEAD",
-                "TID-3069-DEAD",
-                "<title>deferred attach dead renderer</title>",
-            )
-            .await;
-            ctx.with_fixture(|conn| {
-                conn.browser_context
-                    .as_mut()
-                    .unwrap()
-                    .attach_active_session("SID-3069-DEAD-A")
-            });
-            push_current_javascript_dialog_for_active_target(
-                &mut ctx,
-                "BID-3069-DEAD",
-                "TID-3069-DEAD",
-                "issue 3069 dead",
-            )
-            .await;
-            let (completion_tx, mut completion_rx) = tokio::sync::mpsc::unbounded_channel();
-            ctx.with_fixture(|conn| {
-                conn.set_deferred_attachment_binding_completion_sender(completion_tx)
-            });
-
-            ctx.process_async(json!({
-                "id": 306_911,
-                "method": "Target.attachToTarget",
-                "params": { "targetId": "TID-3069-DEAD", "flatten": true }
-            }))
-            .await;
-            take_response_by_id(&mut ctx, 306_911)["result"]["sessionId"]
-                .as_str()
-                .expect("the attach must respond while the dialog is open");
-
-            // The unit fixture's renderer is not modal-blocked, so the deferred
-            // apply settles as soon as its queued dispatch runs; production
-            // modal parking is covered by the websocket integration test. The
-            // completion must arrive through the scheduler channel and refresh
-            // the connection state like the synchronous finish does.
-            let deferred =
-                tokio::time::timeout(std::time::Duration::from_secs(2), completion_rx.recv())
-                    .await
-                    .expect("the deferred completion must still arrive")
-                    .expect("deferred completion channel stays open");
-            let applied = ctx.with_fixture(|conn| deferred.finish(conn));
-            assert!(
-                applied.is_ok(),
-                "the settled deferred apply must refresh connection state: {applied:?}"
-            );
-
-            // A failure carried by the deferred completion surfaces for the
-            // scheduler warn path exactly like a synchronous renderer reply
-            // error would (a renderer that dies while its dispatch is parked
-            // behind a live modal resolves the wait with an error).
-            let failed = DeferredAttachmentBindingCompletion::new(Err(anyhow::anyhow!(
-                "renderer devtools target crashed"
-            )));
-            let surfaced = ctx.with_fixture(|conn| failed.finish(conn));
-            assert!(
-                surfaced.is_err(),
-                "a dead renderer must surface the apply failure for the scheduler warn path"
-            );
         })
         .await;
 }

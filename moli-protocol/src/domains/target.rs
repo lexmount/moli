@@ -17,7 +17,6 @@ pub(crate) mod activation;
 mod automation;
 pub(crate) use automation::{PreparedAutomationTargetCreation, start_automation_lifecycle_command};
 mod attachment;
-pub use attachment::DeferredAttachmentBindingCompletion;
 pub(crate) use attachment::commit_target_attachment;
 pub(crate) use attachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
 mod auto_attach;

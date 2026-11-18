@@ -69,7 +69,7 @@ impl ProtocolWorkflowState<'_> {
             crate::domains::target::session_disposal::SessionDisposalError::Closing
         );
         self.connection
-            .start_apply_stored_runtime_bindings_for_owner(&owner)
+            .start_initialize_runtime_inspector_session_for_owner(&owner)
     }
 
     /// Same exact Page check as the dialog commands use: a dialog that is
@@ -94,57 +94,47 @@ impl ProtocolWorkflowState<'_> {
             .complete_runtime_binding_page_command(completed)
     }
 
-    /// Applies a deferred attachment binding completion. The attach response
-    /// is already published, so no renderer output predecessor fence is
-    /// installed: a fence set after publication could not order anything
-    /// behind it. Failure tolerance matches the synchronous attach path.
-    pub fn finish_deferred_target_attachment_bindings(
-        self,
-        completion: crate::domains::target::DeferredAttachmentBindingCompletion,
-    ) -> Result<()> {
-        if let Err(error) = completion.finish(self.connection)
-            && !error.is::<crate::conn::NoDocumentLoaded>()
-        {
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Hands a still-queued attachment binding apply to a supervised
-    /// background wait so the attach response can be published while a
-    /// JavaScript dialog blocks the renderer. The apply settles once the
-    /// renderer frees up; renderer FIFO keeps the new session's commands
-    /// behind it.
-    ///
-    /// Returns `Some(pending)` when the connection has no scheduler completion
-    /// channel: the caller must then settle the dispatch synchronously.
+    /// Publish the admitted wait to the existing task supervisor. It owns
+    /// cancellation and removes the task when its completion is consumed.
     pub(crate) fn defer_target_attachment_binding_apply(
         self,
         owner: &CommandOwnerScope,
         pending: PendingRuntimeBindingPageCommandDispatch,
-    ) -> Result<Option<PendingRuntimeBindingPageCommandDispatch>> {
-        let Some(sender) = self
+    ) {
+        let target_id = self
             .connection
-            .deferred_attachment_binding_completion_sender()
-        else {
-            return Ok(Some(pending));
-        };
-        let task = crate::conn::spawn_owned_protocol_wait(pending.wait(), move |result| {
-            let result = match result {
-                Ok(result) => result,
-                Err(failure) => Err(anyhow::Error::new(failure)
-                    .context("deferred attachment binding wait did not settle")),
-            };
-            let _ = sender
-                .send(crate::domains::target::DeferredAttachmentBindingCompletion::new(result));
+            .target_owner_identity_for_owner(owner)
+            .and_then(|(_, target)| target);
+        let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+            let result = pending.wait().await;
+            context.defer_owner_turn_completion(move |state, _| {
+                state.finish_deferred_target_attachment_bindings(result);
+                crate::domains::command_output::CommandOutputPlan::default()
+            });
+            context.complete(crate::domains::command_output::CommandOutputPlan::default())
         });
-        if let Some(slot) = self
-            .connection
-            .runtime_session_owner_slot_mut_for_owner(owner)
+        crate::conn::PendingProtocolSchedulerWork::publish_workflow(
+            self.connection,
+            workflow,
+            target_id,
+        );
+    }
+
+    fn finish_deferred_target_attachment_bindings(
+        self,
+        result: Result<CompletedRuntimeBindingPageCommandDispatch>,
+    ) {
+        // The attach response has already been published. Refresh the state
+        // without adding a response predecessor to this later owner turn.
+        let result = result.and_then(|completed| {
+            self.connection
+                .complete_runtime_binding_page_command(completed)
+        });
+        if let Err(error) = result
+            && !error.is::<crate::conn::NoDocumentLoaded>()
         {
-            slot.supervise_deferred_attachment_binding_task(task);
+            tracing::warn!(%error, "target attach renderer binding state apply failed");
         }
-        Ok(None)
     }
 
     pub(crate) fn commit_target_attachment(

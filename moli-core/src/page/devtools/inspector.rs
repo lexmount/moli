@@ -862,6 +862,19 @@ impl Page {
         .await
     }
 
+    /// Attachment can publish before Main initialization settles. Keep this
+    /// session's IO commands queued until that exact dispatch finishes.
+    pub fn hold_runtime_inspector_io_until_settled(
+        &self,
+        mut pending: PendingPageCommand,
+        inspector_session_id: Option<&str>,
+    ) -> PendingPageCommand {
+        pending.pending = self
+            .handle
+            .hold_runtime_inspector_io_until_settled(pending.pending, inspector_session_id);
+        pending
+    }
+
     pub fn start_set_runtime_binding_state(
         &self,
         inspector_session_id: Option<String>,

@@ -475,32 +475,6 @@ pub(super) use detachment::TargetDetachment;
 pub(crate) use detachment::TargetDetachmentOutput;
 pub(crate) use detachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
 
-/// Deferred result of one target-attachment binding apply whose renderer
-/// dispatch stayed queued behind an open JavaScript dialog.
-///
-/// The attach response has already been published when this is produced, so
-/// the apply carries no response fence: the scheduler only refreshes the
-/// cached page state and tolerates failures exactly like the synchronous
-/// attach path does. The completed dispatch keeps its own owner scope.
-pub struct DeferredAttachmentBindingCompletion {
-    result: Result<crate::conn::CompletedRuntimeBindingPageCommandDispatch>,
-}
-
-impl DeferredAttachmentBindingCompletion {
-    pub(crate) fn new(
-        result: Result<crate::conn::CompletedRuntimeBindingPageCommandDispatch>,
-    ) -> Self {
-        Self { result }
-    }
-
-    pub(crate) fn finish(self, conn: &mut CdpConnection) -> Result<()> {
-        match self.result {
-            Ok(completed) => conn.complete_runtime_binding_page_command(completed),
-            Err(error) => Err(error),
-        }
-    }
-}
-
 pub(super) fn start_detach_from_target_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

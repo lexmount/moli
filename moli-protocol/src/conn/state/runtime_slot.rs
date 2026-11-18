@@ -723,20 +723,6 @@ impl TargetRuntimeSlot {
         self.page_slot.supervise_background_navigation(token, task)
     }
 
-    pub(crate) fn supervise_deferred_attachment_binding_task(
-        &mut self,
-        task: crate::conn::OwnedProtocolWaitTask,
-    ) {
-        self.page_slot
-            .supervise_deferred_attachment_binding_task(task)
-    }
-
-    pub(crate) fn take_deferred_attachment_binding_tasks(
-        &mut self,
-    ) -> Vec<crate::conn::OwnedProtocolWaitTask> {
-        self.page_slot.take_deferred_attachment_binding_tasks()
-    }
-
     pub(crate) fn has_supervised_background_navigation(&self) -> bool {
         self.page_slot.has_supervised_background_navigation()
     }
