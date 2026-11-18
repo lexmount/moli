@@ -947,19 +947,6 @@ pub(crate) fn css_style_sheet_replace_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !web_api_interfaces::CSSStyleSheet::is_instance(scope, args.this()) {
-        let promise = rejected_type_error_promise(
-            scope,
-            "Failed to execute 'replace' on 'CSSStyleSheet': Illegal invocation.",
-        );
-        rv.set(promise.unwrap_or_else(|| v8::undefined(scope).into()));
-        return;
-    }
-    if args.length() == 0 {
-        let promise = rejected_type_error_promise(scope, "CSSStyleSheet.replace requires a text");
-        rv.set(promise.unwrap_or_else(|| v8::undefined(scope).into()));
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<CssStyleSheetReplaceArgs>(scope, &args) else {
         return;
     };

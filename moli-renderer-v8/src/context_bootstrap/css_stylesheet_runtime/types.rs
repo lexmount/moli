@@ -452,7 +452,7 @@ pub struct CssStyleSheetPrototypeDeclaration {
     pub insert_rule: (),
     #[webapi(method, length = 1, callback = css_style_sheet_delete_rule_callback)]
     pub delete_rule: (),
-    #[webapi(method, length = 1, callback = css_style_sheet_replace_callback)]
+    #[webapi(method, length = 1, returns_promise, callback = css_style_sheet_replace_callback)]
     pub replace: (),
     #[webapi(method, length = 1, callback = css_style_sheet_replace_sync_callback)]
     pub replace_sync: (),
