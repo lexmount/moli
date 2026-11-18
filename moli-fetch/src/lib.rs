@@ -10,6 +10,7 @@ mod cancellation;
 mod client;
 mod client_hints;
 mod config;
+mod content_coding;
 mod cors;
 mod cross_origin_resource_policy;
 mod dns;
