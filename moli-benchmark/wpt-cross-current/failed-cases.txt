@@ -2536,7 +2536,6 @@ service-workers/service-worker/clients-matchall-order.https.html
 service-workers/service-worker/controlled-dedicatedworker-postMessage.https.html
 service-workers/service-worker/controlled-iframe-postMessage.https.html
 service-workers/service-worker/detached-context.https.html
-service-workers/service-worker/extendable-event-async-waituntil.https.html
 service-workers/service-worker/fetch-audio-tainting.https.html
 service-workers/service-worker/fetch-cors-xhr.https.html
 service-workers/service-worker/fetch-mixed-content-to-inscope.https.html
