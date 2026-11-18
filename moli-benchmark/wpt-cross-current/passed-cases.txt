@@ -6874,6 +6874,7 @@ html/browsers/the-window-object/named-access-on-the-window-object/window-null-na
 html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
 html/browsers/the-window-object/open-close/close_beforeunload.html
 html/browsers/the-window-object/open-close/close_noopener_beforeunload.html
+html/browsers/the-window-object/open-close/close_pagehide.html
 html/browsers/the-window-object/open-close/closed-after-close.html
 html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
 html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?combination
@@ -9344,6 +9345,7 @@ page-visibility/test_attributes_exist.html
 page-visibility/test_child_document.html
 page-visibility/test_default_view.html
 page-visibility/test_read_only.html
+page-visibility/unload.html
 payment-request/PaymentRequestUpdateEvent/constructor.http.html
 payment-request/payment-request-insecure.http.html
 performance-timeline/buffered-does-not-sync-invoke.html
@@ -9704,7 +9706,6 @@ service-workers/service-worker/navigation-preload/navigationPreload.https.html
 service-workers/service-worker/navigation-preload/samesite-iframe.https.html
 service-workers/service-worker/navigation-redirect-resolution.https.html
 service-workers/service-worker/navigation-redirect-to-http.https.html
-service-workers/service-worker/navigation-timing-extended.https.html
 service-workers/service-worker/navigation-timing-sizes.https.html
 service-workers/service-worker/navigation-timing.https.html
 service-workers/service-worker/nested-blob-url-workers.https.html
@@ -10137,6 +10138,7 @@ svg/interact/scripted/async-04.html
 svg/interact/scripted/defer-02.html
 svg/interact/scripted/module-02.html
 svg/linking/scripted/a.rel-noopener-policy.html
+svg/linking/scripted/href-script-element-markup.html
 svg/linking/scripted/xlink-href-compat.html
 svg/path/parsing/arc-commands.html
 svg/path/parsing/curveto-commands.html

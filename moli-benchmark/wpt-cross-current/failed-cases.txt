@@ -2551,6 +2551,7 @@ service-workers/service-worker/fetch-mixed-content-to-outscope.https.html
 service-workers/service-worker/http-to-https-redirect-and-register.https.html
 service-workers/service-worker/multipart-image.https.html
 service-workers/service-worker/navigate-window.https.html
+service-workers/service-worker/navigation-timing-extended.https.html
 service-workers/service-worker/next-hop-protocol.https.html
 service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-cross-origin.https.html
@@ -2617,7 +2618,6 @@ svg/interact/scripted/text-hittest-002.html
 svg/interact/scripted/text-hittest-003.html
 svg/linking/scripted/href-animate-element.html
 svg/linking/scripted/href-mpath-element.html
-svg/linking/scripted/href-script-element-markup.html
 svg/path/property/test_style_flush_on_dom_api_with_d_property.html
 svg/styling/css-var-dom-interface.html
 svg/styling/presentation-attributes-irrelevant.html

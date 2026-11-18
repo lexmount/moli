@@ -55,9 +55,9 @@ html/browsers/browsing-the-web/unloading-documents/prompt-and-unload-script-clos
 html/browsers/history/the-history-interface/joint_session_history/002.html
 html/browsers/history/the-history-interface/traverse_the_history_1.html
 html/browsers/history/the-history-interface/traverse_the_history_write_after_load_1.html
+html/browsers/history/the-location-interface/location_replace_session_history.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
-html/browsers/the-window-object/open-close/close_pagehide.html
 html/browsers/the-window-object/open-close/close_unload.html
 html/browsers/windows/noreferrer-window-name.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
@@ -99,7 +99,6 @@ navigation-api/updateCurrentEntry-method/reentrancy-on-serialize.html
 page-visibility/iframe-unload.html
 page-visibility/onvisibilitychange.html
 page-visibility/unload-bubbles.html
-page-visibility/unload.html
 permissions-policy/policy-extends-to-sandbox.html
 permissions-policy/reporting/fullscreen-reporting.html
 permissions-policy/reporting/sync-xhr-report-only.html
