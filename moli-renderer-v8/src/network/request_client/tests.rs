@@ -39,6 +39,54 @@ fn browser_navigation_request(url: &str) -> Result<Request> {
 }
 
 #[test]
+fn cached_script_completion_unlocks_and_updates_cache_before_notifying_consumers() -> Result<()> {
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let client = owner.handle();
+    let request = Request::get("https://example.test/app.js")?
+        .with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata::default());
+    let (key, lookup) = client.lookup_cached_script_text(&request, "test");
+    let super::ScriptTextCacheLookup::Owner(subscription) = lookup else {
+        panic!("first script load owns the download");
+    };
+    let load = Arc::clone(subscription.load());
+    let runtime = client.resource_runtime.clone();
+    let lookup_key = key.clone();
+    let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let notification = Arc::clone(&notified);
+    let _consumer = subscription.wait_callback(Box::new(move |result| {
+        let mut cache = runtime
+            .memory_cache()
+            .try_lock()
+            .expect("callback may reenter cache");
+        assert!(matches!(
+            cache.lookup_script_text(lookup_key),
+            super::ScriptTextCacheLookup::CompletedHit(_)
+        ));
+        assert_eq!(result.unwrap().body_text(), "loaded");
+        notification.store(true, std::sync::atomic::Ordering::Relaxed);
+    }));
+    let response = moli_fetch::Response::from_head_and_text_body(
+        ResponseHead {
+            final_url: request.url.clone(),
+            status: 200,
+            status_text: None,
+            headers: vec![("cache-control".into(), b"max-age=60".to_vec())],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: Default::default(),
+            negotiated_http_version: None,
+        },
+        "loaded".into(),
+    );
+    client.complete_cached_script_text_load(&key, &load, &request, Ok(response));
+    assert!(notified.load(std::sync::atomic::Ordering::Relaxed));
+    Ok(())
+}
+
+#[test]
 fn browser_client_rejects_http_requests_even_with_an_initiator() -> Result<()> {
     let owner = ResourceRequestClient::new(&FetchConfig::default())?;
     let url = Url::parse("https://example.test/")?;
@@ -965,6 +1013,7 @@ async fn script_text_fetch_uses_shared_memory_resource_cache_with_fresh_cache_he
     assert_eq!(second.body_text(), "window.scriptMemoryCacheHit = true;");
     assert!(!first.from_cache);
     assert!(second.from_cache);
+    assert!(second.network_request_extra_info().is_none());
 
     server.await?;
     Ok(())
@@ -1700,9 +1749,19 @@ async fn browser_fetch_raw_stream_uses_shared_memory_resource_cache_without_http
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
+async fn cached_subresource_clears_transport_observations_but_preserves_redirects() -> Result<()> {
     let start_url = Url::parse("http://example.test/redirect.txt")?;
     let final_url = Url::parse("http://example.test/final.txt")?;
+    let transport = moli_fetch::NetworkRequestExtraInfo {
+        headers: vec![("Cookie".into(), "fixture=one".into())],
+        cookie_report: Default::default(),
+    };
+    let reports = moli_cookie_jar::BrowserCookieStore::default()
+        .store_response_headers_with_reports(
+            &final_url,
+            &[("set-cookie".into(), b"cache=original; Path=/".to_vec())],
+        );
+    assert_eq!(reports.len(), 1);
     let response = RawResponse::from_head_and_body(
         ResponseHead {
             status_text: None,
@@ -1710,7 +1769,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
+            cookie_set_reports: reports.clone(),
             redirected: true,
             redirect_chain: vec![RedirectInfo {
                 source: moli_fetch::RedirectSource::Network,
@@ -1719,12 +1778,17 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
                 status: 301,
                 headers: vec![("location".to_owned(), b"/final.txt".to_vec())],
                 network_extra_info_available: true,
-                request_extra_info: None,
+                request_extra_info: Some(transport.clone()),
                 dispatched_request: None,
-                response_extra_info: None,
+                response_extra_info: Some(moli_fetch::NetworkResponseExtraInfo {
+                    request_extra_info: transport.clone(),
+                    status: 301,
+                    headers: Vec::new(),
+                    cookie_set_reports: reports.clone(),
+                }),
                 redirect_has_extra_info: true,
                 request_cookie_report: None,
-                cookie_set_reports: Vec::new(),
+                cookie_set_reports: reports.clone(),
                 from_cache: false,
                 negotiated_http_version: None,
             }],
@@ -1733,7 +1797,23 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
             negotiated_http_version: None,
         },
         b"cached-final-body".to_vec(),
+    )
+    .with_network_request_extra_info(Some(transport));
+
+    let cached_text = super::response_with_memory_cache_hit(
+        response.clone().into_lossy_materialized_text_response(),
     );
+    assert!(cached_text.from_cache);
+    assert!(cached_text.network_request_extra_info().is_none());
+    assert!(cached_text.cookie_set_reports.is_empty());
+    let redirect = &cached_text.redirect_chain[0];
+    assert!(redirect.from_cache);
+    assert!(!redirect.network_extra_info_available);
+    assert!(!redirect.redirect_has_extra_info);
+    assert!(redirect.request_extra_info.is_none());
+    assert!(redirect.response_extra_info.is_none());
+    assert!(redirect.cookie_set_reports.is_empty());
+    assert_eq!(cached_text.body_text(), "cached-final-body");
 
     let mut response = streaming_raw_response_from_cached_subresource(response)?;
 
@@ -1741,6 +1821,12 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
     assert_eq!(response.redirect_chain.len(), 1);
     assert!(response.redirect_chain[0].from_cache);
     assert!(!response.redirect_chain[0].network_extra_info_available);
+    assert!(!response.redirect_chain[0].redirect_has_extra_info);
+    assert!(response.redirect_chain[0].request_extra_info.is_none());
+    assert!(response.redirect_chain[0].response_extra_info.is_none());
+    assert!(response.network_request_extra_info().is_none());
+    assert!(response.cookie_set_reports.is_empty());
+    assert!(response.redirect_chain[0].cookie_set_reports.is_empty());
     let mut body = Vec::new();
     while let Some(chunk) = response.next_chunk().await {
         body.extend_from_slice(&chunk);
