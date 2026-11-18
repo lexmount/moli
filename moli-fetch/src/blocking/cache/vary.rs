@@ -95,10 +95,6 @@ fn vary_request_header_value(
         return explicit_value()
             .or_else(|| Some(request.browser_identity(config).user_agent().to_owned()));
     }
-    if normalized_name == "accept-encoding" {
-        // libcurl synthesizes this header from `easy.accept_encoding("")`.
-        return explicit_value().or_else(|| Some("libcurl-auto".to_owned()));
-    }
     explicit_value()
 }
 
