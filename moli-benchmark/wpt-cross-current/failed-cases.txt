@@ -2515,7 +2515,6 @@ quirks/unitless-length/excluded-properties-001.html
 referrer-policy/generic/inheritance/popup-inheritance-form-submission.html
 reporting/crashReport-test.html
 resource-timing/initiator-type/link.html
-resource-timing/initiator-type/picture.html
 resource-timing/initiator-type/style.html
 resource-timing/initiator-type/svg.html
 resource-timing/render-blocking-status-link.html
@@ -2551,7 +2550,6 @@ service-workers/service-worker/fetch-mixed-content-to-outscope.https.html
 service-workers/service-worker/http-to-https-redirect-and-register.https.html
 service-workers/service-worker/multipart-image.https.html
 service-workers/service-worker/navigate-window.https.html
-service-workers/service-worker/navigation-timing-extended.https.html
 service-workers/service-worker/next-hop-protocol.https.html
 service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-cross-origin.https.html

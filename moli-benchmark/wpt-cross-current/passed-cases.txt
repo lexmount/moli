@@ -6875,6 +6875,7 @@ html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pendi
 html/browsers/the-window-object/open-close/close_beforeunload.html
 html/browsers/the-window-object/open-close/close_noopener_beforeunload.html
 html/browsers/the-window-object/open-close/close_pagehide.html
+html/browsers/the-window-object/open-close/close_unload.html
 html/browsers/the-window-object/open-close/closed-after-close.html
 html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
 html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?combination
@@ -9345,6 +9346,7 @@ page-visibility/test_attributes_exist.html
 page-visibility/test_child_document.html
 page-visibility/test_default_view.html
 page-visibility/test_read_only.html
+page-visibility/unload-bubbles.html
 page-visibility/unload.html
 payment-request/PaymentRequestUpdateEvent/constructor.http.html
 payment-request/payment-request-insecure.http.html
@@ -9469,6 +9471,7 @@ resource-timing/initiator-type/iframe.html
 resource-timing/initiator-type/img-srcset.html
 resource-timing/initiator-type/img.html
 resource-timing/initiator-type/input.html
+resource-timing/initiator-type/picture.html
 resource-timing/initiator-type/script.html
 resource-timing/initiator-type/workers.html
 resource-timing/input-sequence-of-events.html
@@ -9706,6 +9709,7 @@ service-workers/service-worker/navigation-preload/navigationPreload.https.html
 service-workers/service-worker/navigation-preload/samesite-iframe.https.html
 service-workers/service-worker/navigation-redirect-resolution.https.html
 service-workers/service-worker/navigation-redirect-to-http.https.html
+service-workers/service-worker/navigation-timing-extended.https.html
 service-workers/service-worker/navigation-timing-sizes.https.html
 service-workers/service-worker/navigation-timing.https.html
 service-workers/service-worker/nested-blob-url-workers.https.html
