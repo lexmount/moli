@@ -12,12 +12,12 @@ mod app_manifest_support;
 mod child_frame_navigation_support;
 mod client_geometry;
 mod command_dispatch;
+#[cfg(feature = "devtools")]
+mod devtools;
 mod document_content_support;
 mod document_cookie_diagnostics;
 mod dom_protocol_support;
 mod history_support;
-#[cfg(feature = "devtools")]
-mod input_support;
 mod js_evaluation;
 mod navigation_diagnostics;
 mod network_resource_support;
@@ -39,12 +39,14 @@ use crate::renderer::{
     RendererPageState,
 };
 use anyhow::Result;
-#[cfg(feature = "devtools")]
-pub use command_dispatch::{
-    CompletedDevToolsIoCommandDispatch, CompletedRuntimeInspectorCommandDispatch,
-    PendingDevToolsIoCommandDispatch, PendingRuntimeInspectorCommandDispatch, PreparedNativeCall,
-};
 pub use command_dispatch::{CompletedPageCommand, PageDocumentCommandTarget, PendingPageCommand};
+#[cfg(feature = "devtools")]
+pub use devtools::{
+    CompletedDevToolsIoCommandDispatch, CompletedRuntimeInspectorCommandDispatch, PageInputExt,
+    PendingDevToolsIoCommandDispatch, PendingRuntimeInspectorCommandDispatch, PreparedNativeCall,
+    decode_element_click_dispatch_completion, decode_element_click_preparation_completion,
+    decode_input_dispatch_outcome_completion, decode_insert_text_completion,
+};
 pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 
 #[cfg(all(test, debug_assertions))]
@@ -65,12 +67,6 @@ pub use dom_protocol_support::{
     DocumentNodeAttributeSnapshot, DocumentNodeObjectSnapshot, DocumentNodeSnapshot,
     MAX_DOM_OUTPUT_TREE_DEPTH, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, MAX_JSON_OUTPUT_TREE_DEPTH,
     RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id,
-};
-#[cfg(feature = "devtools")]
-pub use input_support::{
-    PageInputExt, decode_element_click_dispatch_completion,
-    decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
-    decode_insert_text_completion,
 };
 pub use moli_dom::accessibility::{AccessibilityNode, AccessibilityNodeId, AccessibilityValue};
 pub use moli_page_types::DomScrollIntoViewRect;
@@ -302,17 +298,6 @@ impl Page {
         self.handle.devtools_agent_token()
     }
 
-    /// Seals this target's Main/IO DevTools ingress and interrupts active V8.
-    ///
-    /// `Page.crash` is a terminal renderer IO control in Chromium, not an
-    /// ordinary V8 Inspector command. Protocol integrations use this boundary
-    /// to retire the Page without waiting behind a session lane.
-    #[doc(hidden)]
-    #[cfg(feature = "devtools")]
-    pub fn crash_devtools_target_from_io(&self) {
-        self.handle.crash_devtools_target_from_io();
-    }
-
     #[doc(hidden)]
     pub fn set_renderer_devtools_command_session_id(&mut self, session_id: Option<String>) {
         self.renderer_devtools_command_session_id = session_id;
@@ -362,21 +347,6 @@ impl Page {
     }
 
     #[cfg(all(test, debug_assertions))]
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn panic_wait_for_selector_for_testing(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> Result<()> {
-        self.wait_for_selector(
-            loader,
-            "__moli_panic_wait_for_selector_for_testing__",
-            Duration::from_secs(1),
-        )
-        .await
-        .map(|_| ())
-    }
-
-    #[cfg(all(test, debug_assertions))]
     pub(crate) async fn panic_wait_for_script_truthy_for_testing(
         &mut self,
         loader: &ResourceRequestClient,
@@ -387,219 +357,6 @@ impl Page {
             Duration::from_secs(1),
         )
         .await
-    }
-
-    // Input dispatch methods (delegated to by the PageInputExt trait in input_support)
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_mouse_event_at_point_async(
-        &mut self,
-        x: f64,
-        y: f64,
-        event_name: &str,
-        button: i32,
-        buttons: Option<i32>,
-        delta_x: f64,
-        delta_y: f64,
-    ) -> Result<bool> {
-        Ok(self
-            .dispatch_mouse_event_at_point_with_outcome_async(
-                x, y, event_name, button, buttons, delta_x, delta_y,
-            )
-            .await?
-            .handled)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_mouse_event_at_point_with_outcome_async(
-        &mut self,
-        x: f64,
-        y: f64,
-        event_name: &str,
-        button: i32,
-        buttons: Option<i32>,
-        delta_x: f64,
-        delta_y: f64,
-    ) -> Result<RendererInputDispatchOutcome> {
-        let command = RendererPageCommand::DispatchMouseEventAtPoint {
-            x,
-            y,
-            event_name: event_name.to_owned(),
-            button,
-            buttons,
-            click_count: 0,
-            delta_x,
-            delta_y,
-            pointer: RendererPointerEventProperties::default(),
-            modifiers: 0,
-            intercept_drags: false,
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "mouse event page command",
-            "an input dispatch outcome reply",
-            RendererPageReply::InputDispatchOutcome(value) => Ok(value),
-        )
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_touch_event_at_point_async(
-        &mut self,
-        x: f64,
-        y: f64,
-        event_name: &str,
-        activate: bool,
-    ) -> Result<bool> {
-        Ok(self
-            .dispatch_touch_event_at_point_with_outcome_async(x, y, event_name, activate)
-            .await?
-            .handled)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_drag_event_at_point_async(
-        &mut self,
-        x: f64,
-        y: f64,
-        event_name: &str,
-        data: RendererDragData,
-        modifiers: u8,
-    ) -> Result<bool> {
-        Ok(self
-            .dispatch_drag_event_at_point_with_outcome_async(x, y, event_name, data, modifiers)
-            .await?
-            .handled)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_touch_event_at_point_with_outcome_async(
-        &mut self,
-        x: f64,
-        y: f64,
-        event_name: &str,
-        activate: bool,
-    ) -> Result<RendererInputDispatchOutcome> {
-        let command = RendererPageCommand::DispatchTouchEvent {
-            points: vec![RendererTouchPoint { id: 0, x, y }],
-            event_name: event_name.to_owned(),
-            activate,
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "touch event page command",
-            "an input dispatch outcome reply",
-            RendererPageReply::InputDispatchOutcome(value) => Ok(value),
-        )
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_drag_event_at_point_with_outcome_async(
-        &mut self,
-        x: f64,
-        y: f64,
-        event_name: &str,
-        data: RendererDragData,
-        modifiers: u8,
-    ) -> Result<RendererInputDispatchOutcome> {
-        let command = RendererPageCommand::DispatchDragEventAtPoint {
-            x,
-            y,
-            event_name: event_name.to_owned(),
-            data,
-            modifiers,
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "drag event page command",
-            "an input dispatch outcome reply",
-            RendererPageReply::InputDispatchOutcome(value) => Ok(value),
-        )
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn clear_active_drag_data_transfer_async(&mut self) -> Result<()> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::ClearActiveDragDataTransfer)
-            .await?;
-        expect_page_reply!(
-            reply,
-            "clear active drag data transfer page command",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn insert_text_into_active_control_async(
-        &mut self,
-        text: &str,
-    ) -> Result<bool> {
-        let command = RendererPageCommand::InsertTextIntoActiveControl(text.to_owned());
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "insert text page command",
-            "a bool reply",
-            RendererPageReply::Bool(value) => Ok(value),
-        )
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_key_event_async(
-        &mut self,
-        event_name: &str,
-        key: &str,
-        code: &str,
-        text: &str,
-        modifiers: u8,
-        auto_repeat: bool,
-        should_insert_text: bool,
-    ) -> Result<bool> {
-        Ok(self
-            .dispatch_key_event_with_outcome_async(
-                event_name,
-                key,
-                code,
-                text,
-                modifiers,
-                auto_repeat,
-                should_insert_text,
-            )
-            .await?
-            .handled)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) async fn dispatch_key_event_with_outcome_async(
-        &mut self,
-        event_name: &str,
-        key: &str,
-        code: &str,
-        text: &str,
-        modifiers: u8,
-        auto_repeat: bool,
-        should_insert_text: bool,
-    ) -> Result<RendererInputDispatchOutcome> {
-        let command = RendererPageCommand::DispatchKeyEvent {
-            event_name: event_name.to_owned(),
-            key: key.to_owned(),
-            code: code.to_owned(),
-            text: text.to_owned(),
-            modifiers,
-            location: 0,
-            auto_repeat,
-            should_insert_text,
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "key event page command",
-            "an input dispatch outcome reply",
-            RendererPageReply::InputDispatchOutcome(value) => Ok(value),
-        )
     }
 }
 

@@ -10,10 +10,15 @@ async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
         reference: RendererDomNodeReference,
     ) -> Attributes {
         let (reply, _) = page
-            .run_async_command(RendererPageCommand::DocumentNodeAttributes { reference })
+            .run_async_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::DocumentNodeAttributes { reference },
+            ))
             .await
             .expect("typed attributes query completes");
-        let RendererPageReply::DocumentNodeAttributesResolution(result) = reply else {
+        let RendererPageReply::DevTools(
+            RendererDevToolsPageReply::DocumentNodeAttributesResolution(result),
+        ) = reply
+        else {
             panic!("expected typed attribute resolution");
         };
         result
@@ -29,26 +34,30 @@ async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
         "<!doctype html><html><body><input id='probe' data-state='before'></body></html>",
     )
     .await;
-    page.run_async_command(RendererPageCommand::DocumentNodeSnapshotForDocument {
-        inspector_session_id: Some("attributes-a".to_owned()),
-        include_whitespace: false,
-        depth: 1,
-        pierce: false,
-    })
+    page.run_async_command(RendererPageCommand::DevTools(
+        RendererDevToolsPageCommand::DocumentNodeSnapshotForDocument {
+            inspector_session_id: Some("attributes-a".to_owned()),
+            include_whitespace: false,
+            depth: 1,
+            pierce: false,
+        },
+    ))
     .await
     .expect("publish a shallow frontend tree");
     let (reply, _) = page
-        .run_async_command(RendererPageCommand::DocumentQuerySelectorForDocument {
-            inspector_session_id: Some("attributes-a".to_owned()),
-            include_whitespace: false,
-            selector: "#probe".to_owned(),
-            multiple: false,
-        })
+        .run_async_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DocumentQuerySelectorForDocument {
+                inspector_session_id: Some("attributes-a".to_owned()),
+                include_whitespace: false,
+                selector: "#probe".to_owned(),
+                multiple: false,
+            },
+        ))
         .await
         .expect("bind the frontend node in session A");
-    let RendererPageReply::DocumentQuerySelectorResolution(
+    let RendererPageReply::DevTools(RendererDevToolsPageReply::DocumentQuerySelectorResolution(
         RendererDocumentQuerySelectorResolution::Found(nodes),
-    ) = reply
+    )) = reply
     else {
         panic!("expected probe node");
     };
@@ -81,12 +90,12 @@ async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
         ),
         "backend references remain independent of frontend publication"
     );
-    page.run_async_command(
-        RendererPageCommand::DocumentFrontendNodeIdsForBackendNodeIds {
+    page.run_async_command(RendererPageCommand::DevTools(
+        RendererDevToolsPageCommand::DocumentFrontendNodeIdsForBackendNodeIds {
             inspector_session_id: Some("attributes-a".to_owned()),
             backend_node_ids: vec![node.backend_node_id],
         },
-    )
+    ))
     .await
     .expect("publish the frontend tree");
     assert_eq!(
@@ -124,9 +133,11 @@ async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
         attributes(&page, backend.clone()).await,
         Attributes::Found(values) if values.contains(&("data-state".to_owned(), "after".to_owned()))
     ));
-    page.run_async_command(RendererPageCommand::DiscardDomAgentFrontendBindings {
-        inspector_session_id: Some("attributes-a".to_owned()),
-    })
+    page.run_async_command(RendererPageCommand::DevTools(
+        RendererDevToolsPageCommand::DiscardDomAgentFrontendBindings {
+            inspector_session_id: Some("attributes-a".to_owned()),
+        },
+    ))
     .await
     .expect("discard session A's frontend bindings");
     assert_eq!(attributes(&page, frontend).await, Attributes::MissingNode);
@@ -1589,8 +1600,10 @@ async fn stored_document_start_script_remove_uses_registry_key_namespace() {
     .expect("stored document-start scripts should install");
 
     let (remove_reply, _) = page
-        .run_async_command(RendererPageCommand::RemoveDocumentStartScriptByRegistryKey(
-            "target:TID-1:1".to_owned(),
+        .run_async_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::RemoveDocumentStartScriptByRegistryKey(
+                "target:TID-1:1".to_owned(),
+            ),
         ))
         .await
         .expect("registry-key remove should run");
@@ -2832,7 +2845,7 @@ async fn native_terminals_publish_before_waiters_are_polled() {
         pending.push((
             command_id,
             page.enqueue_protocol_command_in_inspector_session(
-                RendererPageCommand::Native(command),
+                RendererPageCommand::DevTools(RendererDevToolsPageCommand::Native(command)),
                 Some("session-a".to_owned()),
             )
             .expect("enqueue native terminal"),
@@ -2931,7 +2944,10 @@ async fn native_terminals_publish_before_waiters_are_polled() {
             "retirement must retain the exact committed terminal boundary",
         );
         let reply = completion.into_reply_and_state().0;
-        assert!(matches!(reply, RendererPageReply::NativeCommandPublished));
+        assert!(matches!(
+            reply,
+            RendererPageReply::DevTools(RendererDevToolsPageReply::NativeCommandPublished)
+        ));
     }
 }
 
@@ -2961,16 +2977,20 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
             DevToolsSessionKey::Attached("native".to_owned()),
             attachment,
             RendererNativeOperation::new(
-                RendererPageCommand::ComputedStyleProperties {
-                    reference:
-                        crate::runtime::page_surface::RendererDomNodeReference::BackendNodeId(
-                            u32::MAX,
-                        ),
-                },
+                RendererPageCommand::DevTools(
+                    RendererDevToolsPageCommand::ComputedStyleProperties {
+                        reference:
+                            crate::runtime::page_surface::RendererDomNodeReference::BackendNodeId(
+                                u32::MAX,
+                            ),
+                    },
+                ),
                 move |reply| {
                     assert!(matches!(
                         reply.unwrap(),
-                        RendererPageReply::ComputedStyleProperties(None)
+                        RendererPageReply::DevTools(
+                            RendererDevToolsPageReply::ComputedStyleProperties(None)
+                        )
                     ));
                     if id == 1 {
                         RendererNativeProtocolResponse::success(serde_json::json!({"found": false}))
@@ -2986,7 +3006,7 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
         guards.push(guard);
         waiters.push(
             page.enqueue_protocol_command_in_inspector_session(
-                RendererPageCommand::Native(command),
+                RendererPageCommand::DevTools(RendererDevToolsPageCommand::Native(command)),
                 Some("native".to_owned()),
             )
             .unwrap(),
@@ -3035,7 +3055,7 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
         tokio::task::yield_now().await;
         assert!(matches!(
             waiter.wait().await.unwrap().into_reply_and_state().0,
-            RendererPageReply::NativeCommandPublished
+            RendererPageReply::DevTools(RendererDevToolsPageReply::NativeCommandPublished)
         ));
     }
     page.close_async().await.unwrap();

@@ -9,6 +9,7 @@ use crate::conn::{
 };
 use crate::domains::fetch;
 use anyhow::Result;
+use moli_core::RendererDevToolsPageCommand;
 use moli_core::page::{
     PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceResponseInfo,
     SubresourceNetworkRequestHandle,
@@ -682,17 +683,21 @@ impl PreparedSubresourceContinueWait {
         };
         let native = match kind {
             SubresourceContinuationKind::Response(internal_id) => {
-                moli_core::RendererPageCommand::ContinuePendingSubresourceResponse {
-                    internal_id,
-                    response_code: None,
-                    response_headers: None,
-                }
+                moli_core::RendererPageCommand::DevTools(
+                    RendererDevToolsPageCommand::ContinuePendingSubresourceResponse {
+                        internal_id,
+                        response_code: None,
+                        response_headers: None,
+                    },
+                )
             }
             SubresourceContinuationKind::FailAuth(internal_id) => {
-                moli_core::RendererPageCommand::FailPendingSubresourceAuth {
-                    internal_id,
-                    error_text: "Fetch auth challenge has no DevTools request".to_owned(),
-                }
+                moli_core::RendererPageCommand::DevTools(
+                    RendererDevToolsPageCommand::FailPendingSubresourceAuth {
+                        internal_id,
+                        error_text: "Fetch auth challenge has no DevTools request".to_owned(),
+                    },
+                )
             }
         };
         let pending = conn.start_subresource_command(owner, &request.residence, native);

@@ -976,11 +976,13 @@ fn live_page_command_should_follow_pending_navigation(command: &RendererPageComm
 fn live_page_command_requires_materialized_child_realms(command: &RendererPageCommand) -> bool {
     match command {
         #[cfg(feature = "devtools")]
-        RendererPageCommand::Native(command) => {
+        RendererPageCommand::DevTools(RendererDevToolsPageCommand::Native(command)) => {
             live_page_command_requires_materialized_child_realms(&command.operation.command)
         }
         #[cfg(feature = "devtools")]
-        RendererPageCommand::Inspector(envelope) => envelope.requires_materialized_child_realms(),
+        RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) => {
+            envelope.requires_materialized_child_realms()
+        }
         _ => false,
     }
 }

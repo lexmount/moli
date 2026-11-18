@@ -175,7 +175,7 @@ impl PageScriptHost {
                 .with_pause_evaluation_until_debugger(true),
         );
         self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(
+            .attach_dedicated_worker_control(
                 renderer_instance_id,
                 &worker_handle,
                 self.renderer_output_journal(),
@@ -600,7 +600,7 @@ impl PageScriptHost {
             .map(|state| state.renderer_instance_id)
             .expect("loading DedicatedWorker must retain its renderer instance identity");
         self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(
+            .attach_dedicated_worker_control(
                 renderer_instance_id,
                 &worker_handle,
                 self.renderer_output_journal(),
@@ -633,7 +633,7 @@ impl PageScriptHost {
         }
         if !self
             .browser_context_runtime()
-            .dedicated_worker_pause_on_start_for_devtools()
+            .dedicated_worker_waits_for_debugger()
         {
             self.start_registered_local_worker(worker_id);
         }
@@ -1096,7 +1096,7 @@ impl PageScriptHost {
         let browser_context_runtime = self.browser_context_runtime();
         if let Some(state) = self.workers.remove(&worker_id) {
             self.browser_context_runtime()
-                .unregister_dedicated_worker_devtools_handle(state.renderer_instance_id);
+                .unregister_dedicated_worker(state.renderer_instance_id);
             if state.target_created {
                 self.append_dedicated_worker_target_lifecycle(
                     crate::runtime::RendererDedicatedWorkerTargetEvent::Destroyed {
@@ -1139,8 +1139,7 @@ impl PageScriptHost {
         let browser_context_runtime = self.browser_context_runtime();
         let workers = std::mem::take(&mut self.workers);
         for (_, state) in workers {
-            browser_context_runtime
-                .unregister_dedicated_worker_devtools_handle(state.renderer_instance_id);
+            browser_context_runtime.unregister_dedicated_worker(state.renderer_instance_id);
             match state.execution {
                 WorkerExecutionState::Loading {
                     load_task,

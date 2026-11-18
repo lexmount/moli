@@ -1,3 +1,5 @@
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererDevToolsPageCommand;
 use anyhow::{Result, anyhow};
 use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
@@ -161,10 +163,10 @@ impl RenderRuntimeHandle {
         if matches!(
             &command,
             RendererOwnerCommand::RunAsyncPageCommand {
-                command: RendererPageCommand::Inspector(_),
+                command: RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(_)),
                 ..
             } | RendererOwnerCommand::RunProtocolPageCommand {
-                command: RendererPageCommand::Inspector(_),
+                command: RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(_)),
                 ..
             }
         ) {

@@ -120,7 +120,8 @@ impl PageVm {
                 nodes: event.snapshots,
             })
             .collect();
-        self.pending_dom_mutation_event_batches
+        self.devtools
+            .pending_dom_mutation_event_batches
             .push(RendererDomMutationEventBatch::new(
                 self.devtools_agent_token(),
                 DevToolsSessionKey::from_wire_session_id(inspector_session_id),
@@ -293,7 +294,7 @@ impl PageVm {
         &mut self,
     ) -> Vec<RendererDomMutationEventBatch> {
         self.flush_pending_dom_mutation_event_batches();
-        std::mem::take(&mut self.pending_dom_mutation_event_batches)
+        std::mem::take(&mut self.devtools.pending_dom_mutation_event_batches)
     }
 
     pub(crate) fn flush_pending_dom_mutation_event_batches(&mut self) {
@@ -320,7 +321,9 @@ impl PageVm {
                 })
             })
             .collect::<Vec<_>>();
-        self.pending_dom_mutation_event_batches.extend(batches);
+        self.devtools
+            .pending_dom_mutation_event_batches
+            .extend(batches);
     }
 
     /// Freezes every DOM mutation produced before the current owner boundary
@@ -333,7 +336,7 @@ impl PageVm {
     /// overtake an earlier DOM change.
     pub(super) fn absorb_pending_dom_mutations_into_output_journal(&mut self) {
         self.flush_pending_dom_mutation_event_batches();
-        let batches = std::mem::take(&mut self.pending_dom_mutation_event_batches);
+        let batches = std::mem::take(&mut self.devtools.pending_dom_mutation_event_batches);
         if batches.is_empty() {
             return;
         }

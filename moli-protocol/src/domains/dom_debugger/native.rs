@@ -1,5 +1,6 @@
 use super::*;
 use crate::domains::native::{self, NativeCommandStep};
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
     RendererPageCommand as Command, RendererPageReply as Reply,
@@ -35,14 +36,14 @@ fn prepare(
                     params.pierce,
                 ),
                 |reply| match reply {
-                    Ok(Reply::DomDebuggerEventListeners(
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DomDebuggerEventListeners(
                         RendererDomDebuggerEventListenersResolution::Found(listeners),
-                    )) => Response::success(
+                    ))) => Response::success(
                         json!({"listeners": listeners.into_iter().map(listener_payload).collect::<Vec<_>>() }),
                     ),
-                    Ok(Reply::DomDebuggerEventListeners(
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DomDebuggerEventListeners(
                         RendererDomDebuggerEventListenersResolution::InvalidRemoteObjectId(message),
-                    )) => Response::error(-32000, message),
+                    ))) => Response::error(-32000, message),
                     Err(error) => Response::error(-32000, error.to_string()),
                     _ => unreachable!("DOMDebugger listeners reply"),
                 },
@@ -52,22 +53,24 @@ fn prepare(
             let params: DomBreakpointParams =
                 cmd.get_params().ok().flatten().ok_or_else(invalid)?;
             Ok(Operation::new(
-                Command::DomDebuggerConfigureDomBreakpoint {
-                    inspector_session_id: session,
-                    frontend_node_id: params.node_id,
-                    breakpoint_type: params.r#type,
-                    enabled: action == DomDebuggerAction::SetDOMBreakpoint,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::DomDebuggerConfigureDomBreakpoint {
+                        inspector_session_id: session,
+                        frontend_node_id: params.node_id,
+                        breakpoint_type: params.r#type,
+                        enabled: action == DomDebuggerAction::SetDOMBreakpoint,
+                    },
+                ),
                 |reply| match reply {
-                    Ok(Reply::DomDebuggerDomBreakpoint(
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DomDebuggerDomBreakpoint(
                         RendererDomDebuggerDomBreakpointResolution::Configured,
-                    )) => Response::success(json!({})),
-                    Ok(Reply::DomDebuggerDomBreakpoint(
+                    ))) => Response::success(json!({})),
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DomDebuggerDomBreakpoint(
                         RendererDomDebuggerDomBreakpointResolution::NodeNotFound,
-                    )) => Response::error(-32000, "Could not find node with given id"),
-                    Ok(Reply::DomDebuggerDomBreakpoint(
+                    ))) => Response::error(-32000, "Could not find node with given id"),
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::DomDebuggerDomBreakpoint(
                         RendererDomDebuggerDomBreakpointResolution::UnknownType(kind),
-                    )) => Response::error(-32000, format!("Unknown DOM breakpoint type: {kind}")),
+                    ))) => Response::error(-32000, format!("Unknown DOM breakpoint type: {kind}")),
                     Err(error) => Response::error(-32000, error.to_string()),
                     _ => unreachable!("DOMDebugger DOM breakpoint reply"),
                 },
@@ -101,11 +104,13 @@ fn prepare(
             })
             .ok_or_else(|| CommandOutputPlan::error(-32000, "NoSuchTarget"))?;
             Ok(Operation::new(
-                Command::DomDebuggerConfigureEventListenerBreakpoint {
-                    inspector_session_id: session,
-                    breakpoint,
-                    enabled,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::DomDebuggerConfigureEventListenerBreakpoint {
+                        inspector_session_id: session,
+                        breakpoint,
+                        enabled,
+                    },
+                ),
                 native::unit_response,
             ))
         }
@@ -125,11 +130,13 @@ fn prepare(
             })
             .ok_or_else(|| CommandOutputPlan::error(-32000, "NoSuchTarget"))?;
             Ok(Operation::new(
-                Command::DomDebuggerConfigureXhrBreakpoint {
-                    inspector_session_id: session,
-                    breakpoint,
-                    enabled,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::DomDebuggerConfigureXhrBreakpoint {
+                        inspector_session_id: session,
+                        breakpoint,
+                        enabled,
+                    },
+                ),
                 native::unit_response,
             ))
         }

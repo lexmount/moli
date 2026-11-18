@@ -1,18 +1,18 @@
 use super::InspectorOutbound;
-#[cfg(feature = "devtools")]
-use super::agent_sessions::RendererInspectorSessionConnection;
 use super::agent_sessions::RendererInspectorSessions;
 use super::context_registry::DocumentInspectorContextGroupId;
 use super::v8_backend::{RendererInspectorIsolateBackend, RendererInspectorIsolateBackendHandle};
 use crate::protocol_types::RuntimeBindingRegistration;
 use crate::runtime::RendererTurnOutputJournal;
 use moli_page_types::RendererDevToolsAgentToken;
-#[cfg(feature = "devtools")]
-use moli_page_types::{DevToolsSessionKey, V8InspectorSessionState};
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
 };
+
+#[cfg(feature = "devtools")]
+#[path = "frontend/agent.rs"]
+mod frontend;
 
 /// Inspector state owned by one renderer local-root agent.
 ///
@@ -63,36 +63,6 @@ pub(crate) struct RendererInspectorObjectWrapper {
     state: Weak<RefCell<RendererDevToolsAgentState>>,
 }
 
-impl RendererInspectorObjectWrapper {
-    #[cfg(feature = "devtools")]
-    pub(crate) fn wrap<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        session_key: &DevToolsSessionKey,
-        value: v8::Local<'s, v8::Value>,
-    ) -> Option<serde_json::Value> {
-        let state = self.state.upgrade()?;
-        let session = state
-            .borrow()
-            .sessions
-            .frontend_session_and_outbound(session_key)?
-            .0;
-        let context = v8::Local::<v8::Object>::try_from(value)
-            .ok()
-            .and_then(|object| object.get_creation_context(scope))
-            .unwrap_or_else(|| scope.get_current_context());
-        let remote = session.wrap_object(
-            scope,
-            context,
-            value,
-            v8::inspector::StringView::from(&b""[..]),
-            false,
-        )?;
-        let json = v8::crdtp::cbor_to_json(&remote.to_bytes())?;
-        serde_json::from_slice(&json).ok()
-    }
-}
-
 #[must_use]
 pub(crate) struct RendererDomDebuggerScheduledPause {
     sessions: Vec<Rc<v8::inspector::V8InspectorSession>>,
@@ -106,86 +76,7 @@ impl Drop for RendererDomDebuggerScheduledPause {
     }
 }
 
-impl RendererDomDebuggerPauseScheduler {
-    #[cfg(feature = "devtools")]
-    pub(crate) fn debugger_pauses_enabled(&self) -> bool {
-        self.state
-            .upgrade()
-            .is_some_and(|state| state.borrow().debugger_pauses_enabled)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn schedule_pause_on_next_statement(
-        &self,
-        session_keys: &[DevToolsSessionKey],
-        reason: &str,
-        detail: &str,
-    ) -> RendererDomDebuggerScheduledPause {
-        let sessions = self
-            .state
-            .upgrade()
-            .map(|state| state.borrow().sessions.frontend_sessions(session_keys))
-            .unwrap_or_default();
-        for session in &sessions {
-            session.schedule_pause_on_next_statement(
-                v8::inspector::StringView::from(reason.as_bytes()),
-                v8::inspector::StringView::from(detail.as_bytes()),
-            );
-        }
-        RendererDomDebuggerScheduledPause { sessions }
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn break_program_for_sessions(
-        &self,
-        pauses: Vec<(DevToolsSessionKey, String)>,
-        reason: &str,
-    ) {
-        self.break_program_for_sessions_with_prefaces(
-            pauses
-                .into_iter()
-                .map(|(session, detail)| (session, detail, Vec::new()))
-                .collect(),
-            reason,
-        );
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn break_program_for_sessions_with_prefaces(
-        &self,
-        pauses: Vec<(
-            DevToolsSessionKey,
-            String,
-            Vec<crate::runtime::RendererRuntimeInspectorMessage>,
-        )>,
-        reason: &str,
-    ) {
-        for (session_key, detail, preface) in pauses {
-            let route = self.state.upgrade().and_then(|state| {
-                state
-                    .borrow()
-                    .sessions
-                    .frontend_session_and_outbound(&session_key)
-            });
-            let Some((session, outbound)) = route else {
-                continue;
-            };
-            let _preface = outbound.stage_pause_preface(preface);
-            session.break_program(
-                v8::inspector::StringView::from(reason.as_bytes()),
-                v8::inspector::StringView::from(detail.as_bytes()),
-            );
-        }
-    }
-}
-
 impl RendererDevToolsAgent {
-    #[cfg(feature = "devtools")]
-    pub(super) fn object_wrapper(&self) -> RendererInspectorObjectWrapper {
-        RendererInspectorObjectWrapper {
-            state: Rc::downgrade(&self.state),
-        }
-    }
     pub(super) fn new(isolate_backend: RendererInspectorIsolateBackendHandle) -> Self {
         let context_group_id = DocumentInspectorContextGroupId::next();
         isolate_backend.bind_context_group(context_group_id);
@@ -262,124 +153,11 @@ impl RendererDevToolsAgent {
         dispatch.run(op)
     }
 
-    #[cfg(feature = "devtools")]
-    pub(super) fn with_frontend<T>(
-        &self,
-        backend: &mut RendererInspectorIsolateBackend,
-        session_key: DevToolsSessionKey,
-        op: impl FnOnce(
-            &v8::inspector::V8InspectorSession,
-            InspectorOutbound,
-            Vec<RuntimeBindingRegistration>,
-        ) -> T,
-    ) -> T {
-        let dispatch = {
-            let mut state = self.state.borrow_mut();
-            state.isolate_backend.assert_matches(backend);
-            let connection = session_connection(&state);
-            state
-                .sessions
-                .prepare_frontend(backend, &connection, session_key)
-        };
-        dispatch.run(op)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn v8_state(
-        &self,
-        session_key: &DevToolsSessionKey,
-    ) -> Option<V8InspectorSessionState> {
-        self.state.borrow().sessions.v8_state(session_key)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn v8_states(&self) -> Vec<(DevToolsSessionKey, V8InspectorSessionState)> {
-        self.state.borrow().sessions.v8_states()
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn reattach_frontend(
-        &self,
-        backend: &mut RendererInspectorIsolateBackend,
-        session_key: DevToolsSessionKey,
-        v8_state: &V8InspectorSessionState,
-    ) {
-        let mut state = self.state.borrow_mut();
-        state.isolate_backend.assert_matches(backend);
-        let connection = session_connection(&state);
-        state
-            .sessions
-            .reattach_frontend(backend, &connection, session_key, v8_state);
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn ensure_frontend(
-        &self,
-        backend: &mut RendererInspectorIsolateBackend,
-        session_key: DevToolsSessionKey,
-    ) {
-        let mut state = self.state.borrow_mut();
-        state.isolate_backend.assert_matches(backend);
-        let connection = session_connection(&state);
-        state
-            .sessions
-            .ensure_frontend(backend, &connection, session_key);
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn set_runtime_bindings(
-        &self,
-        session_key: DevToolsSessionKey,
-        bindings: &[RuntimeBindingRegistration],
-    ) {
-        self.state
-            .borrow_mut()
-            .sessions
-            .set_runtime_bindings(session_key, bindings);
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn runtime_bindings(
-        &self,
-        session_key: &DevToolsSessionKey,
-    ) -> Vec<RuntimeBindingRegistration> {
-        self.state.borrow().sessions.runtime_bindings(session_key)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn end_runtime_command_output(&self, session_key: &DevToolsSessionKey) {
-        self.state
-            .borrow()
-            .sessions
-            .end_runtime_command_output(session_key);
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn remove_frontend(&self, session_key: &DevToolsSessionKey) -> bool {
-        self.state
-            .borrow_mut()
-            .sessions
-            .remove_frontend(session_key)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn cancel_response_callback(&self, session_key: &DevToolsSessionKey, call_id: i32) {
-        self.state
-            .borrow()
-            .sessions
-            .cancel_response_callback(session_key, call_id);
-    }
-
     pub(super) fn cancel_internal_runtime_evaluate_response(&self, call_id: i32) {
         self.state
             .borrow()
             .sessions
             .cancel_internal_runtime_evaluate_response(call_id);
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(super) fn frontend_routes(&self) -> Vec<(DevToolsSessionKey, InspectorOutbound)> {
-        self.state.borrow().sessions.frontend_routes()
     }
 
     pub(super) fn deactivate_all_routes(&self) {
@@ -395,17 +173,6 @@ impl RendererDevToolsAgent {
     }
 }
 
-#[cfg(feature = "devtools")]
-fn session_connection(state: &RendererDevToolsAgentState) -> RendererInspectorSessionConnection {
-    RendererInspectorSessionConnection::new(
-        state.isolate_backend.clone(),
-        state.context_group_id,
-        state.token,
-        state.output_journal.clone(),
-    )
-    .with_debugger_pauses_enabled(state.debugger_pauses_enabled)
-}
-
 #[cfg(test)]
 impl RendererDevToolsAgent {
     pub(super) fn is_same_agent(&self, other: &Self) -> bool {
@@ -415,76 +182,5 @@ impl RendererDevToolsAgent {
     pub(super) fn shares_isolate_backend_with(&self, other: &Self) -> bool {
         let isolate_backend = self.state.borrow().isolate_backend.clone();
         isolate_backend.is_same_backend(&other.state.borrow().isolate_backend)
-    }
-}
-
-#[cfg(all(test, feature = "devtools"))]
-mod tests {
-    use super::*;
-    use crate::script_vm::inspector::context_registry::DocumentInspectorContextRegistrationId;
-    use std::pin::pin;
-
-    #[test]
-    fn same_agent_context_reset_keeps_its_frontend_v8_session() {
-        crate::ensure_v8_for_test();
-        let mut isolate = v8::Isolate::new(Default::default());
-        let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
-        let agent = RendererDevToolsAgent::new(backend.handle());
-        let session_key = DevToolsSessionKey::Primary;
-
-        let session_before =
-            agent.with_frontend(&mut backend, session_key.clone(), |session, _, _| {
-                std::ptr::from_ref(session)
-            });
-        let default_context = {
-            let scope = pin!(v8::HandleScope::new(&mut isolate));
-            let scope = &mut scope.init();
-            let context = v8::Context::new(scope, Default::default());
-            backend.context_created_with_unique_id(
-                context,
-                agent.context_group_id(),
-                b"https://document-open.test/",
-                b"https://document-open.test",
-                br#"{"isDefault":true,"type":"default"}"#,
-            );
-            v8::Global::new(scope, context)
-        };
-        backend.context_registry.set_default_context(
-            agent.context_group_id(),
-            default_context,
-            DocumentInspectorContextRegistrationId::next(),
-        );
-
-        assert!(
-            backend.reset_default_context_group_before_replacement(agent.context_group_id()),
-            "same-agent document replacement should reset its existing context group"
-        );
-        let session_after = agent.with_frontend(&mut backend, session_key, |session, _, _| {
-            std::ptr::from_ref(session)
-        });
-
-        assert_eq!(
-            session_before, session_after,
-            "same-agent document replacement must not detach its frontend V8 session"
-        );
-        assert_eq!(agent.session_count(), 1);
-    }
-
-    #[test]
-    fn agent_rejects_a_different_isolate_inspector_backend() {
-        crate::ensure_v8_for_test();
-        let mut isolate = v8::Isolate::new(Default::default());
-        let backend = RendererInspectorIsolateBackend::new(&mut isolate);
-        let agent =
-            RendererDevToolsAgent::new(RendererInspectorIsolateBackendHandle::new_for_test());
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            agent.assert_isolate_backend(&backend);
-        }));
-
-        assert!(
-            result.is_err(),
-            "an agent must not connect sessions or contexts through another isolate's backend"
-        );
     }
 }

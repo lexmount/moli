@@ -1,4 +1,5 @@
 use moli_core::page::RendererDomFrontendNodeBindingResolution;
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
     RendererNativeProtocolResponse as Response, RendererPageCommand as Command,
@@ -28,19 +29,20 @@ pub(crate) fn with_backend_node(
     match reference {
         DevToolsDomNodeReference::BackendNodeId(id) => next(id).require_owner_turn(),
         DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) => {
-            let command = Command::DocumentFrontendNodeBinding {
-                reference: moli_core::page::RendererDomNodeReference::FrontendNodeId {
-                    inspector_session_id: session,
-                    frontend_node_id,
-                },
-            };
+            let command =
+                Command::DevTools(RendererDevToolsPageCommand::DocumentFrontendNodeBinding {
+                    reference: moli_core::page::RendererDomNodeReference::FrontendNodeId {
+                        inspector_session_id: session,
+                        frontend_node_id,
+                    },
+                });
             let continue_binding = move |reply| match reply {
-                Ok(Reply::DocumentFrontendNodeBinding(
+                Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentFrontendNodeBinding(
                     RendererDomFrontendNodeBindingResolution::BackendNodeId(id),
-                )) => Step::Continue(next(id)),
-                Ok(Reply::DocumentFrontendNodeBinding(
+                ))) => Step::Continue(next(id)),
+                Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentFrontendNodeBinding(
                     RendererDomFrontendNodeBindingResolution::NotFound,
-                )) => Step::Complete(Response::error(-32000, "Could not find node with given id")),
+                ))) => Step::Complete(Response::error(-32000, "Could not find node with given id")),
                 Err(error) => Step::Complete(Response::error(
                     -32000,
                     format!("Could not resolve frontend node binding: {error}"),

@@ -1,4 +1,6 @@
+use super::host::RendererSharedWorkerHostState;
 use crate::runtime::WorkerInspectorError;
+use crate::worker::WorkerControlHandle;
 use anyhow::{Context as _, Result};
 use tokio::sync::oneshot;
 
@@ -6,11 +8,24 @@ use super::host::RendererSharedWorkerHost;
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 
 impl RendererSharedWorkerHost {
+    fn running_worker_control(&self) -> Option<WorkerControlHandle> {
+        let state = self.state.lock();
+        match &*state {
+            RendererSharedWorkerHostState::Running {
+                handle: Some(handle),
+                ..
+            } => Some(handle.control_handle()),
+            RendererSharedWorkerHostState::Loading { .. }
+            | RendererSharedWorkerHostState::Running { handle: None, .. }
+            | RendererSharedWorkerHostState::Closed => None,
+        }
+    }
+
     pub(super) fn attach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.running_devtools_handle()
+        self.running_worker_control()
             .is_some_and(|handle| handle.attach_runtime_inspector_session(inspector_session_id))
     }
 
@@ -47,7 +62,7 @@ impl RendererSharedWorkerHost {
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let Some(handle) = self.running_devtools_handle() else {
+        let Some(handle) = self.running_worker_control() else {
             return Err(WorkerInspectorError::SharedUnavailable.into());
         };
         let (response_tx, response_rx) = oneshot::channel();
@@ -68,7 +83,7 @@ impl RendererSharedWorkerHost {
         &self,
         inspector_session_id: Option<String>,
     ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
-        self.running_devtools_handle()
+        self.running_worker_control()
             .map(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
     }
 }

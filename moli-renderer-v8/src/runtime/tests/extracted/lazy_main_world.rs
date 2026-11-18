@@ -227,22 +227,27 @@ async fn native_input_activates_the_live_document_and_its_inline_handler_once() 
     assert_main_world_count(&page, 0).await;
     for event in ["mousemove", "mousedown", "mouseup"] {
         let (reply, _) = page
-            .run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
-                x: 30.0,
-                y: 30.0,
-                event_name: event.to_owned(),
-                button: if event == "mousemove" { -1 } else { 0 },
-                buttons: Some(if event == "mousedown" { 1 } else { 0 }),
-                click_count: 1,
-                delta_x: 0.0,
-                delta_y: 0.0,
-                pointer: RendererPointerEventProperties::default(),
-                modifiers: 0,
-                intercept_drags: false,
-            })
+            .run_async_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::DispatchMouseEventAtPoint {
+                    x: 30.0,
+                    y: 30.0,
+                    event_name: event.to_owned(),
+                    button: if event == "mousemove" { -1 } else { 0 },
+                    buttons: Some(if event == "mousedown" { 1 } else { 0 }),
+                    click_count: 1,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                    pointer: RendererPointerEventProperties::default(),
+                    modifiers: 0,
+                    intercept_drags: false,
+                },
+            ))
             .await
             .unwrap();
-        assert!(matches!(reply, RendererPageReply::InputDispatchOutcome(_)));
+        assert!(matches!(
+            reply,
+            RendererPageReply::DevTools(RendererDevToolsPageReply::InputDispatchOutcome(_))
+        ));
     }
     assert_main_world_count(&page, 1).await;
     assert_eq!(
@@ -263,11 +268,13 @@ async fn cold_runtime_binding_install_initializes_main_world() {
         .await;
         assert_main_world_count(&page, 0).await;
         let (reply, _) = page
-            .run_async_command(RendererPageCommand::InstallRuntimeBinding {
-                name: "coldBinding".to_owned(),
-                execution_context_name: None,
-                execution_context_id,
-            })
+            .run_async_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::InstallRuntimeBinding {
+                    name: "coldBinding".to_owned(),
+                    execution_context_name: None,
+                    execution_context_id,
+                },
+            ))
             .await
             .expect("native binding installation must activate the default realm");
         assert!(matches!(reply, RendererPageReply::Unit));
@@ -277,8 +284,8 @@ async fn cold_runtime_binding_install_initializes_main_world() {
             "function"
         );
         let (reply, _) = page
-            .run_async_command(RendererPageCommand::RemoveRuntimeBinding(
-                "coldBinding".to_owned(),
+            .run_async_command(RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::RemoveRuntimeBinding("coldBinding".to_owned()),
             ))
             .await
             .expect("a materialized binding must remain removable");
@@ -295,8 +302,12 @@ async fn cold_runtime_binding_install_initializes_main_world() {
 #[tokio::test(flavor = "multi_thread")]
 async fn cold_runtime_binding_removal_keeps_main_world_deferred() {
     for command in [
-        RendererPageCommand::RemoveRuntimeBinding("coldBinding".to_owned()),
-        RendererPageCommand::RemoveDefaultRuntimeBinding("coldBinding".to_owned()),
+        RendererPageCommand::DevTools(RendererDevToolsPageCommand::RemoveRuntimeBinding(
+            "coldBinding".to_owned(),
+        )),
+        RendererPageCommand::DevTools(RendererDevToolsPageCommand::RemoveDefaultRuntimeBinding(
+            "coldBinding".to_owned(),
+        )),
     ] {
         let (_runtime, mut page) = lazy_test_page(
             "<!doctype html><p>Native binding removal</p>",

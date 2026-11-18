@@ -209,7 +209,7 @@ struct RendererBrowserContextRuntimeInner {
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
     next_dedicated_worker_instance_id: AtomicU64,
-    dedicated_worker_devtools_targets: Mutex<HashMap<u64, DedicatedWorkerDevToolsTarget>>,
+    dedicated_worker_targets: Mutex<HashMap<u64, DedicatedWorkerTarget>>,
     #[cfg(feature = "devtools")]
     dedicated_worker_pause_on_start_for_devtools: AtomicBool,
     #[cfg(feature = "devtools")]
@@ -220,12 +220,14 @@ struct RendererBrowserContextRuntimeInner {
 }
 
 #[derive(Clone, Debug)]
-enum DedicatedWorkerDevToolsTarget {
+enum DedicatedWorkerTarget {
     Loading {
+        #[cfg(feature = "devtools")]
         inspector_sessions: Vec<Option<String>>,
     },
     Running {
-        handle: crate::worker::WorkerDevToolsHandle,
+        handle: crate::worker::WorkerControlHandle,
+        #[cfg(feature = "devtools")]
         output_journal: Option<super::RendererTurnOutputJournal>,
     },
 }
@@ -362,11 +364,10 @@ impl Drop for RendererBrowserContextRuntimeInner {
 }
 
 fn terminate_browser_context_resource_producers(inner: &RendererBrowserContextRuntimeInner) {
-    let dedicated_worker_targets =
-        std::mem::take(&mut *inner.dedicated_worker_devtools_targets.lock());
+    let dedicated_worker_targets = std::mem::take(&mut *inner.dedicated_worker_targets.lock());
     for target in dedicated_worker_targets.into_values() {
-        if let DedicatedWorkerDevToolsTarget::Running { handle, .. } = target {
-            let _ = handle.terminate_for_devtools();
+        if let DedicatedWorkerTarget::Running { handle, .. } = target {
+            let _ = handle.terminate();
         }
     }
     if let Some(shared_worker_runtime) = inner.shared_worker_runtime.get() {
@@ -618,7 +619,7 @@ impl RendererBrowserContextRuntime {
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
                 next_dedicated_worker_instance_id: AtomicU64::default(),
-                dedicated_worker_devtools_targets: Mutex::new(HashMap::new()),
+                dedicated_worker_targets: Mutex::new(HashMap::new()),
                 #[cfg(feature = "devtools")]
                 dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
                 #[cfg(feature = "devtools")]

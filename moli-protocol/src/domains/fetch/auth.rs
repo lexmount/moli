@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_core::RendererDevToolsPageCommand;
 use moli_core::RendererPageCommand;
 
 use crate::automation::{
@@ -233,17 +234,17 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     None
                 };
                 let native = match action {
-                    DevToolsAuthChallengeAction::Default => {
-                        RendererPageCommand::FailPendingSubresourceAuth {
+                    DevToolsAuthChallengeAction::Default => RendererPageCommand::DevTools(
+                        RendererDevToolsPageCommand::FailPendingSubresourceAuth {
                             internal_id: pending.internal_id,
                             error_text: "Fetch auth challenge aborted".to_owned(),
-                        }
-                    }
-                    DevToolsAuthChallengeAction::Cancel => {
-                        RendererPageCommand::CancelPendingSubresourceAuth {
+                        },
+                    ),
+                    DevToolsAuthChallengeAction::Cancel => RendererPageCommand::DevTools(
+                        RendererDevToolsPageCommand::CancelPendingSubresourceAuth {
                             internal_id: pending.internal_id,
-                        }
-                    }
+                        },
+                    ),
                     DevToolsAuthChallengeAction::ProvideCredentials => unreachable!(),
                 };
                 let pending_page =
@@ -328,10 +329,12 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                 let pending_page = conn.start_subresource_command(
                     owner,
                     &pending.residence,
-                    RendererPageCommand::ContinuePendingSubresourceAuth {
-                        internal_id: pending.internal_id,
-                        auth,
-                    },
+                    RendererPageCommand::DevTools(
+                        RendererDevToolsPageCommand::ContinuePendingSubresourceAuth {
+                            internal_id: pending.internal_id,
+                            auth,
+                        },
+                    ),
                 );
                 let pending_page = match pending_page {
                     Ok(pending_page) => pending_page,

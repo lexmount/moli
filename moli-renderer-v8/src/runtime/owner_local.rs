@@ -211,9 +211,9 @@ impl RendererPageRequestPolicyUpdate {
     pub(super) fn into_command(self) -> RendererPageCommand {
         match self {
             #[cfg(feature = "devtools")]
-            Self::FetchInterception { classes } => {
-                RendererPageCommand::SetFetchSubresourceInterception { classes }
-            }
+            Self::FetchInterception { classes } => RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::SetFetchSubresourceInterception { classes },
+            ),
             Self::BlockedUrls(patterns) => RendererPageCommand::SetBlockedUrlPatterns(patterns),
         }
     }
@@ -697,7 +697,7 @@ impl RendererPageHandle {
         }
         let command = match command {
             #[cfg(feature = "devtools")]
-            RendererPageCommand::Inspector(envelope) => {
+            RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) => {
                 let route = self.devtools_target.main_ref().enqueue_owner_command(
                     self.token(),
                     self.devtools_agent_token,

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use moli_core::RendererDevToolsPageCommand;
 use moli_core::page::{CompletedResourceCommand, PendingResourceCommand};
 
 use super::state::PreparedSubresourceCorrelation;
@@ -47,15 +48,17 @@ impl PreparedSubresourceAutoContinue {
         let pending = conn.start_subresource_command(
             owner,
             &residence,
-            moli_core::RendererPageCommand::ContinuePendingSubresourceFetch {
-                internal_id,
-                url: None,
-                method: None,
-                body: None,
-                headers: None,
-                intercept_response,
-                handle_auth_requests,
-            },
+            moli_core::RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::ContinuePendingSubresourceFetch {
+                    internal_id,
+                    url: None,
+                    method: None,
+                    body: None,
+                    headers: None,
+                    intercept_response,
+                    handle_auth_requests,
+                },
+            ),
         );
         match pending {
             Ok(pending) => Some(Self {

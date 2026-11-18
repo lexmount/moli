@@ -1,6 +1,7 @@
 use super::*;
 use crate::automation::DevToolsDomNodeReference;
 use crate::domains::native::{self, NativeCommandStep};
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
     RendererPageCommand as Command, RendererPageReply as Reply,
@@ -141,40 +142,51 @@ fn frame_operation(
     let frame_id = frame_id.unwrap_or_else(|| top_frame_id.clone());
     let child = frame_id != top_frame_id;
     let command = match (child, root_only) {
-        (false, false) => Command::AccessibilityTreePayloadsForDocument { max_depth },
-        (false, true) => Command::AccessibilityNodePayloadForDocument,
-        (true, false) => Command::AccessibilityTreePayloadsForChildFrame {
-            frame_id,
-            max_depth,
-        },
-        (true, true) => Command::AccessibilityNodePayloadForChildFrame { frame_id },
+        (false, false) => Command::DevTools(
+            RendererDevToolsPageCommand::AccessibilityTreePayloadsForDocument { max_depth },
+        ),
+        (false, true) => {
+            Command::DevTools(RendererDevToolsPageCommand::AccessibilityNodePayloadForDocument)
+        }
+        (true, false) => Command::DevTools(
+            RendererDevToolsPageCommand::AccessibilityTreePayloadsForChildFrame {
+                frame_id,
+                max_depth,
+            },
+        ),
+        (true, true) => Command::DevTools(
+            RendererDevToolsPageCommand::AccessibilityNodePayloadForChildFrame { frame_id },
+        ),
     };
     Operation::new(command, move |reply| match reply {
-        Ok(Reply::OptionalAccessibilityPayload(Some(node))) => {
-            Response::success(json!({"node": node}))
-        }
-        Ok(Reply::OptionalAccessibilityPayloads(Some(nodes))) => {
-            Response::success(json!({"nodes": nodes}))
-        }
-        Ok(Reply::OptionalAccessibilityPayloadsForObjectId(Some(payload))) => {
-            match payload.payloads {
-                Some(mut nodes) if root_only => {
-                    if nodes.is_empty() {
-                        node_not_found()
-                    } else {
-                        Response::success(json!({"node": nodes.remove(0)}))
-                    }
+        Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayload(Some(
+            node,
+        )))) => Response::success(json!({"node": node})),
+        Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayloads(Some(
+            nodes,
+        )))) => Response::success(json!({"nodes": nodes})),
+        Ok(Reply::DevTools(
+            RendererDevToolsPageReply::OptionalAccessibilityPayloadsForObjectId(Some(payload)),
+        )) => match payload.payloads {
+            Some(mut nodes) if root_only => {
+                if nodes.is_empty() {
+                    node_not_found()
+                } else {
+                    Response::success(json!({"node": nodes.remove(0)}))
                 }
-                Some(nodes) => Response::success(json!({"nodes": nodes})),
-                None => node_not_found(),
             }
-        }
-        Ok(Reply::OptionalAccessibilityPayloadsForObjectId(None)) => Response::error(
+            Some(nodes) => Response::success(json!({"nodes": nodes})),
+            None => node_not_found(),
+        },
+        Ok(Reply::DevTools(
+            RendererDevToolsPageReply::OptionalAccessibilityPayloadsForObjectId(None),
+        )) => Response::error(
             -32000,
             "Frame with the given id does not belong to the target.",
         ),
         Ok(
-            Reply::OptionalAccessibilityPayload(None) | Reply::OptionalAccessibilityPayloads(None),
+            Reply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayload(None))
+            | Reply::DevTools(RendererDevToolsPageReply::OptionalAccessibilityPayloads(None)),
         ) => Response::error(-32000, "NoDocumentLoaded"),
         Err(error) => {
             let kind = if root_only {
@@ -243,22 +255,24 @@ fn node_operation(
     operation: AccessibilityNodeOperation,
 ) -> Operation {
     let command = match &operation {
-        AccessibilityNodeOperation::Children => {
-            Command::AccessibilityChildNodePayloadsForNode { reference }
-        }
-        AccessibilityNodeOperation::Ancestors => {
-            Command::AccessibilityNodeAndAncestorPayloadsForNode { reference }
-        }
-        AccessibilityNodeOperation::Query { .. } => Command::AccessibilityTreePayloadsForNode {
-            reference,
-            max_depth: None,
-        },
-        AccessibilityNodeOperation::Partial { fetch_relatives } => {
-            Command::AccessibilityPartialTreePayloadsForNode {
+        AccessibilityNodeOperation::Children => Command::DevTools(
+            RendererDevToolsPageCommand::AccessibilityChildNodePayloadsForNode { reference },
+        ),
+        AccessibilityNodeOperation::Ancestors => Command::DevTools(
+            RendererDevToolsPageCommand::AccessibilityNodeAndAncestorPayloadsForNode { reference },
+        ),
+        AccessibilityNodeOperation::Query { .. } => Command::DevTools(
+            RendererDevToolsPageCommand::AccessibilityTreePayloadsForNode {
+                reference,
+                max_depth: None,
+            },
+        ),
+        AccessibilityNodeOperation::Partial { fetch_relatives } => Command::DevTools(
+            RendererDevToolsPageCommand::AccessibilityPartialTreePayloadsForNode {
                 reference,
                 fetch_relatives: *fetch_relatives,
-            }
-        }
+            },
+        ),
     };
     Operation::new(command, move |reply| {
         project_nodes(reply, Some(frame_id), top_frame_id, operation)
@@ -272,8 +286,12 @@ fn project_nodes(
     operation: AccessibilityNodeOperation,
 ) -> Response {
     let payload = match reply {
-        Ok(Reply::OptionalAccessibilityPayloadsForObjectId(Some(payload))) => payload,
-        Ok(Reply::OptionalAccessibilityPayloadsForObjectId(None)) => return node_not_found(),
+        Ok(Reply::DevTools(
+            RendererDevToolsPageReply::OptionalAccessibilityPayloadsForObjectId(Some(payload)),
+        )) => payload,
+        Ok(Reply::DevTools(
+            RendererDevToolsPageReply::OptionalAccessibilityPayloadsForObjectId(None),
+        )) => return node_not_found(),
         Err(error) => {
             return Response::error(
                 -32000,

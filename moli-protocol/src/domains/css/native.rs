@@ -1,6 +1,7 @@
 use super::*;
 use crate::automation::DevToolsDomNodeReference;
 use crate::domains::native::{self, NativeCommandStep};
+use moli_core::{RendererDevToolsPageCommand, RendererDevToolsPageReply};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
     RendererPageCommand as Command, RendererPageReply as Reply,
@@ -19,11 +20,13 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                 state.css_enabled = true
             });
             Operation::new(
-                Command::StyleSheetInventoryForDocument {
-                    inspector_session_id,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::StyleSheetInventoryForDocument {
+                        inspector_session_id,
+                    },
+                ),
                 move |reply| match reply {
-                    Ok(Reply::StyleSheetInventory(update)) => {
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::StyleSheetInventory(update))) => {
                         let mut response = Response::success(json!({}));
                         response.notifications.extend(
                             style_sheets::style_sheet_inventory_notifications(&frame_id, update)
@@ -43,9 +46,9 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                 state.css_enabled = false
             });
             Operation::new(
-                Command::ResetCssAgentSession {
+                Command::DevTools(RendererDevToolsPageCommand::ResetCssAgentSession {
                     inspector_session_id,
-                },
+                }),
                 native::unit_response,
             )
         }
@@ -56,17 +59,21 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
             };
             let id = params.style_sheet_id.as_ref().to_owned();
             Operation::new(
-                Command::StyleSheetPayloadForStyleSheetId {
-                    inspector_session_id,
-                    style_sheet_id: id.clone(),
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::StyleSheetPayloadForStyleSheetId {
+                        inspector_session_id,
+                        style_sheet_id: id.clone(),
+                    },
+                ),
                 move |reply| match reply {
-                    Ok(Reply::OptionalStyleSheetPayload(Some(payload))) => Response::success(
-                        style_sheets::get_style_sheet_result(&id, &frame_id, payload),
-                    ),
-                    Ok(Reply::OptionalStyleSheetPayload(None)) => {
-                        Response::error(-32000, "Could not find stylesheet with given id")
-                    }
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalStyleSheetPayload(
+                        Some(payload),
+                    ))) => Response::success(style_sheets::get_style_sheet_result(
+                        &id, &frame_id, payload,
+                    )),
+                    Ok(Reply::DevTools(RendererDevToolsPageReply::OptionalStyleSheetPayload(
+                        None,
+                    ))) => Response::error(-32000, "Could not find stylesheet with given id"),
                     Err(error) => Response::error(-32000, error.to_string()),
                     _ => unreachable!("CSS stylesheet reply"),
                 },
@@ -79,11 +86,13 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
             };
             let id = params.style_sheet_id.as_ref().to_owned();
             Operation::new(
-                Command::SetInlineStyleSheetTextForStyleSheetId {
-                    inspector_session_id,
-                    style_sheet_id: id.clone(),
-                    text: params.text,
-                },
+                Command::DevTools(
+                    RendererDevToolsPageCommand::SetInlineStyleSheetTextForStyleSheetId {
+                        inspector_session_id,
+                        style_sheet_id: id.clone(),
+                        text: params.text,
+                    },
+                ),
                 move |reply| match reply {
                     Ok(Reply::Bool(true)) => {
                         Response::success(json!({"styleSheetId": id, "sourceMapURL": ""}))
@@ -139,15 +148,15 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                 };
                 match query {
                     StyleQuery::Inline(_) => Operation::new(
-                        Command::DocumentNodeAttributes {
+                        Command::DevTools(RendererDevToolsPageCommand::DocumentNodeAttributes {
                             reference: reference.into_renderer_reference(inspector_session_id),
-                        },
+                        }),
                         move |reply| project_style(reply, query),
                     ),
                     StyleQuery::Computed => Operation::new(
-                        Command::ComputedStyleProperties {
+                        Command::DevTools(RendererDevToolsPageCommand::ComputedStyleProperties {
                             reference: reference.into_renderer_reference(inspector_session_id),
-                        },
+                        }),
                         move |reply| project_style(reply, query),
                     ),
                 }
@@ -165,18 +174,25 @@ enum StyleQuery {
 
 fn project_style(reply: anyhow::Result<Reply>, query: StyleQuery) -> Response {
     match (query, reply) {
-        (StyleQuery::Computed, Ok(Reply::ComputedStyleProperties(Some(properties)))) => {
-            Response::success(computed_style_result(properties))
-        }
-        (StyleQuery::Computed, Ok(Reply::ComputedStyleProperties(None))) => {
-            Response::error(-32000, "Could not find node with given id")
-        }
-        (StyleQuery::Inline(kind), Ok(Reply::DocumentNodeAttributesResolution(attributes))) => {
-            match inline_style_result_from_attributes_resolution(attributes, kind) {
-                Ok(result) => Response::success(result),
-                Err(error) => Response::error(error.code, error.message),
-            }
-        }
+        (
+            StyleQuery::Computed,
+            Ok(Reply::DevTools(RendererDevToolsPageReply::ComputedStyleProperties(Some(
+                properties,
+            )))),
+        ) => Response::success(computed_style_result(properties)),
+        (
+            StyleQuery::Computed,
+            Ok(Reply::DevTools(RendererDevToolsPageReply::ComputedStyleProperties(None))),
+        ) => Response::error(-32000, "Could not find node with given id"),
+        (
+            StyleQuery::Inline(kind),
+            Ok(Reply::DevTools(RendererDevToolsPageReply::DocumentNodeAttributesResolution(
+                attributes,
+            ))),
+        ) => match inline_style_result_from_attributes_resolution(attributes, kind) {
+            Ok(result) => Response::success(result),
+            Err(error) => Response::error(error.code, error.message),
+        },
         (StyleQuery::Computed, Err(error)) => {
             Response::error(-32000, format!("failed to compute style: {error}"))
         }

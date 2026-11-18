@@ -332,7 +332,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             .with_storage_bucket_store(Some(host.storage_bucket_store()))
             .with_pause_evaluation_until_debugger(
                 host.browser_context_runtime()
-                    .dedicated_worker_pause_on_start_for_devtools(),
+                    .dedicated_worker_waits_for_debugger(),
             );
             if let Some(client_id) = reserved_service_worker_client_id {
                 options = options.with_reserved_service_worker_client_id(client_id);

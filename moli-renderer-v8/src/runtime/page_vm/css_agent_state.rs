@@ -105,7 +105,7 @@ impl PageVm {
     ) -> &mut RendererCssAgentSessionState {
         let document_id = self.current_dom_agent_document_id();
         let key = inspector_session_id.map(str::to_owned);
-        let state = self.css_agent_sessions.entry(key).or_default();
+        let state = self.devtools.css_agent_sessions.entry(key).or_default();
         state.reset_for_document(document_id);
         state
     }
@@ -155,7 +155,7 @@ impl PageVm {
         inspector_session_id: Option<&str>,
     ) {
         let key = inspector_session_id.map(str::to_owned);
-        self.css_agent_sessions.remove(&key);
+        self.devtools.css_agent_sessions.remove(&key);
     }
 
     #[cfg(feature = "devtools")]

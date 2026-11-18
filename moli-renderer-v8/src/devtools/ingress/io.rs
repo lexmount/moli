@@ -900,6 +900,7 @@ fn closed_isolate_discards_queued_and_late_environment_notifications() {
 mod tests {
     use super::*;
     use crate::devtools::pause::RendererInspectorPauseBridge;
+    use crate::runtime::RendererDevToolsPageCommand;
     use crate::runtime::{
         RendererDevToolsSessionOutputHost, RendererOutputStreamIdentity,
         RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
@@ -1508,7 +1509,10 @@ mod tests {
             Some("session-a".to_owned()),
             "main".to_owned(),
         );
-        let crate::runtime::RendererPageCommand::Inspector(envelope) = page_command else {
+        let crate::runtime::RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(
+            envelope,
+        )) = page_command
+        else {
             panic!("runtime protocol message must use an Inspector envelope");
         };
         let envelope = RendererDevToolsIoCommandEnvelope::inspector(envelope);

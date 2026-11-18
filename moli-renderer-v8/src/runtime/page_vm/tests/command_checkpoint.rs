@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "devtools")]
+use crate::RendererDevToolsPageCommand;
 use crate::types::SubresourceInterceptionClasses;
 use crate::{
     PendingSubresourceContinueOutcome, RendererPageCommand, RendererPageReply,
@@ -237,12 +239,12 @@ Promise.resolve().then(() => __fetchCommandCheckpoint += 1);
             )?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
-        let reply = page_vm.dispatch_renderer_page_command(
-            RendererPageCommand::FailPendingSubresourceFetch {
+        let reply = page_vm.dispatch_renderer_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::FailPendingSubresourceFetch {
                 internal_id: pending[0].internal_id,
                 error_text: "command checkpoint witness".to_owned(),
             },
-        )?;
+        ))?;
         assert!(matches!(reply, RendererPageReply::Unit));
         assert_eq!(
             page_vm
@@ -308,8 +310,8 @@ Promise.resolve().then(() => __offlineContinueCheckpoint += 1);
             )?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
-        let reply = page_vm.dispatch_renderer_page_command(
-            RendererPageCommand::ContinuePendingSubresourceFetch {
+        let reply = page_vm.dispatch_renderer_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::ContinuePendingSubresourceFetch {
                 internal_id: pending[0].internal_id,
                 url: None,
                 method: None,
@@ -318,7 +320,7 @@ Promise.resolve().then(() => __offlineContinueCheckpoint += 1);
                 intercept_response: false,
                 handle_auth_requests: false,
             },
-        )?;
+        ))?;
         assert!(matches!(
             reply,
             RendererPageReply::PendingSubresourceContinueOutcome(
@@ -378,12 +380,12 @@ Promise.resolve().then(() => __rejectedFetchCommandCheckpoint += 1);
 "#,
             )?;
 
-        let error = match page_vm.dispatch_renderer_page_command(
-            RendererPageCommand::FailPendingSubresourceFetch {
+        let error = match page_vm.dispatch_renderer_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::FailPendingSubresourceFetch {
                 internal_id: u64::MAX,
                 error_text: "missing request".to_owned(),
             },
-        ) {
+        )) {
             Ok(_) => panic!("an unknown interception request should be rejected"),
             Err(error) => error,
         };

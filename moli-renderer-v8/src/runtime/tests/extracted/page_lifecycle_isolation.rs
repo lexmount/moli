@@ -2685,11 +2685,13 @@ async fn per_page_isolate_policy_scopes_document_start_scripts_to_page_worlds() 
         bidi_channel_handoffs: Vec::new(),
     };
     let first_preload_result = first_page
-        .run_async_command(RendererPageCommand::AddDocumentStartScriptRuntimeActivity {
-            inspector_session_id: None,
-            script: script.clone(),
-            run_immediately: true,
-        })
+        .run_async_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::AddDocumentStartScriptRuntimeActivity {
+                inspector_session_id: None,
+                script: script.clone(),
+                run_immediately: true,
+            },
+        ))
         .await
         .expect("first page document-start script should run")
         .0;

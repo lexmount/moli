@@ -1055,14 +1055,16 @@ impl PageVm {
         );
         let remove = {
             let configuration = self
-                .runtime_inspector_protocol_configurations
+                .devtools
+                .inspector_protocol_configurations
                 .entry(session_key.clone())
                 .or_default();
             configuration.apply_successful_command(command);
             !configuration.requires_restore()
         };
         if remove {
-            self.runtime_inspector_protocol_configurations
+            self.devtools
+                .inspector_protocol_configurations
                 .remove(&session_key);
         }
     }
@@ -1075,7 +1077,8 @@ impl PageVm {
         let session_key = DevToolsSessionKey::from_wire_session_id(
             inspector_session_id.filter(|session_id| !session_id.is_empty()),
         );
-        self.runtime_inspector_protocol_configurations
+        self.devtools
+            .inspector_protocol_configurations
             .get(&session_key)
             .is_some_and(|configuration| configuration.runtime_frontend_enabled)
     }
@@ -1098,7 +1101,8 @@ impl PageVm {
         );
         let remove = {
             let configuration = self
-                .runtime_inspector_protocol_configurations
+                .devtools
+                .inspector_protocol_configurations
                 .entry(session_key.clone())
                 .or_default();
             if enabled {
@@ -1109,7 +1113,8 @@ impl PageVm {
             !configuration.requires_restore()
         };
         if remove {
-            self.runtime_inspector_protocol_configurations
+            self.devtools
+                .inspector_protocol_configurations
                 .remove(&session_key);
         }
     }
@@ -1131,7 +1136,8 @@ impl PageVm {
         );
         let remove = {
             let configuration = self
-                .runtime_inspector_protocol_configurations
+                .devtools
+                .inspector_protocol_configurations
                 .entry(session_key.clone())
                 .or_default();
             if enabled {
@@ -1142,7 +1148,8 @@ impl PageVm {
             !configuration.requires_restore()
         };
         if remove {
-            self.runtime_inspector_protocol_configurations
+            self.devtools
+                .inspector_protocol_configurations
                 .remove(&session_key);
         }
     }
@@ -4357,14 +4364,16 @@ impl PageVm {
         );
         let remove = {
             let configuration = self
-                .runtime_inspector_protocol_configurations
+                .devtools
+                .inspector_protocol_configurations
                 .entry(session_key.clone())
                 .or_default();
             configuration.runtime_bindings = bindings.to_vec();
             !configuration.requires_restore()
         };
         if remove {
-            self.runtime_inspector_protocol_configurations
+            self.devtools
+                .inspector_protocol_configurations
                 .remove(&session_key);
         }
     }
@@ -4415,7 +4424,8 @@ impl PageVm {
         let detached = self
             .vm_mut()
             .detach_runtime_inspector_session(inspector_session_id);
-        self.runtime_inspector_protocol_configurations
+        self.devtools
+            .inspector_protocol_configurations
             .remove(&session_key);
         detached
     }
