@@ -13,6 +13,7 @@ pub(super) use super::navigation_lifecycle::{
 use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::{get_private_value, set_private_value};
+use moli_webapi::navigation_values::{navigation_result_fallback_object, navigation_result_object};
 use moli_webapi_declare::WebApiObject;
 
 const CROSS_DOCUMENT_PENDING_ACTIVE_SLOT: &str = "__lmCrossDocumentPendingActive";
@@ -23,24 +24,6 @@ const CROSS_DOCUMENT_PENDING_FINISHED_REJECT_SLOT: &str = "__lmCrossDocumentPend
 const CROSS_DOCUMENT_PENDING_HREF_SLOT: &str = "__lmCrossDocumentPendingHref";
 const NAVIGATION_ACTIVE_CROSS_DOCUMENT_PENDING_SLOT: &str =
     "__lmNavigationActiveCrossDocumentPending";
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct NavigationResultDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    committed: v8::Local<'scope, v8::Promise>,
-    #[webapi(data_property, enumerable)]
-    finished: v8::Local<'scope, v8::Promise>,
-}
-
-#[derive(Default, WebApiObject)]
-#[webapi(plain)]
-struct NavigationResultFallbackDeclaration {
-    #[webapi(data_property, enumerable, name = "committed", init = "undefined")]
-    committed: (),
-    #[webapi(data_property, enumerable, name = "finished", init = "undefined")]
-    finished: (),
-}
 
 #[derive(Default, WebApiObject)]
 #[webapi(plain)]
@@ -725,24 +708,6 @@ fn reject_pending_navigation_api_task<'s>(
             );
         }
     }
-}
-
-fn navigation_result_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    committed: v8::Local<'s, v8::Promise>,
-    finished: v8::Local<'s, v8::Promise>,
-) -> v8::Local<'s, v8::Object> {
-    NavigationResultDeclaration::new(committed, finished)
-        .bind(scope)
-        .expect("NavigationResult declaration should bind")
-}
-
-fn navigation_result_fallback_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    NavigationResultFallbackDeclaration::default()
-        .bind(scope)
-        .expect("NavigationResult fallback declaration should bind")
 }
 
 pub(super) fn suppress_unhandled_rejection(
