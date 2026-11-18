@@ -10,158 +10,54 @@
 use crate::context_bootstrap::context_host_ptr_from_global_bridge;
 use crate::webidl;
 
-#[derive(Clone, Copy)]
-enum AbortSignalOwner {
-    Window,
-    Worker,
-}
+use crate::worker::abort as worker_abort;
+use moli_webapi::abort_signal::AbortSignalOwner;
+pub(crate) use moli_webapi::abort_signal::ResolvedAbortSignal;
 
-/// A scope-local capability for one validated Window- or worker-owned signal.
-///
-/// This value never outlives the V8 callback in which it was resolved. It is
-/// not signal state and does not own abort algorithms; those remain in the
-/// Window `AbortStore` or worker-run `WorkerAbortStore`.
-#[derive(Clone, Copy)]
-pub(crate) struct ResolvedAbortSignal<'s> {
-    signal: v8::Local<'s, v8::Object>,
-    owner: AbortSignalOwner,
-}
-
-impl<'s> webidl::WebIdlConverter<'s> for ResolvedAbortSignal<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _: &(),
-    ) -> Result<Self, webidl::WebIdlError> {
-        v8::Local::<v8::Object>::try_from(value)
-            .ok()
-            .and_then(|signal| Self::resolve(scope, signal))
-            .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "AbortSignal"))
-    }
-}
-
-impl<'s> ResolvedAbortSignal<'s> {
-    pub(crate) fn resolve(
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-    ) -> Option<Self> {
-        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-            && unsafe { &mut *host_ptr }.is_abort_signal(scope, signal)
-        {
-            return Some(Self {
-                signal,
-                owner: AbortSignalOwner::Window,
-            });
-        }
-        crate::worker::abort::worker_abort_signal_id(scope, signal).map(|_| Self {
-            signal,
-            owner: AbortSignalOwner::Worker,
+static WINDOW_SIGNALS: AbortSignalOwner = AbortSignalOwner {
+    is_aborted: |scope, signal| {
+        context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host| unsafe { &mut *host }.abort_signal_aborted(scope, signal))
+    },
+    reason: |scope, signal| {
+        let host = context_host_ptr_from_global_bridge(scope)?;
+        unsafe { &mut *host }.abort_signal_reason(scope, signal)
+    },
+    abort: crate::native_bridge::abort::abort_signal,
+    register_algorithm: |scope, signal, algorithm| {
+        context_host_ptr_from_global_bridge(scope).is_some_and(|host| {
+            unsafe { &mut *host }.register_abort_signal_algorithm(scope, signal, algorithm)
         })
-    }
+    },
+    unregister_algorithm: |scope, signal, algorithm| {
+        context_host_ptr_from_global_bridge(scope).is_some_and(|host| {
+            unsafe { &mut *host }.unregister_abort_signal_algorithm(scope, signal, algorithm)
+        })
+    },
+};
 
-    pub(crate) fn value(self) -> v8::Local<'s, v8::Object> {
-        self.signal
-    }
-
-    pub(crate) fn is_aborted(self, scope: &mut v8::PinScope<'s, '_>) -> bool {
-        match self.owner {
-            AbortSignalOwner::Window => {
-                let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-                    return false;
-                };
-                unsafe { &mut *host_ptr }.abort_signal_aborted(scope, self.signal)
-            }
-            AbortSignalOwner::Worker => {
-                crate::worker::abort::worker_abort_signal_aborted(scope, self.signal)
-            }
+static WORKER_SIGNALS: AbortSignalOwner = AbortSignalOwner {
+    is_aborted: worker_abort::worker_abort_signal_aborted,
+    reason: worker_abort::worker_abort_signal_reason,
+    abort: |scope, signal, reason| {
+        if let Some(id) = worker_abort::worker_abort_signal_id(scope, signal) {
+            worker_abort::abort_worker_signal_by_id(scope, id, reason);
         }
-    }
+    },
+    register_algorithm: worker_abort::register_worker_abort_signal_algorithm,
+    unregister_algorithm: worker_abort::unregister_worker_abort_signal_algorithm,
+};
 
-    pub(crate) fn reason(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-    ) -> Option<v8::Local<'s, v8::Value>> {
-        match self.owner {
-            AbortSignalOwner::Window => {
-                let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-                unsafe { &mut *host_ptr }.abort_signal_reason(scope, self.signal)
-            }
-            AbortSignalOwner::Worker => {
-                crate::worker::abort::worker_abort_signal_reason(scope, self.signal)
-            }
-        }
+pub(crate) fn resolve_abort_signal_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: v8::Local<'s, v8::Object>,
+) -> Option<&'static AbortSignalOwner> {
+    if context_host_ptr_from_global_bridge(scope)
+        .is_some_and(|host| unsafe { &mut *host }.is_abort_signal(scope, signal))
+    {
+        return Some(&WINDOW_SIGNALS);
     }
-
-    pub(crate) fn abort(self, scope: &mut v8::PinScope<'s, '_>, reason: v8::Local<'s, v8::Value>) {
-        match self.owner {
-            AbortSignalOwner::Window => {
-                crate::native_bridge::abort::abort_signal(scope, self.signal, reason);
-            }
-            AbortSignalOwner::Worker => {
-                let Some(signal_id) =
-                    crate::worker::abort::worker_abort_signal_id(scope, self.signal)
-                else {
-                    return;
-                };
-                crate::worker::abort::abort_worker_signal_by_id(scope, signal_id, reason);
-            }
-        }
-    }
-
-    pub(crate) fn register_algorithm(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        algorithm: v8::Local<'s, v8::Function>,
-    ) -> bool {
-        match self.owner {
-            AbortSignalOwner::Window => {
-                let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-                    return false;
-                };
-                unsafe { &mut *host_ptr }.register_abort_signal_algorithm(
-                    scope,
-                    self.signal,
-                    algorithm,
-                )
-            }
-            AbortSignalOwner::Worker => {
-                crate::worker::abort::register_worker_abort_signal_algorithm(
-                    scope,
-                    self.signal,
-                    algorithm,
-                )
-            }
-        }
-    }
-
-    pub(crate) fn unregister_algorithm(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        algorithm: v8::Local<'s, v8::Function>,
-    ) -> bool {
-        match self.owner {
-            AbortSignalOwner::Window => {
-                let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-                    return false;
-                };
-                unsafe { &mut *host_ptr }.unregister_abort_signal_algorithm(
-                    scope,
-                    self.signal,
-                    algorithm,
-                )
-            }
-            AbortSignalOwner::Worker => {
-                crate::worker::abort::unregister_worker_abort_signal_algorithm(
-                    scope,
-                    self.signal,
-                    algorithm,
-                )
-            }
-        }
-    }
+    worker_abort::worker_abort_signal_id(scope, signal).map(|_| &WORKER_SIGNALS)
 }
 
 /// Converts the final AddEventListenerOptions member after capture/once/passive.

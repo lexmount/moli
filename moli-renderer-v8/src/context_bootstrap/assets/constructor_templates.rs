@@ -50,15 +50,6 @@ use super::super::{
     shared_worker_host::shared_worker_constructor_callback,
     specs::{ConstructorKind, ConstructorPrototypeProperty, ConstructorSpec},
     speech_synthesis::speech_synthesis_utterance_constructor_callback,
-    streams::{
-        byte_length_queuing_strategy_constructor_callback, compression_stream_constructor_callback,
-        count_queuing_strategy_constructor_callback,
-        readable_stream_byob_reader_constructor_callback, readable_stream_constructor_callback,
-        readable_stream_default_reader_constructor_callback,
-        text_decoder_stream_constructor_callback, text_encoder_stream_constructor_callback,
-        transform_stream_constructor_callback, writable_stream_constructor_callback,
-        writable_stream_default_writer_constructor_callback,
-    },
     touch_runtime::touch_constructor_callback,
     url_form::build_url_constructor_template,
     url_search_params_runtime::build_url_search_params_constructor_template,
@@ -419,72 +410,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(0)
             .build(scope)
         }
-        ConstructorKind::ReadableStream => {
-            v8::FunctionTemplate::builder(readable_stream_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::WritableStream => {
-            v8::FunctionTemplate::builder(writable_stream_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::ReadableStreamDefaultReader => {
-            v8::FunctionTemplate::builder(readable_stream_default_reader_constructor_callback)
-                .length(1)
-                .build(scope)
-        }
-        ConstructorKind::ReadableStreamByobReader => {
-            v8::FunctionTemplate::builder(readable_stream_byob_reader_constructor_callback)
-                .length(1)
-                .build(scope)
-        }
-        ConstructorKind::WritableStreamDefaultWriter => {
-            v8::FunctionTemplate::builder(writable_stream_default_writer_constructor_callback)
-                .length(1)
-                .build(scope)
-        }
-        ConstructorKind::ReadableStreamDefaultController
-        | ConstructorKind::WritableStreamDefaultController
-        | ConstructorKind::TransformStreamDefaultController => {
-            v8::FunctionTemplate::builder(illegal_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::TransformStream => {
-            v8::FunctionTemplate::builder(transform_stream_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::TextEncoderStream => {
-            v8::FunctionTemplate::builder(text_encoder_stream_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::TextDecoderStream => {
-            v8::FunctionTemplate::builder(text_decoder_stream_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::CompressionStream => {
-            v8::FunctionTemplate::builder(compression_stream_constructor_callback::<false>)
-                .length(1)
-                .build(scope)
-        }
-        ConstructorKind::DecompressionStream => {
-            v8::FunctionTemplate::builder(compression_stream_constructor_callback::<true>)
-                .length(1)
-                .build(scope)
-        }
-        ConstructorKind::CountQueuingStrategy => {
-            v8::FunctionTemplate::builder(count_queuing_strategy_constructor_callback)
-                .length(1)
-                .build(scope)
-        }
-        ConstructorKind::ByteLengthQueuingStrategy => {
-            v8::FunctionTemplate::builder(byte_length_queuing_strategy_constructor_callback)
-                .length(1)
-                .build(scope)
+        ConstructorKind::Stream => {
+            moli_webapi::streams::build_constructor_template(scope, spec.interface.name())
+                .expect("constructible stream interface must have a template")
         }
         ConstructorKind::Blob => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(

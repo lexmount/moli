@@ -18,7 +18,7 @@ use crate::{
             EnqueueChunkError, READABLE_STREAM_ALGORITHM_CANCEL_INDEX,
             READABLE_STREAM_ALGORITHM_PULL_INDEX, READABLE_STREAM_ALGORITHM_SOURCE_INDEX,
             StreamOwnerPublication, apply_readable_stream_access_transition,
-            build_required_stream_callback, error_writable_stream_with_value,
+            build_required_stream_callback, enqueue_chunk, error_writable_stream_with_value,
             initialize_readable_stream_object, initialize_transform_stream_endpoints,
             initialize_writable_stream_object, new_pending_read_promise,
             new_readable_stream_shell_object, new_transform_stream_shell_object,
@@ -37,6 +37,7 @@ use moli_streams::{
     readable::{ReadableAccessTransition, ReadableLockPlan},
     transfer::{TransferEntryPlan, TransferEntrySnapshot},
 };
+use moli_webapi::streams::is_writable_stream_object;
 
 mod protocol;
 mod receiver;
@@ -148,7 +149,7 @@ impl<'s> PreparedWritableStreamTransfer<'s> {
     pub(crate) fn commit(self, scope: &mut v8::PinScope<'s, '_>) -> WritableStreamClonePayload {
         self.registry
             .detach_message_port_owner_for_transfer(self.receiver_port_id);
-        let pipe = super::readable::start_internal_readable_stream_pipe_to(
+        let pipe = moli_webapi::streams::start_internal_readable_stream_pipe_to(
             scope,
             self.transfer_readable,
             self.stream,

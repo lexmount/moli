@@ -5,6 +5,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+brotlic = "0.8.2"
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }
+moli-streams = { path = "../moli-streams" }
 encoding_rs = "0.8"
 parking_lot = "0.12"
 moli-websocket-types = { path = "../moli-types/moli-websocket-types" }
@@ -31,6 +34,7 @@ v8 = "152.2.0"
 url = "2.5.7"
 
 [dev-dependencies]
+fastrand = "2.3.0"
 moli-v8-test-util = { path = "../moli-v8-test-util" }
 
 [lints]

@@ -1,0 +1,277 @@
+//! V8 storage and effect adapter for the runtime-independent Streams core.
+//!
+//! JavaScript payload identity, wrappers, promises, callbacks, private slots,
+//! ArrayBuffer operations, and queue storage live here. Queue and lifecycle
+//! coordination use `moli-streams` snapshots and typed plans. Transform finish
+//! reactions read the relevant stream state and apply their effects directly.
+
+use super::*;
+use moli_v8_util::{get_private_value, set_private_value};
+
+const READABLE_STREAM_PENDING_READ_RESOLVER_SLOT: &str = "__moliReadableStreamPendingResolver";
+pub const READABLE_STREAM_ALGORITHM_SOURCE_INDEX: u32 = 0;
+pub const READABLE_STREAM_ALGORITHM_PULL_INDEX: u32 = 1;
+pub const READABLE_STREAM_ALGORITHM_CANCEL_INDEX: u32 = 2;
+const READABLE_STREAM_ALGORITHM_SIZE_INDEX: u32 = 3;
+const READABLE_STREAM_PULL_STATE_STARTED: u32 = 1 << 0;
+const READABLE_STREAM_PULL_STATE_PULLING: u32 = 1 << 1;
+const READABLE_STREAM_PULL_STATE_PULL_AGAIN: u32 = 1 << 2;
+const READABLE_STREAM_PULL_STATE_CLOSE_REQUESTED: u32 = 1 << 3;
+// Adapter call-stack state. This is narrower than the spec's [[pulling]]:
+// it is set only while the underlying pull callback itself is executing.
+const READABLE_STREAM_PULL_STATE_CALLBACK_ACTIVE: u32 = 1 << 5;
+const WRITABLE_STREAM_STRATEGY_HIGH_WATER_MARK_INDEX: u32 = 0;
+const WRITABLE_STREAM_STRATEGY_SIZE_ALGORITHM_INDEX: u32 = 1;
+const WRITABLE_STREAM_STRATEGY_TOTAL_SIZE_INDEX: u32 = 2;
+const WRITABLE_STREAM_STRATEGY_STORED_ERROR_INDEX: u32 = 3;
+const WRITABLE_STREAM_STRATEGY_PENDING_WRITES_INDEX: u32 = 4;
+const WRITABLE_STREAM_STRATEGY_START_PENDING_INDEX: u32 = 5;
+const WRITABLE_STREAM_STRATEGY_ERRORED_INDEX: u32 = 6;
+const WRITABLE_STREAM_STRATEGY_QUEUE_PUMP_STATE_INDEX: u32 = 7;
+const WRITABLE_STREAM_STRATEGY_PENDING_WRITES_HEAD_INDEX: u32 = 8;
+const WRITABLE_STREAM_STRATEGY_CLOSE_REQUESTED_INDEX: u32 = 9;
+const WRITABLE_STREAM_STRATEGY_ERRORING_INDEX: u32 = 10;
+const WRITABLE_STREAM_STRATEGY_PENDING_ABORT_INDEX: u32 = 11;
+const WRITABLE_STREAM_STRATEGY_PENDING_CLOSE_INDEX: u32 = 12;
+const WRITABLE_STREAM_ALGORITHM_SINK_WRITE_INDEX: u32 = 0;
+const WRITABLE_STREAM_ALGORITHM_SINK_CLOSE_INDEX: u32 = 1;
+const WRITABLE_STREAM_ALGORITHM_SINK_ABORT_INDEX: u32 = 2;
+const WRITABLE_STREAM_ALGORITHM_TRANSFORM_INDEX: u32 = 3;
+const WRITABLE_STREAM_ALGORITHM_TRANSFORM_FLUSH_INDEX: u32 = 4;
+const WRITABLE_STREAM_ALGORITHM_TRANSFORM_CANCEL_INDEX: u32 = 5;
+mod callbacks;
+mod construction;
+mod pipe;
+mod pipe_owner;
+mod queue_v8;
+mod read_request;
+mod readable;
+mod readable_byte;
+mod readable_state;
+mod tee;
+mod transform_finish;
+mod utils;
+mod writable;
+
+pub(in crate::streams) use callbacks::{
+    QueuingStrategyMembers, StreamWebIdlCallbackCarrier, WebIdlReadableStreamSource,
+    WebIdlTransformStreamTransformer, WebIdlWritableStreamSink, callback_carrier_value,
+    invoke_stored_stream_algorithm, invoke_stored_stream_promise_algorithm,
+    invoke_stored_stream_size_algorithm, invoke_stream_webidl_callback,
+    parse_readable_stream_source_object, parse_transform_stream_transformer_object,
+    parse_writable_stream_sink_object, stored_stream_algorithm_is_webidl,
+};
+pub use construction::initialize_writable_stream_object;
+pub(super) use construction::{
+    initialize_transform_stream_object, initialize_webidl_readable_stream_object,
+    initialize_webidl_transform_stream_object, initialize_webidl_writable_stream_object,
+};
+pub use pipe::readable_stream_has_pipe_owner;
+pub(in crate::streams) use pipe::{
+    install_readable_stream_pipe_to_abort_signal, new_readable_stream_pipe_owner,
+    prime_readable_stream_pipe_to, register_readable_stream_pipe_owner,
+};
+pub use queue_v8::readable_stream_queue_total_size;
+pub(in crate::streams) use queue_v8::{
+    dequeue_readable_stream_queue_value, enqueue_readable_stream_queue_value,
+    prepend_readable_stream_queue_value, readable_stream_queue_error_value,
+    readable_stream_queue_exists, readable_stream_queue_is_empty, reset_readable_stream_queue,
+    take_byte_stream_bytes,
+};
+pub(in crate::streams::adapter) use readable::mark_readable_stream_started;
+pub(in crate::streams::adapter) use readable::perform_read_from_stream;
+pub use readable::read_from_stream_as_promise;
+pub(super) use readable::{
+    PreparedReadableStreamRead, prepare_read_from_stream_as_promise, readable_stream_closed_promise,
+};
+pub use readable::{
+    cancel_readable_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
+};
+pub use readable_byte::enqueue_byte_chunk;
+pub(in crate::streams) use readable_byte::{
+    enqueue_auto_allocate_pull_into, finish_byte_stream_tee_branch_close,
+    finish_readable_byte_stream_close, initialize_readable_byte_stream_state,
+    perform_read_into_byte_stream, prepare_readable_byte_stream_close,
+    read_into_byte_stream_as_promise, readable_byte_stream_byob_request,
+    readable_byte_stream_pending_byob_view, readable_stream_byob_request_respond_callback,
+    readable_stream_byob_request_respond_with_new_view_callback,
+    readable_stream_byob_request_view_getter, release_byte_stream_reader,
+    reset_byte_stream_pending_pull_intos, respond_byte_stream_with_new_view,
+};
+pub use readable_state::EnqueueChunkError;
+pub use readable_state::writable_stream_locked;
+pub use readable_state::{
+    apply_readable_stream_access_transition, readable_stream_access_snapshot,
+};
+pub use readable_state::{begin_readable_stream_body_consumption, readable_stream_disturbed};
+pub use readable_state::{close_stream, enqueue_chunk, error_stream, readable_stream_error};
+pub(in crate::streams) use readable_state::{
+    disturb_readable_stream, finish_readable_stream_close_if_requested_and_queue_empty,
+    lock_readable_stream, readable_stream_is_byte_stream, unlock_readable_stream,
+};
+pub(super) use readable_state::{
+    readable_stream_closed, reject_pending_read_requests, remove_pending_closed_promise,
+};
+pub(in crate::streams::adapter) use transform_finish::transform_stream_readable_cancel_callback;
+pub(super) use utils::{
+    done_result, resolved_promise_value, suppress_pending_read_unhandled_rejection,
+    value_buffer_source_bytes,
+};
+pub use utils::{
+    reject_pending_read, rejected_promise_value, set_resolved_promise,
+    suppress_promise_unhandled_rejection,
+};
+pub(in crate::streams) use writable::register_writable_stream_pipe_owner;
+pub(in crate::streams::adapter) use writable::transform_stream_readable_pull_callback;
+pub(super) use writable::{
+    acquire_writable_stream_writer, begin_writable_stream_start, error_transform_stream_with_value,
+    release_writable_stream_writer, set_transform_stream_start_result,
+    set_writable_stream_start_result, terminate_transform_stream, writable_stream_abort_internal,
+    writable_stream_abort_promise, writable_stream_close_internal, writable_stream_has_capacity,
+    writable_stream_stored_error, writable_stream_writer_closed_promise_value,
+    writable_stream_writer_ready_promise_value, writable_stream_writer_write_internal,
+};
+pub use writable::{
+    error_writable_stream_with_value, writable_stream_snapshot, writable_stream_write_internal,
+};
+
+pub use construction::{
+    initialize_readable_stream_object, initialize_transform_stream_endpoints,
+    new_lazy_readable_stream_object, new_readable_stream_shell_object,
+    new_transform_stream_shell_object, new_writable_stream_object,
+    new_writable_stream_shell_object,
+};
+pub(in crate::streams) use construction::{
+    new_lazy_readable_byte_stream_object, new_readable_byte_stream_object,
+    new_readable_stream_object,
+};
+pub(in crate::streams::adapter) use read_request::{
+    error_read_request, fulfill_read_request, new_internal_read_request,
+};
+pub(in crate::streams::adapter) use readable_state::enqueue_pending_closed_promise;
+pub use readable_state::readable_stream_locked;
+pub(in crate::streams::adapter) use readable_state::{
+    enqueue_pending_read, finish_readable_stream_close,
+    readable_stream_controller_algorithm_object, readable_stream_controller_algorithm_value,
+    readable_stream_pull_state_has, readable_stream_snapshot, set_readable_stream_pull_state_bit,
+};
+pub(in crate::streams) use tee::{
+    TeeStartError, tee_readable_stream, tee_readable_stream_with_cloned_branch,
+};
+pub use utils::require_internal_stream_value;
+pub use utils::{
+    StreamOwnerPublication, build_required_stream_callback,
+    publish_required_stream_promise_reactions,
+};
+pub(in crate::streams) use utils::{
+    call_function_result, call_named_method, call_named_method_result, iter_result,
+};
+pub use utils::{new_pending_read_promise, resolve_pending_promise};
+pub(in crate::streams::adapter) use utils::{
+    reject_pending_read_after_timeout, resolve_callable_property_result,
+};
+
+pub(in crate::streams) fn stream_slot_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    get_private_value(scope, stream, slot)
+}
+
+pub fn stream_slot_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    stream_slot_value(scope, stream, slot)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+pub fn stream_slot_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Option<v8::Local<'s, v8::Array>> {
+    stream_slot_value(scope, stream, slot)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+}
+
+pub fn stream_slot_bool<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Option<bool> {
+    get_private_value(scope, stream, slot).map(|value| value.boolean_value(scope))
+}
+
+pub fn stream_slot_number<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Option<f64> {
+    get_private_value(scope, stream, slot).and_then(|value| value.number_value(scope))
+}
+
+pub(in crate::streams) fn stream_slot_string<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+) -> Option<String> {
+    let value = get_private_value(scope, stream, slot)?;
+    if value.is_null_or_undefined() {
+        return None;
+    }
+    value
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+pub fn set_stream_slot_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+    value: v8::Local<'s, v8::Value>,
+) {
+    set_private_value(scope, stream, slot, value);
+}
+
+/// Publish a private slot which is required to keep an internal Streams owner
+/// reachable or its state machine coherent. Unlike the general-purpose slot
+/// helper, this boundary must not turn a V8 publication failure into a
+/// partially registered operation.
+pub(in crate::streams) fn set_required_stream_slot_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+    value: v8::Local<'s, v8::Value>,
+    role: &'static str,
+) {
+    let key = moli_v8_util::private_key(scope, slot)
+        .unwrap_or_else(|| panic!("required Streams private key for `{role}` must publish"));
+    let published = object
+        .set_private(scope, key, value)
+        .unwrap_or_else(|| panic!("required Streams private slot for `{role}` must publish"));
+    assert!(
+        published,
+        "required Streams private slot for `{role}` must be accepted"
+    );
+}
+
+pub fn set_stream_slot_bool(
+    scope: &mut v8::PinScope<'_, '_>,
+    stream: v8::Local<'_, v8::Object>,
+    slot: &'static str,
+    value: bool,
+) {
+    let stored = v8::Boolean::new(scope, value);
+    set_private_value(scope, stream, slot, stored.into());
+}
+
+pub(in crate::streams) fn set_writable_stream_locked(
+    scope: &mut v8::PinScope<'_, '_>,
+    stream: v8::Local<'_, v8::Object>,
+    locked: bool,
+) {
+    set_stream_slot_bool(scope, stream, WRITABLE_STREAM_LOCKED_SLOT, locked);
+}

@@ -232,8 +232,7 @@ pub(crate) use selection_surface::{
 pub(crate) use shared::{dom_time_since_origin_millis, unix_epoch_millis};
 pub(crate) mod encoded_frames;
 mod specs;
-mod stream_adapter;
-mod stream_objects;
+use moli_webapi::streams::adapter as stream_adapter;
 mod streams;
 mod style_font_template;
 pub(crate) mod svg_runtime;
@@ -508,8 +507,7 @@ pub(crate) use self::shared::structured_deserialize_value;
 pub(crate) use self::shared::structured_serialize_value;
 pub(in crate::context_bootstrap) use self::shared::*;
 pub(crate) use self::shared::{
-    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, READABLE_STREAM_CHILD_REALM_HANDLED_REJECTION_SLOT,
-    WINDOW_CUSTOM_ELEMENTS_SLOT, WINDOW_NAME_SLOT,
+    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, WINDOW_CUSTOM_ELEMENTS_SLOT, WINDOW_NAME_SLOT,
 };
 pub(crate) use self::shared::{
     RuntimeMessageSourceSecurity, prepare_value_for_window_post_message,
@@ -598,8 +596,7 @@ pub(super) use super::{
     native_bridge::{self, PageScriptHost},
     util::{
         callback_data_item, context_host_ptr_from_global_bridge, get_private_value,
-        object_number_property, set_private_value, throw_range_error, throw_type_error, v8_string,
-        v8str,
+        object_number_property, set_private_value, throw_type_error, v8_string, v8str,
     },
 };
 use crate::web_api_interfaces;

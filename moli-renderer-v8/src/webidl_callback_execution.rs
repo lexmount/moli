@@ -16,6 +16,21 @@ use crate::{
     worker::dispatch_current_worker_callback_exception,
 };
 
+pub(crate) fn invoke_traced_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    carrier: v8::Local<'s, v8::Object>,
+    receiver: v8::Local<'s, v8::Value>,
+    arguments: &[v8::Local<'s, v8::Value>],
+    invoke: moli_webapi::WebIdlCallbackInvocation<'s>,
+) -> Option<moli_webapi::WebIdlCallbackResult<'s>> {
+    let callback = PreparedWebIdlCallbackExecution::from_traced(scope, carrier)?;
+    match callback.invoke_with(scope, receiver, arguments, invoke) {
+        WebIdlCallbackExecutionOutcome::Returned(value) => Some(Ok(value)),
+        WebIdlCallbackExecutionOutcome::Failed(error) => Some(Err(error)),
+        WebIdlCallbackExecutionOutcome::Unavailable => None,
+    }
+}
+
 /// A short-lived invocation snapshot. It must not be retained as an async
 /// task binding: the API's registration or task owner supplies that lifetime.
 pub(crate) struct PreparedWebIdlCallbackExecution {
