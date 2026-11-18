@@ -162,7 +162,7 @@ fn send_worker_content_security_policy_report_for_state(
     let metadata = service_worker_fetch_request_metadata(&request);
     let runner = load.task_runner();
     runner.spawn(async move {
-        crate::network_host::controlled_xhr::ControlledResourceLoad::for_stylesheet(
+        crate::network_host::controlled_resource::ControlledResourceLoad::new(
             interception,
             request,
             info,

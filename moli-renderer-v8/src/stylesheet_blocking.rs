@@ -334,17 +334,16 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
             resource_type: SubresourceResourceType::Stylesheet,
             request_cookie_report: None,
         };
-        let completed =
-            crate::network_host::controlled_xhr::ControlledResourceLoad::for_stylesheet(
-                context,
-                request,
-                info,
-                load,
-                cancel,
-                request_initiator_type,
-            )
-            .run()
-            .await;
+        let completed = crate::network_host::controlled_resource::ControlledResourceLoad::new(
+            context,
+            request,
+            info,
+            load,
+            cancel,
+            request_initiator_type,
+        )
+        .run()
+        .await;
         let terminal = match completed.result {
             Ok(response) => {
                 let bytes = match completed.network_record.outcome() {

@@ -1,6 +1,6 @@
 use super::*;
 use crate::network_host::ResolveContextUrlError;
-use crate::network_host::controlled_xhr::{ControlledXhrContext, start_buffered_xhr};
+use crate::network_host::controlled_resource::{ControlledXhrContext, start_buffered_xhr};
 use crossbeam_channel::{after, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -417,14 +417,14 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         let _ = state.borrow().xhr_completion_tx.send(WorkerXhrCompletion {
             xhr_id,
             result,
-            local_request: Some(Box::new(native_worker_xhr_info(&prepared))),
+            local_request: Some(Box::new(worker_xhr_info(&prepared))),
             csp_violations: Vec::new(),
         });
         return true;
     }
 
     let completion_tx = state.borrow().xhr_completion_tx.clone();
-    let info = native_worker_xhr_info(&prepared);
+    let info = worker_xhr_info(&prepared);
     let request = worker_xhr_request(&state.borrow(), &prepared);
     load.task_runner().spawn(async move {
         let completed = control
@@ -477,8 +477,10 @@ fn worker_xhr_request(
 
 fn worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourceFetchInfo {
     PendingSubresourceFetchInfo {
-        internal_id: 0,
-        network_request_handle: None,
+        internal_id: crate::network::interception_control::next_subresource_request_id(),
+        network_request_handle: Some(
+            crate::network::interception_control::next_subresource_network_handle(),
+        ),
         frame_id: None,
         document_url: prepared.document_url.clone(),
         url: prepared.resolved_url.clone(),
@@ -492,13 +494,6 @@ fn worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourc
     }
 }
 
-fn native_worker_xhr_info(prepared: &PreparedWorkerXhrSendRequest) -> PendingSubresourceFetchInfo {
-    let mut info = worker_xhr_info(prepared);
-    info.internal_id = crate::network::interception_control::next_subresource_request_id();
-    info.network_request_handle =
-        Some(crate::network::interception_control::next_subresource_network_handle());
-    info
-}
 fn send_synchronous_worker_xhr(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
@@ -525,7 +520,7 @@ fn send_synchronous_worker_xhr(
         .unwrap_or_else(never);
     let response_rx = start_buffered_xhr(
         request,
-        native_worker_xhr_info(&prepared),
+        worker_xhr_info(&prepared),
         load.clone(),
         cancel,
         prepared.request_headers.to_byte_strings(),

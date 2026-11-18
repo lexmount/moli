@@ -1,11 +1,9 @@
-use super::super::delivery::{queue_xhr_failure_delivery, queue_xhr_response_delivery};
+use super::super::delivery::queue_xhr_response_delivery;
 use super::super::*;
 use super::request::PreparedXhrSendRequest;
-use crate::network_host::controlled_xhr::ControlledXhrContext;
+use crate::network_host::controlled_resource::ControlledXhrContext;
 use crate::service_worker_runtime::{ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination};
-use moli_fetch::{
-    FetchCancelHandle, RequestRedirectMode, should_request_be_blocked_due_to_bad_port,
-};
+use moli_fetch::{FetchCancelHandle, RequestRedirectMode};
 
 // Standalone ScriptVm's public pending-request API has no protocol journal.
 // Keep that compatibility adapter separate from the native Page loading path.
@@ -152,90 +150,6 @@ pub(super) fn dispatch_service_worker_xhr(
     Some(internal_id)
 }
 
-pub(super) fn record_offline_xhr_failure(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &mut PageScriptHost,
-    xhr: v8::Local<'_, v8::Object>,
-    prepared: PreparedXhrSendRequest,
-) {
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        prepared.frame_id,
-        prepared.document_url,
-        prepared.resolved_url,
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.send_body),
-        SubresourceResourceType::Xhr,
-        "Network emulation offline".to_owned(),
-    ));
-    queue_xhr_failure_delivery(scope, xhr);
-}
-
-pub(super) fn record_blocked_xhr_failure(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &mut PageScriptHost,
-    xhr: v8::Local<'_, v8::Object>,
-    prepared: PreparedXhrSendRequest,
-) {
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        prepared.frame_id,
-        prepared.document_url,
-        prepared.resolved_url,
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.send_body),
-        SubresourceResourceType::Xhr,
-        BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
-    ));
-    queue_xhr_failure_delivery(scope, xhr);
-}
-
-pub(super) fn record_policy_blocked_xhr_failure(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &mut PageScriptHost,
-    xhr: v8::Local<'_, v8::Object>,
-    prepared: PreparedXhrSendRequest,
-    message: String,
-) {
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        prepared.frame_id,
-        prepared.document_url,
-        prepared.resolved_url,
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.send_body),
-        SubresourceResourceType::Xhr,
-        message,
-    ));
-    queue_xhr_failure_delivery(scope, xhr);
-}
-
-pub(super) use self::record_policy_blocked_xhr_failure as record_csp_xhr_failure;
-
-pub(super) use self::record_policy_blocked_xhr_failure as record_url_policy_xhr_failure;
-
-pub(super) fn record_bad_port_xhr_failure(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &mut PageScriptHost,
-    xhr: v8::Local<'_, v8::Object>,
-    prepared: PreparedXhrSendRequest,
-) {
-    debug_assert!(should_request_be_blocked_due_to_bad_port(
-        &prepared.resolved_url
-    ));
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        prepared.frame_id,
-        prepared.document_url,
-        prepared.resolved_url.clone(),
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.send_body),
-        SubresourceResourceType::Xhr,
-        format!("xhr: blocked bad port for `{}`", prepared.resolved_url),
-    ));
-    queue_xhr_failure_delivery(scope, xhr);
-}
-
 pub(super) fn queue_local_xhr_response(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut PageScriptHost,
@@ -348,7 +262,7 @@ pub(super) fn spawn_network_xhr_fetch(
         );
         host.append_live_turn_owner_action(controlled.prepare_initial_pause());
         runner.spawn(async move {
-            use crate::network_host::controlled_xhr::{
+            use crate::network_host::controlled_resource::{
                 ControlledResourceStream, ControlledXhrCompletion,
             };
             let completed = controlled

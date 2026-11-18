@@ -1,4 +1,4 @@
-//! Native interception transport shared by Worker fetch, XHR and stylesheets.
+//! Native interception transport for resource loads.
 
 mod context;
 mod fetch;
@@ -99,7 +99,7 @@ impl ControlledResourceLoad {
         self
     }
 
-    pub(crate) fn for_stylesheet(
+    pub(crate) fn new(
         interception: crate::network::interception_output::ResourceInterceptionContext,
         request: Request,
         info: PendingSubresourceFetchInfo,
