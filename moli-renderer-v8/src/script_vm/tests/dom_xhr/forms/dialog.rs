@@ -835,3 +835,39 @@ dialogProbe.dialogs.second.setAttribute('closedby', 'none');
         r#"{"open":[true,true],"cancels":[]}"#
     );
 }
+
+#[test]
+fn dialog_buttons_run_modal_and_close_commands_after_cancelable_dispatch() {
+    let mut vm = new_storage_html_test_vm("https://dialog-button-command.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  document.body.innerHTML =
+    '<dialog id="target"><button id="closer" type="button" commandfor="target" command="close" value="result"></button></dialog>' +
+    '<button id="opener" type="button" commandfor="target" command="show-modal"></button>';
+  const dialog = document.getElementById('target');
+  const opener = document.getElementById('opener');
+  const closer = document.getElementById('closer');
+  const sources = [];
+  dialog.addEventListener('command', event => sources.push(event.source.id));
+  dialog.addEventListener('command', event => event.preventDefault(), {once:true});
+  opener.click();
+  const canceledOpening = !dialog.open;
+  opener.click();
+  const becameModal = dialog.open && dialog.matches(':modal');
+  dialog.addEventListener('command', event => event.preventDefault(), {once:true});
+  closer.click();
+  const canceledClosing = dialog.open;
+  closer.click();
+  return JSON.stringify([canceledOpening, becameModal, canceledClosing, dialog.open,
+    dialog.returnValue, sources]);
+})()
+"#,
+        )
+        .expect("dialog button commands should evaluate");
+    assert_eq!(
+        result,
+        r#"[true,true,true,false,"result",["opener","opener","closer","closer"]]"#
+    );
+}
