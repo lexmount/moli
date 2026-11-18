@@ -42,6 +42,7 @@ pub(crate) enum RendererPageHistoryTraversalTaskKind {
     ByDelta,
     SameDocument,
     CrossDocument,
+    CompleteTopLevelHandoff,
 }
 
 /// Exact authority captured when a history traversal becomes pending.

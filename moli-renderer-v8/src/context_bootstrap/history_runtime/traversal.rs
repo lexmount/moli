@@ -143,7 +143,10 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
         };
         let popup = host.history_traversal_popup(&queued.action);
         let results = match &queued.action {
-            crate::native_bridge::PendingHistoryTraversalAction::ByDelta { .. } => &[],
+            crate::native_bridge::PendingHistoryTraversalAction::ByDelta { .. }
+            | crate::native_bridge::PendingHistoryTraversalAction::CompleteTopLevelHandoff {
+                ..
+            } => &[],
             crate::native_bridge::PendingHistoryTraversalAction::SameDocument(traversal) => {
                 traversal.results.as_slice()
             }

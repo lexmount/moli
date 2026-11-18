@@ -308,7 +308,8 @@ pub use runtime::{
     RendererLifecycleTerminationStamp, RendererMainDocumentCommit, RendererMainDocumentResource,
     RendererMarkdownOptions, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
     RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics,
-    RendererNavigationHistory, RendererNavigationHistoryRequest, RendererNavigationInitiator, RendererNavigationPolicy, RendererOutputCursor, RendererOutputFence,
+    RendererNavigationHistory, RendererNavigationHistoryRequest, RendererNavigationInitiator,
+    RendererNavigationPolicy, RendererOutputCursor, RendererOutputFence,
     RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
@@ -353,8 +354,9 @@ pub use runtime::{
     RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
     RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
     RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
-    RendererTouchEventInput, RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
-    RuntimeConsoleMessageSnapshot, WorkerInspectorError, renderer_output_transport_channel,
+    RendererTopLevelHistoryTraversalCompletion, RendererTouchEventInput, RendererTouchPoint,
+    RendererVisualStateToken, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
+    WorkerInspectorError, renderer_output_transport_channel,
 };
 #[cfg(feature = "devtools")]
 pub use runtime::{

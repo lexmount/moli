@@ -1,6 +1,7 @@
 use moli_core::page::{
     Page, RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererDocumentLifecycleIdentity,
-    RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, SubresourceNetworkRequestHandle,
+    RendererRuntimeInspectorMessageBatch, RendererTopLevelHistoryTraversalCompletion,
+    ScriptNetworkOutputItem, SubresourceNetworkRequestHandle,
 };
 #[cfg(test)]
 use moli_core::page::{RendererPageDiagnosticsSnapshot, RendererRuntimeObservableSourceSummary};
@@ -180,6 +181,19 @@ impl TargetRuntimeSlot {
     ) -> Option<moli_core::page::RendererPageInspectorEndpoint> {
         self.inspector_endpoint_before_adoption()
             .or_else(|| self.loaded_page().map(Page::inspector_endpoint))
+    }
+
+    pub(crate) fn retain_history_traversal_completion(
+        &mut self,
+        token: &DocumentNavigationToken,
+        completion: RendererTopLevelHistoryTraversalCompletion,
+    ) -> Option<RendererTopLevelHistoryTraversalCompletion> {
+        self.page_slot
+            .retain_history_traversal_completion(token, completion)
+    }
+
+    pub(crate) fn pending_document_navigation_token(&self) -> Option<&DocumentNavigationToken> {
+        self.page_slot.pending_document_navigation_token()
     }
 
     pub(crate) fn loaded_page(&self) -> Option<&Page> {
