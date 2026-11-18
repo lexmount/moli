@@ -84,6 +84,24 @@ pub(super) fn native_range_client_rects_for_boundaries(
                     length
                 }
                 .min(length);
+                // Inline SVG is published as a replaced scene. For a whole
+                // text node that supplies all of an SVG text element's content,
+                // its shaped object quad also describes the selected text.
+                if start == 0
+                    && end == length
+                    && length != 0
+                    && let Some(parent) = parent_handle(scope, handle)
+                    && host
+                        .dom_host()
+                        .node(parent)
+                        .and_then(|node| node.as_element())
+                        .is_some_and(|element| element.is_svg_element("text"))
+                    && host.dom_host().child_handles(parent).eq([handle])
+                {
+                    queries.push(moli_layout::LayoutQuery::ClientRects { source: parent });
+                    kinds.push(NativeRangeGeometryQuery::Element);
+                    continue;
+                }
                 queries.push(moli_layout::LayoutQuery::TextRangeRects {
                     source: handle,
                     utf16_range: start..end,
