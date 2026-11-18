@@ -2486,7 +2486,6 @@ navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
 navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
 navigation-api/per-entry-events/dispose-after-bfcache.html
-navigation-api/precommit-handler/precommitHandler-traversal-commit-new-navigation-before-commit.html
 navigation-api/precommit-handler/precommitHandler-window-stop-before-commit.html
 navigation-api/scroll-behavior/after-transition-reload-no-scroll-anchoring.html
 navigation-api/scroll-behavior/after-transition-reload.html

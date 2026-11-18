@@ -9248,6 +9248,7 @@ navigation-api/precommit-handler/precommitHandler-redirect-replace.html
 navigation-api/precommit-handler/precommitHandler-redirect-throws.html
 navigation-api/precommit-handler/precommitHandler-reload.html
 navigation-api/precommit-handler/precommitHandler-replace.html
+navigation-api/precommit-handler/precommitHandler-traversal-commit-new-navigation-before-commit.html
 navigation-api/precommit-handler/precommitHandler-traversal-window-stop-before-commit.html
 navigation-api/precommit-handler/precommitHandler-traverse.html
 navigation-api/precommit-handler/precommitHandler-uncancelable.html
