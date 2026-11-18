@@ -49,7 +49,7 @@ pub use node::{
     ProcessingInstruction, Text,
 };
 pub use parser_construction::ParserConstruction;
-pub(crate) use queries::select_display_size;
+pub use queries::select_display_size;
 
 // Node IDs remain dense indexes, while immutable page snapshots share complete
 // chunks. A mutation detaches only its 256-node chunk, bounding copy-on-write

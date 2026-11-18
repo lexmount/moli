@@ -190,6 +190,110 @@ async fn dom_focus_and_ax_use_the_same_native_element_rules() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn select_disabledness_agrees_across_selectors_focus_and_ax() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.test/select.html")?,
+        );
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <select id="locked" disabled>
+                    <option id="intrinsic" disabled>Unavailable</option>
+                    <optgroup id="group" label="Choices">
+                        <option id="first" tabindex="0" value="first">First</option>
+                    </optgroup>
+                    <optgroup disabled label="Unavailable choices">
+                        <option id="group-disabled">Unavailable choice</option>
+                    </optgroup>
+                </select>
+                <select disabled><option id="plain-option">One</option></select>
+                <fieldset disabled>
+                    <legend><select><option id="legend">Legend choice</option></select></legend>
+                    <select><option id="fieldset">Fieldset choice</option></select>
+                </fieldset>`;
+            document.getElementById('legend').setAttributeNS('urn:test', 'disabled', '');
+        "#)?;
+        for select_disabled in [true, false] {
+            let selected = page.vm_mut().eval(&format!(r#"
+                (() => {{
+                    const select = document.getElementById('locked');
+                    select.disabled = {select_disabled};
+                    return JSON.stringify([select.value, select.selectedIndex, select.selectedOptions[0].disabled]);
+                }})()
+            "#))?;
+            assert_eq!(selected, r#"["first",1,false]"#);
+            for (id, disabled, ax_focusable) in [
+                ("intrinsic", true, false),
+                ("group", select_disabled, false),
+                ("first", select_disabled, true),
+                ("group-disabled", true, false),
+                ("plain-option", true, true),
+                ("legend", false, true),
+                ("fieldset", true, true),
+            ] {
+                let state = page.vm_mut().eval(&format!(r#"
+                    (() => {{
+                        const element = document.getElementById('{id}');
+                        element.focus();
+                        return JSON.stringify([element.matches(':disabled'), element.matches(':enabled'),
+                            document.activeElement === element]);
+                    }})()
+                "#))?;
+                let state: serde_json::Value = serde_json::from_str(&state)?;
+                assert_eq!(state[0], disabled, "{id}");
+                assert_eq!(state[1], !disabled, "{id}");
+                if disabled {
+                    assert_eq!(state[2], false, "{id}");
+                }
+
+                let handle = page.vm().document_runtime.dom_host().element_handle_by_id(id)
+                    .expect("fixture element");
+                let node = page.accessibility_node_payload_for_live_handle(handle).expect("AX node");
+                assert_eq!(node["ignored"], false, "{id}");
+                let properties = node["properties"].as_array().expect("AX properties");
+                let has_true_property = |name| properties.iter().any(|property|
+                    property["name"] == name && property["value"]["value"] == true);
+                assert_eq!(has_true_property("disabled"), disabled, "{id}");
+                assert_eq!(has_true_property("focusable"), ax_focusable, "{id}");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("actually disabled options retain their selection state");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn select_validation_and_ax_ignore_namespaced_display_size() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.test/select-size.html")?,
+        );
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = '<select id="test" required><option value="" selected>Choose</option><option>Valid</option></select>';
+            document.getElementById('test').setAttributeNS('urn:test', 'size', '4');
+        "#)?;
+        let handle = page.vm().document_runtime.dom_host().element_handle_by_id("test")
+            .expect("select");
+        for (native_size, role, invalid) in [(false, "combobox", true), (true, "listbox", false)] {
+            if native_size {
+                page.vm_mut().eval("document.getElementById('test').setAttributeNS(null, 'size', '4')")?;
+            }
+            let result = page.vm_mut().eval(r#"
+                (() => {
+                    const select = document.getElementById('test');
+                    return JSON.stringify([select.matches(':invalid'), select.validity.valueMissing]);
+                })()
+            "#)?;
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&result)?, serde_json::json!([invalid, invalid]));
+            let node = page.accessibility_node_payload_for_live_handle(handle).expect("AX node");
+            assert_eq!(node["role"]["value"], role);
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("select display size uses the null namespace");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn ax_link_urls_match_html_area_and_svg_activation() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

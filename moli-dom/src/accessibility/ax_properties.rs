@@ -648,9 +648,14 @@ pub(super) fn ax_properties(
                 properties.push(ax_string_property("url", url.as_str()));
             }
             let focus_support = document.focus_support(node_id);
-            let disabled = focus_support == FocusSupport::Blocked
-                && document.is_disabled_form_control(node_id);
+            let disabled =
+                focus_support == FocusSupport::Blocked && document.is_actually_disabled(node_id);
             if disabled {
+                // An option's own disabledness determines AX focus when its
+                // select is disabled.
+                if element.is_html_option() && !document.is_disabled_form_control(node_id) {
+                    properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
+                }
                 properties.push(ax_bool_property("disabled", "boolean", true));
             } else if focus_support == FocusSupport::Supported || element.is_html_element("option")
             {

@@ -73,9 +73,12 @@ impl NativeDom {
         {
             return None;
         }
+        self.nearest_ancestor_select(option_id)
+    }
 
+    pub(super) fn nearest_ancestor_select(&self, node_id: NativeNodeId) -> Option<NativeNodeId> {
         let mut traversal = OptionNearestSelectTraversal::default();
-        let mut current = self.parent_node(option_id);
+        let mut current = self.parent_node(node_id);
         while let Some(parent) = current {
             let Some(element) = self.node(parent).and_then(Node::as_element) else {
                 current = self.parent_node(parent);
@@ -239,7 +242,7 @@ impl NativeDom {
     }
 }
 
-pub(crate) fn select_display_size(select: &Element) -> i32 {
+pub fn select_display_size(select: &Element) -> i32 {
     select
         .attribute_ns("", "size")
         .map(parse_non_negative_integer_prefix)

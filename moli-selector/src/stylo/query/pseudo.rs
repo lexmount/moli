@@ -6,9 +6,9 @@ use crate::{
         NodeId,
         forms::{
             InputType, form_control_type_supports_intrinsic_validation, input_range_overflow,
-            input_range_underflow, parse_input_numeric_value, parse_non_negative_integer_prefix,
+            input_range_underflow, parse_input_numeric_value,
         },
-        native::{DomHost, Element, Node},
+        native::{DomHost, Element, Node, select_display_size},
     },
     stylo::{atoms::normalized_direction, query::QueryElement},
 };
@@ -213,7 +213,8 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn select_placeholder_label_option(self) -> Option<NodeId> {
-        if self.element().has_attribute("multiple") || self.select_display_size() != 1 {
+        let select = self.element();
+        if select.has_attribute_ns("", "multiple") || select_display_size(select) != 1 {
             return None;
         }
         let first = self
@@ -230,41 +231,12 @@ impl<'a> QueryElement<'a> {
             .then_some(first)
     }
 
-    pub(super) fn select_display_size(self) -> i32 {
-        self.element()
-            .attribute("size")
-            .map(parse_non_negative_integer_prefix)
-            .unwrap_or(0)
-            .max(1)
-    }
-
     pub(super) fn is_disableable_element(self) -> bool {
         self.element().supports_disabled()
     }
 
     pub(super) fn matches_disabled_pseudo(self) -> bool {
-        self.is_disableable_element()
-            && (self.host.dom().is_disabled_form_control(self.handle)
-                || (matches!(self.element().local_name(), "option" | "optgroup")
-                    && self.disabled_select_ancestor().is_some()))
-    }
-
-    pub(super) fn disabled_select_ancestor(self) -> Option<NodeId> {
-        let mut current = self.node().parent_node();
-        while let Some(parent) = current {
-            let Some(element) = self.host.node(parent).and_then(Node::as_element) else {
-                current = self.host.node(parent).and_then(Node::parent_node);
-                continue;
-            };
-            match element.local_name() {
-                "select" if element.has_attribute("disabled") => return Some(parent),
-                "select" | "option" => return None,
-                "optgroup" if self.element().local_name() == "optgroup" => return None,
-                _ => {}
-            }
-            current = self.host.node(parent).and_then(Node::parent_node);
-        }
-        None
+        self.host.dom().is_actually_disabled(self.handle)
     }
 
     pub(super) fn can_match_required_pseudo(self) -> bool {
