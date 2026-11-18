@@ -460,3 +460,49 @@ fn child_frameset_event_handler_property_reflects_on_its_window() {
         r#"{"reflectedErrorHandler":true,"reflectedOrdinaryHandler":true,"mainWindowUntouched":true,"errorCalls":[[5,true,"message","source",3,4,"reason"]],"errorDefaultPrevented":true,"ordinaryCalls":[[1,true,"error"]],"ordinaryDefaultPrevented":false}"#,
     );
 }
+
+#[test]
+fn window_document_and_shadow_handlers_share_listener_registration_order() {
+    let mut vm = new_parsed_test_vm(
+        "https://event-handler-owner-order.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const windowOrder = [];
+  window.addEventListener("message", () => windowOrder.push("ONE"));
+  window.onmessage = () => windowOrder.push("TWO");
+  window.addEventListener("message", () => windowOrder.push("THREE"));
+  window.dispatchEvent(new MessageEvent("message"));
+
+  const documentOrder = {};
+  for (const type of ["readystatechange", "visibilitychange"]) {
+    const order = documentOrder[type] = [];
+    document.addEventListener(type, () => order.push("ONE"));
+    document[`on${type}`] = () => order.push("TWO");
+    document.addEventListener(type, () => order.push("THREE"));
+    document.dispatchEvent(new Event(type));
+  }
+
+  const shadowOrder = [];
+  const shadow = document.createElement("div").attachShadow({ mode: "open" });
+  shadow.addEventListener("slotchange", () => shadowOrder.push("ONE"));
+  shadow.onslotchange = () => shadowOrder.push("TWO");
+  shadow.addEventListener("slotchange", () => shadowOrder.push("THREE"));
+  shadow.dispatchEvent(new Event("slotchange"));
+
+  let customExpandoCalled = false;
+  const customTarget = document.createElement("div");
+  customTarget.onmolicustom = () => { customExpandoCalled = true; };
+  customTarget.dispatchEvent(new Event("molicustom"));
+
+  return JSON.stringify({
+    window: windowOrder,
+    document: documentOrder,
+    shadow: shadowOrder,
+    customExpandoCalled
+  });
+}
