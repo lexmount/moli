@@ -23,7 +23,7 @@ pub use model::{
     StoredCookieEffectiveSameSite, StoredCookiePartitionFilter, StoredCookiePartitionKey,
     StoredCookieSameSite, StoredCookieSetRejectionReason, StoredCookieSetReport,
     StoredCookieSetStatus, StoredCookieSetWarningReason, StoredCookieSourceScheme,
-    advance_cookie_request_context, redirect_types_for_request, site_context_downgrade_type,
+    advance_cookie_request_context,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use model::{

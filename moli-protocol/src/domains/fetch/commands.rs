@@ -406,9 +406,6 @@ fn start_devtools_continue_intercepted_request_command(
             command_session_id,
             &pending.navigation.requested_url,
             &pending.navigation.request_method,
-            None,
-            pending.navigation.request_load_policy,
-            None,
         );
         if super::navigation_interception::advance_navigation_request_stage(conn, &mut pending) {
             let event = super::request_paused_background_event(
