@@ -980,9 +980,7 @@ impl RuntimeOwner {
             Ok(headers) => headers,
             Err(error) => return Err((job.response_tx, error)),
         };
-        let request_extra_info = (job.request.is_top_level_navigation_request()
-            || !job.request.redirect_chain.is_empty())
-        .then(|| {
+        let request_extra_info = matches!(job.current_url.scheme(), "http" | "https").then(|| {
             network_request_extra_info_from_headers(
                 &self.config,
                 &prepared_request.request,
@@ -1193,9 +1191,7 @@ impl RuntimeOwner {
             Ok(headers) => headers,
             Err(error) => return Err((Box::new(job), Some(easy), error)),
         };
-        let request_extra_info = (job.request.is_top_level_navigation_request()
-            || !job.request.redirect_chain.is_empty())
-        .then(|| {
+        let request_extra_info = matches!(job.current_url.scheme(), "http" | "https").then(|| {
             network_request_extra_info_from_headers(
                 &self.config,
                 &prepared_request.request,
@@ -1435,9 +1431,7 @@ impl RuntimeOwner {
             Ok(headers) => headers,
             Err(error) => return Err((Box::new(job), Some(easy), error)),
         };
-        let request_extra_info = (job.request.is_top_level_navigation_request()
-            || !job.request.redirect_chain.is_empty())
-        .then(|| {
+        let request_extra_info = matches!(job.current_url.scheme(), "http" | "https").then(|| {
             network_request_extra_info_from_headers(
                 &self.config,
                 &prepared_request.request,

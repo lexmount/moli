@@ -825,8 +825,17 @@ impl ScriptVm {
                             .with_negotiated_http_version(
                                 started.head.negotiated_http_version,
                             )
-                            .with_network_request_headers(
-                                started.network_request_headers.clone(),
+                            .with_network_request_extra_info(
+                                started.network_request_headers.clone().map(|headers| {
+                                    moli_fetch::NetworkRequestExtraInfo {
+                                        headers,
+                                        cookie_report: started
+                                            .head
+                                            .request_cookie_report
+                                            .clone()
+                                            .unwrap_or_default(),
+                                    }
+                                }),
                             ),
                         );
                     self._context_host
@@ -895,7 +904,18 @@ impl ScriptVm {
                         )
                         .with_from_cache(started.head.from_cache)
                         .with_negotiated_http_version(started.head.negotiated_http_version)
-                        .with_network_request_headers(started.network_request_headers.clone()),
+                        .with_network_request_extra_info(
+                            started.network_request_headers.clone().map(|headers| {
+                                moli_fetch::NetworkRequestExtraInfo {
+                                    headers,
+                                    cookie_report: started
+                                        .head
+                                        .request_cookie_report
+                                        .clone()
+                                        .unwrap_or_default(),
+                                }
+                            }),
+                        ),
                     );
             }
 
@@ -1042,8 +1062,17 @@ impl ScriptVm {
                                 .with_negotiated_http_version(
                                     started.head.negotiated_http_version,
                                 )
-                                .with_network_request_headers(
-                                    started.network_request_headers.clone(),
+                                .with_network_request_extra_info(
+                                    started.network_request_headers.clone().map(|headers| {
+                                        moli_fetch::NetworkRequestExtraInfo {
+                                            headers,
+                                            cookie_report: started
+                                                .head
+                                                .request_cookie_report
+                                                .clone()
+                                                .unwrap_or_default(),
+                                        }
+                                    }),
                                 ),
                             );
                     }
@@ -1412,7 +1441,18 @@ impl ScriptVm {
                             )
                             .with_from_cache(streaming.head.from_cache)
                             .with_negotiated_http_version(streaming.head.negotiated_http_version)
-                            .with_network_request_headers(streaming.network_request_headers),
+                            .with_network_request_extra_info(
+                                (streaming.network_request_headers).map(|headers| {
+                                    moli_fetch::NetworkRequestExtraInfo {
+                                        headers,
+                                        cookie_report: streaming
+                                            .head
+                                            .request_cookie_report
+                                            .clone()
+                                            .unwrap_or_default(),
+                                    }
+                                }),
+                            ),
                         );
                     self._context_host
                         .borrow_mut()
@@ -1888,8 +1928,17 @@ impl ScriptVm {
                                         .with_negotiated_http_version(
                                             streaming.head.negotiated_http_version,
                                         )
-                                        .with_network_request_headers(
-                                            streaming.network_request_headers.clone(),
+                                        .with_network_request_extra_info(
+                                            streaming.network_request_headers.clone().map(|headers| {
+                                                moli_fetch::NetworkRequestExtraInfo {
+                                                    headers,
+                                                    cookie_report: streaming
+                                                        .head
+                                                        .request_cookie_report
+                                                        .clone()
+                                                        .unwrap_or_default(),
+                                                }
+                                            }),
                                         ),
                                     );
                             }

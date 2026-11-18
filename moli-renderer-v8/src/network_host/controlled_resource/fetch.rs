@@ -120,7 +120,12 @@ impl ControlledFetchStream {
                     )
                     .with_status_text(head.status_text.clone())
                     .with_from_cache(head.from_cache)
-                    .with_network_request_headers(network_request_headers.clone())
+                    .with_network_request_extra_info((network_request_headers.clone()).map(
+                        |headers| moli_fetch::NetworkRequestExtraInfo {
+                            headers,
+                            cookie_report: head.request_cookie_report.clone().unwrap_or_default(),
+                        },
+                    ))
                     .with_negotiated_http_version(head.negotiated_http_version),
                 ),
             ));

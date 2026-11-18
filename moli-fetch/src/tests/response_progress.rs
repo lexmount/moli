@@ -31,6 +31,16 @@ async fn buffered_response_commits_completion_before_delivery() -> Result<()> {
             parent.adopt_response_progress(&child);
             assert_eq!(response.status, status);
             assert_eq!(response.body_text(), body);
+            let extra = response.network_request_extra_info().expect(
+                "completed HTTP transfers retain request metadata for async and callback clients",
+            );
+            assert!(
+                extra
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("user-agent")
+                        && value == client.user_agent())
+            );
             assert!(parent.response_completion_is_committed());
             assert!(!parent.cancel_if_response_pending());
             assert!(!parent.is_cancelled());

@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{
     ScriptNetworkOutputItem, SubresourceBodyFinished, SubresourceNetworkRequestHandle,
-    SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+    SubresourceRequestInitiatorType, SubresourceRequestSnapshot, SubresourceResourceType,
     SubresourceResponseBody, SubresourceResponseStarted,
 };
 
@@ -341,7 +341,7 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
     let handle = SubresourceNetworkRequestHandle::new(41);
     let document_url = Url::parse("https://example.test/page").unwrap();
     let request_url = Url::parse("https://example.test/sw-stream").unwrap();
-    let request = SubresourceRequestStarted::new(
+    let request = SubresourceRequestSnapshot::new(
         handle,
         Some("FRAME-1".to_owned()),
         document_url,

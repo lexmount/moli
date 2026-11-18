@@ -1123,7 +1123,8 @@ fn update_active_renderer_subresource_requests(
                 active_requests.remove(&handle);
             }
         }
-        ScriptNetworkOutputItem::SubresourceResponseStarted(_)
+        ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
+        | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
         | ScriptNetworkOutputItem::SubresourceDataReceived(_)
         | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
         | ScriptNetworkOutputItem::WebSocketNetworkEvent(_)
@@ -2445,7 +2446,7 @@ impl TargetIoStreamArtifacts {
 mod tests {
     use moli_core::page::{
         ScriptNetworkOutputItem, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-        SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+        SubresourceRequestInitiatorType, SubresourceRequestSnapshot, SubresourceResourceType,
         WebSocketFrameDirection, WebSocketFrameOpcode, WebSocketNetworkEvent,
     };
     use url::Url;
@@ -2731,7 +2732,7 @@ mod tests {
         let request_url =
             Url::parse("https://example.com/late-xhr").expect("request URL should parse");
         let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
-            SubresourceRequestStarted::new(
+            SubresourceRequestSnapshot::new(
                 handle,
                 None,
                 document_url,
@@ -2744,7 +2745,17 @@ mod tests {
                 None,
             ),
         ));
+        let ScriptNetworkOutputItem::SubresourceRequestStarted(snapshot) = &started else {
+            unreachable!()
+        };
+        let updated = ScriptNetworkOutputItem::SubresourceRequestUpdated(snapshot.clone());
+        agent.ingest_renderer_output_item(&updated, "LOADER-1");
+        assert!(
+            agent.renderer_subresources_are_idle(),
+            "an update cannot start network activity"
+        );
         agent.ingest_renderer_output_item(&started, "LOADER-1");
+        agent.ingest_renderer_output_item(&updated, "LOADER-1");
         assert!(!agent.renderer_subresources_are_idle());
 
         let terminal = ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
@@ -2756,6 +2767,11 @@ mod tests {
             agent.renderer_subresources_are_idle(),
             "a handled all-in-one record is terminal for the staged request with the same handle"
         );
+        agent.ingest_renderer_output_item(&updated, "LOADER-1");
+        assert!(
+            agent.renderer_subresources_are_idle(),
+            "late updates cannot resurrect a retired request"
+        );
     }
 
     #[test]
@@ -2765,7 +2781,7 @@ mod tests {
             keepalive: bool,
         ) -> ScriptNetworkOutputItem {
             ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
-                SubresourceRequestStarted::new(
+                SubresourceRequestSnapshot::new(
                     handle,
                     None,
                     Url::parse("https://example.com/").expect("document URL should parse"),

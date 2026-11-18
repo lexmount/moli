@@ -2798,14 +2798,14 @@ impl ScriptVm {
         }
         self._context_host
             .borrow_mut()
-            .record_get_subresource_network_result_with_handle(
+            .record_get_subresource_network_result(
                 None,
                 document_url,
                 request_url,
                 SubresourceResourceType::Script,
                 request_initiator_type,
                 result,
-                request_handle,
+                crate::types::SubresourceRequestStart::Unrecorded(request_handle),
             );
         self.record_resource_performance_entries(vec![performance_entry]);
     }

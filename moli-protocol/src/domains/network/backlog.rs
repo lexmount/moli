@@ -92,6 +92,7 @@ fn emit_subresource_redirect_events(
     resource_type: DevToolsNetworkResourceType,
     initiator: SubresourceRequestInitiatorType,
     redirects: &[NavigationRedirect],
+    inline_request_extra_info: bool,
 ) {
     for redirect in redirects {
         // An unissued hop has no dispatched request to report. ExtraInfo still
@@ -121,9 +122,9 @@ fn emit_subresource_redirect_events(
                         redirect.from_cache,
                         redirect.negotiated_http_version,
                     )),
-                    !redirect.cookie_set_reports.is_empty(),
+                    redirect.redirect_has_extra_info,
                     redirect.request_cookie_report.as_ref(),
-                    true,
+                    inline_request_extra_info,
                     &[],
                 );
             }
@@ -131,9 +132,7 @@ fn emit_subresource_redirect_events(
                 out,
                 event_session_id.as_deref(),
                 request_id,
-                &redirect.headers,
-                redirect.status,
-                &redirect.cookie_set_reports,
+                redirect,
             );
         }
     }
@@ -170,6 +169,10 @@ fn emit_subresource_network_delivery_record(
                 frame_id,
                 base_timestamp,
             )
+        }
+        TargetSubresourceNetworkDeliveryOutput::RequestUpdated(output) => {
+            capture_staged_subresource_request(conn, output, event_session_ids, owner);
+            false
         }
         TargetSubresourceNetworkDeliveryOutput::RequestExtraInfo(output) => {
             emit_staged_subresource_request_extra_info(
@@ -365,6 +368,7 @@ fn emit_complete_subresource_network_delivery_record(
                 resource_type,
                 output.request_initiator_type(),
                 &redirect_chain[announced_redirects.min(redirect_chain.len())..],
+                true,
             );
             for event_session_id in event_session_ids {
                 // Complete records have already delivered their response and
@@ -437,6 +441,29 @@ fn emit_complete_subresource_network_delivery_record(
     out.len() > initial_output_len
 }
 
+fn capture_staged_subresource_request(
+    conn: &mut CdpConnection,
+    delivery_output: &TargetSubresourceRequestNetworkDeliveryOutput,
+    event_session_ids: &[Option<String>],
+    owner: &CommandOwnerScope,
+) {
+    if event_session_ids.is_empty() {
+        return;
+    }
+    let request_id = delivery_output.request_id();
+    let output = delivery_output.output();
+    if output.resource_type() != moli_core::page::SubresourceResourceType::WebSocket {
+        record_subresource_pending_response_body(conn, owner, request_id, event_session_ids);
+        record_subresource_request_body(
+            conn,
+            owner,
+            request_id,
+            output.request_body_bytes(),
+            event_session_ids,
+        );
+    }
+}
+
 fn emit_staged_subresource_request_started(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -461,19 +488,8 @@ fn emit_staged_subresource_request_started(
     let request_was_announced_by_fetch_pause = conn
         .runtime_session_owner_slot_for_owner(owner)
         .is_some_and(|runtime_slot| runtime_slot.request_was_announced_by_fetch_pause(request_id));
-    if output.resource_type() != moli_core::page::SubresourceResourceType::WebSocket {
-        record_subresource_pending_response_body(conn, owner, request_id, event_session_ids);
-        record_subresource_request_body(
-            conn,
-            owner,
-            request_id,
-            output.request_body_bytes(),
-            event_session_ids,
-        );
-    }
-    if output.announces_request()
-        && (!request_was_announced_by_fetch_pause || output.redirect().is_some())
-    {
+    capture_staged_subresource_request(conn, delivery_output, event_session_ids, owner);
+    if !request_was_announced_by_fetch_pause || output.redirect().is_some() {
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
                 out,
@@ -500,9 +516,9 @@ fn emit_staged_subresource_request_started(
                 }),
                 output
                     .redirect()
-                    .is_some_and(|redirect| !redirect.cookie_set_reports.is_empty()),
+                    .is_some_and(|redirect| redirect.redirect_has_extra_info),
                 output.request_cookie_report(),
-                !output.request_extra_info_deferred(),
+                false,
                 &[],
             );
         }
@@ -513,9 +529,7 @@ fn emit_staged_subresource_request_started(
                 out,
                 session.as_deref(),
                 request_id,
-                &redirect.headers,
-                redirect.status,
-                &redirect.cookie_set_reports,
+                redirect,
             );
         }
         if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
@@ -587,6 +601,7 @@ fn emit_staged_subresource_response_started(
         resource_type,
         request.request_initiator_type(),
         &output.redirect_chain()[announced_redirects.min(output.redirect_chain().len())..],
+        false,
     );
     for event_session_id in event_session_ids {
         let fetch_request_id = conn
@@ -1094,7 +1109,7 @@ mod tests {
     use moli_core::page::{
         NavigationRedirect, ScriptNetworkOutputItem, SubresourceBodyFinished,
         SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
-        SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
+        SubresourceRequestSnapshot, SubresourceResourceType, SubresourceResponseBody,
         SubresourceResponseStarted,
     };
     use url::Url;
@@ -1260,7 +1275,7 @@ mod tests {
                 Vec::new(),
             );
             let handle = SubresourceNetworkRequestHandle::new(1);
-            let request = SubresourceRequestStarted::new(
+            let request = SubresourceRequestSnapshot::new(
                 handle,
                 Some("FRAME-1".to_owned()),
                 document_url,
@@ -1425,7 +1440,7 @@ mod tests {
             SubresourceResponseBody::from_bytes(b"done".to_vec()),
             Vec::new(),
         );
-        let started = SubresourceRequestStarted::new(
+        let started = SubresourceRequestSnapshot::new(
             handle,
             None,
             document_url,
@@ -1564,7 +1579,7 @@ mod tests {
             })
             .collect();
         let handle = SubresourceNetworkRequestHandle::new(1);
-        let request = SubresourceRequestStarted::new(
+        let request = SubresourceRequestSnapshot::new(
             handle,
             Some("FRAME-1".to_owned()),
             document_url,
@@ -1648,7 +1663,7 @@ mod tests {
         ]);
 
         let handle = SubresourceNetworkRequestHandle::new(1);
-        let request = SubresourceRequestStarted::new(
+        let request = SubresourceRequestSnapshot::new(
             handle,
             Some("FRAME-1".to_owned()),
             document_url,

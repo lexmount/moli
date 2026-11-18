@@ -10,6 +10,13 @@ pub(crate) type NetworkBodySourceId = u64;
 pub(crate) type SharedNavigationResponseResult =
     std::sync::Arc<std::result::Result<NavigationResponse, String>>;
 
+/// Whether the renderer has recorded this request's start. Fetch interception
+/// can assign a handle before that start enters the renderer's network output.
+pub(crate) enum SubresourceRequestStart {
+    Unrecorded(Option<SubresourceNetworkRequestHandle>),
+    Recorded(SubresourceNetworkRequestHandle),
+}
+
 #[derive(Clone)]
 pub(crate) enum SubresourceFetchRegistration {
     Intercepted,
@@ -75,7 +82,7 @@ pub use crate::protocol_types::{
     SubresourceEventSourceMessageReceived, SubresourceInterceptionClasses,
     SubresourceJsonPathEquals, SubresourceJsonPathRegex, SubresourceNetworkOutcome,
     SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
-    SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
+    SubresourceRequestSnapshot, SubresourceResourceType, SubresourceResponseBody,
     SubresourceResponseBodyWriter, SubresourceResponseStarted, SubresourceResponseWaitCriteria,
     WebSocketFrameDirection, WebSocketFrameOpcode, WebSocketLifecycleEvent, WebSocketLifecycleKind,
     WebSocketNetworkEvent,
