@@ -14,6 +14,15 @@ pub struct AccessibilityStyle {
 /// makes the AX request unavailable; it must not become a visible default.
 pub trait AccessibilityStyleSource {
     fn element_style(&mut self, node_id: NodeId) -> Option<AccessibilityStyle>;
+
+    /// Also reads whether a user-scrollable range is available in published
+    /// geometry. An absent snapshot provides no scroll-based focus support.
+    fn element_style_with_scroll_focus(
+        &mut self,
+        node_id: NodeId,
+    ) -> Option<(AccessibilityStyle, bool)> {
+        self.element_style(node_id).map(|style| (style, false))
+    }
 }
 
 pub struct AccessibilityInput<'a> {

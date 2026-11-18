@@ -6,9 +6,9 @@ use super::super::{
 use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
 };
-use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
+use super::geometry::scroll_node_into_view_if_needed;
 use super::rendered_state::ElementRenderedStyle;
-use super::styles::{StyleMode, StyleObservation, style_property_value};
+use super::styles::{ComputedStyleRead, StyleMode, StyleObservation, style_property_value};
 use super::{
     ClickEventSource, InputEventCoordinates, construct_focus_event, construct_interest_event,
     dispatch_popover_show_events, dispatch_public_event,
@@ -190,46 +190,79 @@ pub(super) fn is_focusable(runtime: &PageScriptHost, handle: DomHandle) -> bool 
     }
 }
 
-fn overflow_makes_scroll_container(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "auto" | "scroll"
-    )
+#[derive(Clone, Copy)]
+pub(crate) struct ScrollFocusAxes {
+    horizontal: bool,
+    vertical: bool,
+}
+
+impl ScrollFocusAxes {
+    pub(crate) fn for_style(style: &ComputedStyleRead<'_>) -> Option<Self> {
+        use style::values::computed::Overflow;
+
+        let values = style.computed_values()?;
+        let horizontal = matches!(values.clone_overflow_x(), Overflow::Auto | Overflow::Scroll);
+        let vertical = matches!(values.clone_overflow_y(), Overflow::Auto | Overflow::Scroll);
+        (horizontal || vertical).then_some(Self {
+            horizontal,
+            vertical,
+        })
+    }
+
+    pub(crate) fn for_extent(
+        extent: &moli_layout::LayoutScrollExtent,
+        is_viewport: bool,
+    ) -> Option<Self> {
+        // Live overflow governs element scroll permission. Published viewport permissions
+        // also reflect embedder policy.
+        let horizontal = extent.maximum_offset.x > extent.minimum_offset.x
+            && (!is_viewport || extent.allows_user_scroll_x);
+        let vertical = extent.maximum_offset.y > extent.minimum_offset.y
+            && (!is_viewport || extent.allows_user_scroll_y);
+        (extent.is_scroll_container && (horizontal || vertical)).then_some(Self {
+            horizontal,
+            vertical,
+        })
+    }
+
+    pub(crate) fn intersects(self, extent: Self) -> bool {
+        (self.horizontal && extent.horizontal) || (self.vertical && extent.vertical)
+    }
 }
 
 fn element_is_scrollable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    let scrolls_x = overflow_makes_scroll_container(&style_property_value(
-        runtime,
-        handle,
-        StyleMode::Computed,
-        "overflow-x",
-    ));
-    let scrolls_y = overflow_makes_scroll_container(&style_property_value(
-        runtime,
-        handle,
-        StyleMode::Computed,
-        "overflow-y",
-    ));
-    if !scrolls_x && !scrolls_y {
+    if !runtime.layout_policy().uses_real_layout() || !runtime.dom_host().is_connected(handle) {
         return false;
     }
-    match read_element_metrics(runtime, handle) {
-        Ok(Some(metrics)) => {
-            metrics.is_scroll_container
-                && (scrolls_x && metrics.maximum_scroll_offset.x > metrics.minimum_scroll_offset.x
-                    || scrolls_y
-                        && metrics.maximum_scroll_offset.y > metrics.minimum_scroll_offset.y)
-        }
-        Ok(None) => false,
-        Err(error) => {
-            tracing::warn!(
-                ?handle,
-                %error,
-                "failed to evaluate scroll-container focusability from layout"
-            );
-            false
-        }
+    let Some(axes) = ScrollFocusAxes::for_style(&ComputedStyleRead::new(runtime, handle)) else {
+        return false;
+    };
+    let Some(document) = runtime.layout_document_for_source(handle) else {
+        return false;
+    };
+    if let Err(error) = runtime.ensure_initial_layout() {
+        tracing::warn!(
+            ?handle,
+            %error,
+            "failed to evaluate scroll-container focusability from layout"
+        );
+        return false;
     }
+    runtime
+        .with_latest_layout_tree_for_document(document, |tree| {
+            tree.boxes
+                .iter()
+                .rev()
+                .find(|layout_box| layout_box.principal_source == Some(handle))
+                .and_then(|layout_box| {
+                    ScrollFocusAxes::for_extent(
+                        &layout_box.scroll_extent,
+                        layout_box.id == tree.root_box,
+                    )
+                })
+                .is_some_and(|extent| axes.intersects(extent))
+        })
+        .unwrap_or(false)
 }
 
 fn shadow_including_contains(

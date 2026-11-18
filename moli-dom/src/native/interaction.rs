@@ -38,6 +38,16 @@ pub enum FocusSupport {
     LayoutDependent,
 }
 
+impl FocusSupport {
+    pub(crate) fn supports_focus(self, scrollable: bool) -> bool {
+        match self {
+            Self::Blocked => false,
+            Self::Supported => true,
+            Self::LayoutDependent => scrollable,
+        }
+    }
+}
+
 impl Element {
     /// The raw target of a navigable HTML or SVG hyperlink, including an empty
     /// target. URL resolution uses the element's owner document.

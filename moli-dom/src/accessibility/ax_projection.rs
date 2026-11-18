@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     NodeData, NodeId,
     forms::InputType,
-    native::{DomHost, Element, Node},
+    native::{DomHost, Element, FocusSupport, Node},
 };
 
 use super::{
@@ -36,6 +36,7 @@ pub(super) struct AxNodeState {
     pub(super) visibility_visible: bool,
     pub(super) hides_contents: bool,
     pub(super) block_level: bool,
+    pub(super) scrollable_for_focus: bool,
     pub(super) aria_hidden_root: Option<NodeId>,
     pub(super) inert_reason: Option<AxIgnoredReason>,
 }
@@ -126,6 +127,7 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
                 visibility_visible: parent.is_none_or(|parent| parent.visibility_visible),
                 hides_contents: false,
                 block_level: false,
+                scrollable_for_focus: false,
                 aria_hidden_root: parent.and_then(|parent| parent.aria_hidden_root),
                 inert_reason: parent.and_then(|parent| parent.inert_reason).or_else(|| {
                     if id != self.root {
@@ -142,11 +144,6 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
                 state.inert_reason = self.frame_inert.then_some(AxIgnoredReason::InertFrame);
             }
             if let Some(element) = node.as_element() {
-                let style = self.styles.element_style(id).ok_or(AxUnavailable)?;
-                state.not_rendered |= style.display_none;
-                state.visibility_visible = style.visibility_visible;
-                state.hides_contents = style.hides_contents;
-                state.block_level = style.block_level;
                 if ax_aria_hidden(element) {
                     state.aria_hidden_root = state.aria_hidden_root.or(Some(id));
                 }
@@ -155,6 +152,22 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
                 {
                     state.inert_reason = Some(AxIgnoredReason::InertSubtree { root: id });
                 }
+                let can_use_scroll_focus = !state.not_rendered
+                    && state.inert_reason.is_none()
+                    && state.aria_hidden_root.is_none()
+                    && self.document.focus_support(id) == FocusSupport::LayoutDependent;
+                let (style, scrollable_for_focus) = if can_use_scroll_focus {
+                    self.styles
+                        .element_style_with_scroll_focus(id)
+                        .ok_or(AxUnavailable)?
+                } else {
+                    (self.styles.element_style(id).ok_or(AxUnavailable)?, false)
+                };
+                state.scrollable_for_focus = scrollable_for_focus;
+                state.not_rendered |= style.display_none;
+                state.visibility_visible = style.visibility_visible;
+                state.hides_contents = style.hides_contents;
+                state.block_level = style.block_level;
             }
             self.states.insert(id, state);
         }
@@ -193,7 +206,7 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
                 },
                 AxNodeInclusion::Include => {
                     let state = self.state(id)?;
-                    let role = ax_role(self.document, node);
+                    let role = ax_role(self.document, node, state.scrollable_for_focus);
                     let ignored_reason = if node.is_document() {
                         None
                     } else {
@@ -252,7 +265,13 @@ impl<'dom, 'styles> AxTreeProjection<'dom, 'styles> {
     pub(super) fn role_for_name(&self, node: &Node) -> &'static str {
         match self.entries.get(&node.id()) {
             Some(AxProjectionEntry::Included(projected)) => projected.role,
-            _ => ax_role(self.document, node),
+            _ => ax_role(
+                self.document,
+                node,
+                self.states
+                    .get(&node.id())
+                    .is_some_and(|state| state.scrollable_for_focus),
+            ),
         }
         .for_name()
     }
