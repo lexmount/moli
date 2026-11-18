@@ -470,6 +470,7 @@ pub(crate) use geometry::{
     input_target_in_document, observable_geometry_query, perform_scrollbar_scroll_default_action,
     perform_wheel_scroll_default_action,
 };
+pub(super) use geometry::{element_for_hit_source, live_interaction_target};
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,
     node_client_top_getter_function, node_client_width_getter_function,

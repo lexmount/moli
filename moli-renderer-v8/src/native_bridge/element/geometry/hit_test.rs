@@ -6,7 +6,9 @@ use moli_layout::{
 #[cfg(test)]
 use moli_layout::LayoutScrollbarHit;
 
-use super::provider::{observable_hit_test, observable_hit_test_all};
+use super::provider::{
+    is_live_hit_source, live_interaction_target, observable_hit_test, observable_hit_test_all,
+};
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
@@ -152,7 +154,9 @@ fn input_surface_hit_test_in_tree(
                         LayoutControlSurfaceHit::Scrollbar(hit) => hit.source,
                         LayoutControlSurfaceHit::ScrollbarCorner(hit) => hit.source,
                     };
-                    if live_interaction_target(runtime, source).is_none() {
+                    // Viewport scrollbars remain interactive when the document root is inert.
+                    let is_viewport_control = source == tree.source_root();
+                    if !is_live_hit_source(runtime, source, is_viewport_control) {
                         continue;
                     }
                     match &mut control {
@@ -171,7 +175,11 @@ fn input_surface_hit_test_in_tree(
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
-                    let Some(target) = live_interaction_target(runtime, layout_hit.source) else {
+                    let Some(target) = live_interaction_target(
+                        runtime,
+                        layout_hit.source,
+                        ignore_pointer_events_none,
+                    ) else {
                         continue;
                     };
                     live_dom_hit = Some((layout_hit, target));
@@ -233,14 +241,17 @@ fn live_hit_in_tree(
     ignore_pointer_events_none: bool,
 ) -> Option<(LayoutHit<DomHandle>, DomHandle)> {
     let first_hit = tree.hit_test(point, ignore_pointer_events_none);
-    let live_first_hit = first_hit
-        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
+    let resolve_hit = |hit: LayoutHit<DomHandle>| {
+        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
+            .map(|target| (hit, target))
+    };
+    let live_first_hit = first_hit.and_then(resolve_hit);
     if live_first_hit.is_some() || first_hit.is_none() {
         return live_first_hit;
     }
     tree.hit_test_all(point, ignore_pointer_events_none)
         .into_iter()
-        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)))
+        .find_map(resolve_hit)
 }
 
 fn live_hit_in_document(
@@ -250,8 +261,11 @@ fn live_hit_in_document(
     ignore_pointer_events_none: bool,
 ) -> Result<Option<(LayoutHit<DomHandle>, DomHandle)>, LayoutError> {
     let (_, first_hit) = observable_hit_test(runtime, document, point, ignore_pointer_events_none)?;
-    let live_first_hit = first_hit
-        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
+    let resolve_hit = |hit: LayoutHit<DomHandle>| {
+        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
+            .map(|target| (hit, target))
+    };
+    let live_first_hit = first_hit.and_then(resolve_hit);
     // A latest-layout snapshot may still contain a text fragment whose DOM
     // node was replaced after publication, and `inert` can change without
     // changing geometry. Walk the sampled paint stack only when the live DOM
@@ -261,27 +275,5 @@ fn live_hit_in_document(
         return Ok(live_first_hit);
     }
     let (_, hits) = observable_hit_test_all(runtime, document, point, ignore_pointer_events_none)?;
-    Ok(hits
-        .into_iter()
-        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target))))
-}
-
-fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Option<DomHandle> {
-    loop {
-        let node = runtime.dom_host().node(source)?;
-        if node.is_element() {
-            return Some(source);
-        }
-        let parent = node.parent_node()?;
-        if runtime.dom_host().is_shadow_root(parent) {
-            return runtime.dom_host().shadow_root_host(parent);
-        }
-        source = parent;
-    }
-}
-
-fn live_interaction_target(runtime: &PageScriptHost, source: DomHandle) -> Option<DomHandle> {
-    let target = element_for_hit_source(runtime, source)?;
-    (runtime.dom_host().is_connected(target) && !runtime.dom_host().is_inert_in_document(target))
-        .then_some(target)
+    Ok(hits.into_iter().find_map(resolve_hit))
 }

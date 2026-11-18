@@ -413,3 +413,40 @@ html, body { margin: 0; }
 
     assert_eq!(result, "true|under|under,html|true|true|true");
 }
+
+#[test]
+fn shadow_point_queries_hit_text_slotted_into_a_modal_dialog() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-modal-point-query.test/",
+        r#"<!doctype html><div id="host">MMMM</div>"#,
+    );
+    vm.eval(
+        r#"
+const host = document.getElementById('host');
+const shadow = host.attachShadow({mode: 'open'});
+shadow.innerHTML = `
+  <style>dialog { inset: 30px auto auto 30px; margin: 0; border: 0; padding: 8px; font: 36px monospace; }</style>
+  <dialog id="modal"><slot style="display: contents"></slot></dialog>`;
+shadow.querySelector('dialog').showModal();
+"#,
+    )
+    .expect("modal dialog should open");
+    publish_layout_for_test(&mut vm);
+
+    let result = vm
+        .eval(
+            r#"
+const range = document.createRange();
+range.selectNodeContents(host.firstChild);
+const rect = range.getBoundingClientRect();
+const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+JSON.stringify([
+  shadow.elementFromPoint(x, y)?.id,
+  shadow.elementsFromPoint(x, y).map(element => element.id || element.localName)
+]);
+"#,
+        )
+        .expect("slotted text point queries should evaluate");
+
+    assert_eq!(result, r#"["host",["modal","html"]]"#);
+}
