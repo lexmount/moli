@@ -14,7 +14,7 @@ use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XPathEvaluator, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::XPathEvaluator, enumerable)]
 struct XPathEvaluatorPrototypeDeclaration {
     #[webapi(method, length = 1, callback = xpath_evaluator_create_expression_callback)]
     create_expression: (),
@@ -29,7 +29,7 @@ struct XPathEvaluatorPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XPathExpression, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::XPathExpression, enumerable)]
 struct XPathExpressionPrototypeDeclaration {
     #[webapi(method, length = 1, callback = xpath_expression_evaluate_callback)]
     evaluate: (),

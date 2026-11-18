@@ -42,6 +42,9 @@ pub fn build<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> 
     if let Some(prototype) = global_constructor_prototype(scope, "CanvasGradient") {
         let _ = gradient.set_prototype(scope, prototype.into());
     }
+    web_api_interfaces::CanvasGradient::DESCRIPTOR
+        .initialize(scope, gradient)
+        .expect("CanvasGradient must accept its native brand");
     gradient
 }
 pub fn install<'s>(

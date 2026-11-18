@@ -31,7 +31,7 @@ struct ImageDataObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ImageData, receiver)]
+#[webapi(interface = web_api_interfaces::ImageData)]
 struct ImageDataPrototypeDeclaration {
     #[webapi(
         accessor_property,

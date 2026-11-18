@@ -23,7 +23,7 @@ struct DomRectObjectDeclaration {}
 struct DomRectReadOnlyObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRectReadOnly, receiver)]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
 struct DomRectReadOnlyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -86,7 +86,7 @@ struct DomRectReadOnlyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRect, receiver)]
+#[webapi(interface = web_api_interfaces::DOMRect)]
 struct DomRectPrototypeDeclaration {
     #[webapi(
         accessor_property,

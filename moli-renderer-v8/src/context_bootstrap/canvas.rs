@@ -63,7 +63,7 @@ pub(crate) fn canvas_composite_operation_canonical(value: &str) -> Option<&'stat
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLCanvasElement, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLCanvasElement)]
 struct HtmlCanvasElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -182,7 +182,7 @@ pub(crate) use context2d::{
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
-    install_canvas_rect_bindings,
+    install_canvas_rect_bindings, is_canvas_context_receiver,
 };
 pub(crate) use image_bitmap::window_create_image_bitmap_callback;
 pub(crate) use objects::{build_canvas_rendering_context_2d_object, build_offscreen_canvas_object};

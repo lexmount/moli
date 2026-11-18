@@ -42,7 +42,7 @@ pub fn apply_options<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AudioNode, enumerable)]
 struct AudioNodePrototypeDeclaration {
     #[webapi(method, length = 1, callback = audio_node_connect_callback)]
     connect: (),
@@ -63,7 +63,7 @@ struct AudioNodePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioDestinationNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AudioDestinationNode, enumerable)]
 struct DestinationPrototypeDeclaration {
     #[webapi(accessor_property, getter = max_channel_count_getter)]
     max_channel_count: (),

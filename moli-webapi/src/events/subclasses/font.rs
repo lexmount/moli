@@ -3,7 +3,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_webidl as webidl;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSetLoadEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::FontFaceSetLoadEvent, enumerable)]
 struct FontFaceSetLoadEventPrototypeDeclaration {
     #[webapi(
         accessor_property,

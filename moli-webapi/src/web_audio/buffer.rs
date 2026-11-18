@@ -8,7 +8,7 @@ const CHANNELS: &str = "__moliAudioBufferChannels";
 const VIEWS: &str = "__moliAudioBufferViews";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioBuffer, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AudioBuffer, enumerable)]
 struct BufferPrototypeDeclaration {
     #[webapi(accessor_property, getter = metadata_getter, data = v8str(scope, LENGTH))]
     length: (),

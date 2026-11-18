@@ -785,15 +785,15 @@ struct FileSystemHandlePrototypeDeclaration {
     kind: (),
     #[webapi(accessor_property, getter = file_system_handle_name_getter_callback)]
     name: (),
-    #[webapi(method, length = 0, callback = file_system_handle_query_permission_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = file_system_handle_query_permission_callback)]
     query_permission: (),
-    #[webapi(method, length = 0, callback = file_system_handle_request_permission_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = file_system_handle_request_permission_callback)]
     request_permission: (),
-    #[webapi(method, length = 1, callback = file_system_handle_is_same_entry_callback)]
+    #[webapi(returns_promise, method, length = 1, callback = file_system_handle_is_same_entry_callback)]
     is_same_entry: (),
-    #[webapi(method, length = 0, callback = file_system_handle_get_unique_id_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = file_system_handle_get_unique_id_callback)]
     get_unique_id: (),
-    #[webapi(method, length = 0, callback = file_system_handle_remove_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = file_system_handle_remove_callback)]
     remove: (),
 }
 

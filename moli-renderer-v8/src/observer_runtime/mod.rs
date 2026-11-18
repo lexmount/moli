@@ -83,7 +83,7 @@ const ROOTLESS_IO_VERTICAL_GEOMETRY_PROPERTIES: [&str; 18] = [
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable)]
 struct IntersectionObserverPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = intersection_observer_attribute_getter_callback, data = callback_data_index_value(scope, 0))]
     root: (),

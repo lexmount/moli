@@ -842,7 +842,7 @@ pub(crate) fn install_worker_base64_runtime_state<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AbortSignal, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AbortSignal, enumerable)]
 struct WorkerAbortSignalTemplateDeclaration {
     #[webapi(
         static_method = "abort",
@@ -891,9 +891,7 @@ struct WorkerAbortSignalTemplateDeclaration {
     interface = web_api_interfaces::AbortController,
     constructor_callback = crate::worker::abort::worker_abort_controller_constructor_callback,
     constructor_length = 0,
-    enumerable,
-    receiver
-)]
+    enumerable)]
 struct WorkerAbortControllerTemplateDeclaration {
     #[webapi(
         accessor_property,

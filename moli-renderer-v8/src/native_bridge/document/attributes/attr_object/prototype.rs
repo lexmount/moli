@@ -5,7 +5,7 @@ use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Attr, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Attr, enumerable)]
 struct AttrPrototypeDeclaration {
     #[webapi(accessor_property = "namespaceURI", getter = attr_namespace_uri_getter)]
     namespace_uri: (),

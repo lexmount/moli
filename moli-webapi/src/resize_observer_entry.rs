@@ -93,7 +93,7 @@ fn frozen_box_size<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ResizeObserverEntry, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ResizeObserverEntry, enumerable)]
 struct ResizeObserverEntryPrototypeDeclaration {
     #[webapi(accessor_property, getter = result_attribute_getter, data = callback_data_index_value(scope, 0))]
     target: (),
@@ -108,7 +108,7 @@ struct ResizeObserverEntryPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ResizeObserverSize, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ResizeObserverSize, enumerable)]
 struct ResizeObserverSizePrototypeDeclaration {
     #[webapi(accessor_property, getter = result_attribute_getter, data = callback_data_index_value(scope, 5))]
     inline_size: (),

@@ -36,7 +36,7 @@ const FONT_FACE_SET_EVENT_HANDLERS: &[FontFaceSetEventHandler] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSet, receiver)]
+#[webapi(interface = web_api_interfaces::FontFaceSet)]
 struct FontFaceSetEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,

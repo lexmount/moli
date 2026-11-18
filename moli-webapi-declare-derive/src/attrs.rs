@@ -1,5 +1,5 @@
 use syn::spanned::Spanned;
-use syn::{Error, Expr, ExprLit, Field, Lit, LitInt, LitStr, Path, Token};
+use syn::{Error, Expr, ExprLit, Field, Lit, LitBool, LitInt, LitStr, Path, Token};
 
 pub(crate) type ReceiverAttr = Path;
 
@@ -19,21 +19,43 @@ impl ObjectRole {
     }
 }
 
-fn resolve_interface_receiver(
-    receiver: &mut Option<ReceiverAttr>,
-    interface: Option<&Path>,
-    shorthand: Option<proc_macro2::Span>,
+enum ReceiverOverride {
+    Custom(ReceiverAttr),
+    Unchecked,
+}
+
+fn parse_receiver_override(
+    meta: syn::meta::ParseNestedMeta<'_>,
+    receiver: &mut Option<ReceiverOverride>,
 ) -> Result<(), Error> {
-    if let Some(span) = shorthand {
-        if receiver.is_some() {
-            return Err(Error::new(span, "receiver can only be specified once"));
-        }
-        let interface = interface.ok_or_else(|| {
-            Error::new(span, "receiver shorthand requires an interface descriptor")
-        })?;
-        *receiver = Some(syn::parse_quote!(#interface::is_instance));
+    if receiver.is_some() {
+        return Err(meta.error("receiver can only be specified once"));
     }
+    let value = meta.value()?;
+    *receiver = Some(if value.peek(LitBool) {
+        let value: LitBool = value.parse()?;
+        if value.value {
+            return Err(Error::new(
+                value.span(),
+                "receiver expects a predicate path or false",
+            ));
+        }
+        ReceiverOverride::Unchecked
+    } else {
+        ReceiverOverride::Custom(value.parse()?)
+    });
     Ok(())
+}
+
+fn resolve_receiver(
+    receiver: Option<ReceiverOverride>,
+    default: impl FnOnce() -> Option<ReceiverAttr>,
+) -> Option<ReceiverAttr> {
+    match receiver {
+        Some(ReceiverOverride::Custom(predicate)) => Some(predicate),
+        Some(ReceiverOverride::Unchecked) => None,
+        None => default(),
+    }
 }
 
 #[derive(Clone)]
@@ -198,24 +220,6 @@ pub(crate) struct FieldAttrs {
 }
 
 impl FieldAttrs {
-    pub(crate) fn inherit_receiver(
-        &mut self,
-        receiver: Option<&ReceiverAttr>,
-    ) -> Result<(), Error> {
-        if matches!(self.kind, FieldKind::Method | FieldKind::AccessorProperty) {
-            self.receiver = self.receiver.take().or_else(|| receiver.cloned());
-        }
-        if (self.receiver.is_some() || self.returns_promise)
-            && let Some(getter_value) = &self.getter_value
-        {
-            return Err(Error::new(
-                getter_value.span(),
-                "receiver and returns_promise require a Rust callback, not getter_value",
-            ));
-        }
-        Ok(())
-    }
-
     pub(crate) fn has_installation_kind(&self) -> bool {
         !matches!(self.kind, FieldKind::Input)
     }
@@ -273,7 +277,7 @@ impl FieldAttrs {
 
 pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs, Error> {
     let mut parsed = ObjectAttrs::default();
-    let mut interface_receiver = None;
+    let mut receiver = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("receiver_access_check") {
@@ -281,12 +285,7 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
                 return Ok(());
             }
             if meta.path.is_ident("receiver") {
-                if meta.input.peek(Token![=]) {
-                    parsed.receiver = Some(meta.value()?.parse()?);
-                } else {
-                    interface_receiver = Some(meta.path.span());
-                }
-                return Ok(());
+                return parse_receiver_override(meta, &mut receiver);
             }
             if meta.path.is_ident("interface")
                 || meta.path.is_ident("plain")
@@ -348,11 +347,13 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
             Err(meta.error("unsupported #[webapi(...)] object attribute"))
         })?;
     }
-    resolve_interface_receiver(
-        &mut parsed.receiver,
-        parsed.role.as_ref().and_then(ObjectRole::interface),
-        interface_receiver,
-    )?;
+    parsed.receiver = resolve_receiver(receiver, || {
+        parsed
+            .role
+            .as_ref()?
+            .interface()
+            .map(|interface| syn::parse_quote!(#interface::is_instance))
+    });
     Ok(parsed)
 }
 
@@ -360,7 +361,7 @@ pub(crate) fn parse_function_template_attrs(
     attrs: &[syn::Attribute],
 ) -> Result<FunctionTemplateAttrs, Error> {
     let mut parsed = FunctionTemplateAttrs::default();
-    let mut interface_receiver = None;
+    let mut receiver = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("receiver_access_check") {
@@ -368,12 +369,7 @@ pub(crate) fn parse_function_template_attrs(
                 return Ok(());
             }
             if meta.path.is_ident("receiver") {
-                if meta.input.peek(Token![=]) {
-                    parsed.receiver = Some(meta.value()?.parse()?);
-                } else {
-                    interface_receiver = Some(meta.path.span());
-                }
-                return Ok(());
+                return parse_receiver_override(meta, &mut receiver);
             }
             if meta.path.is_ident("interface") {
                 parsed.interface = Some(meta.value()?.parse()?);
@@ -442,11 +438,12 @@ pub(crate) fn parse_function_template_attrs(
             Err(meta.error("unsupported #[webapi(...)] function template attribute"))
         })?;
     }
-    resolve_interface_receiver(
-        &mut parsed.receiver,
-        parsed.interface.as_ref(),
-        interface_receiver,
-    )?;
+    parsed.receiver = resolve_receiver(receiver, || {
+        parsed
+            .interface
+            .as_ref()
+            .map(|interface| syn::parse_quote!(#interface::is_instance))
+    });
     Ok(parsed)
 }
 
@@ -470,6 +467,7 @@ pub(crate) fn parse_field_attrs_with_defaults(
     defaults: FieldDefaults<'_>,
 ) -> Result<FieldAttrs, Error> {
     let mut parsed = FieldAttrs::default();
+    let mut receiver = None;
     for attr in field
         .attrs
         .iter()
@@ -490,10 +488,7 @@ pub(crate) fn parse_field_attrs_with_defaults(
                 return Ok(());
             }
             if meta.path.is_ident("receiver") {
-                if parsed.receiver.replace(meta.value()?.parse()?).is_some() {
-                    return Err(meta.error("field receiver can only be specified once"));
-                }
-                return Ok(());
+                return parse_receiver_override(meta, &mut receiver);
             }
             if meta.path.is_ident("access_policy") {
                 if parsed
@@ -707,9 +702,9 @@ pub(crate) fn parse_field_attrs_with_defaults(
     {
         parsed.enumerable = true;
     }
-    if parsed.receiver.is_some()
-        && !matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
-    {
+    if matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty) {
+        parsed.receiver = resolve_receiver(receiver, || defaults.receiver.cloned());
+    } else if receiver.is_some() {
         return Err(Error::new(
             field.span(),
             "receiver is only supported on instance methods and accessor_property fields",
@@ -726,7 +721,20 @@ pub(crate) fn parse_field_attrs_with_defaults(
             "returns_promise is only supported on methods and accessor_property getters",
         ));
     }
-    parsed.inherit_receiver(defaults.receiver)?;
+    if parsed.getter.is_some() && parsed.getter_value.is_some() {
+        return Err(Error::new(
+            field.span(),
+            "`accessor_property` field cannot declare both #[webapi(getter = ...)] and #[webapi(getter_value = ...)]",
+        ));
+    }
+    if (parsed.receiver.is_some() || parsed.returns_promise)
+        && let Some(getter_value) = &parsed.getter_value
+    {
+        return Err(Error::new(
+            getter_value.span(),
+            "receiver and returns_promise require a Rust callback, not getter_value",
+        ));
+    }
     if parsed.access_policy.is_some() {
         if !matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
             || parsed.getter_value.is_some()
@@ -1141,17 +1149,35 @@ mod tests {
     }
 
     #[test]
-    fn receiver_shorthand_requires_and_uses_the_declared_interface() {
+    fn interface_supplies_the_default_receiver_predicate() {
         let attrs: Vec<syn::Attribute> =
-            syn::parse_quote!(#[webapi(interface = interfaces::Event, receiver)]);
-        let parsed = parse_object_attrs(&attrs).expect("native instance receiver");
-        let receiver = parsed.receiver.expect("resolved receiver");
-        assert_eq!(
-            quote::quote!(#receiver).to_string(),
-            "interfaces :: Event :: is_instance"
+            syn::parse_quote!(#[webapi(interface = interfaces::Event)]);
+        for receiver in [
+            parse_object_attrs(&attrs).unwrap().receiver,
+            parse_function_template_attrs(&attrs).unwrap().receiver,
+        ] {
+            let receiver = receiver.expect("resolved receiver");
+            assert_eq!(
+                quote::quote!(#receiver).to_string(),
+                "interfaces :: Event :: is_instance"
+            );
+        }
+        let attrs: Vec<syn::Attribute> =
+            syn::parse_quote!(#[webapi(interface = interfaces::Event, receiver = false)]);
+        assert!(parse_object_attrs(&attrs).unwrap().receiver.is_none());
+        assert!(
+            parse_function_template_attrs(&attrs)
+                .unwrap()
+                .receiver
+                .is_none()
         );
-        let attrs: Vec<syn::Attribute> = syn::parse_quote!(#[webapi(plain, receiver)]);
-        assert!(parse_object_attrs(&attrs).is_err());
+        let attrs: Vec<syn::Attribute> = syn::parse_quote!(#[webapi(name = "Named")]);
+        assert!(
+            parse_function_template_attrs(&attrs)
+                .unwrap()
+                .receiver
+                .is_none()
+        );
     }
 
     #[test]

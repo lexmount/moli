@@ -58,7 +58,7 @@ pub use self::constructors::{
 pub use self::instance::idb_key_range_includes_callback;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBKeyRange, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBKeyRange, enumerable)]
 struct IdbKeyRangePrototypeDeclaration {
     #[webapi(accessor_property, getter = idb_key_range_lower_getter)]
     lower: (),

@@ -15,7 +15,7 @@ use crate::interfaces as web_api_interfaces;
 use moli_v8_util::v8str;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Credential, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Credential, enumerable)]
 struct CredentialDeclaration {
     #[webapi(accessor_property, getter = credential_unavailable)]
     id: (),
@@ -26,7 +26,7 @@ struct CredentialDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PublicKeyCredential, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PublicKeyCredential, enumerable)]
 struct PublicKeyCredentialDeclaration {
     #[webapi(accessor_property, getter = credential_unavailable)]
     raw_id: (),
@@ -51,14 +51,14 @@ struct PublicKeyCredentialDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AuthenticatorResponse, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AuthenticatorResponse, enumerable)]
 struct AuthenticatorResponseDeclaration {
     #[webapi(accessor_property = "clientDataJSON", getter = credential_unavailable)]
     client_data_json: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AuthenticatorAttestationResponse, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AuthenticatorAttestationResponse, enumerable)]
 struct AuthenticatorAttestationResponseDeclaration {
     #[webapi(accessor_property, getter = credential_unavailable)]
     attestation_object: (),
@@ -73,7 +73,7 @@ struct AuthenticatorAttestationResponseDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AuthenticatorAssertionResponse, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AuthenticatorAssertionResponse, enumerable)]
 struct AuthenticatorAssertionResponseDeclaration {
     #[webapi(accessor_property, getter = credential_unavailable)]
     authenticator_data: (),

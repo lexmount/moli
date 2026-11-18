@@ -230,12 +230,14 @@ fn only_explicitly_registered_native_proxies_share_target_identity() {
 }
 
 #[derive(moli_webapi_declare::WebApiFunctionTemplate)]
-#[webapi(interface = interfaces::TestBase, receiver)]
+#[webapi(interface = interfaces::TestBase)]
 struct CheckedBaseTemplate {
     #[webapi(method, callback = convert_argument)]
     convert: (),
     #[webapi(method, callback = convert_argument, returns_promise)]
     convert_async: (),
+    #[webapi(method, callback = convert_argument, receiver = false)]
+    unchecked_convert: (),
 }
 
 fn convert_argument<'s>(
@@ -280,7 +282,9 @@ fn generated_interface_receivers_accept_subtypes_and_reject_forgery_before_conve
             try { method.call(fake, input); return false; }
             catch (error) { if (!(error instanceof TypeError)) return false; }
           }
-          return conversions === 1;
+          return conversions === 1
+            && TestBase.prototype.uncheckedConvert.call({}, input) === 'converted'
+            && conversions === 2;
         })()
     "#).is_true());
     let promise = eval(

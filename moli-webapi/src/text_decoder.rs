@@ -23,7 +23,7 @@ struct TextDecoderObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TextDecoder, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::TextDecoder, enumerable)]
 struct TextDecoderPrototypeDeclaration {
     #[webapi(method, length = 0, callback = text_decoder_decode_callback)]
     decode: (),

@@ -3,7 +3,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_webidl as webidl;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SubmitEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SubmitEvent, enumerable)]
 struct SubmitEventMethodsDeclaration {
     #[webapi(accessor_property = "agentInvoked", getter = submit_event_agent_invoked_getter_function)]
     agent_invoked: (),

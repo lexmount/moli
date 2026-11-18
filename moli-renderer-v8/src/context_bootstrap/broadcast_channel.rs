@@ -26,7 +26,7 @@ const BROADCAST_CHANNEL_ONMESSAGE_SLOT: &str = "__lmBroadcastChannelOnmessage";
 const BROADCAST_CHANNEL_ONMESSAGEERROR_SLOT: &str = "__lmBroadcastChannelOnmessageerror";
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::BroadcastChannel, receiver)]
+#[webapi(interface = web_api_interfaces::BroadcastChannel)]
 struct BroadcastChannelObjectDeclaration<'scope> {
     #[webapi(slot = BROADCAST_CHANNEL_ID_SLOT)]
     channel_id: v8::Local<'scope, v8::Value>,
@@ -48,7 +48,7 @@ struct BroadcastChannelObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::BroadcastChannel, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::BroadcastChannel, enumerable)]
 struct BroadcastChannelPrototypeDeclaration {
     #[webapi(
         accessor_property,

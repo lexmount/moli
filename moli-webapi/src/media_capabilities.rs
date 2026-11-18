@@ -19,7 +19,7 @@ struct MediaCapabilitiesObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaCapabilities, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MediaCapabilities, enumerable)]
 struct MediaCapabilitiesPrototypeDeclaration {
     #[webapi(method, length = 1, callback = media_capabilities_decoding_info_callback, returns_promise)]
     decoding_info: (),

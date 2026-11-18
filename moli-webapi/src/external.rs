@@ -12,7 +12,7 @@ struct ExternalObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::External, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::External, enumerable)]
 struct ExternalPrototypeDeclaration {
     #[webapi(method = "AddSearchProvider", length = 0, callback = external_noop)]
     add_search_provider: (),

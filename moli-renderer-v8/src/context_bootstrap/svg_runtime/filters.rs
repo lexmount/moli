@@ -18,7 +18,7 @@ macro_rules! filter_primitive {
         $(($field:ident, $name:literal, $getter:ident, $index:literal)),* $(,)?
     }) => {
         #[derive(WebApiFunctionTemplate)]
-        #[webapi(interface = web_api_interfaces::$interface, enumerable, receiver)]
+        #[webapi(interface = web_api_interfaces::$interface, enumerable)]
         struct $declaration {
             #[webapi(accessor_property = "x", getter = animated_length_getter, data = callback_data_index_value(scope, 0))]
             x: (),
@@ -52,21 +52,21 @@ filter_primitive!(TileDeclaration, SVGFETileElement, {
 });
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEMergeNodeElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEMergeNodeElement, enumerable)]
 struct MergeNodeDeclaration {
     #[webapi(accessor_property = "in1", getter = animated_string_getter, data = callback_data_index_value(scope, 1))]
     in1: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEDropShadowElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEDropShadowElement, enumerable)]
 struct DropShadowMethodsDeclaration {
     #[webapi(method = "setStdDeviation", length = 2, callback = set_std_deviation)]
     set_std_deviation: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEGaussianBlurElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEGaussianBlurElement, enumerable)]
 struct GaussianBlurMethodsDeclaration {
     #[webapi(method = "setStdDeviation", length = 2, callback = set_std_deviation)]
     set_std_deviation: (),

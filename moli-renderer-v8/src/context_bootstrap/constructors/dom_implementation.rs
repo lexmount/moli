@@ -13,7 +13,7 @@ struct DomImplementationSingletonDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMImplementation, receiver)]
+#[webapi(interface = web_api_interfaces::DOMImplementation)]
 struct DomImplementationPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 0, callback = dom_implementation_has_feature_callback)]
     has_feature: (),

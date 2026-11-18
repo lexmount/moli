@@ -3,7 +3,7 @@ use crate::web_api_interfaces;
 use moli_css_parse::{CssFontPaletteValuesProperty, parse_font_palette_values_property_with_stylo};
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSFontPaletteValuesRule, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CSSFontPaletteValuesRule, enumerable)]
 pub(crate) struct CssFontPaletteValuesRulePrototypeDeclaration {
     #[webapi(accessor_property, getter = name_getter)]
     name: (),

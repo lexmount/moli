@@ -82,7 +82,7 @@ struct SpeechSynthesisErrorEventInit<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SpeechSynthesisEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisEvent, enumerable)]
 struct SpeechSynthesisEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, UTTERANCE))]
     utterance: (),
@@ -97,7 +97,7 @@ struct SpeechSynthesisEventPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SpeechSynthesisErrorEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisErrorEvent, enumerable)]
 struct SpeechSynthesisErrorEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ERROR))]
     error: (),

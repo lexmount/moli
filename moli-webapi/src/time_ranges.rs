@@ -15,7 +15,7 @@ struct TimeRangesObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TimeRanges, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::TimeRanges, enumerable)]
 struct TimeRangesPrototypeDeclaration {
     #[webapi(accessor_property, getter = length_getter)]
     length: (),

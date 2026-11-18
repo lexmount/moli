@@ -14,7 +14,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebSocket, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::WebSocket, enumerable)]
 struct WebSocketTemplateMethodsDeclaration {
     #[webapi(constant = "CONNECTING", value = CONNECTING)]
     connecting: (),
@@ -45,7 +45,6 @@ struct WebSocketStreamTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
     interface = web_api_interfaces::WebSocket,
-    receiver,
     prototype_to_string_tag = "WebSocket"
 )]
 struct WebSocketPrototypeAccessorsDeclaration {
@@ -76,8 +75,9 @@ struct WebSocketPrototypeAccessorsDeclaration {
     binary_type: (),
 }
 
+// The stream getters preserve their empty values when the receiver has no stream.
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebSocketStream)]
+#[webapi(interface = web_api_interfaces::WebSocketStream, receiver = false)]
 struct WebSocketStreamPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = websocket_stream_url_getter_function, enumerable)]
     url: (),

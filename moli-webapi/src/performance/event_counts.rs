@@ -54,7 +54,8 @@ struct EventCountsObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::EventCounts, enumerable)]
+// Missing native counter data projects as zero counts.
+#[webapi(interface = web_api_interfaces::EventCounts, enumerable, receiver = false)]
 struct EventCountsPrototypeMethodsDeclaration {
     #[webapi(accessor_property, getter = event_counts_size_getter)]
     size: (),

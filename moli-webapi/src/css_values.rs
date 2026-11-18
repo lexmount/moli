@@ -50,7 +50,7 @@ struct CssKeywordValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSStyleValue, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CSSStyleValue, enumerable)]
 struct CssStyleValuePrototypeDeclaration {
     #[webapi(method = "toString", callback = css_style_value_to_string_callback, length = 0)]
     to_string: (),

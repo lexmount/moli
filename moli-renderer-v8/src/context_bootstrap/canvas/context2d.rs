@@ -41,7 +41,7 @@ pub(super) fn reset_canvas_context_state<'s>(
 macro_rules! canvas_rect_declaration {
     ($name:ident, $interface:path) => {
         #[derive(WebApiFunctionTemplate)]
-        #[webapi(interface = $interface, enumerable, receiver)]
+        #[webapi(interface = $interface, enumerable)]
         struct $name {
             #[webapi(method = "fillRect", length = 4, callback = canvas_context_fill_rect_callback)]
             fill_rect: (),
@@ -322,14 +322,20 @@ struct CanvasContextEllipseArgs {
     counterclockwise: bool,
 }
 
+pub(crate) fn is_canvas_context_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    web_api_interfaces::CanvasRenderingContext2D::is_instance(scope, receiver)
+        || web_api_interfaces::OffscreenCanvasRenderingContext2D::is_instance(scope, receiver)
+}
+
 fn require_canvas_context_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
-    if web_api_interfaces::CanvasRenderingContext2D::is_instance(scope, receiver)
-        || web_api_interfaces::OffscreenCanvasRenderingContext2D::is_instance(scope, receiver)
-    {
+    if is_canvas_context_receiver(scope, receiver) {
         return true;
     }
     throw_type_error(

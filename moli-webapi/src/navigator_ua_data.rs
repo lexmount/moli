@@ -236,7 +236,7 @@ fn build_ua_brand_records(
 
 const NAVIGATOR_UA_DATA_USER_AGENT_SLOT: &str = "__moliNavigatorUADataUserAgent";
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::NavigatorUAData, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::NavigatorUAData, enumerable)]
 struct NavigatorUaDataPrototypeMethodsDeclaration {
     #[webapi(method, name = "toJSON", length = 0, callback = navigator_ua_data_to_json_callback)]
     to_json: (),

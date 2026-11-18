@@ -275,11 +275,11 @@ pub fn build_constructor_template<'s>(
 struct ReadableStreamPrototypeDeclaration {
     #[webapi(method, length = 0, callback = readable_stream_get_reader_callback)]
     get_reader: (),
-    #[webapi(method, length = 0, callback = readable_stream_cancel_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = readable_stream_cancel_callback)]
     cancel: (),
     #[webapi(method, length = 1, callback = readable_stream_pipe_through_callback)]
     pipe_through: (),
-    #[webapi(method, length = 1, callback = readable_stream_pipe_to_callback)]
+    #[webapi(returns_promise, method, length = 1, callback = readable_stream_pipe_to_callback)]
     pipe_to: (),
     #[webapi(method, length = 0, callback = readable_stream_tee_callback)]
     tee: (),
@@ -292,7 +292,7 @@ struct ReadableStreamPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WritableStream, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::WritableStream, enumerable)]
 struct WritableStreamPrototypeDeclaration {
     #[webapi(method, length = 0, callback = writable_stream_get_writer_callback)]
     get_writer: (),
@@ -307,26 +307,26 @@ struct WritableStreamPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::ReadableStreamDefaultReader, enumerable)]
 struct ReadableStreamDefaultReaderPrototypeDeclaration {
-    #[webapi(method, length = 0, callback = readable_stream_reader_read_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = readable_stream_reader_read_callback)]
     read: (),
     #[webapi(method, length = 0, callback = readable_stream_reader_release_lock_callback)]
     release_lock: (),
-    #[webapi(method, length = 0, callback = readable_stream_reader_cancel_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = readable_stream_reader_cancel_callback)]
     cancel: (),
-    #[webapi(accessor_property, getter = readable_stream_reader_closed_getter)]
+    #[webapi(returns_promise, accessor_property, getter = readable_stream_reader_closed_getter)]
     closed: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::ReadableStreamBYOBReader, enumerable)]
 struct ReadableStreamByobReaderPrototypeDeclaration {
-    #[webapi(method, length = 1, callback = readable_stream_byob_reader_read_callback)]
+    #[webapi(returns_promise, method, length = 1, callback = readable_stream_byob_reader_read_callback)]
     read: (),
     #[webapi(method, length = 0, callback = readable_stream_reader_release_lock_callback)]
     release_lock: (),
-    #[webapi(method, length = 0, callback = readable_stream_reader_cancel_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = readable_stream_reader_cancel_callback)]
     cancel: (),
-    #[webapi(accessor_property, getter = readable_stream_reader_closed_getter)]
+    #[webapi(returns_promise, accessor_property, getter = readable_stream_reader_closed_getter)]
     closed: (),
 }
 
@@ -348,19 +348,19 @@ struct ReadableStreamByobRequestPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::WritableStreamDefaultWriter, enumerable)]
 struct WritableStreamDefaultWriterPrototypeDeclaration {
-    #[webapi(method, length = 0, callback = writable_stream_writer_write_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = writable_stream_writer_write_callback)]
     write: (),
-    #[webapi(method, length = 0, callback = writable_stream_writer_close_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = writable_stream_writer_close_callback)]
     close: (),
-    #[webapi(method, length = 0, callback = writable_stream_writer_abort_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = writable_stream_writer_abort_callback)]
     abort: (),
     #[webapi(method, length = 0, callback = writable_stream_writer_release_lock_callback)]
     release_lock: (),
-    #[webapi(accessor_property, getter = writable_stream_writer_closed_getter)]
+    #[webapi(returns_promise, accessor_property, getter = writable_stream_writer_closed_getter)]
     closed: (),
     #[webapi(accessor_property, getter = writable_stream_writer_desired_size_getter)]
     desired_size: (),
-    #[webapi(accessor_property, getter = writable_stream_writer_ready_getter)]
+    #[webapi(returns_promise, accessor_property, getter = writable_stream_writer_ready_getter)]
     ready: (),
 }
 

@@ -163,8 +163,7 @@ pub fn fetch_event_attribute_getter<'s>(
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
     interface = web_api_interfaces::FetchEvent,
-    readonly_prototype,
-    receiver = web_api_interfaces::FetchEvent::is_instance
+    readonly_prototype
 )]
 struct FetchEventValueTemplateDeclaration {
     #[webapi(accessor_property, enumerable, getter = fetch_event_attribute_getter, data = v8str(scope, REQUEST_SLOT))]

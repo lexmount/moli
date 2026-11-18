@@ -45,7 +45,7 @@ struct ClipboardItemObjectDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ClipboardItem, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ClipboardItem, enumerable)]
 struct ClipboardItemPrototypeDeclaration {
     #[webapi(accessor_property, getter = clipboard_item_presentation_style_getter)]
     presentation_style: (),

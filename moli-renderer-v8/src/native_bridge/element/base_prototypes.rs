@@ -121,7 +121,6 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "setPointerCapture",
         length = 1,
         enumerable,
-        receiver = web_api_interfaces::Element::is_instance,
         callback = node_set_pointer_capture_callback
     )]
     set_pointer_capture: (),
@@ -129,7 +128,6 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "releasePointerCapture",
         length = 1,
         enumerable,
-        receiver = web_api_interfaces::Element::is_instance,
         callback = node_release_pointer_capture_callback
     )]
     release_pointer_capture: (),
@@ -137,7 +135,6 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
         method = "hasPointerCapture",
         length = 1,
         enumerable,
-        receiver = web_api_interfaces::Element::is_instance,
         callback = node_has_pointer_capture_callback
     )]
     has_pointer_capture: (),
@@ -276,7 +273,7 @@ pub(super) struct ElementPrototypeQueryAndAttributeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 pub(super) struct ExtendedElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = node_get_attribute_node_callback)]
     get_attribute_node: (),
@@ -296,8 +293,7 @@ pub(super) struct ExtendedElementPrototypeMethodsDeclaration {
     set_attribute_node_ns: (),
     #[webapi(method, length = 1, callback = node_remove_attribute_node_callback)]
     remove_attribute_node: (),
-    #[webapi(method, length = 2, callback = node_insert_adjacent_element_callback,
-        receiver = web_api_interfaces::Element::is_instance)]
+    #[webapi(method, length = 2, callback = node_insert_adjacent_element_callback)]
     insert_adjacent_element: (),
     #[webapi(method, length = 2, callback = node_insert_adjacent_text_callback)]
     insert_adjacent_text: (),
@@ -382,14 +378,12 @@ pub(super) struct HtmlElementGeometryPrototypeDeclaration {
     #[webapi(
         accessor_property = "offsetWidth",
         enumerable,
-        receiver = web_api_interfaces::HTMLElement::is_instance,
         getter = node_offset_width_getter_function
     )]
     offset_width: (),
     #[webapi(
         accessor_property = "offsetHeight",
         enumerable,
-        receiver = web_api_interfaces::HTMLElement::is_instance,
         getter = node_offset_height_getter_function
     )]
     offset_height: (),
@@ -767,7 +761,7 @@ pub(super) struct ElementAriaElementReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, receiver)]
+#[webapi(interface = web_api_interfaces::Document)]
 pub(super) struct DocumentCustomElementRegistryPrototypeDeclaration {
     #[webapi(
         accessor_property = "customElementRegistry",
@@ -790,7 +784,7 @@ pub(super) struct ElementStylePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLElement, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLElement)]
 pub(super) struct HtmlElementStandardPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -926,7 +920,7 @@ pub(super) struct HtmlElementStandardPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLElement, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLElement)]
 pub(super) struct HtmlElementActionPrototypeDeclaration {
     #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
     focus: (),
@@ -1142,7 +1136,7 @@ pub(super) struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable)]
 pub(super) struct HtmlBodyElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,

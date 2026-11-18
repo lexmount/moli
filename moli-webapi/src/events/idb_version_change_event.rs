@@ -9,7 +9,7 @@ const OLD_VERSION_SLOT: &str = "__moli_idb_event_old_version";
 const NEW_VERSION_SLOT: &str = "__moli_idb_event_new_version";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBVersionChangeEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBVersionChangeEvent, enumerable)]
 struct IdbVersionChangeEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = old_version_getter)]
     old_version: (),

@@ -12,7 +12,7 @@ struct PerformanceObserverEntryListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList, enumerable)]
 struct PerformanceObserverEntryListTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = performance_entry_list_get_entries_callback)]
     get_entries: (),

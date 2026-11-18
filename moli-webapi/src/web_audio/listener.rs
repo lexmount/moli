@@ -7,7 +7,7 @@ const LISTENER: &str = "__moliAudioContextListener";
 struct AudioListenerObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioListener, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AudioListener, enumerable)]
 struct AudioListenerPrototypeDeclaration {
     #[webapi(accessor_property = "positionX", getter = parameter, data = v8str(scope, "positionX"))]
     position_x: (),

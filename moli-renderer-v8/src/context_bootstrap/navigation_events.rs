@@ -155,7 +155,7 @@ struct NavigationDestinationDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::NavigationDestination, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::NavigationDestination, enumerable)]
 struct NavigationDestinationPrototypeDeclaration {
     #[webapi(accessor_property, getter = navigation_destination_url_getter)]
     url: (),

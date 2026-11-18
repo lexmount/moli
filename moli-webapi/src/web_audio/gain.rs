@@ -10,7 +10,7 @@ struct GainNodeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::GainNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::GainNode, enumerable)]
 struct GainNodePrototypeDeclaration {
     #[webapi(accessor_property, getter = gain)]
     gain: (),

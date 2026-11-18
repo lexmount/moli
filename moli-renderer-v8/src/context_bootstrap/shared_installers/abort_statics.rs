@@ -30,7 +30,7 @@ struct AbortSignalConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AbortSignal, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AbortSignal, enumerable)]
 struct AbortSignalPrototypeDeclaration {
     #[webapi(
         method,
@@ -60,7 +60,7 @@ struct AbortSignalPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AbortController, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AbortController, enumerable)]
 struct AbortControllerPrototypeDeclaration {
     #[webapi(method, length = 0, callback = abort::abort_controller_abort_callback)]
     abort: (),

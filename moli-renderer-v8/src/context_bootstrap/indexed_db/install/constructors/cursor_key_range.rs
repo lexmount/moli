@@ -7,7 +7,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBCursor, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBCursor, enumerable)]
 struct IdbCursorPrototypeDeclaration {
     #[webapi(accessor_property, getter = idb_cursor_source_getter)]
     source: (),
@@ -36,7 +36,7 @@ struct IdbCursorPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBCursorWithValue, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBCursorWithValue, enumerable)]
 struct IdbCursorWithValuePrototypeDeclaration {
     #[webapi(accessor_property, getter = idb_cursor_value_getter)]
     value: (),

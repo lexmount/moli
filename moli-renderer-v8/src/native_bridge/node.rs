@@ -48,7 +48,7 @@ pub(crate) use self::reference::NativeNodeReference;
 pub(super) use self::tree::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Node, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Node, enumerable)]
 struct NodePrototypeReflectionDeclaration {
     #[webapi(accessor_property = "nodeType", getter = node_node_type_getter_function)]
     node_type: (),
@@ -159,8 +159,7 @@ declare_parent_node_prototype!(
 declare_parent_node_prototype!(
     DocumentParentNodePrototypeDeclaration,
     interface = web_api_interfaces::Document,
-    enumerable,
-    receiver
+    enumerable
 );
 
 #[derive(WebApiFunctionTemplate)]

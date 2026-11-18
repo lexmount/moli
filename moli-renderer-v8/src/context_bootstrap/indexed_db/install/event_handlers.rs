@@ -6,7 +6,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBRequest, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBRequest, enumerable)]
 struct IDBRequestEventHandlers {
     #[webapi(accessor_property, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onsuccess"), setter_data = v8str(scope, "onsuccess"))]
     onsuccess: (),
@@ -15,7 +15,7 @@ struct IDBRequestEventHandlers {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBOpenDBRequest, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBOpenDBRequest, enumerable)]
 struct IDBOpenDBRequestEventHandlers {
     #[webapi(accessor_property, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onupgradeneeded"), setter_data = v8str(scope, "onupgradeneeded"))]
     onupgradeneeded: (),
@@ -24,7 +24,7 @@ struct IDBOpenDBRequestEventHandlers {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBTransaction, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBTransaction, enumerable)]
 struct IDBTransactionEventHandlers {
     #[webapi(accessor_property, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onabort"), setter_data = v8str(scope, "onabort"))]
     onabort: (),
@@ -35,7 +35,7 @@ struct IDBTransactionEventHandlers {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBDatabase, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBDatabase, enumerable)]
 struct IDBDatabaseEventHandlers {
     #[webapi(accessor_property, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onabort"), setter_data = v8str(scope, "onabort"))]
     onabort: (),

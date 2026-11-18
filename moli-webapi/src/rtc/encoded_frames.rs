@@ -104,7 +104,7 @@ struct VideoObject<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCEncodedAudioFrame, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::RTCEncodedAudioFrame, enumerable)]
 struct AudioPrototype {
     #[webapi(accessor_property, getter = data, setter = set_data)]
     data: (),
@@ -113,7 +113,7 @@ struct AudioPrototype {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCEncodedVideoFrame, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::RTCEncodedVideoFrame, enumerable)]
 struct VideoPrototype {
     #[webapi(accessor_property = "type", getter = frame_type)]
     kind: (),

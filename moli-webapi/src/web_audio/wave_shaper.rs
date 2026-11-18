@@ -8,7 +8,7 @@ const CURVE_SET: &str = "__moliWaveShaperCurveSet";
 const OVERSAMPLE: &str = "__moliWaveShaperOversample";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WaveShaperNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::WaveShaperNode, enumerable)]
 struct PrototypeDeclaration {
     #[webapi(accessor_property, getter = curve_getter, setter = curve_setter)]
     curve: (),

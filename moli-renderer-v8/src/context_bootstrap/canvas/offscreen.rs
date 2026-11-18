@@ -17,7 +17,7 @@ const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
 const OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT: &str = "__moliOffscreenCanvasContextKind";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OffscreenCanvas, receiver)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas)]
 struct OffscreenCanvasPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

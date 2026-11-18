@@ -13,7 +13,7 @@ const ACTIVE_TYPE: &str = "__moliWebGlActiveType";
 const ACTIVE_NAME: &str = "__moliWebGlActiveName";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebGLShaderPrecisionFormat, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::WebGLShaderPrecisionFormat, enumerable)]
 struct PrecisionAttributes {
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, PRECISION))]
     precision: (),
@@ -24,7 +24,7 @@ struct PrecisionAttributes {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebGLActiveInfo, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::WebGLActiveInfo, enumerable)]
 struct ActiveInfoAttributes {
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, ACTIVE_SIZE))]
     size: (),

@@ -36,8 +36,7 @@ struct IdleDetectorPrototypeDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onchange"),
         setter_data = v8str(scope, "onchange"),
-        enumerable,
-        receiver = web_api_interfaces::IdleDetector::is_instance
+        enumerable
     )]
     onchange: (),
 
@@ -56,7 +55,7 @@ struct IdleDetectorPrototypeDeclaration {
     screen_state: (),
 
     #[webapi(method, length = 0, callback = idle_detector_start_callback,
-        returns_promise, receiver = web_api_interfaces::IdleDetector::is_instance)]
+        returns_promise)]
     start: (),
 }
 

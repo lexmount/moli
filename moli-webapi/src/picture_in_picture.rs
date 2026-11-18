@@ -11,7 +11,7 @@ const HEIGHT: &str = "__moliPictureInPictureWindowHeight";
 const ON_RESIZE: &str = "__moliPictureInPictureWindowOnresize";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PictureInPictureWindow, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PictureInPictureWindow, enumerable)]
 struct PictureInPictureWindowPrototype {
     #[webapi(accessor_property, getter = dimension_getter, data = v8str(scope, WIDTH))]
     width: (),

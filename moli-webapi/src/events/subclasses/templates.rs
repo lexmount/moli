@@ -26,7 +26,7 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CloseEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CloseEvent, enumerable)]
 struct CloseEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "wasClean", getter = close_event_was_clean_getter_function)]
     was_clean: (),
@@ -39,21 +39,21 @@ struct CloseEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TrackEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::TrackEvent, enumerable)]
 struct TrackEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = track_event_track_getter_function)]
     track: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable)]
 struct BeforeUnloadEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = before_unload_event_return_value_getter, setter = before_unload_event_return_value_setter)]
     return_value: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HashChangeEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::HashChangeEvent, enumerable)]
 struct HashChangeEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "oldURL", getter = event_value_attribute_getter, data = moli_v8_util::v8str(scope, "oldURL"))]
     old_url: (),
@@ -62,14 +62,14 @@ struct HashChangeEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CustomEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CustomEvent, enumerable)]
 struct CustomEventTemplateMethodsDeclaration {
     #[webapi(method = "initCustomEvent", length = 1, callback = custom_event_init_callback)]
     init_custom_event: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SecurityPolicyViolationEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SecurityPolicyViolationEvent, enumerable)]
 struct SecurityPolicyViolationEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "documentURI", getter = event_value_attribute_getter, data = moli_v8_util::v8str(scope, "documentURI"))]
     document_uri: (),
@@ -109,7 +109,7 @@ struct SecurityPolicyViolationEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ErrorEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ErrorEvent, enumerable)]
 struct ErrorEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = event_value_attribute_getter, data = moli_v8_util::v8str(scope, "message"))]
     message: (),
@@ -128,7 +128,7 @@ struct ErrorEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ClipboardEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ClipboardEvent, enumerable)]
 struct ClipboardEventTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "clipboardData",
@@ -138,7 +138,7 @@ struct ClipboardEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ClipboardChangeEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ClipboardChangeEvent, enumerable)]
 struct ClipboardChangeEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = clipboard_change_event_types_getter_function)]
     types: (),
@@ -179,14 +179,14 @@ pub fn template_declaration(interface: &str) -> Option<EventTemplateDeclaration>
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MessageEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MessageEvent, enumerable)]
 struct MessageEventTemplateMethodsDeclaration {
     #[webapi(method = "initMessageEvent", length = 1, callback = message_event_init_callback)]
     init_message_event: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::StorageEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::StorageEvent, enumerable)]
 struct StorageEventTemplateMethodsDeclaration {
     #[webapi(
         method = "initStorageEvent",
@@ -197,7 +197,7 @@ struct StorageEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PageRevealEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PageRevealEvent, enumerable)]
 struct PageRevealEventTemplateDeclaration {
     #[webapi(accessor_property = "viewTransition", getter = page_reveal_event_view_transition_getter)]
     view_transition: (),

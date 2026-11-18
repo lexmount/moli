@@ -57,7 +57,7 @@ struct Args {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCPeerConnectionIceErrorEvent, receiver, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCPeerConnectionIceErrorEvent, enumerable)]
 struct PrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = callback_data_index_value(scope, 0))]
     address: (),

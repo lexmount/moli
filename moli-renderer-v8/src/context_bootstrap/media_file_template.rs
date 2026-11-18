@@ -44,7 +44,7 @@ use crate::xml_serializer;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable)]
 struct OffscreenCanvasTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = offscreen_canvas_get_context_callback)]
     get_context: (),
@@ -57,7 +57,7 @@ struct OffscreenCanvasTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileReader, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::FileReader, enumerable)]
 struct FileReaderTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = file_reader_read_as_text_callback)]
     read_as_text: (),
@@ -84,7 +84,7 @@ struct FileReaderTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XMLSerializer, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::XMLSerializer, enumerable)]
 struct XmlSerializerTemplateMethodsDeclaration {
     #[webapi(
         method,
@@ -95,7 +95,7 @@ struct XmlSerializerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CanvasRenderingContext2D, enumerable)]
+#[webapi(interface = web_api_interfaces::CanvasRenderingContext2D, enumerable, receiver = super::canvas::is_canvas_context_receiver)]
 struct CanvasRenderingContext2dTemplateDeclaration {
     #[webapi(
         accessor_property = "fillStyle",

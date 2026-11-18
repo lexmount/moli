@@ -45,7 +45,7 @@ struct CaretPositionPrototypeDeclaration {
     offset_node: (),
     #[webapi(accessor_property, getter = caret_position_offset_getter)]
     offset: (),
-    #[webapi(method, length = 0, callback = caret_position_get_client_rect_callback)]
+    #[webapi(method, length = 0, callback = caret_position_get_client_rect_callback, receiver = false)]
     get_client_rect: (),
 }
 

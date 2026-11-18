@@ -78,7 +78,7 @@ struct KeyframeEffectObjectDeclaration<'s> {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::KeyframeEffect, enumerable)]
 struct KeyframeEffectPrototypeDeclaration {
-    #[webapi(method, length = 1, callback = keyframe_effect_set_keyframes_callback)]
+    #[webapi(method, length = 1, callback = keyframe_effect_set_keyframes_callback, receiver = false)]
     set_keyframes: (),
 }
 

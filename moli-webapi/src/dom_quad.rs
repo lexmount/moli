@@ -35,7 +35,7 @@ struct DomQuadJsonDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMQuad, receiver)]
+#[webapi(interface = web_api_interfaces::DOMQuad)]
 struct DomQuadPrototypeDeclaration {
     #[webapi(
         accessor_property,

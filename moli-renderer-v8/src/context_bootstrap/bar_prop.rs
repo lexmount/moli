@@ -31,7 +31,7 @@ struct BarPropObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::BarProp, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::BarProp, enumerable)]
 struct BarPropPrototypeDeclaration {
     #[webapi(accessor_property, getter = visible_getter)]
     visible: (),

@@ -49,7 +49,7 @@ struct XPathResultBaseDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XPathResult, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::XPathResult, enumerable)]
 struct XPathResultPrototypeDeclaration {
     #[webapi(accessor_property, getter = xpath_result_result_type_getter_callback)]
     result_type: (),

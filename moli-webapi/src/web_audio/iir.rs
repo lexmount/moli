@@ -8,7 +8,7 @@ const FEEDFORWARD: &str = "__moliIirFeedforward";
 const FEEDBACK: &str = "__moliIirFeedback";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IIRFilterNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IIRFilterNode, enumerable)]
 struct PrototypeDeclaration {
     #[webapi(method, length = 3, callback = get_frequency_response)]
     get_frequency_response: (),

@@ -30,7 +30,7 @@ const WEBSOCKET_EVENT_HANDLERS: &[WebSocketEventHandler] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebSocket, receiver)]
+#[webapi(interface = web_api_interfaces::WebSocket)]
 struct WebSocketEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,

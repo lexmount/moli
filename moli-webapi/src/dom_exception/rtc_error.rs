@@ -58,7 +58,7 @@ struct ObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCError, receiver, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCError, enumerable)]
 struct PrototypeDeclaration {
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, ERROR_DETAIL))]
     error_detail: (),

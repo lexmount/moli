@@ -75,30 +75,35 @@ struct StorageBucketCacheStorageObjectDeclaration<'scope> {
 #[webapi(interface = web_api_interfaces::CacheStorage, enumerable)]
 struct CacheStoragePrototypeDeclaration {
     #[webapi(
+        returns_promise,
         method,
         callback = storage_bucket_cache_storage_match_callback,
         length = 1
     )]
     r#match: (),
     #[webapi(
+        returns_promise,
         method,
         callback = storage_bucket_cache_storage_has_callback,
         length = 1
     )]
     has: (),
     #[webapi(
+        returns_promise,
         method,
         callback = storage_bucket_cache_storage_open_callback,
         length = 1
     )]
     open: (),
     #[webapi(
+        returns_promise,
         method,
         callback = storage_bucket_cache_storage_keys_callback,
         length = 0
     )]
     keys: (),
     #[webapi(
+        returns_promise,
         method,
         callback = storage_bucket_cache_storage_delete_callback,
         length = 1
@@ -120,15 +125,15 @@ struct StorageBucketCacheObjectDeclaration<'scope> {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Cache, enumerable)]
 struct CachePrototypeDeclaration {
-    #[webapi(method, callback = storage_bucket_cache_put_callback, length = 2)]
+    #[webapi(returns_promise, method, callback = storage_bucket_cache_put_callback, length = 2)]
     put: (),
-    #[webapi(method, callback = storage_bucket_cache_match_callback, length = 1)]
+    #[webapi(returns_promise, method, callback = storage_bucket_cache_match_callback, length = 1)]
     r#match: (),
-    #[webapi(method = "matchAll", callback = storage_bucket_cache_match_all_callback, length = 0)]
+    #[webapi(returns_promise, method = "matchAll", callback = storage_bucket_cache_match_all_callback, length = 0)]
     match_all: (),
-    #[webapi(method, callback = storage_bucket_cache_keys_callback, length = 0)]
+    #[webapi(returns_promise, method, callback = storage_bucket_cache_keys_callback, length = 0)]
     keys: (),
-    #[webapi(method, callback = storage_bucket_cache_delete_callback, length = 1)]
+    #[webapi(returns_promise, method, callback = storage_bucket_cache_delete_callback, length = 1)]
     delete: (),
 }
 
@@ -180,7 +185,7 @@ struct MidiPermissionDescriptorMembers {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::BatteryManager, data_properties, receiver)]
+#[webapi(interface = web_api_interfaces::BatteryManager, data_properties)]
 struct NavigatorBatteryStatusObjectDeclaration {
     #[webapi(data_property, enumerable)]
     charging: bool,

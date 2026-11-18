@@ -25,7 +25,7 @@ const ROTATION_RATE: &str = "__moliDeviceRotationRate";
 const INTERVAL: &str = "__moliDeviceInterval";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DeviceOrientationEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DeviceOrientationEvent, enumerable)]
 struct OrientationPrototype {
     #[webapi(accessor_property, getter = event_payload_getter, data = v8str(scope, ALPHA))]
     alpha: (),
@@ -38,7 +38,7 @@ struct OrientationPrototype {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DeviceMotionEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DeviceMotionEvent, enumerable)]
 struct MotionPrototype {
     #[webapi(accessor_property, getter = event_payload_getter, data = v8str(scope, ACCELERATION))]
     acceleration: (),
@@ -58,7 +58,7 @@ struct AccelerationObject<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DeviceMotionEventAcceleration, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DeviceMotionEventAcceleration, enumerable)]
 struct AccelerationPrototype {
     #[webapi(accessor_property, getter = vector_getter, data = v8str(scope, X))]
     x: (),
@@ -76,7 +76,7 @@ struct RotationRateObject<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DeviceMotionEventRotationRate, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DeviceMotionEventRotationRate, enumerable)]
 struct RotationRatePrototype {
     #[webapi(accessor_property, getter = vector_getter, data = v8str(scope, ALPHA))]
     alpha: (),

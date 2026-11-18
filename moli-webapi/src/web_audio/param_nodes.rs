@@ -6,14 +6,14 @@ use webidl::WebIdlDictionary;
 const PARAM: &str = "__moliAudioNodePrimaryParam";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DelayNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DelayNode, enumerable)]
 struct DelayPrototypeDeclaration {
     #[webapi(accessor_property, getter = param_getter)]
     delay_time: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::StereoPannerNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::StereoPannerNode, enumerable)]
 struct StereoPannerPrototypeDeclaration {
     #[webapi(accessor_property, getter = param_getter)]
     pan: (),

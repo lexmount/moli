@@ -7,7 +7,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBDatabase, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBDatabase, enumerable)]
 struct IdbDatabasePrototypeDeclaration {
     #[webapi(accessor_property, getter = idb_database_name_getter)]
     name: (),
@@ -28,11 +28,11 @@ struct IdbDatabasePrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBTransaction, enumerable)]
 struct IdbTransactionPrototypeDeclaration {
-    #[webapi(accessor_property, getter = idb_transaction_db_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
+    #[webapi(accessor_property, getter = idb_transaction_db_getter)]
     db: (),
-    #[webapi(accessor_property, getter = idb_transaction_mode_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
+    #[webapi(accessor_property, getter = idb_transaction_mode_getter)]
     mode: (),
-    #[webapi(accessor_property, getter = idb_transaction_error_getter, receiver = web_api_interfaces::IDBTransaction::is_instance)]
+    #[webapi(accessor_property, getter = idb_transaction_error_getter)]
     error: (),
     #[webapi(method, length = 1, callback = idb_transaction_object_store_callback)]
     object_store: (),

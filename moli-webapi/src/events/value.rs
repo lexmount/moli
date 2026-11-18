@@ -71,7 +71,7 @@ impl ValueEventKind {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AnimationEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AnimationEvent, enumerable)]
 struct AnimationEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
     animation: (),
@@ -84,7 +84,7 @@ struct AnimationEventPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TransitionEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::TransitionEvent, enumerable)]
 struct TransitionEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
     animation: (),
@@ -97,7 +97,7 @@ struct TransitionEventPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::BlobEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::BlobEvent, enumerable)]
 struct BlobEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, BLOB_SLOT))]
     data: (),
@@ -106,21 +106,21 @@ struct BlobEventPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebGLContextEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::WebGLContextEvent, enumerable)]
 struct WebGlContextEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, STATUS_MESSAGE_SLOT))]
     status_message: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ToolActivatedEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ToolActivatedEvent, enumerable)]
 struct ToolActivatedEventPrototypeDeclaration {
     #[webapi(accessor_property = "toolName", getter = payload_getter, data = v8str(scope, TOOL_NAME_SLOT))]
     tool_name: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ToolCancelEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ToolCancelEvent, enumerable)]
 struct ToolCancelEventPrototypeDeclaration {
     #[webapi(accessor_property = "toolName", getter = payload_getter, data = v8str(scope, TOOL_NAME_SLOT))]
     tool_name: (),
@@ -187,7 +187,7 @@ struct TransitionEventInit<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::GamepadEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::GamepadEvent, enumerable)]
 struct GamepadEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, GAMEPAD_SLOT))]
     gamepad: (),
@@ -236,7 +236,7 @@ struct BlobEventInit<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PictureInPictureEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PictureInPictureEvent, enumerable)]
 struct PictureInPictureEventPrototype {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, PICTURE_IN_PICTURE_WINDOW_SLOT))]
     picture_in_picture_window: (),
@@ -253,7 +253,7 @@ struct PictureInPictureEventInit<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PaymentMethodChangeEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PaymentMethodChangeEvent, enumerable)]
 struct PaymentMethodChangeEventPrototypeDeclaration {
     #[webapi(accessor_property = "methodName", getter = payload_getter, data = v8str(scope, PAYMENT_METHOD_NAME_SLOT))]
     method_name: (),
@@ -275,7 +275,7 @@ struct PaymentMethodChangeEventInit<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PaymentRequestUpdateEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PaymentRequestUpdateEvent, enumerable)]
 struct PaymentRequestUpdateEventPrototypeDeclaration {
     #[webapi(method, length = 1, callback = payment_update_with_callback)]
     update_with: (),
@@ -322,14 +322,14 @@ fn string_member<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MIDIMessageEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MIDIMessageEvent, enumerable)]
 struct MidiMessageEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_DATA_SLOT))]
     data: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MIDIConnectionEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MIDIConnectionEvent, enumerable)]
 struct MidiConnectionEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_PORT_SLOT))]
     port: (),

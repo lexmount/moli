@@ -174,7 +174,7 @@ struct WorkerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransfer, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DataTransfer, enumerable)]
 struct DataTransferTemplateMethodsDeclaration {
     #[webapi(
         method = "getData",
@@ -199,7 +199,7 @@ struct DataTransferTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable)]
 struct DataTransferItemTemplateMethodsDeclaration {
     #[webapi(
         method = "getAsFile",
@@ -224,7 +224,7 @@ struct DataTransferItemTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable)]
 struct DataTransferItemListTemplateMethodsDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -297,13 +297,14 @@ struct FileSystemDirectoryReaderTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::StorageBucketManager, enumerable)]
 struct StorageBucketManagerTemplateMethodsDeclaration {
-    #[webapi(method = "open", length = 1, callback = storage_bucket_manager_open_callback)]
+    #[webapi(returns_promise, method = "open", length = 1, callback = storage_bucket_manager_open_callback)]
     open: (),
 
-    #[webapi(method = "keys", length = 0, callback = storage_bucket_manager_keys_callback)]
+    #[webapi(returns_promise, method = "keys", length = 0, callback = storage_bucket_manager_keys_callback)]
     keys: (),
 
     #[webapi(
+        returns_promise,
         method = "delete",
         length = 1,
         callback = storage_bucket_manager_delete_callback
@@ -314,26 +315,25 @@ struct StorageBucketManagerTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::StorageBucket, enumerable)]
 struct StorageBucketTemplateMethodsDeclaration {
-    #[webapi(accessor_property, receiver = web_api_interfaces::StorageBucket::is_instance, getter = storage_bucket_name_getter_callback)]
+    #[webapi(accessor_property, getter = storage_bucket_name_getter_callback)]
     name: (),
 
     #[webapi(
         accessor_property = "indexedDB",
-        receiver = web_api_interfaces::StorageBucket::is_instance,
         getter = storage_bucket_indexed_db_getter_callback
     )]
     indexed_db: (),
 
-    #[webapi(accessor_property, receiver = web_api_interfaces::StorageBucket::is_instance, getter = storage_bucket_caches_getter_callback)]
+    #[webapi(accessor_property, getter = storage_bucket_caches_getter_callback)]
     caches: (),
 
-    #[webapi(method = "persist", length = 0, callback = storage_bucket_persist_callback)]
+    #[webapi(returns_promise, method = "persist", length = 0, callback = storage_bucket_persist_callback)]
     persist: (),
 
-    #[webapi(method = "persisted", length = 0, callback = storage_bucket_persisted_callback)]
+    #[webapi(returns_promise, method = "persisted", length = 0, callback = storage_bucket_persisted_callback)]
     persisted: (),
 
-    #[webapi(method = "estimate", length = 0, callback = storage_bucket_estimate_callback)]
+    #[webapi(returns_promise, method = "estimate", length = 0, callback = storage_bucket_estimate_callback)]
     estimate: (),
 
     #[webapi(
@@ -344,16 +344,18 @@ struct StorageBucketTemplateMethodsDeclaration {
     durability: (),
 
     #[webapi(
+        returns_promise,
         method = "setExpires",
         length = 1,
         callback = storage_bucket_set_expires_callback
     )]
     set_expires: (),
 
-    #[webapi(method = "expires", length = 0, callback = storage_bucket_expires_callback)]
+    #[webapi(returns_promise, method = "expires", length = 0, callback = storage_bucket_expires_callback)]
     expires: (),
 
     #[webapi(
+        returns_promise,
         method = "getDirectory",
         length = 0,
         callback = storage_bucket_get_directory_callback

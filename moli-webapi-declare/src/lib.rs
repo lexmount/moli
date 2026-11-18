@@ -202,23 +202,23 @@
 //!
 //! # Receiver checks and Promise-returning members
 //!
-//! `#[webapi(interface = interfaces::Event, receiver)]` checks instance methods
+//! `#[webapi(interface = interfaces::Event)]` checks instance methods
 //! and accessors against the declared interface before argument conversion.
-//! A field can use `receiver = interfaces::Other::is_instance` to select another
-//! interface. Merely naming a template does not enable receiver checks.
 //! Invalid receivers throw `TypeError("Illegal invocation")`. Native subtypes
 //! and cross-realm objects are accepted even after their JavaScript prototypes
 //! change. Forged prototypes, public properties, and author Proxies cannot pass.
 //!
-//! Struct-level `receiver` supplies the default for instance methods and
-//! accessor properties in both derives; a field can override it. Static
-//! methods, data properties, and holder-based native data properties do not
-//! inherit this policy. Already-built `getter_value` functions cannot use it.
+//! Both derives infer this check from the interface descriptor. A declaration
+//! or member can use `receiver = path` for a custom check or `receiver = false`
+//! for a callback that handles its own receiver semantics. Static methods and
+//! data properties, including holder-based native properties, are outside this
+//! policy. An already-built `getter_value` requires an unchecked declaration
+//! or member because the macro cannot adapt the existing function.
 //!
-//! `receiver = path` remains available for a custom native predicate with
-//! signature `fn(&mut v8::PinScope, v8::Local<v8::Object>) -> bool`. It must not
-//! execute JavaScript or throw. Use it for checks that additionally require
-//! native resource state; ordinary interface checks should use their descriptor.
+//! Custom native predicates have signature
+//! `fn(&mut v8::PinScope, v8::Local<v8::Object>) -> bool`. Use them for checks
+//! that require a different native brand or additional native resource state.
+//! Keep them free of JavaScript execution and exceptions.
 //!
 //! `receiver_access_check` enables V8's receiver access check before invoking
 //! native methods and accessor callbacks. Window bindings use it to reject

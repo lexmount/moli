@@ -32,7 +32,7 @@ impl Kind {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OscillatorNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::OscillatorNode, enumerable)]
 struct PrototypeDeclaration {
     #[webapi(accessor_property = "type", getter = slot_getter, setter = type_setter, data = v8str(scope, TYPE))]
     kind: (),

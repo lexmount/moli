@@ -5,7 +5,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLength, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGLength, enumerable)]
 struct SvgLengthTemplateMethodsDeclaration {
     #[webapi(constant = "SVG_LENGTHTYPE_UNKNOWN", value = SVG_LENGTH_TYPE_UNKNOWN)]
     length_type_unknown: (),
@@ -95,7 +95,7 @@ struct SvgAngleTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLengthList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGLengthList, enumerable)]
 struct SvgLengthListTemplateMethodsDeclaration {
     #[webapi(method = "clear", length = 0, callback = svg_length_list_clear_callback)]
     clear: (),
@@ -140,7 +140,7 @@ struct SvgLengthListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGNumberList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGNumberList, enumerable)]
 struct SvgNumberListTemplateMethodsDeclaration {
     #[webapi(method = "clear", length = 0, callback = svg_number_list_clear_callback)]
     clear: (),
@@ -185,7 +185,7 @@ struct SvgNumberListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGPointList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGPointList, enumerable)]
 struct SvgPointListTemplateMethodsDeclaration {
     #[webapi(method = "clear", length = 0, callback = svg_point_list_clear_callback)]
     clear: (),
@@ -275,7 +275,7 @@ struct SvgStringListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable)]
 struct SvgTransformListTemplateMethodsDeclaration {
     #[webapi(method = "clear", length = 0, callback = svg_transform_list_clear_callback)]
     clear: (),
@@ -334,7 +334,7 @@ struct SvgTransformListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransform, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGTransform, enumerable)]
 struct SvgTransformTemplateMethodsDeclaration {
     #[webapi(
         constant = "SVG_TRANSFORM_UNKNOWN",
@@ -432,7 +432,7 @@ struct SvgMatrixTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable)]
 struct SvgGraphicsElementTemplateMethodsDeclaration {
     #[webapi(method = "getBBox", length = 0, callback = svg_graphics_get_bbox_callback)]
     get_bbox: (),
@@ -449,7 +449,7 @@ struct SvgGraphicsElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGeometryElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGGeometryElement, enumerable)]
 struct SvgGeometryElementTemplateMethodsDeclaration {
     #[webapi(
         method = "isPointInFill",
@@ -547,8 +547,7 @@ struct SvgTextContentElementTemplateMethodsDeclaration {
     #[webapi(
         method = "getCharNumAtPosition",
         length = 0,
-        callback = svg_text_content_get_char_num_at_position_callback,
-        receiver = web_api_interfaces::SVGTextContentElement::is_instance
+        callback = svg_text_content_get_char_num_at_position_callback
     )]
     get_char_num_at_position: (),
 
@@ -830,7 +829,7 @@ struct SvgMarkerElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
         method = "createSVGRect",
@@ -897,7 +896,7 @@ struct SvgSvgElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLength, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGLength, enumerable)]
 struct SvgLengthTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "unitType",
@@ -1108,7 +1107,7 @@ struct SvgNumberTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedLengthList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedLengthList, enumerable)]
 struct SvgAnimatedLengthListTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1145,7 +1144,7 @@ struct SvgAnimatedNumberTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedInteger, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedInteger, enumerable)]
 struct SvgAnimatedIntegerTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1164,7 +1163,7 @@ struct SvgAnimatedIntegerTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedNumberList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedNumberList, enumerable)]
 struct SvgAnimatedNumberListTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1201,7 +1200,7 @@ struct SvgAnimatedEnumerationTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLengthList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGLengthList, enumerable)]
 struct SvgLengthListTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "length", getter = svg_length_list_length_getter)]
     length: (),
@@ -1214,7 +1213,7 @@ struct SvgLengthListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGNumberList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGNumberList, enumerable)]
 struct SvgNumberListTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "length", getter = svg_number_list_length_getter)]
     length: (),
@@ -1227,7 +1226,7 @@ struct SvgNumberListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGPointList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGPointList, enumerable)]
 struct SvgPointListTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "length", getter = svg_point_list_length_getter)]
     length: (),
@@ -1253,7 +1252,7 @@ struct SvgStringListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimatedTransformList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedTransformList, enumerable)]
 struct SvgAnimatedTransformListTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "baseVal",
@@ -1271,7 +1270,7 @@ struct SvgAnimatedTransformListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGTransformList, enumerable)]
 struct SvgTransformListTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "length", getter = svg_transform_list_length_getter)]
     length: (),
@@ -1284,7 +1283,7 @@ struct SvgTransformListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTransform, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGTransform, enumerable)]
 struct SvgTransformTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "type",
@@ -1309,7 +1308,7 @@ struct SvgTransformTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMatrix, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGMatrix, enumerable)]
 struct SvgMatrixTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "a",
@@ -1507,7 +1506,7 @@ define_svg_animated_number_accessors!(
 );
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGElement, enumerable)]
 struct SvgElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "ownerSVGElement",
@@ -1519,7 +1518,7 @@ struct SvgElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable)]
 struct SvgGraphicsElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "transform", getter = svg_graphics_transform_getter)]
     transform: (),
@@ -1540,7 +1539,7 @@ struct SvgGraphicsElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGGeometryElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGGeometryElement, enumerable)]
 struct SvgGeometryElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "pathLength", getter = svg_geometry_path_length_getter)]
     path_length: (),
@@ -1583,7 +1582,7 @@ struct SvgFitToViewBoxPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGImageElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGImageElement, enumerable)]
 struct SvgImagePreserveAspectRatioPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "preserveAspectRatio",
@@ -1608,7 +1607,7 @@ struct SvgTextContentElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGTextPositioningElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGTextPositioningElement, enumerable)]
 struct SvgTextPositioningElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_text_positioning_list_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -1681,7 +1680,7 @@ struct SvgGradientElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLinearGradientElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGLinearGradientElement, enumerable)]
 struct SvgLinearGradientElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x1", getter = svg_linear_gradient_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x1: (),
@@ -1697,7 +1696,7 @@ struct SvgLinearGradientElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGRadialGradientElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGRadialGradientElement, enumerable)]
 struct SvgRadialGradientElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "cx", getter = svg_radial_gradient_animated_length_getter, data = callback_data_index_value(scope, 0))]
     cx: (),
@@ -1719,7 +1718,7 @@ struct SvgRadialGradientElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
 struct SvgSvgElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_svg_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -1746,7 +1745,7 @@ struct SvgClipPathElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable)]
 struct SvgFilterElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_filter_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -1792,7 +1791,7 @@ struct SvgFilterPrimitiveStandardAttributesPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGComponentTransferFunctionElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGComponentTransferFunctionElement, enumerable)]
 struct SvgComponentTransferFunctionElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "type",
@@ -1803,7 +1802,7 @@ struct SvgComponentTransferFunctionElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEBlendElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEBlendElement, enumerable)]
 struct SvgFeBlendElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "mode",
@@ -1814,7 +1813,7 @@ struct SvgFeBlendElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEColorMatrixElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEColorMatrixElement, enumerable)]
 struct SvgFeColorMatrixElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "type",
@@ -1825,7 +1824,7 @@ struct SvgFeColorMatrixElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFECompositeElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFECompositeElement, enumerable)]
 struct SvgFeCompositeElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "operator",
@@ -1836,7 +1835,7 @@ struct SvgFeCompositeElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable)]
 struct SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "orderX",
@@ -1881,7 +1880,7 @@ struct SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEDisplacementMapElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEDisplacementMapElement, enumerable)]
 struct SvgFeDisplacementMapElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "xChannelSelector",
@@ -1899,7 +1898,7 @@ struct SvgFeDisplacementMapElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFEMorphologyElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFEMorphologyElement, enumerable)]
 struct SvgFeMorphologyElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "operator",
@@ -1910,7 +1909,7 @@ struct SvgFeMorphologyElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGFETurbulenceElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGFETurbulenceElement, enumerable)]
 struct SvgFeTurbulenceElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "numOctaves",
@@ -1993,7 +1992,7 @@ struct SvgMaskElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGRectElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGRectElement, enumerable)]
 struct SvgRectElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x", getter = svg_rect_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x: (),
@@ -2015,7 +2014,7 @@ struct SvgRectElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGCircleElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGCircleElement, enumerable)]
 struct SvgCircleElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "cx", getter = svg_circle_animated_length_getter, data = callback_data_index_value(scope, 0))]
     cx: (),
@@ -2028,7 +2027,7 @@ struct SvgCircleElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGEllipseElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGEllipseElement, enumerable)]
 struct SvgEllipseElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "cx", getter = svg_ellipse_animated_length_getter, data = callback_data_index_value(scope, 0))]
     cx: (),
@@ -2044,7 +2043,7 @@ struct SvgEllipseElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGLineElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGLineElement, enumerable)]
 struct SvgLineElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "x1", getter = svg_line_animated_length_getter, data = callback_data_index_value(scope, 0))]
     x1: (),
@@ -2062,7 +2061,7 @@ struct SvgLineElementPrototypeAccessorsDeclaration {
 macro_rules! define_svg_box_length_accessors {
     ($declaration:ident, $interface:ident) => {
         #[derive(WebApiFunctionTemplate)]
-        #[webapi(interface = web_api_interfaces::$interface, enumerable, receiver)]
+        #[webapi(interface = web_api_interfaces::$interface, enumerable)]
         struct $declaration {
             #[webapi(accessor_property = "x", getter = svg_box_animated_length_getter, data = callback_data_index_value(scope, 0))]
             x: (),
@@ -2090,7 +2089,7 @@ define_svg_box_length_accessors!(
 );
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
 struct SvgMarkerElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "refX", getter = svg_marker_animated_length_getter, data = callback_data_index_value(scope, 0))]
     ref_x: (),
@@ -2133,7 +2132,7 @@ struct SvgUriReferencePrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMPathElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGMPathElement, enumerable)]
 struct SvgMPathElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "href", getter = svg_mpath_href_getter)]
     href: (),

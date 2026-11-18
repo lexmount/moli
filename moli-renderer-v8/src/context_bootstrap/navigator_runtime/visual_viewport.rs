@@ -42,8 +42,7 @@ struct VisualViewportPrototypeDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onresize"),
         setter_data = v8str(scope, "onresize"),
-        enumerable,
-        receiver = web_api_interfaces::VisualViewport::is_instance
+        enumerable
     )]
     onresize: (),
     #[webapi(
@@ -52,8 +51,7 @@ struct VisualViewportPrototypeDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onscroll"),
         setter_data = v8str(scope, "onscroll"),
-        enumerable,
-        receiver = web_api_interfaces::VisualViewport::is_instance
+        enumerable
     )]
     onscroll: (),
     #[webapi(
@@ -62,8 +60,7 @@ struct VisualViewportPrototypeDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onscrollend"),
         setter_data = v8str(scope, "onscrollend"),
-        enumerable,
-        receiver = web_api_interfaces::VisualViewport::is_instance
+        enumerable
     )]
     onscrollend: (),
 
