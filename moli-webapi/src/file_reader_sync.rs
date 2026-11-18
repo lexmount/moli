@@ -1,9 +1,8 @@
-use super::*;
-use crate::web_api_interfaces;
-use crate::webidl;
+use crate::{blob, interfaces as web_api_interfaces};
 use moli_file_api::{file_reader_binary_string, file_reader_data_url, file_reader_text};
-pub(in crate::context_bootstrap) use moli_webapi::constructors::file_reader_sync_constructor_callback;
+use moli_v8_util::{array_buffer_from_bytes, throw_type_error, v8_string};
 use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webidl as webidl;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::FileReaderSync, enumerable, receiver)]
@@ -51,7 +50,7 @@ struct FileReaderSyncReadAsTextArgs<'s> {
     encoding: Option<String>,
 }
 
-pub(super) fn install_file_reader_sync_template_bindings<'s>(
+pub fn install_file_reader_sync_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -116,7 +115,7 @@ fn file_reader_sync_read_as_array_buffer_callback<'s>(
     else {
         return;
     };
-    let value = blob::array_buffer_from_bytes(scope, bytes)
+    let value = array_buffer_from_bytes(scope, bytes)
         .map(v8::Local::<v8::ArrayBuffer>::into)
         .unwrap_or_else(|| v8::undefined(scope).into());
     rv.set(value);
@@ -160,7 +159,7 @@ fn file_reader_sync_blob_bytes<'s>(
     let bytes = match data.read_blocking() {
         Ok(bytes) => bytes,
         Err(error) => {
-            let exception = crate::context_bootstrap::new_dom_exception_value(
+            let exception = crate::dom_exception::new_dom_exception_value(
                 scope,
                 &error.to_string(),
                 moli_file_api::file::read_error_name(&error),

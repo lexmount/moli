@@ -1,6 +1,7 @@
 use super::native_blob_line_ending;
-use crate::{web_api_interfaces, webidl};
+use crate::interfaces as web_api_interfaces;
 use moli_file_api::{BlobLineEndings, normalize_blob_line_endings_with_native_ending};
+use moli_webidl as webidl;
 
 pub(crate) struct BlobParts<'s>(Vec<BlobPart<'s>>);
 

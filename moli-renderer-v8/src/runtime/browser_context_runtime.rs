@@ -1,3 +1,4 @@
+pub(crate) use moli_webapi::clipboard_item::{ClipboardPresentationStyle, ClipboardSnapshot};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -175,21 +176,6 @@ pub(crate) struct RendererWorkerContextRuntime {
 pub(crate) struct RendererStoragePartitionIdentity {
     browser_context_id: String,
     profile_partition_id: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, moli_webidl::WebIdlEnum)]
-#[webidl(name = "PresentationStyle", rename_all = "kebab-case")]
-pub(crate) enum ClipboardPresentationStyle {
-    #[default]
-    Unspecified,
-    Inline,
-    Attachment,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ClipboardSnapshot {
-    pub(crate) presentation_style: ClipboardPresentationStyle,
-    pub(crate) representations: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Debug)]

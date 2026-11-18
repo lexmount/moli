@@ -40,7 +40,6 @@ pub(in crate::context_bootstrap) const WINDOW_FRAMES_SLOT: &str = "__moliWindowF
 pub(crate) use moli_webapi::event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 pub(in crate::context_bootstrap) const DOM_IMPLEMENTATION_SINGLETON_SLOT: &str =
     "__moliDOMImplementationSingleton";
-pub(in crate::context_bootstrap) const FORM_DATA_ENTRIES_SLOT: &str = "__moliFormDataEntries";
 pub(in crate::context_bootstrap) const STATIC_RANGE_START_CONTAINER_STORAGE_KEY: &str =
     "__moliStaticRangeStartContainer";
 pub(in crate::context_bootstrap) const STATIC_RANGE_START_OFFSET_STORAGE_KEY: &str =

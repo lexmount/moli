@@ -3813,6 +3813,7 @@ dependencies = [
  "moli-browser-profile",
  "moli-canvas",
  "moli-fetch-types",
+ "moli-file-api",
  "moli-geometry",
  "moli-indexeddb-types",
  "moli-streams",

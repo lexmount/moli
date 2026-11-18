@@ -1,7 +1,8 @@
 use std::io;
 
 use super::*;
-use crate::util::set_private_value;
+use crate::util::{get_private_value, set_private_value};
+use moli_webapi_declare::WebApiObject;
 
 const BLOB: &str = "__moliBlobStreamBlob";
 const STREAM: &str = "__moliBlobStream";

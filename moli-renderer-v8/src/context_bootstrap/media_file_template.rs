@@ -40,27 +40,8 @@ use super::file_api::{
     file_reader_read_as_text_callback,
 };
 use crate::web_api_interfaces;
-use crate::{blob, xml_serializer};
+use crate::xml_serializer;
 use moli_webapi_declare::WebApiFunctionTemplate;
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Blob, enumerable, receiver)]
-struct BlobTemplateMethodsDeclaration {
-    #[webapi(method, length = 0, returns_promise, callback = blob::blob_text_callback)]
-    text: (),
-
-    #[webapi(method, length = 0, returns_promise, callback = blob::blob_array_buffer_callback)]
-    array_buffer: (),
-
-    #[webapi(method, length = 0, returns_promise, callback = blob::blob_bytes_callback)]
-    bytes: (),
-
-    #[webapi(method, length = 0, callback = blob::blob_stream_callback)]
-    stream: (),
-
-    #[webapi(method, length = 0, callback = blob::blob_slice_callback)]
-    slice: (),
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable, receiver)]
@@ -368,7 +349,7 @@ pub(super) fn install_media_file_template_bindings<'s>(
     match spec_name {
         "Blob" => {
             let proto = template.prototype_template(scope);
-            BlobTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+            moli_webapi::blob::install_blob_methods(scope, proto);
         }
         "ImageData" => {}
         "OffscreenCanvas" => {

@@ -7,7 +7,7 @@ mod file;
 mod file_entry_file;
 use moli_webapi::file_list;
 mod file_reader;
-mod file_reader_sync;
+use moli_webapi::file_reader_sync;
 mod file_reading;
 mod install;
 
@@ -70,8 +70,8 @@ pub(super) use file_reader::{
     file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,
     file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
 };
-pub(super) use file_reader_sync::file_reader_sync_constructor_callback;
 pub(crate) use file_reading::{
     FileReadingTask, flush_one_pending_file_reading_task, queue_file_reading_task,
 };
 pub(super) use install::install_file_api_template_bindings;
+pub(super) use moli_webapi::constructors::file_reader_sync_constructor_callback;
