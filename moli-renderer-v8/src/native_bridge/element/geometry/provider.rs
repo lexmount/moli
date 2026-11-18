@@ -369,3 +369,41 @@ pub(crate) fn observable_hit_test(
         _ => Err(provider_contract_error("hit test")),
     }
 }
+
+pub(in crate::native_bridge) fn element_for_hit_source(
+    runtime: &PageScriptHost,
+    mut source: DomHandle,
+) -> Option<DomHandle> {
+    loop {
+        let node = runtime.dom_host().node(source)?;
+        if node.is_element() {
+            return Some(source);
+        }
+        let parent = node.parent_node()?;
+        if runtime.dom_host().is_shadow_root(parent) {
+            return runtime.dom_host().shadow_root_host(parent);
+        }
+        source = parent;
+    }
+}
+
+pub(super) fn is_live_hit_source(
+    runtime: &PageScriptHost,
+    source: DomHandle,
+    ignore_inert: bool,
+) -> bool {
+    let dom = runtime.dom_host();
+    dom.is_connected(source) && (ignore_inert || !dom.is_inert_in_document(source))
+}
+
+pub(in crate::native_bridge) fn live_interaction_target(
+    runtime: &PageScriptHost,
+    source: DomHandle,
+    ignore_pointer_events_none: bool,
+) -> Option<DomHandle> {
+    // Slotted text can be inside a modal dialog while its DOM parent is inert.
+    if !is_live_hit_source(runtime, source, ignore_pointer_events_none) {
+        return None;
+    }
+    element_for_hit_source(runtime, source)
+}

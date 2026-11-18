@@ -34,6 +34,7 @@ pub(crate) use mock::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use provider::observable_geometry_query;
+pub(in crate::native_bridge) use provider::{element_for_hit_source, live_interaction_target};
 pub(crate) use provider::{
     observable_bounding_client_rects, observable_caret_position, observable_document_metrics,
     observable_event_offset, observable_geometry_batch, observable_hit_test,
