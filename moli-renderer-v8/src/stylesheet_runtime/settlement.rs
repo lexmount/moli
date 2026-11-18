@@ -176,9 +176,7 @@ impl DocumentRuntime {
             // rejection stops before CSSStyleSheet creation; its link error and
             // load-delay settlement still follow the normal terminal path.
             let ready_response = terminal.ready_response();
-            let stylesheet_text = ready_response
-                .map(|response| response.body_text().to_owned())
-                .unwrap_or_default();
+            let stylesheet_text = terminal.stylesheet_text().unwrap_or_default();
             let stylesheet_base_url = match terminal.physical() {
                 crate::stylesheet_blocking::StylesheetPhysicalOutcome::Response(response) => {
                     response.final_url.clone()
@@ -193,7 +191,7 @@ impl DocumentRuntime {
             } else {
                 host.prepare_linked_stylesheet_resource(
                     load.owner(),
-                    &stylesheet_text,
+                    stylesheet_text,
                     stylesheet_base_url.clone(),
                     request_url.clone(),
                     terminal.origin_clean().unwrap_or(false),
@@ -241,7 +239,7 @@ impl DocumentRuntime {
                 linked_stylesheet_import_urls.extend(import_urls);
             }
             for resource in crate::css_resource_urls::stylesheet_load_blocking_font_resources(
-                &stylesheet_text,
+                stylesheet_text,
                 &stylesheet_base_url,
                 optional_resource_fetch_mask,
             ) {

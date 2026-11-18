@@ -536,7 +536,8 @@ fn stylesheet_terminal_from_response(
     let usability = validate_stylesheet_response_ref(request_url, &response, allow_non_css_mime);
 
     match usability {
-        Ok(()) => StylesheetFetchTerminal::ready(response, origin_clean),
+        Ok(()) => StylesheetFetchTerminal::ready(response, origin_clean)
+            .with_fallback_encoding(options.charset()),
         Err(reason) => StylesheetFetchTerminal::unusable_response(response, origin_clean, reason),
     }
 }

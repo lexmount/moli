@@ -2545,7 +2545,12 @@ impl ScriptVm {
                     });
                 let (stylesheet_text, stylesheet_base_url) = validated_response
                     .as_ref()
-                    .map(|response| (response.body_text().to_owned(), response.final_url.clone()))
+                    .map(|response| {
+                        (
+                            crate::stylesheet_blocking::StylesheetFetchTerminal::decode_response_text(response, None),
+                            response.final_url.clone(),
+                        )
+                    })
                     .unwrap_or_else(|| {
                         let final_url = result
                             .as_ref()
