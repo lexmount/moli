@@ -348,6 +348,8 @@ fn resource_store_lazily_restores_registration_added_after_startup() {
         resource_store.clone(),
         test_worker_context_runtime(),
     );
+    let cache_store = crate::context_bootstrap::new_shared_storage_bucket_store();
+    observer_service.bind_storage_bucket_store(cache_store.clone());
     assert_eq!(
         observer_service.diagnostics_snapshot().registration_count,
         0
@@ -404,6 +406,14 @@ fn resource_store_lazily_restores_registration_added_after_startup() {
         .matching_registration_for_client(&document_url)
         .expect("matching client query should lazily restore later stored registration");
     assert_eq!(restored.scope_url(), &scope_url);
+    {
+        let state = observer_service.inner.state.lock();
+        let version = state.versions.values().next().unwrap();
+        assert!(Arc::ptr_eq(
+            version.launch_config.storage_bucket_store.as_ref().unwrap(),
+            &cache_store,
+        ));
+    }
     assert_eq!(
         observer_service.diagnostics_snapshot().registration_count,
         1
@@ -429,6 +439,67 @@ fn resource_store_lazily_restores_registration_added_after_startup() {
         );
         assert_eq!(state.stored_registration_cache.len(), 1);
     }
+}
+
+#[test]
+fn startup_restored_worker_launch_uses_partition_cache_storage() {
+    let resource_store = new_shared_service_worker_resource_store();
+    let writer = new_service_worker_runtime_service_with_resource_store(
+        resource_store.clone(),
+        test_worker_context_runtime(),
+    );
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let scope = url("https://example.test/app/");
+    let script = scope.join("worker.js").unwrap();
+    insert_registered_version(
+        &writer,
+        registration_id,
+        version_id,
+        script.clone(),
+        scope,
+        [],
+    );
+    writer
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&version_id)
+        .unwrap()
+        .main_script_resource = Some(test_script_resource(&script));
+    assert!(
+        writer
+            .store_registration_resources_for_test(registration_id, version_id)
+            .unwrap()
+    );
+
+    let reader = new_service_worker_runtime_service_with_resource_store(
+        resource_store,
+        test_worker_context_runtime(),
+    );
+    let cache_store = crate::context_bootstrap::new_shared_storage_bucket_store();
+    reader.bind_storage_bucket_store(cache_store.clone());
+    let state = reader.inner.state.lock();
+    let version = state.versions.values().next().unwrap();
+    let registration = state.registrations.get(&version.registration_id).unwrap();
+    let owner = test_run_owner(version.id, &version.run);
+    let params = version.launch_config.to_launch_params(
+        version.registration_id,
+        &owner,
+        version.script_url.clone(),
+        registration.scope_url.clone(),
+        registration.storage_key.clone(),
+        version.script_kind,
+    );
+    assert!(Arc::ptr_eq(
+        params.storage_bucket_store.as_ref().unwrap(),
+        &cache_store
+    ));
+    assert!(matches!(
+        version.running_state,
+        ServiceWorkerVersionRunningState::Stopped
+    ));
 }
 #[test]
 fn resource_store_deletes_registration_on_unregistration_clear() {
