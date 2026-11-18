@@ -42,8 +42,8 @@ impl PageScriptHost {
         self.mouse_input = MouseInputState::default();
     }
 
-    pub(crate) fn set_mouse_event_target(&mut self, target: DomHandle) {
-        self.mouse_input.element_under_mouse = Some(target);
+    pub(crate) fn set_mouse_event_target(&mut self, target: Option<DomHandle>) {
+        self.mouse_input.element_under_mouse = target;
     }
 
     pub(crate) fn mouse_event_target(&self) -> Option<DomHandle> {

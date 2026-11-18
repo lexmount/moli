@@ -31,7 +31,7 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    InputEventCoordinates, TextEditInputType, TextInputSource, TouchEventPoint,
+    InputEventCoordinates, InputHitTestMode, TextEditInputType, TextInputSource, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_after_touch_release,
     activate_handle_via_keyboard, cache_input_files_from_selected_files,
     construct_drag_event_with_related_target, construct_keyboard_event,
@@ -729,7 +729,7 @@ impl PreparedPointerEvent<'_> {
     }
 }
 
-fn dispatch_drag_pointer_suppression_boundaries(
+fn dispatch_pointer_exit_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     target: DomHandle,
@@ -1087,12 +1087,17 @@ impl ScriptVm {
         y: f64,
         event_name: &str,
     ) -> Result<crate::native_bridge::element::InputSurfaceHit> {
+        let mode = match event_name {
+            "wheel" => InputHitTestMode::Wheel,
+            "mousedown" | "mouseup" | "mousemove" => InputHitTestMode::Mouse,
+            _ => InputHitTestMode::Dom,
+        };
         Ok(input_surface_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),
             false,
-            matches!(event_name, "mousedown" | "mouseup" | "mousemove"),
+            mode,
         )?)
     }
 
@@ -1270,6 +1275,7 @@ impl ScriptVm {
 
         let hit_handle = surface_hit.target;
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
+        let tracks_hover = tracks_mouse_hover_for_event(event_name);
         let routed_target = self.mouse_routed_target(hit_handle, position, event_name, &prepared);
         if self.mouse_routed_frame.is_none()
             && let Some(control) = surface_hit.control
@@ -1291,7 +1297,7 @@ impl ScriptVm {
         }
         let initial_target = {
             let mut runtime = self._context_host.borrow_mut();
-            if tracks_mouse_hover_for_event(event_name) {
+            if tracks_hover {
                 runtime.set_hovered_element_for_input(hit_handle);
             }
             if pointer_event_name.is_some() {
@@ -1322,6 +1328,49 @@ impl ScriptVm {
                     }
                     Ok(())
                 })?;
+            }
+            if tracks_hover {
+                let had_pointer_target = {
+                    let mut runtime = self._context_host.borrow_mut();
+                    let had_target = runtime.mouse_event_target().is_some();
+                    runtime.set_mouse_event_target(None);
+                    had_target
+                };
+                if let Some(previous) = self.hovered_mouse_handle.take() {
+                    self.with_default_context_scope(|scope, runtime_ptr| {
+                        let coordinates = position.for_target(
+                            unsafe { &*runtime_ptr },
+                            previous,
+                            sampled.as_deref(),
+                        );
+                        if had_pointer_target {
+                            dispatch_pointer_exit_events(
+                                scope,
+                                runtime_ptr,
+                                previous,
+                                PreparedPointerEvent {
+                                    coordinates,
+                                    button,
+                                    buttons,
+                                    pointer: &pointer,
+                                    modifiers,
+                                },
+                            );
+                        }
+                        dispatch_mouse_boundary_events(
+                            scope,
+                            runtime_ptr,
+                            Some(previous),
+                            None,
+                            coordinates,
+                            coordinates,
+                            button,
+                            buttons,
+                            modifiers,
+                        );
+                        Ok(())
+                    })?;
+                }
             }
             return Ok(input_dispatch_outcome(false));
         };
@@ -1427,7 +1476,7 @@ impl ScriptVm {
                 if !is_move {
                     host.set_pointer_active_document(pointer_id, input_document.owner);
                 }
-                host.set_mouse_event_target(pointer_dispatch_handle);
+                host.set_mouse_event_target(Some(pointer_dispatch_handle));
                 if event_name == "mousedown" && button >= 0 {
                     unsafe { &mut *runtime_ptr }.begin_mouse_press(pointer_dispatch_handle, button);
                 }
@@ -1496,7 +1545,7 @@ impl ScriptVm {
                     pointer_dispatch_handle = target;
                     let host = unsafe { &mut *runtime_ptr };
                     host.set_pointer_active_document(pointer_id, input_document.owner);
-                    host.set_mouse_event_target(pointer_dispatch_handle);
+                    host.set_mouse_event_target(Some(pointer_dispatch_handle));
                     if previous != target {
                         dispatch_mouse_pointer_boundaries(
                             scope,
@@ -1719,12 +1768,7 @@ impl ScriptVm {
                         let _ = dispatch_public_event(scope, runtime_ptr, cancel_target, event);
                         cancel.release_capture(scope, runtime_ptr, event);
                     }
-                    dispatch_drag_pointer_suppression_boundaries(
-                        scope,
-                        runtime_ptr,
-                        cancel_target,
-                        cancel,
-                    );
+                    dispatch_pointer_exit_events(scope, runtime_ptr, cancel_target, cancel);
                     // Preserve ScriptVm's legacy mouse hover cache while
                     // marking this suppressed pointer stream as outside.
                     unsafe { &mut *runtime_ptr }.clear_mouse_input_state();
