@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn mouse_boundary_events_leave_and_reenter_after_an_inert_hit_miss() {
+    let mut vm = new_rendered_test_vm(
+        "https://inert-mouse-boundary.test/",
+        r#"<!doctype html><style>body { margin: 0; min-height: 100vh; }</style>
+        <button id="target" style="position:absolute;left:30px;top:30px;width:100px;height:100px"></button>"#,
+    );
+    vm.eval(
+        r#"
+        window.boundaries = [];
+        const target = document.getElementById('target');
+        for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter',
+                            'pointerout', 'pointerleave', 'mouseout', 'mouseleave']) {
+            target.addEventListener(type, event => boundaries.push(event.type));
+        }
+    "#,
+    )
+    .unwrap();
+
+    vm.dispatch_mouse_event_at_point(55.0, 55.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .unwrap();
+    let enter = r#"["pointerover","pointerenter","mouseover","mouseenter"]"#;
+    assert_eq!(
+        vm.eval("JSON.stringify(boundaries.splice(0))").unwrap(),
+        enter
+    );
+
+    vm.eval("document.documentElement.inert = true").unwrap();
+    vm.dispatch_mouse_event_at_point(300.0, 100.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(boundaries.splice(0))").unwrap(),
+        r#"["pointerout","pointerleave","mouseout","mouseleave"]"#,
+    );
+
+    vm.eval("document.documentElement.inert = false").unwrap();
+    vm.dispatch_mouse_event_at_point(55.0, 55.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .unwrap();
+    assert_eq!(vm.eval("JSON.stringify(boundaries)").unwrap(), enter);
+}
+
+#[test]
 fn native_mouse_boundary_and_wheel_events_use_target_document_intrinsics() {
     for context in ["root", "child", "nested", "shadow-open", "shadow-closed"] {
         for poison in ["ordinary", "deleted", "replaced", "getter"] {

@@ -240,6 +240,35 @@ fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root(
         "[25,40]"
     );
 }
+
+#[cfg(feature = "devtools")]
+#[test]
+fn wheel_input_stays_in_a_child_viewport_with_an_inert_root() {
+    let mut vm = new_storage_html_test_vm("https://inert-child-wheel.test/");
+    vm.eval(r#"
+        document.body.style.cssText = 'margin:0;min-height:1200px';
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'position:absolute;left:70px;top:40px;width:350px;height:250px;border:0';
+        document.body.appendChild(frame);
+        const child = frame.contentWindow;
+        child.document.body.style.cssText = 'margin:0;min-height:1200px';
+        window.wheelEvents = [];
+        window.addEventListener('wheel', () => wheelEvents.push('parent'));
+        child.addEventListener('wheel', event => wheelEvents.push([event.clientX, event.clientY]));
+    "#).unwrap();
+    publish_layout_for_test(&mut vm);
+
+    vm.eval("child.document.documentElement.inert = true")
+        .unwrap();
+    vm.dispatch_mouse_event_at_point(115.0, 100.0, "wheel", -1, Some(0), 0.0, 140.0)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([scrollY, child.scrollY, wheelEvents])")
+            .unwrap(),
+        "[0,140,[[45,60]]]",
+    );
+}
+
 #[cfg(feature = "devtools")]
 #[test]
 fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_events() {
