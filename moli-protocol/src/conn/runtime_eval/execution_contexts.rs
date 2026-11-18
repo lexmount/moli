@@ -130,6 +130,21 @@ impl CdpConnection {
         })
     }
 
+    pub(crate) fn start_initialize_runtime_inspector_session_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Result<PendingRuntimeBindingPageCommandDispatch> {
+        let inspector_session_id =
+            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        let mut pending = self.start_apply_stored_runtime_bindings_for_owner(owner)?;
+        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
+        pending.pending = page.hold_runtime_inspector_io_until_settled(
+            pending.pending,
+            inspector_session_id.as_deref(),
+        );
+        Ok(pending)
+    }
+
     pub(crate) fn start_apply_stored_runtime_bindings_for_owner(
         &mut self,
         owner: &CommandOwnerScope,

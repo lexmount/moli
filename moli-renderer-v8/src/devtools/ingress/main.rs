@@ -159,19 +159,9 @@ impl RendererRuntimeInspectorMainCommandRoute {
     pub async fn wait_for_completion(
         mut self,
     ) -> anyhow::Result<RendererRuntimeInspectorMainCommandCompletion> {
-        self.wait_for_completion_by_ref().await
-    }
-
-    /// Completion wait that keeps the route alive on cancellation. A caller
-    /// racing this wait against another signal must not drop the route while
-    /// the command is still queued: dropping it cancels the queued command
-    /// even though the dispatch itself may still be legitimate.
-    pub(crate) async fn wait_for_completion_by_ref(
-        &mut self,
-    ) -> anyhow::Result<RendererRuntimeInspectorMainCommandCompletion> {
         let claim = match self
             .claim_rx
-            .as_mut()
+            .take()
             .expect("runtime inspector Main command claim receiver should only be awaited once")
             .await
         {
@@ -189,7 +179,7 @@ impl RendererRuntimeInspectorMainCommandRoute {
             RendererInspectorMainCommandClaim::Owner => {
                 let reply = match self
                     .owner_reply_rx
-                    .as_mut()
+                    .take()
                     .expect("an owner-claimed Main command must retain its owner reply receiver")
                     .await
                 {
@@ -234,7 +224,7 @@ impl RendererRuntimeInspectorMainCommandRoute {
             }
             RendererInspectorMainCommandClaim::Inspector => {
                 let Some(session_response_settlement_rx) =
-                    self.session_response_settlement_rx.as_mut()
+                    self.session_response_settlement_rx.take()
                 else {
                     return Ok(RendererRuntimeInspectorMainCommandCompletion::Inspector);
                 };
@@ -254,7 +244,7 @@ impl RendererRuntimeInspectorMainCommandRoute {
             RendererInspectorMainCommandClaim::Page => {
                 let reply = self
                     .owner_reply_rx
-                    .as_mut()
+                    .take()
                     .expect("a pause-claimed Page command must retain its reply receiver")
                     .await
                     .map_err(|_| anyhow::anyhow!("nested Main Page reply channel closed"))??;
@@ -284,7 +274,7 @@ impl RendererRuntimeInspectorMainCommandRoute {
     ) -> Option<RendererRuntimeInspectorMainCommandCompletion> {
         let (predecessor, response_succeeded) = self
             .session_response_settlement_rx
-            .as_mut()?
+            .take()?
             .await
             .ok()?
             .into_parts();

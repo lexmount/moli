@@ -53,7 +53,9 @@ pub(super) async fn complete_attachment(
     let bindings = match pending {
         Err(error) => Err(error),
         Ok(pending) if dialog_open => {
-            defer_or_settle_target_attachment_bindings(driver, context, &owner, pending).await
+            driver
+                .with_state(|state| state.defer_target_attachment_binding_apply(&owner, pending))?;
+            Ok(())
         }
         Ok(pending) => match pending.wait_until_settled_or_dialog_open().await {
             Ok(Ok(completed)) => context.with_state(driver, move |state, context| {
@@ -64,8 +66,10 @@ pub(super) async fn complete_attachment(
             // mid-wait. Defer exactly like the already-open case: publish the
             // response now and settle the apply once the renderer frees up.
             Err(still_pending) => {
-                defer_or_settle_target_attachment_bindings(driver, context, &owner, still_pending)
-                    .await
+                driver.with_state(|state| {
+                    state.defer_target_attachment_binding_apply(&owner, still_pending)
+                })?;
+                Ok(())
             }
         },
     };
@@ -94,34 +98,6 @@ pub(super) async fn complete_attachment(
             }
         });
         Ok(CommandOutputPlan::default())
-    }
-}
-
-/// Settles an attachment binding apply whose renderer dispatch is parked
-/// behind an open JavaScript dialog.
-///
-/// The apply is already enqueued, so renderer FIFO secures "bindings installed
-/// before the new session's first command executes" even without awaiting it
-/// here. With a scheduler completion channel the pending moves into a
-/// supervised background task and the attach response publishes immediately,
-/// matching Chromium. Without one the dispatch settles synchronously, exactly
-/// as before deferral existed.
-async fn defer_or_settle_target_attachment_bindings(
-    driver: &mut ProtocolWorkflowDriver,
-    context: &mut CommandWorkflowContext,
-    owner: &crate::conn::CommandOwnerScope,
-    pending: crate::conn::PendingRuntimeBindingPageCommandDispatch,
-) -> Result<()> {
-    let unapplied = driver
-        .with_state(|state| state.defer_target_attachment_binding_apply(owner, pending))??;
-    match unapplied {
-        None => Ok(()),
-        Some(pending) => match pending.wait().await {
-            Ok(completed) => context.with_state(driver, move |state, context| {
-                state.finish_target_attachment_bindings(completed, context)
-            })?,
-            Err(error) => Err(error),
-        },
     }
 }
 

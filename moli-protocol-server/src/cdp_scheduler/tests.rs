@@ -108,7 +108,6 @@ async fn dialog_handling_reaches_its_owner_during_pending_document_admission() {
         document_activity_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         background_event_rx: tokio::sync::mpsc::unbounded_channel().1,
         background_navigation_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
-        deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         renderer_publication_rx: moli_core::renderer_output_transport_channel().1,
     };
     let (ready, _ready_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -219,7 +218,6 @@ async fn classic_alert_wait_is_interrupted_by_a_dialog_not_by_a_blanket_exemptio
                 document_activity_completion_rx,
                 background_event_rx,
                 background_navigation_completion_rx,
-                deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
                 renderer_publication_rx,
             };
             let install = || {
@@ -340,7 +338,6 @@ async fn classic_alert_navigation_deadline_stops_only_the_timed_out_navigation()
                     document_activity_completion_rx,
                     background_event_rx,
                     background_navigation_completion_rx,
-                    deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
                     renderer_publication_rx,
                 };
                 let started = tokio::time::Instant::now();
@@ -2330,7 +2327,6 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
         document_activity_completion_rx,
         background_event_rx,
         background_navigation_completion_rx,
-        deferred_attachment_binding_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         renderer_publication_rx,
     };
     let stream =
@@ -3261,6 +3257,161 @@ async fn adapter_closes_provisional_load_window_and_delivers_in_the_same_turn() 
                 0,
                 "a later unrelated load cannot recover the closed candidate"
             );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn deferred_attachment_churn_reclaims_successful_and_cancelled_supervised_tasks() {
+    use moli_core::page::{
+        RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+        RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
+    };
+
+    async fn command(
+        scheduler: &mut CdpScheduler,
+        value: serde_json::Value,
+    ) -> Vec<serde_json::Value> {
+        let command = moli_protocol::ParsedCdpCommand::parse_str(value.to_string()).unwrap();
+        let (mut step, permit, mut context) = scheduler.start_command_dispatch(&command);
+        loop {
+            match step {
+                super::CommandTaskStep::Pending(pending) => {
+                    let completed = pending.wait().await;
+                    step = scheduler
+                        .complete_pending_command_dispatch_with_context(completed, &mut context);
+                }
+                super::CommandTaskStep::Complete(output) => {
+                    let (messages, _, _, _, _, release) =
+                        output.with_output_release_permit(permit).into_parts();
+                    scheduler.finish_command_dispatch_output_flush(release);
+                    return messages.into_messages();
+                }
+            }
+        }
+    }
+
+    async fn detach(scheduler: &mut CdpScheduler, session: &str) {
+        let detached = command(
+            scheduler,
+            json!({"id":2,"method":"Target.detachFromTarget","params":{"sessionId":session}}),
+        )
+        .await;
+        assert!(
+            detached
+                .iter()
+                .any(|value| value["id"] == 2 && value.get("result").is_some()),
+            "detach: {detached:?}"
+        );
+    }
+
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (mut scheduler, mut receivers) =
+                CdpScheduler::new_with_initial_state_runtime_config(
+                    moli_protocol::CdpInitialStoragePartition::memory(),
+                    moli_core::runtime::NavigationRuntimeConfig::new(
+                        moli_fetch::FetchConfig::default(),
+                        moli_core::OptionalResourceFetchMask::NONE,
+                        true,
+                        moli_core::LayoutPolicy::OnDemand,
+                    ),
+                );
+            let context = AutomationContext {
+                protocol: FrontendProtocol::Cdp,
+                session_id: None,
+                target_id: Some(moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID.into()),
+                browser_context_id: None,
+            };
+            scheduler
+                .execute_automation_command_with_protocol_messages(
+                    &mut receivers,
+                    AutomationCommand::Navigate(
+                        moli_protocol::automation::DevToolsNavigateCommand {
+                            context: context.clone(),
+                            url: "about:blank".to_owned(),
+                            referrer: None,
+                            wait: DevToolsNavigationWait::Load,
+                        },
+                    ),
+                )
+                .await
+                .result
+                .expect("fixture page installed");
+            while let Ok(completion) = receivers.protocol_work_completion_rx.try_recv() {
+                scheduler.complete_protocol_work(completion).unwrap();
+            }
+            assert!(scheduler.protocol_tasks.take_tasks().is_empty());
+
+            for cycle in 0..64_u64 {
+                let page_id = PageId::new_for_testing(77);
+                let dialog = RendererJavaScriptDialogCompletion::pending();
+                scheduler
+                    .state
+                    .with_state(|state| {
+                        state.push_page_javascript_dialog_for_test(
+                            &context,
+                            RendererPendingJavaScriptDialog::new(
+                                RendererJavaScriptDialogId::new(cycle + 1),
+                                RendererDocumentLifecycleIdentity {
+                                    frame: RendererFrameToken { page_id },
+                                    document: RendererDocumentToken::new_for_testing(page_id, 1),
+                                    epoch: RendererLifecycleEpoch(1),
+                                },
+                                RendererJavaScriptDialogSource::RootFrame,
+                                "about:blank".to_owned(),
+                                "confirm".to_owned(),
+                                "attachment churn".to_owned(),
+                                String::new(),
+                                Some(dialog.clone()),
+                            ),
+                        )
+                    })
+                    .unwrap();
+                let attach = command(
+                    &mut scheduler,
+                    json!({"id":1,"method":"Target.attachToTarget","params":{
+                        "targetId":moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID,"flatten":true
+                    }}),
+                )
+                .await;
+                let session = attach
+                    .iter()
+                    .find(|value| value["id"] == 1)
+                    .and_then(|value| value["result"]["sessionId"].as_str())
+                    .expect("attach acknowledged")
+                    .to_owned();
+                if cycle % 3 == 1 {
+                    let tasks = scheduler.protocol_tasks.take_tasks();
+                    assert_eq!(tasks.len(), 1, "one admitted attachment wait");
+                    for task in tasks {
+                        task.cancel_and_join().await;
+                    }
+                }
+                let retired_before_finish = cycle % 3 == 2;
+                if retired_before_finish {
+                    // Completing this apply will fail its original owner check.
+                    // That failure must still retire the supervised task.
+                    assert!(dialog.finish(false, String::new()));
+                    detach(&mut scheduler, &session).await;
+                }
+                let completion = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    receivers.protocol_work_completion_rx.recv(),
+                )
+                .await
+                .expect("attachment completion")
+                .expect("live supervisor");
+                scheduler.complete_protocol_work(completion).unwrap();
+                assert!(
+                    scheduler.protocol_tasks.take_tasks().is_empty(),
+                    "no task survives cycle {cycle}"
+                );
+                if !retired_before_finish {
+                    assert!(dialog.finish(false, String::new()));
+                    detach(&mut scheduler, &session).await;
+                }
+            }
         })
         .await;
 }
