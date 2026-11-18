@@ -367,7 +367,7 @@ fn node_event_handler_target_context<'s>(
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Context>> {
-    let runtime = unsafe { &*runtime_ptr };
+    let runtime = unsafe { &mut *runtime_ptr };
     let owner_document = runtime.dom_host().owner_document_handle(handle)?;
     let dispatch_scope = if owner_document == runtime.dom_host().document_handle() {
         crate::native_bridge::OwnerDispatchScope::Top
@@ -377,9 +377,15 @@ fn node_event_handler_target_context<'s>(
         )
     };
     let owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
+    if let Some((_, context)) = runtime.window_execution_context(scope, owner, dispatch_scope) {
+        return Some(context);
+    }
+    let crate::native_bridge::OwnerDispatchScope::Child(child_handle) = dispatch_scope else {
+        return None;
+    };
     runtime
-        .window_execution_context(scope, owner, dispatch_scope)
-        .map(|(_, context)| context)
+        .ensure_prebootstrapped_child_default_context(scope, child_handle)
+        .ok()
 }
 
 pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
