@@ -6,6 +6,9 @@ use support::FixtureServer;
 use tokio::time::Duration;
 use url::Url;
 
+#[path = "history_child/src_during_load.rs"]
+mod src_during_load;
+
 async fn wait_for_body_attribute(
     browser: &Browser,
     page: &mut moli_core::page::Page,
