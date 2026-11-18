@@ -15,7 +15,7 @@ use crate::stylesheet_blocking::DocumentBlockingStylesheetSignature;
 use crate::types::{ScriptKind, ScriptMode};
 use html5ever::tree_builder::QuirksMode;
 use moli_parser::{
-    ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
+    HtmlFragmentContext, ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
     ParserElementCreationConsumer, ParserElementCreationRequest, ParserMutationEffectConsumer,
     ParserPumpOutcome,
 };
@@ -522,7 +522,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
-        context_handle: DomHandle,
+        context_handle: Option<DomHandle>,
         html: &str,
         scripts_already_started: bool,
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
@@ -531,19 +531,22 @@ impl DocumentRuntime {
     ) -> Option<DomHandle> {
         let first_node_index = self.dom_host().dom().len();
         let parser = HtmlParser::with_scripting_enabled(scripting_enabled);
-        let context_node = self.dom_host().node(context_handle);
+        let context_node = context_handle.and_then(|element| self.dom_host().node(element));
         let context_namespace = context_node
             .and_then(Node::namespace)
-            .unwrap_or("http://www.w3.org/1999/xhtml")
-            .to_owned();
-        let context_local_name = context_node
-            .and_then(Node::local_name)
-            .unwrap_or("body")
-            .to_owned();
+            .unwrap_or("http://www.w3.org/1999/xhtml");
+        let context_local_name = context_node.and_then(Node::local_name).unwrap_or("body");
+        let context =
+            HtmlFragmentContext::new(context_handle, context_namespace, context_local_name);
         let is_frameset_context = context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("frameset");
-        let registry_association =
-            self.fragment_context_custom_element_registry_association(host_ptr, context_handle);
+        let registry_association = match context_handle {
+            Some(element) => {
+                self.fragment_context_custom_element_registry_association(host_ptr, element)
+            }
+            None => unsafe { &*host_ptr }
+                .default_custom_element_registry_association_for_document(document_handle),
+        };
         let fragment = self.create_document_fragment_for_document(document_handle);
         let finish_signals = self.with_dom_host_parse_step(|runtime| {
             let mut mutation_owner = DocumentWriteParserMutationOwner {
@@ -556,9 +559,7 @@ impl DocumentRuntime {
                 mutation_owner.runtime.document_url().clone(),
                 fragment,
                 document_handle,
-                context_handle,
-                &context_namespace,
-                &context_local_name,
+                context,
                 html,
                 &mut mutation_owner,
                 allow_declarative_shadow_roots,
@@ -630,7 +631,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
-        context_handle: DomHandle,
+        context_handle: Option<DomHandle>,
         html: &str,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
@@ -662,7 +663,7 @@ impl DocumentRuntime {
             scope,
             host_ptr,
             document_handle,
-            context_handle,
+            Some(context_handle),
             html,
             scripts_already_started,
             custom_element_upgrade_timing,
@@ -685,7 +686,7 @@ impl DocumentRuntime {
             scope,
             host_ptr,
             document_handle,
-            context_handle,
+            Some(context_handle),
             html,
             true,
             custom_element_upgrade_timing,

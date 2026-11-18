@@ -1,9 +1,5 @@
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::cell::{Cell, RefCell};
 
-use html5ever::{LocalName, Namespace, QualName};
 use html5ever::{
     ParseOpts,
     tendril::StrTendril,
@@ -13,11 +9,13 @@ use html5ever::{
     tree_builder::{TreeBuilder, TreeBuilderOpts, TreeSink},
 };
 use markup5ever::TokenizerResult;
-use moli_dom::native::NativeNodeId;
 use moli_script::script_element_nonce_is_nonceable;
 
 use super::{
-    html::{DocumentSink, ParseHandle, ParserFinishDiscoverySignals, ParserInputQueue},
+    html::{
+        DocumentSink, HtmlFragmentContext, ParseHandle, ParserFinishDiscoverySignals,
+        ParserInputQueue,
+    },
     html_input::InputStack,
     live_target::ParserStreamHtmlTreeSinkTarget,
 };
@@ -485,18 +483,11 @@ pub(super) fn new_html_tree_sink_session(
 
 pub(super) fn new_fragment_html_tree_sink_session(
     target: ParserStreamHtmlTreeSinkTarget,
-    context_handle: NativeNodeId,
-    context_namespace: &str,
-    context_local_name: &str,
+    context: HtmlFragmentContext,
     scripting_enabled: bool,
 ) -> HtmlTreeSinkSession {
     let sink = DocumentSink::new(target);
-    let context = QualName::new(
-        None,
-        Namespace::from(context_namespace),
-        LocalName::from(context_local_name),
-    );
-    let context_handle = ParseHandle::new(context_handle, Some(Rc::new(context)));
+    let context_handle = context.into_parse_handle();
     let parser = HtmlParserSession::new_fragment(
         sink,
         html_parse_opts_with_scripting(scripting_enabled),

@@ -49,6 +49,33 @@ pub struct HtmlParser {
     scripting_enabled: bool,
 }
 
+/// The element name for fragment parsing and its DOM identity, when present.
+pub struct HtmlFragmentContext {
+    element: Option<NativeNodeId>,
+    name: QualName,
+}
+
+impl HtmlFragmentContext {
+    pub fn new(element: Option<NativeNodeId>, namespace: &str, local_name: &str) -> Self {
+        Self {
+            element,
+            name: QualName::new(
+                None,
+                Namespace::from(namespace),
+                LocalName::from(local_name),
+            ),
+        }
+    }
+
+    pub(super) fn into_parse_handle(self) -> ParseHandle {
+        let name = Rc::new(self.name);
+        match self.element {
+            Some(element) => ParseHandle::new(element, Some(name)),
+            None => ParseHandle::new_synthetic_fragment_context(name),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ParserInputSession(Rc<RefCell<ParserInputState>>);
 
@@ -343,12 +370,8 @@ pub(super) struct ParseHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParseHandleIdentity {
     DomNode(NativeNodeId),
-    // Standalone fragment parsing, like `Element.innerHTML` staging, only has a
-    // context element name. Chromium keeps a real `context_element` next to the
-    // `DocumentFragment` target; our detached staging parser uses this
-    // parser-only handle instead of pretending the document node is that
-    // context. It may answer parser questions such as `elem_name`, but it must
-    // never be used as a DOM mutation target.
+    // A parser-only context supplies a name. Tree mutations target the
+    // fragment's own root and descendants.
     SyntheticFragmentContext,
 }
 
@@ -525,17 +548,12 @@ impl HtmlParser {
             final_url,
             allow_declarative_shadow_roots,
         );
-        let context = QualName::new(
-            None,
-            Namespace::from(context_namespace),
-            LocalName::from(context_local_name),
-        );
-        let context_handle = ParseHandle::new_synthetic_fragment_context(Rc::new(context));
+        let context = HtmlFragmentContext::new(None, context_namespace, context_local_name);
         let sink = DocumentSink::new(target);
         let parser = HtmlParserSession::new_fragment(
             sink,
             html_parse_opts_with_scripting(scripting_enabled),
-            context_handle,
+            context.into_parse_handle(),
             scripting_enabled,
         );
 
@@ -558,9 +576,7 @@ impl HtmlParser {
         final_url: Url,
         fragment_handle: NativeNodeId,
         owner_document_handle: NativeNodeId,
-        context_handle: NativeNodeId,
-        context_namespace: &str,
-        context_local_name: &str,
+        context: HtmlFragmentContext,
         html: &str,
         consumer: &mut T,
         allow_declarative_shadow_roots: bool,
@@ -579,9 +595,7 @@ impl HtmlParser {
             final_url,
             fragment_handle,
             owner_document_handle,
-            context_handle,
-            context_namespace,
-            context_local_name,
+            context,
             runtime_dom_sinks,
             allow_declarative_shadow_roots,
             self.scripting_enabled,
@@ -637,9 +651,7 @@ impl DocumentStream {
         final_url: Url,
         fragment_handle: NativeNodeId,
         owner_document_handle: NativeNodeId,
-        context_handle: NativeNodeId,
-        context_namespace: &str,
-        context_local_name: &str,
+        context: HtmlFragmentContext,
         runtime_dom_sinks: ParserRuntimeDomSinks,
         allow_declarative_shadow_roots: bool,
         scripting_enabled: bool,
@@ -649,9 +661,7 @@ impl DocumentStream {
                 final_url,
                 fragment_handle,
                 owner_document_handle,
-                context_handle,
-                context_namespace,
-                context_local_name,
+                context,
                 runtime_dom_sinks,
                 allow_declarative_shadow_roots,
                 scripting_enabled,
@@ -683,9 +693,7 @@ impl DocumentStream {
         final_url: Url,
         fragment_handle: NativeNodeId,
         owner_document_handle: NativeNodeId,
-        context_handle: NativeNodeId,
-        context_namespace: &str,
-        context_local_name: &str,
+        context: HtmlFragmentContext,
         consumer: &mut T,
         allow_declarative_shadow_roots: bool,
         scripting_enabled: bool,
@@ -701,9 +709,7 @@ impl DocumentStream {
             final_url,
             fragment_handle,
             owner_document_handle,
-            context_handle,
-            context_namespace,
-            context_local_name,
+            context,
             runtime_dom_sinks,
             allow_declarative_shadow_roots,
             scripting_enabled,
