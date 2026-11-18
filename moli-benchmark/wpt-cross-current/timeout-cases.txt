@@ -38,6 +38,7 @@ dom/events/webkit-animation-end-event.html
 dom/events/webkit-animation-iteration-event.html
 dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
+dom/nodes/NodeList-static-length-getter-tampered-1.html
 editing/crashtests/designMode-caret-change.html
 editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-events.html
 editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
@@ -94,8 +95,6 @@ navigation-api/navigate-event/defer/tentative/defer-restore-callback-abort.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-single-reject.html
 navigation-api/updateCurrentEntry-method/reentrancy-on-serialize.html
-page-visibility/iframe-unload.html
-page-visibility/onvisibilitychange.html
 permissions-policy/policy-extends-to-sandbox.html
 permissions-policy/reporting/fullscreen-reporting.html
 permissions-policy/reporting/sync-xhr-report-only.html
@@ -115,3 +114,4 @@ svg/linking/scripted/href-script-element.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-navigation.html?36-last
 xhr/open-url-multi-window-4.htm
+xhr/setrequestheader-header-forbidden.htm
