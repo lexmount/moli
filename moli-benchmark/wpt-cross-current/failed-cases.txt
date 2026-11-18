@@ -2264,10 +2264,6 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/unloading-documents/004.html
 html/browsers/history/the-history-interface/001.html
 html/browsers/history/the-history-interface/history_go_undefined.html
-html/browsers/history/the-history-interface/traverse_the_history_2.html
-html/browsers/history/the-history-interface/traverse_the_history_3.html
-html/browsers/history/the-history-interface/traverse_the_history_4.html
-html/browsers/history/the-history-interface/traverse_the_history_5.html
 html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
 html/browsers/history/the-location-interface/same-hash.html

@@ -6778,6 +6778,10 @@ html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
+html/browsers/history/the-history-interface/traverse_the_history_2.html
+html/browsers/history/the-history-interface/traverse_the_history_3.html
+html/browsers/history/the-history-interface/traverse_the_history_4.html
+html/browsers/history/the-history-interface/traverse_the_history_5.html
 html/browsers/history/the-history-interface/traverse_the_history_unload_1.html
 html/browsers/history/the-history-interface/traverse_the_history_write_after_load_2.html
 html/browsers/history/the-history-interface/traverse_the_history_write_onload_1.html
