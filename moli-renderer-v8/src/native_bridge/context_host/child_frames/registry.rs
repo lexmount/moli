@@ -129,6 +129,7 @@ impl PageScriptHost {
         self.cancel_child_document_script_work_for_owner(handle, retired_owner);
         self.retire_child_frame_realm_materialization_request(handle, retired_owner);
         self.note_style_subtree_context_change(document_handle);
+        self.retire_document_popovers(document_handle);
         self.dom_host_mut()
             .mark_subtree_disconnected_preserving_owner_document(document_handle);
         // The retired child realm exposes no further rendered style surface.
@@ -157,6 +158,7 @@ impl PageScriptHost {
         self.drop_child_browsing_context_subtree(document_handle);
         self.cancel_child_classic_document_script_work(handle);
         self.note_style_subtree_context_change(document_handle);
+        self.retire_document_popovers(document_handle);
         self.dom_host_mut()
             .mark_subtree_disconnected_preserving_owner_document(document_handle);
         self.style_engine

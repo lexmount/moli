@@ -1165,6 +1165,7 @@ pub(crate) struct PageScriptHost {
     inline_style_declarations: HashMap<DomHandle, CssInlineStyleDeclarationState>,
     css_module_texts_by_url: HashMap<String, String>,
     css_module_failed_urls: HashSet<String>,
+    pub(super) document_popovers: HashMap<DomHandle, super::element::DocumentPopovers>,
     popover_focus_restore_targets: HashMap<DomHandle, Option<DomHandle>>,
     pending_slotchange_slots: Vec<DomHandle>,
     deferred_slotchange_slots: Vec<DomHandle>,

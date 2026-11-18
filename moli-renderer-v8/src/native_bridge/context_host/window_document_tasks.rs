@@ -130,6 +130,10 @@ impl<I: Copy + Eq, K: Copy + Eq, P, T: Copy + Eq> WindowTaskLedger<I, K, P, T> {
         &self.pending[index]
     }
 
+    pub(super) fn payload_at_mut(&mut self, index: usize) -> &mut P {
+        &mut self.pending[index].payload
+    }
+
     pub(super) fn retain(&mut self, keep: impl FnMut(&PendingWindowTask<I, K, P, T>) -> bool) {
         self.pending.retain(keep);
     }

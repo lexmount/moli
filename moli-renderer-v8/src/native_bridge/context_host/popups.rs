@@ -3678,6 +3678,7 @@ impl PageScriptHost {
                 .remove(&document_handle);
         }
         self.note_style_subtree_context_change(document_handle);
+        self.retire_document_popovers(document_handle);
         self.dom_host_mut()
             .mark_subtree_disconnected_preserving_owner_document(document_handle);
         self.style_engine

@@ -1046,13 +1046,8 @@ impl ElementControlState {
                     self.checked = Some(attribute_value.is_some());
                 }
             }
-            ("option", "selected") => {
-                if !self.selected_dirty {
-                    self.selected = Some(attribute_value.is_some());
-                }
-            }
-            (_, "popover") => {
-                self.popover_open = false;
+            ("option", "selected") if !self.selected_dirty => {
+                self.selected = Some(attribute_value.is_some());
             }
             _ => {}
         }
