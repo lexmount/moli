@@ -39,7 +39,6 @@ mod activity;
 mod agent;
 mod backlog;
 mod collectors;
-mod cookie_context;
 mod cookies;
 mod events;
 mod load_resource;
@@ -73,7 +72,6 @@ pub(crate) use backlog::{
     emit_prepared_renderer_network_live_background_events, record_subresource_request_body,
 };
 pub(crate) use collectors::NetworkDataCollectorStore;
-pub(crate) use cookie_context::navigation_cookie_request_context;
 use cookies::{
     start_clear_browser_cookies_command, start_delete_cookies_command,
     start_get_all_cookies_command, start_get_cookies_command, start_set_cookie_command,

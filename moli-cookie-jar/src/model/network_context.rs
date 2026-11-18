@@ -382,6 +382,19 @@ impl NetworkCookieRequestContext {
         Self::new(method, NetworkCookieRequestType::TopLevelNavigation)
     }
 
+    /// Builds the initial cookie context for a top-level navigation.
+    pub fn top_level_navigation_for_request(
+        request_url: &Url,
+        method: &str,
+        initiator_url: Option<&Url>,
+    ) -> Self {
+        let context = Self::top_level_navigation(method);
+        match initiator_url {
+            Some(initiator) => context.with_initiator_url(request_url, initiator),
+            None => context,
+        }
+    }
+
     /// Computes this hop's result from the site relation and current method.
     pub fn site_context(&self) -> NetworkSiteContext {
         self.site.for_method(self.method.is_safe())
@@ -783,28 +796,6 @@ fn normalized_network_same_site_scheme(scheme: &str) -> &str {
     }
 }
 
-/// Classifies whether a SameSite context transition became less permissive.
-pub fn site_context_downgrade_type(
-    previous: NetworkSameSiteContext,
-    current: NetworkSameSiteContext,
-) -> Option<NetworkSameSiteContextDowngradeType> {
-    match (
-        same_site_inclusion_class(previous),
-        same_site_inclusion_class(current),
-    ) {
-        (NetworkSameSiteInclusionClass::Strict, NetworkSameSiteInclusionClass::Lax) => {
-            Some(NetworkSameSiteContextDowngradeType::StrictToLax)
-        }
-        (NetworkSameSiteInclusionClass::Strict, NetworkSameSiteInclusionClass::Cross) => {
-            Some(NetworkSameSiteContextDowngradeType::StrictToCross)
-        }
-        (NetworkSameSiteInclusionClass::Lax, NetworkSameSiteInclusionClass::Cross) => {
-            Some(NetworkSameSiteContextDowngradeType::LaxToCross)
-        }
-        _ => None,
-    }
-}
-
 fn approximate_is_same_site(request_url: &Url, initiator_url: &Url, schemeful: bool) -> bool {
     let Some(request_host) = request_url.host_str() else {
         return false;
@@ -835,7 +826,7 @@ fn redirect_type_for_track(
 }
 
 /// Computes schemeless and schemeful redirect diagnostics for a request chain.
-pub fn redirect_types_for_request(
+fn redirect_types_for_request(
     original_request_url: &Url,
     current_request_url: &Url,
     initiator_url: Option<&Url>,
@@ -974,23 +965,6 @@ pub fn advance_cookie_request_context(
         redirect_types.schemeful_context.redirect_type,
     );
     context
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NetworkSameSiteInclusionClass {
-    Strict,
-    Lax,
-    Cross,
-}
-
-fn same_site_inclusion_class(context: NetworkSameSiteContext) -> NetworkSameSiteInclusionClass {
-    match context {
-        NetworkSameSiteContext::SameSiteStrict => NetworkSameSiteInclusionClass::Strict,
-        NetworkSameSiteContext::SameSiteLax => NetworkSameSiteInclusionClass::Lax,
-        NetworkSameSiteContext::SameSiteLaxMethodUnsafe | NetworkSameSiteContext::CrossSite => {
-            NetworkSameSiteInclusionClass::Cross
-        }
-    }
 }
 
 /// Converts Moli SameSite metadata into the canonical store type.

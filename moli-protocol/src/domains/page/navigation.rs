@@ -656,53 +656,23 @@ pub(crate) fn navigation_cookie_access_report(
     owner_session_id: Option<&str>,
     request_url: &Url,
     method: &str,
-    previous_request_url: Option<&Url>,
-    _request_load_policy: NavigationRequestLoadPolicy,
-    initiator_url_override: Option<&Url>,
 ) -> Option<StoredCookieQueryReport> {
     let owner = CommandOwnerScope::capture(conn, owner_session_id);
-    navigation_cookie_access_report_for_owner(
-        conn,
-        &owner,
-        request_url,
-        method,
-        previous_request_url,
-        _request_load_policy,
-        initiator_url_override,
-    )
+    navigation_cookie_access_report_for_owner(conn, &owner, request_url, method)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn navigation_cookie_access_report_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
     request_url: &Url,
     method: &str,
-    previous_request_url: Option<&Url>,
-    _request_load_policy: NavigationRequestLoadPolicy,
-    initiator_url_override: Option<&Url>,
 ) -> Option<StoredCookieQueryReport> {
-    // Once a navigation commits, the target identity and loaded page already point
-    // at the destination document. Redirect diagnostics still need the
-    // pre-commit initiator, so callers may override it with a snapshot taken
-    // before mutating browser context state.
-    let initiator_url = initiator_url_override
-        .cloned()
-        .or_else(|| conn.navigation_initiator_url_for_owner(owner));
-    let request_context = network::navigation_cookie_request_context(
+    let initiator_url = conn.navigation_initiator_url_for_owner(owner);
+    let request_context = NetworkCookieRequestContext::top_level_navigation_for_request(
         request_url,
         method,
-        previous_request_url,
         initiator_url.as_ref(),
     );
-    navigation_cookie_access_report_for_context(conn, request_url, request_context)
-}
-
-fn navigation_cookie_access_report_for_context(
-    conn: &CdpConnection,
-    request_url: &Url,
-    request_context: NetworkCookieRequestContext,
-) -> Option<StoredCookieQueryReport> {
     let browser_context = conn.browser_context.as_ref()?;
     browser_context
         .observe_request_cookie_access_report(request_url, request_context)
@@ -2857,9 +2827,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 &pending.navigation.owner,
                 &pending.navigation.requested_url,
                 &pending.navigation.request_method,
-                None,
-                pending.navigation.request_load_policy,
-                None,
             );
             if pending.navigation.request_id.is_some() {
                 network::emit_fetch_navigation_initial_request_for_pause_background_events(
@@ -2887,9 +2854,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 &pending.navigation.owner,
                 &pending.navigation.requested_url,
                 &pending.navigation.request_method,
-                None,
-                pending.navigation.request_load_policy,
-                None,
             );
             network::emit_fetch_navigation_initial_request_for_pause_background_events(
                 conn,
@@ -2924,9 +2888,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 &navigation_state.owner,
                 &navigation_state.requested_url,
                 &navigation_state.request_method,
-                None,
-                navigation_state.request_load_policy,
-                None,
             );
             network::start_observed_main_document_navigation_progress_background_events(
                 conn,
@@ -3002,9 +2963,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             &navigation_state.owner,
             &navigation_state.requested_url,
             &navigation_state.request_method,
-            None,
-            navigation_state.request_load_policy,
-            None,
         );
         network::start_observed_main_document_navigation_progress_background_events(
             conn,

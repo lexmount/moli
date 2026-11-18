@@ -11,8 +11,7 @@ pub use network_context::{
     BrowserCookieStorageAccessStatus, CookieSource, NetworkCookieRequestContext,
     NetworkSameSiteContext, NetworkSiteContextMetadata, NetworkSiteContextTrackMetadata,
     advance_cookie_request_context, core_browser_site_context_from_facade,
-    core_same_site_context_metadata_from_stored, redirect_types_for_request,
-    site_context_downgrade_type,
+    core_same_site_context_metadata_from_stored,
 };
 pub use query_report::{
     StoredCookieAccess, StoredCookieAccessSemantics, StoredCookieBrowserContextValueSource,

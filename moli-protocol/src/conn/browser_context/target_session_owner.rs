@@ -17,7 +17,9 @@ use crate::conn::{
     LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit, NETWORK_ERROR_PAGE_URL,
     NetworkErrorPageNavigation, PendingFetchNavigation, RuntimeBindingDefinition,
 };
-use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
+use moli_cookie_jar::{
+    NetworkCookieRequestContext, StoredCookieQueryReport, StoredCookieSetReport,
+};
 #[cfg(test)]
 use moli_core::page::RendererServiceWorkerVersionStatus;
 use moli_core::page::{
@@ -260,10 +262,9 @@ impl TargetNavigationLoadInputs {
         if !matches!(requested_url.scheme(), "http" | "https") {
             return Ok(None);
         }
-        let request_context = crate::domains::network::navigation_cookie_request_context(
+        let request_context = NetworkCookieRequestContext::top_level_navigation_for_request(
             requested_url,
             request_method,
-            None,
             self.navigation_initiator_url.as_ref(),
         );
         let mut cookie_store = self.storage_handles.page_handles.cookie_store.lock()?;
