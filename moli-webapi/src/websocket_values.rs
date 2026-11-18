@@ -1,6 +1,7 @@
 //! WebSocket dictionaries and error values; sockets and transport stay with the host.
 use crate::dom_exception::initialize_websocket_error;
-use moli_v8_util::throw_type_error;
+use moli_v8_util::{throw_type_error, v8_string};
+use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
 use moli_websocket_types::{WebSocketCloseValidationError, close_info_code_from_number};
 
@@ -85,4 +86,51 @@ pub fn websocket_error_constructor_callback<'s>(
     };
     initialize_websocket_error(scope, args.this(), message, close.code, &close.reason);
     rv.set(args.this().into());
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct WebSocketStreamOpenInfoDeclaration<'scope> {
+    #[webapi(data_property, enumerable)]
+    readable: v8::Local<'scope, v8::Object>,
+    #[webapi(data_property, enumerable)]
+    writable: v8::Local<'scope, v8::Object>,
+    #[webapi(data_property, enumerable)]
+    protocol: Option<v8::Local<'scope, v8::String>>,
+    #[webapi(data_property, enumerable)]
+    extensions: Option<v8::Local<'scope, v8::String>>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct WebSocketStreamCloseInfoDeclaration<'scope> {
+    close_code: f64,
+    reason: Option<v8::Local<'scope, v8::String>>,
+}
+
+pub fn new_websocket_stream_open_info<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    readable: v8::Local<'s, v8::Object>,
+    writable: v8::Local<'s, v8::Object>,
+    protocol: &str,
+    extensions: &str,
+) -> v8::Local<'s, v8::Object> {
+    WebSocketStreamOpenInfoDeclaration::new(
+        readable,
+        writable,
+        v8_string(scope, protocol),
+        v8_string(scope, extensions),
+    )
+    .bind(scope)
+    .expect("WebSocketStream open info declaration should bind")
+}
+
+pub fn new_websocket_stream_close_info<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    close_code: u16,
+    reason: &str,
+) -> v8::Local<'s, v8::Object> {
+    WebSocketStreamCloseInfoDeclaration::new(close_code as f64, v8_string(scope, reason))
+        .bind(scope)
+        .expect("WebSocketStream close info declaration should bind")
 }

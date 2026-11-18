@@ -11,51 +11,11 @@ use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::{NavigationActivationSeed, NavigationHistorySerializedEntry};
 use crate::util::{get_private_value, set_private_value};
-use crate::web_api_interfaces;
+pub(super) use moli_webapi::navigation_values::install_navigation_activation_template_bindings;
+use moli_webapi::navigation_values::{
+    new_navigation_activation, new_navigation_transition, take_transition_committed_resolver,
+};
 use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::NavigationActivation,
-    own_to_string_tag = "NavigationActivation",
-    readonly_to_string_tag
-)]
-struct NavigationActivationObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    entry: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "navigationType")]
-    navigation_type: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::NavigationTransition,
-    own_to_string_tag = "NavigationTransition",
-    readonly_to_string_tag
-)]
-struct NavigationTransitionObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Object>,
-
-    #[webapi(data_property)]
-    to: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "navigationType")]
-    navigation_type: &'static str,
-
-    #[webapi(data_property)]
-    committed: v8::Local<'scope, v8::Promise>,
-
-    #[webapi(slot = NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT)]
-    committed_resolver: v8::Local<'scope, v8::PromiseResolver>,
-
-    #[webapi(data_property)]
-    finished: v8::Local<'scope, v8::Promise>,
-}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -68,21 +28,6 @@ struct NavigationTransitionSettleDataDeclaration<'scope> {
 
     #[webapi(slot = NAVIGATION_TRANSITION_SETTLE_ERROR_SLOT)]
     error: Option<v8::Local<'scope, v8::Value>>,
-}
-
-pub(super) fn install_navigation_activation_template_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-    interface_name: &str,
-) {
-    if interface_name != "NavigationTransition" {
-        return;
-    }
-    template.prototype_template(scope).set_with_attr(
-        v8str(scope, "committed").into(),
-        v8::undefined(scope).into(),
-        v8::PropertyAttribute::DONT_ENUM,
-    );
 }
 
 pub(super) fn current_entry_matches_activation_snapshot<'s>(
@@ -171,10 +116,7 @@ pub(super) fn create_navigation_activation_object<'s>(
     } else {
         from
     };
-    NavigationActivationObjectDeclaration::new(entry, from, navigation_type)
-        .bind(scope)
-        .expect("NavigationActivation declaration should bind")
-        .into()
+    new_navigation_activation(scope, entry, from, navigation_type).into()
 }
 
 pub(super) fn install_navigation_activation_runtime_state<'s>(
@@ -217,18 +159,14 @@ pub(super) fn install_navigation_transition<'s>(
     let from = entry_wrappers::in_realm(scope, from, context);
     let to =
         to.and_then(|to| super::navigation_events::navigation_destination_for_realm(scope, to));
-    let transition = NavigationTransitionObjectDeclaration {
+    let transition = new_navigation_transition(
+        scope,
         from,
-        to: to
-            .map(v8::Local::<v8::Value>::from)
-            .unwrap_or_else(|| v8::null(scope).into()),
+        to,
         navigation_type,
-        committed,
         committed_resolver,
         finished,
-    }
-    .bind(scope)
-    .expect("NavigationTransition declaration should bind");
+    );
     set_navigation_transition_value(scope, navigation, transition.into());
     Some(resolver)
 }
@@ -269,28 +207,12 @@ const NAVIGATION_TRANSITION_SETTLE_NAVIGATION_SLOT: &str =
     "__lmNavigationTransitionSettleNavigation";
 const NAVIGATION_TRANSITION_SETTLE_RESOLVER_SLOT: &str = "__lmNavigationTransitionSettleResolver";
 const NAVIGATION_TRANSITION_SETTLE_ERROR_SLOT: &str = "__lmNavigationTransitionSettleError";
-const NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT: &str =
-    "__lmNavigationTransitionCommittedResolver";
-
 fn take_navigation_transition_committed_resolver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
     let transition = navigation_transition_object(scope, navigation)?;
-    let resolver = get_private_value(
-        scope,
-        transition,
-        NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT,
-    )
-    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) })?;
-    set_private_value(
-        scope,
-        transition,
-        NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT,
-        v8::undefined(scope).into(),
-    );
-    Some(resolver)
+    take_transition_committed_resolver(scope, transition)
 }
 
 pub(super) fn schedule_settle_navigation_transition<'s>(

@@ -2,6 +2,7 @@ use super::*;
 use crate::web_api_interfaces;
 use moli_storage_service::SqlBucketOperation;
 use moli_v8_util::reject_promise_with_type_error as reject_type_error;
+use moli_webapi::storage_values::new_storage_estimate;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
@@ -176,30 +177,6 @@ struct MidiPermissionDescriptorMembers {
 
     #[webidl(default = false)]
     sysex: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(fragment, prototype = "StorageEstimate")]
-struct StorageEstimateObjectDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    quota: f64,
-
-    #[webapi(data_property, enumerable)]
-    usage: f64,
-
-    #[webapi(data_property, enumerable)]
-    usage_details: v8::Local<'scope, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct StorageUsageDetailsObjectDeclaration {
-    #[webapi(data_property = "indexedDB", enumerable)]
-    indexed_db: Option<f64>,
-    #[webapi(data_property = "caches", enumerable)]
-    caches: Option<f64>,
-    #[webapi(data_property = "fileSystem", enumerable)]
-    file_system: Option<f64>,
 }
 
 #[derive(WebApiObject)]
@@ -578,7 +555,7 @@ pub(in crate::context_bootstrap) fn navigator_storage_estimate_callback<'s>(
         return;
     };
     let usage = storage_manager_usage_bytes(scope, &context);
-    let estimate = build_storage_estimate_object_with_quota(
+    let estimate = new_storage_estimate(
         scope,
         usage.total,
         usage.indexed_db,
@@ -1327,7 +1304,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_estimate_callback<'s>(
             return;
         }
     };
-    let estimate = build_storage_estimate_object_with_quota(
+    let estimate = new_storage_estimate(
         scope,
         usage,
         indexed_db_usage,
@@ -3105,40 +3082,6 @@ struct StorageUsageSnapshot {
     indexed_db: u64,
     cache_storage: u64,
     opfs: u64,
-}
-
-fn build_storage_estimate_object_with_quota<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    usage: u64,
-    indexed_db_usage: u64,
-    cache_storage_usage: u64,
-    opfs_usage: u64,
-    quota: u64,
-) -> v8::Local<'s, v8::Object> {
-    let usage_details = build_storage_usage_details_object(
-        scope,
-        indexed_db_usage,
-        cache_storage_usage,
-        opfs_usage,
-    );
-    StorageEstimateObjectDeclaration::new(quota as f64, usage as f64, usage_details)
-        .bind(scope)
-        .expect("StorageEstimate declaration should bind")
-}
-
-fn build_storage_usage_details_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    indexed_db_usage: u64,
-    cache_storage_usage: u64,
-    opfs_usage: u64,
-) -> v8::Local<'s, v8::Object> {
-    StorageUsageDetailsObjectDeclaration::new(
-        (indexed_db_usage > 0).then_some(indexed_db_usage as f64),
-        (cache_storage_usage > 0).then_some(cache_storage_usage as f64),
-        (opfs_usage > 0).then_some(opfs_usage as f64),
-    )
-    .bind(scope)
-    .expect("StorageUsageDetails declaration should bind")
 }
 
 pub(in crate::context_bootstrap) fn navigator_media_devices_get_user_media_callback<'s>(

@@ -7,7 +7,7 @@ use crate::page_task_queue::{
     RendererPageHistoryTraversalTaskKind, RendererPageNavigationApiTaskId,
     RendererPageNavigationApiTaskKind, RendererPageNavigationApiTaskProducer,
 };
-use moli_webapi_declare::WebApiObject;
+use moli_webapi::navigation_values::navigation_result_object;
 use std::collections::VecDeque;
 
 const NAVIGATION_LIFECYCLE_TRACE_LIMIT: usize = 128;
@@ -69,13 +69,6 @@ pub(crate) struct PendingChildCrossDocumentTraversal {
     pub(crate) seed: NavigationHistoryEntrySeed,
     pub(crate) info: Option<v8::Global<v8::Value>>,
     pub(crate) results: Vec<PendingNavigationResult>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct NavigationResultDeclaration<'scope> {
-    committed: v8::Local<'scope, v8::Promise>,
-    finished: v8::Local<'scope, v8::Promise>,
 }
 
 pub(crate) enum PendingHistoryTraversalAction {
@@ -819,14 +812,4 @@ impl PageScriptHost {
         self.history_queue
             .take_pending_history_traversal_task(task_id)
     }
-}
-
-fn navigation_result_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    committed: v8::Local<'s, v8::Promise>,
-    finished: v8::Local<'s, v8::Promise>,
-) -> v8::Local<'s, v8::Object> {
-    NavigationResultDeclaration::new(committed, finished)
-        .bind(scope)
-        .expect("navigation result declaration should bind")
 }

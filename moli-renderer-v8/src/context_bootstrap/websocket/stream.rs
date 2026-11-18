@@ -12,20 +12,10 @@ use crate::context_bootstrap::stream_adapter::{
 };
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
+use moli_webapi::websocket_values::{
+    new_websocket_stream_close_info, new_websocket_stream_open_info,
+};
 use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebSocketStreamOpenInfoDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    readable: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, enumerable)]
-    writable: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, enumerable)]
-    protocol: Option<v8::Local<'scope, v8::String>>,
-    #[webapi(data_property, enumerable)]
-    extensions: Option<v8::Local<'scope, v8::String>>,
-}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -62,13 +52,6 @@ struct WebSocketStreamPendingWriteDeclaration<'scope> {
     resolver: v8::Local<'scope, v8::PromiseResolver>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct WebSocketStreamCloseInfoDeclaration<'scope> {
-    close_code: f64,
-    reason: Option<v8::Local<'scope, v8::String>>,
-}
-
 pub(super) fn dispatch_websocket_stream_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
@@ -98,14 +81,8 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
                 WEBSOCKET_STREAM_WRITABLE_SLOT,
                 writable.into(),
             );
-            let open_info = WebSocketStreamOpenInfoDeclaration::new(
-                readable,
-                writable,
-                v8_string(scope, protocol),
-                v8_string(scope, extensions),
-            )
-            .bind(scope)
-            .expect("WebSocketStream open info declaration should bind");
+            let open_info =
+                new_websocket_stream_open_info(scope, readable, writable, protocol, extensions);
             resolve_websocket_stream_promise(
                 scope,
                 stream,
@@ -611,16 +588,6 @@ fn websocket_stream_resolver<'s>(
     // These private slots are populated only with PromiseResolver::new results
     // by the stream constructor and native pending-write declarations.
     Some(unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) })
-}
-
-fn new_websocket_stream_close_info<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    close_code: u16,
-    reason: &str,
-) -> v8::Local<'s, v8::Object> {
-    WebSocketStreamCloseInfoDeclaration::new(close_code as f64, v8_string(scope, reason))
-        .bind(scope)
-        .expect("WebSocketStream close info declaration should bind")
 }
 
 fn new_websocket_error_object<'s>(
