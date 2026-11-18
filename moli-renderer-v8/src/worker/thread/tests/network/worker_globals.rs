@@ -1,5 +1,6 @@
 // Tests grouped by behavior. Shared fixtures live in the parent module.
 use super::*;
+use crate::worker::handle::WorkerMessage;
 
 #[tokio::test]
 async fn worker_request_constructor_resolves_relative_url_against_worker_script_url() {
@@ -87,6 +88,37 @@ async fn worker_url_and_search_params_surface_is_available() {
         expect_post_json(msg),
         r#"{"urlCtor":"function","searchParamsCtor":"function","href":"http://127.0.0.1/worker/data.txt?x=1&x=2","origin":"http://127.0.0.1","pathname":"/worker/data.txt","search":"?x=1&x=2","xValues":["1","2"],"paramsString":"a=1&a=2&b=3","canParseRelative":true,"canParseInvalidBase":false,"urlTag":"[object URL]","paramsTag":"[object URLSearchParams]"}"#
     );
+}
+
+#[tokio::test]
+async fn worker_controllerchange_can_precede_navigator_access() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        onmessage = () => {
+            navigator.serviceWorker.addEventListener("controllerchange", event => {
+                postMessage(event.type);
+            });
+            postMessage("listening");
+        };
+        "#
+        .into(),
+        "http://127.0.0.1/worker/main.js".into(),
+    );
+
+    handle
+        .tx
+        .send(WorkerMessage::ServiceWorkerControllerChange)
+        .expect("queue controller change before navigator access");
+    handle.post_message(serialize_test_string("listen"));
+    assert_eq!(recv_post_json(&mut handle).await, r#""listening""#);
+
+    handle
+        .tx
+        .send(WorkerMessage::ServiceWorkerControllerChange)
+        .expect("queue controller change after listener registration");
+    assert_eq!(recv_post_json(&mut handle).await, r#""controllerchange""#);
+    handle.terminate_and_join();
 }
 
 #[tokio::test]
