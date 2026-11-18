@@ -1264,21 +1264,25 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_PRECOMMIT_SEEN_SLOT, false);
     let intercepted =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_INTERCEPTED_SLOT, false);
-    let focus_reset =
-        navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
-    set_navigation_focus_reset_epoch(
-        scope,
-        navigation,
-        (intercepted && focus_reset)
-            .then_some(focus_reset_epoch)
-            .flatten(),
-    );
-    set_navigation_scroll_state(scope, navigation, event, &href, intercepted);
+    let abort_error = navigate_event_private_value(scope, event, NAVIGATE_EVENT_ABORT_ERROR_SLOT);
+    // An aborted event no longer owns interception state if its dispatch
+    // started a replacement navigation during callback cleanup.
+    if abort_error.is_none() {
+        let focus_reset =
+            navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
+        set_navigation_focus_reset_epoch(
+            scope,
+            navigation,
+            (intercepted && focus_reset)
+                .then_some(focus_reset_epoch)
+                .flatten(),
+        );
+        set_navigation_scroll_state(scope, navigation, event, &href, intercepted);
+    }
     let intercept_error =
         navigate_event_private_value(scope, event, NAVIGATE_EVENT_INTERCEPT_ERROR_SLOT);
     let intercept_result =
         navigate_event_private_value(scope, event, NAVIGATE_EVENT_INTERCEPT_RESULT_SLOT);
-    let abort_error = navigate_event_private_value(scope, event, NAVIGATE_EVENT_ABORT_ERROR_SLOT);
     NavigationDispatchOutcome {
         proceed,
         intercepted,

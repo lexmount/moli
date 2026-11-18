@@ -324,10 +324,21 @@ fn settle_aborted_admission<'s>(
     });
     results::reject_pending_navigation_results(scope, &admission.results, error);
     for participant in &admission.participants {
-        if let Some(signal) = &participant.outcome.signal {
-            let signal = v8::Local::new(scope, signal);
-            crate::native_bridge::abort::abort_signal(scope, signal, error);
+        let Some(signal) = participant
+            .outcome
+            .signal
+            .as_ref()
+            .map(|signal| v8::Local::new(scope, signal))
+        else {
+            continue;
+        };
+        // An event aborted during dispatch already notified its listeners.
+        if context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host| unsafe { &mut *host }.abort_signal_aborted(scope, signal))
+        {
+            continue;
         }
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
         if let Some(navigation) = &participant.navigation {
             let navigation = v8::Local::new(scope, navigation);
             let filename = if canceled {
