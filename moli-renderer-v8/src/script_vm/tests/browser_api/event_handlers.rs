@@ -250,3 +250,30 @@ fn pointer_raw_update_handler_properties_follow_secure_context_exposure() {
         assert_eq!(vm.eval(&script).unwrap(), "true", "{url}");
     }
 }
+
+#[test]
+fn document_visibility_handler_is_native_and_can_be_cleared() {
+    let mut vm = new_storage_html_test_vm("https://visibility-handler.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, "onvisibilitychange");
+    const isAccessor = typeof descriptor?.get === "function" && typeof descriptor?.set === "function";
+    const initiallyNull = document.onvisibilitychange === null;
+    const calls = [];
+    let listeners = 0;
+    document.addEventListener("visibilitychange", () => ++listeners);
+    document.onvisibilitychange = function (event) {
+        calls.push(this === document && event.currentTarget === document);
+    };
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.onvisibilitychange = null;
+    document.dispatchEvent(new Event("visibilitychange"));
+    return JSON.stringify([isAccessor, initiallyNull, calls, listeners, document.onvisibilitychange === null]);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"[true,true,[true],2,true]"#);
+}

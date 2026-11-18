@@ -126,6 +126,7 @@ const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onpointerlockerror",
     "onreadystatechange",
     "onresume",
+    "onvisibilitychange",
 ];
 
 #[derive(Clone, Copy)]
