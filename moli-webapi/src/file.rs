@@ -43,7 +43,7 @@ struct FileMetadataDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::File, receiver)]
+#[webapi(interface = web_api_interfaces::File)]
 struct FilePrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_name_attribute_getter_callback, enumerable)]
     name: (),

@@ -2584,8 +2584,11 @@ fn function_template_declaration_installs_webidl_method_descriptors() {
             .and_then(|value| value.uint32_value(scope)),
         Some(2)
     );
+    let instance = constructor
+        .new_instance(scope, &[])
+        .expect("SampleTemplate instance");
     let append_result = append
-        .call(scope, prototype.into(), &[])
+        .call(scope, instance.into(), &[])
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope));
     assert_eq!(append_result.as_deref(), Some("template-method-data"));
@@ -2662,9 +2665,6 @@ fn function_template_declaration_installs_webidl_method_descriptors() {
         Some("entries".to_owned())
     );
 
-    let instance = constructor
-        .new_instance(scope, &[])
-        .expect("SampleTemplate instance");
     let receiver_key = v8::String::new(scope, "receiver").unwrap();
     let receiver = instance
         .get(scope, receiver_key.into())

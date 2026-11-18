@@ -14,7 +14,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MutationObserver, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MutationObserver, enumerable)]
 struct MutationObserverTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = observer_runtime::mutation_observer_observe_callback)]
     observe: (),
@@ -35,7 +35,7 @@ struct MutationObserverTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable)]
 struct IntersectionObserverTemplateMethodsDeclaration {
     #[webapi(
         method,
@@ -67,7 +67,7 @@ struct IntersectionObserverTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaQueryList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MediaQueryList, enumerable)]
 struct MediaQueryListTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = media_query_list_add_listener_callback)]
     add_listener: (),
@@ -77,7 +77,7 @@ struct MediaQueryListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ResizeObserver, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ResizeObserver, enumerable)]
 struct ResizeObserverTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = resize_observer_observe_callback)]
     observe: (),
@@ -93,7 +93,7 @@ struct ResizeObserverTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceObserver, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PerformanceObserver, enumerable)]
 struct PerformanceObserverTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = performance_observer_observe_callback)]
     observe: (),

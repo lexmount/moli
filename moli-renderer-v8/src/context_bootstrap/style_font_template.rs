@@ -14,14 +14,14 @@ use moli_webapi::events::subclasses::font::install_font_face_set_load_event_temp
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFace, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::FontFace, enumerable)]
 struct FontFaceTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = font_face_load_callback, returns_promise)]
     load: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSet, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::FontFaceSet, enumerable)]
 struct FontFaceSetTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = font_face_set_add_callback)]
     add: (),

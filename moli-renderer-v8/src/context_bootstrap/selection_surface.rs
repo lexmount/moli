@@ -71,7 +71,8 @@ struct SelectionPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Selection)]
+// These getters return empty selection values when no native selection is present.
+#[webapi(interface = web_api_interfaces::Selection, receiver = false)]
 struct SelectionPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

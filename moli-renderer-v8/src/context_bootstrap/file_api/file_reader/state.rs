@@ -37,7 +37,7 @@ struct FileReaderObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileReader, receiver)]
+#[webapi(interface = web_api_interfaces::FileReader)]
 struct FileReaderPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property = "onloadstart",

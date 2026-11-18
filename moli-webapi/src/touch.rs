@@ -31,7 +31,7 @@ const TOUCH_EVENT_CHANGED_TOUCHES_SLOT: &str = "__lmTouchEventChangedTouches";
 struct TouchObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Touch, receiver)]
+#[webapi(interface = web_api_interfaces::Touch)]
 struct TouchPrototypeDeclaration {
     #[webapi(accessor_property, getter = touch_getter, data = callback_data_index_value(scope, 0), enumerable)]
     identifier: (),
@@ -77,7 +77,7 @@ struct TouchEventObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TouchEvent, receiver)]
+#[webapi(interface = web_api_interfaces::TouchEvent)]
 struct TouchEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 0), enumerable)]
     touches: (),

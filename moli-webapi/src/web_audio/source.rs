@@ -29,7 +29,7 @@ struct BufferSourceObjectDeclaration {}
 struct ConstantSourceObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioScheduledSourceNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AudioScheduledSourceNode, enumerable)]
 struct ScheduledSourcePrototypeDeclaration {
     #[webapi(method, length = 0, callback = start)]
     start: (),
@@ -40,7 +40,7 @@ struct ScheduledSourcePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioBufferSourceNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AudioBufferSourceNode, enumerable)]
 struct BufferSourcePrototypeDeclaration {
     #[webapi(accessor_property, getter = slot_getter, setter = buffer_setter, data = v8str(scope, BUFFER))]
     buffer: (),
@@ -59,7 +59,7 @@ struct BufferSourcePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ConstantSourceNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ConstantSourceNode, enumerable)]
 struct ConstantSourcePrototypeDeclaration {
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, OFFSET))]
     offset: (),

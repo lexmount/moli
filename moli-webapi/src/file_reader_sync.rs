@@ -5,7 +5,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_webidl as webidl;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileReaderSync, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::FileReaderSync, enumerable)]
 struct FileReaderSyncPrototypeDeclaration {
     #[webapi(method, length = 1, callback = file_reader_sync_read_as_text_callback)]
     read_as_text: (),

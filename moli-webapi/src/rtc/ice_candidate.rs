@@ -56,7 +56,7 @@ struct IceCandidateObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCIceCandidate, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::RTCIceCandidate, enumerable)]
 struct IceCandidatePrototypeDeclaration {
     #[webapi(accessor_property, getter = candidate_attribute_getter, data = callback_data_index_value(scope, 0))]
     candidate: (),

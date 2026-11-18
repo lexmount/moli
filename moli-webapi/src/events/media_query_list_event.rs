@@ -9,7 +9,7 @@ const MEDIA_SLOT: &str = "__moliMediaQueryListEventMedia";
 const MATCHES_SLOT: &str = "__moliMediaQueryListEventMatches";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaQueryListEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MediaQueryListEvent, enumerable)]
 struct MediaQueryListEventPrototype {
     #[webapi(accessor_property, getter = media_getter)]
     media: (),

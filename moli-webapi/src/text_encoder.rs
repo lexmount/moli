@@ -11,7 +11,7 @@ struct TextEncoderObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TextEncoder, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::TextEncoder, enumerable)]
 struct TextEncoderPrototypeDeclaration {
     #[webapi(method, length = 0, callback = text_encoder_encode_callback)]
     encode: (),

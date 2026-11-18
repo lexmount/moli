@@ -207,7 +207,7 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceEntry, receiver)]
+#[webapi(interface = web_api_interfaces::PerformanceEntry)]
 struct PerformanceEntryPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -254,7 +254,7 @@ struct PerformanceEntryPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceEntry, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PerformanceEntry, enumerable)]
 struct PerformanceEntryPrototypeMethodsDeclaration {
     #[webapi(
         method,
@@ -279,9 +279,7 @@ struct PerformanceEntryDetailPrototypeAccessorsDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    interface = web_api_interfaces::PerformanceResourceTiming,
-    receiver
-)]
+    interface = web_api_interfaces::PerformanceResourceTiming)]
 struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -436,9 +434,7 @@ struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
     interface = web_api_interfaces::PerformanceResourceTiming,
-    enumerable,
-    receiver
-)]
+    enumerable)]
 struct PerformanceResourceTimingPrototypeMethodsDeclaration {
     #[webapi(
         method,

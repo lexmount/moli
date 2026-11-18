@@ -1263,12 +1263,6 @@ fn expand_accessor_property_field(
     let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
-    if attrs.getter.is_some() && attrs.getter_value.is_some() {
-        return Err(Error::new(
-            field.span(),
-            "`accessor_property` field cannot declare both #[webapi(getter = ...)] and #[webapi(getter_value = ...)]",
-        ));
-    }
     let (getter, setter) = expand_accessor_callbacks(attrs, |callback, is_setter, data| {
         let accessor_name = if is_setter { "setter" } else { "getter" };
         let check_receiver = if is_setter {
@@ -2008,6 +2002,7 @@ mod tests {
             syn::parse_quote!(#[webapi(static_method, callback = call, receiver = check)] value: ()),
             syn::parse_quote!(#[webapi(native_data_property, getter = get, receiver = check)] value: ()),
             syn::parse_quote!(#[webapi(alias = "other", receiver = check)] value: ()),
+            syn::parse_quote!(#[webapi(static_method, callback = call, receiver = false)] value: ()),
             syn::parse_quote!(#[webapi(data_property, returns_promise)] value: ()),
             syn::parse_quote!(#[webapi(native_data_property, getter = get, returns_promise)] value: ()),
             syn::parse_quote!(#[webapi(accessor_property, getter_value = self.getter, receiver = check)] value: ()),
@@ -2022,7 +2017,7 @@ mod tests {
     #[test]
     fn inherited_receiver_cannot_silently_skip_an_already_built_getter() {
         let input = syn::parse_quote! {
-            #[webapi(plain, receiver = check)]
+            #[webapi(interface = interfaces::Example)]
             struct Invalid {
                 #[webapi(accessor_property, getter_value = self.getter)]
                 getter: (),

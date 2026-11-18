@@ -5,7 +5,8 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowNetworkTemplateMethodsDeclaration {
-    #[webapi(method = "fetch", length = 1, callback = window_fetch_callback)]
+    // The callback authorizes WindowProxy receivers and selects the exception realm.
+    #[webapi(method = "fetch", length = 1, callback = window_fetch_callback, receiver = false)]
     fetch: (),
 }
 

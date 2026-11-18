@@ -947,6 +947,9 @@ pub fn webgl_rendering_context_constructor_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    web_api_interfaces::WebGLRenderingContext::DESCRIPTOR
+        .initialize(scope, args.this())
+        .expect("WebGL context must accept its native brand");
     init_webgl_context_object(scope, args.this());
     rv.set(args.this().into());
 }
@@ -1031,8 +1034,16 @@ pub fn build_webgl_lose_context_object<'s>(
     build_constructed_object(scope, "WEBGL_lose_context")
 }
 
+fn is_webgl_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    web_api_interfaces::WebGLRenderingContext::is_instance(scope, receiver)
+        || web_api_interfaces::WebGL2RenderingContext::is_instance(scope, receiver)
+}
+
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebGLRenderingContext, enumerable)]
+#[webapi(interface = web_api_interfaces::WebGLRenderingContext, enumerable, receiver = is_webgl_context)]
 struct WebGlRenderingContextTemplateMethodsDeclaration {
     #[webapi(method = "viewport", length = 4, callback = webgl_viewport_callback)]
     viewport: (),

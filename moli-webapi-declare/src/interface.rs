@@ -70,7 +70,7 @@ impl WebApiInterfaceDescriptor {
 /// struct ProgressEventState { /* private slots */ }
 ///
 /// #[derive(WebApiFunctionTemplate)]
-/// #[webapi(interface = Event, receiver)]
+/// #[webapi(interface = Event)]
 /// struct EventMethods { /* instance methods and accessors */ }
 /// ```
 ///

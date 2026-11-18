@@ -111,7 +111,7 @@ pub(in crate::context_bootstrap) const SERVICE_WORKER_OWNER_TOKEN_SLOT: &str =
 struct PermissionsObjectDeclaration {}
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Permissions, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Permissions, enumerable)]
 struct PermissionsPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = navigator_permissions_query_callback, returns_promise)]
     query: (),
@@ -193,9 +193,9 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     geolocation: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 32))]
     media_capabilities: (),
-    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 34), receiver = web_api_interfaces::Navigator::is_instance)]
+    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 34))]
     media_session: (),
-    #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback, receiver = web_api_interfaces::Navigator::is_instance)]
+    #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback)]
     cookie_enabled: (),
 }
 
@@ -207,7 +207,7 @@ struct NavigatorCredentialsPrototypeDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Navigator, receiver)]
+#[webapi(interface = web_api_interfaces::Navigator)]
 struct NavigatorPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 0, callback = navigator_get_gamepads_callback)]
     get_gamepads: (),
@@ -291,9 +291,7 @@ struct PermissionStatusPrototypeDeclaration {
 
 #[derive(Default, WebApiObject)]
 #[webapi(
-    interface = web_api_interfaces::NetworkInformation,
-    receiver
-)]
+    interface = web_api_interfaces::NetworkInformation)]
 struct NavigatorConnectionDeclaration {
     #[webapi(data_property, name = "type", enumerable, value = DEFAULT_CONNECTION_TYPE)]
     connection_type: (),
@@ -327,29 +325,29 @@ struct StorageManagerObjectDeclaration {}
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::StorageManager, enumerable)]
 struct StorageManagerTemplateMethodsDeclaration {
-    #[webapi(method, length = 0, callback = navigator_storage_persisted_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = navigator_storage_persisted_callback)]
     persisted: (),
 
-    #[webapi(method, length = 0, callback = navigator_storage_persist_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = navigator_storage_persist_callback)]
     persist: (),
 
-    #[webapi(method, length = 0, callback = navigator_storage_estimate_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = navigator_storage_estimate_callback)]
     estimate: (),
 
-    #[webapi(method, length = 0, callback = navigator_storage_get_directory_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = navigator_storage_get_directory_callback)]
     get_directory: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::StorageManager, enumerable)]
 struct StorageManagerWorkerTemplateMethodsDeclaration {
-    #[webapi(method, length = 0, callback = navigator_storage_persisted_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = navigator_storage_persisted_callback)]
     persisted: (),
 
-    #[webapi(method, length = 0, callback = navigator_storage_estimate_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = navigator_storage_estimate_callback)]
     estimate: (),
 
-    #[webapi(method, length = 0, callback = navigator_storage_get_directory_callback)]
+    #[webapi(returns_promise, method, length = 0, callback = navigator_storage_get_directory_callback)]
     get_directory: (),
 }
 
@@ -403,7 +401,6 @@ struct ServiceWorkerContainerDeclaration {
         method,
         enumerable,
         callback = navigator_service_worker_register_callback,
-        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
         returns_promise,
         length = 1
     )]
@@ -413,7 +410,6 @@ struct ServiceWorkerContainerDeclaration {
         method,
         enumerable,
         callback = navigator_service_worker_get_registration_callback,
-        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
         returns_promise,
         length = 0
     )]
@@ -423,7 +419,6 @@ struct ServiceWorkerContainerDeclaration {
         method,
         enumerable,
         callback = navigator_service_worker_get_registrations_callback,
-        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
         returns_promise,
         length = 0
     )]

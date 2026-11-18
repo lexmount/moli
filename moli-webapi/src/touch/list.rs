@@ -11,7 +11,7 @@ struct TouchListObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TouchList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::TouchList, enumerable)]
 struct TouchListPrototypeDeclaration {
     #[webapi(intrinsic_data_property = v8::Intrinsic::ArrayProtoValues, symbol = "iterator")]
     iterator: (),

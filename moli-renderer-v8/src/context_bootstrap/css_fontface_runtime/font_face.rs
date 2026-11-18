@@ -49,7 +49,7 @@ struct FontFaceObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFace, receiver)]
+#[webapi(interface = web_api_interfaces::FontFace)]
 struct FontFacePrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

@@ -48,7 +48,7 @@ fn read_blob<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Blob, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Blob, enumerable)]
 struct BlobTemplateMethodsDeclaration {
     #[webapi(method, length = 0, returns_promise, callback = blob_text_callback)]
     text: (),
@@ -112,7 +112,7 @@ struct BlobInstanceDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Blob, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Blob, enumerable)]
 struct BlobPrototypeDeclaration {
     #[webapi(accessor_property, getter = blob_size_attribute_getter_callback)]
     size: (),

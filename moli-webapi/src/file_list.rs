@@ -14,7 +14,7 @@ struct FileListObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileList, receiver)]
+#[webapi(interface = web_api_interfaces::FileList)]
 struct FileListPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_list_length_getter_callback, enumerable)]
     length: (),
@@ -192,7 +192,7 @@ fn file_list_length_from_object<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileList, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::FileList, enumerable)]
 struct FileListTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = file_list_item_callback)]
     item: (),

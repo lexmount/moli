@@ -8,7 +8,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_webidl as webidl;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Gamepad, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Gamepad, enumerable)]
 struct GamepadPrototypeDeclaration {
     #[webapi(accessor_property, getter = device_backend_unavailable)]
     id: (),
@@ -31,7 +31,7 @@ struct GamepadPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::GamepadButton, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::GamepadButton, enumerable)]
 struct GamepadButtonPrototypeDeclaration {
     #[webapi(accessor_property, getter = device_backend_unavailable)]
     pressed: (),
@@ -42,7 +42,7 @@ struct GamepadButtonPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::GamepadHapticActuator, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::GamepadHapticActuator, enumerable)]
 struct GamepadHapticActuatorPrototypeDeclaration {
     #[webapi(accessor_property, getter = device_backend_unavailable)]
     effects: (),

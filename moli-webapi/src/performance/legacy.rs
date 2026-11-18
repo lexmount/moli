@@ -35,7 +35,8 @@ struct PerformanceNavigationConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigation, enumerable)]
+// Preserve the legacy navigation defaults when the receiver has no timing data.
+#[webapi(interface = web_api_interfaces::PerformanceNavigation, enumerable, receiver = false)]
 struct PerformanceNavigationPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -127,7 +128,7 @@ pub struct PerformanceNavigationTimingSlotDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming, enumerable)]
 struct PerformanceNavigationTimingPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

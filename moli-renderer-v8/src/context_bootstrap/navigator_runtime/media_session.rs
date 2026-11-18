@@ -29,7 +29,7 @@ struct MediaSessionStateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaSession, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MediaSession, enumerable)]
 struct MediaSessionPrototypeDeclaration {
     #[webapi(method, length = 2, callback = set_action_handler)]
     set_action_handler: (),

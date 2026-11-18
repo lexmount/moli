@@ -47,8 +47,7 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onupdatefound"),
         setter_data = v8str(scope, "onupdatefound"),
-        enumerable,
-        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance
+        enumerable
     )]
     onupdatefound: (),
 
@@ -73,7 +72,6 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
     #[webapi(
         method = "showNotification",
         returns_promise,
-        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_show_notification_callback,
         length = 1
     )]
@@ -82,7 +80,6 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
     #[webapi(
         method = "getNotifications",
         returns_promise,
-        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_get_notifications_callback,
         length = 0
     )]
@@ -243,8 +240,7 @@ struct ServiceWorkerObjectDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onstatechange"),
         setter_data = v8str(scope, "onstatechange"),
-        enumerable,
-        receiver = web_api_interfaces::ServiceWorker::is_instance
+        enumerable
     )]
     onstatechange: (),
     #[webapi(
@@ -253,8 +249,7 @@ struct ServiceWorkerObjectDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onerror"),
         setter_data = v8str(scope, "onerror"),
-        enumerable,
-        receiver = web_api_interfaces::ServiceWorker::is_instance
+        enumerable
     )]
     onerror: (),
 

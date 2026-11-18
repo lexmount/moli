@@ -23,7 +23,7 @@ struct FontFaceSetObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSet, receiver)]
+#[webapi(interface = web_api_interfaces::FontFaceSet)]
 struct FontFaceSetPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

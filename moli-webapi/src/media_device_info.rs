@@ -12,7 +12,7 @@ const LABEL: &str = "__moliMediaDeviceLabel";
 const GROUP_ID: &str = "__moliMediaDeviceGroupId";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaDeviceInfo, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MediaDeviceInfo, enumerable)]
 struct DeviceInfoAttributes {
     #[webapi(accessor_property, getter = info_getter, data = v8str(scope, DEVICE_ID))]
     device_id: (),
@@ -27,7 +27,7 @@ struct DeviceInfoAttributes {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::InputDeviceInfo, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::InputDeviceInfo, enumerable)]
 struct InputDeviceInfoMethods {
     #[webapi(method, length = 0, callback = get_capabilities)]
     get_capabilities: (),

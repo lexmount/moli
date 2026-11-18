@@ -47,7 +47,7 @@ pub struct MutationRecordDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MutationRecord, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MutationRecord, enumerable)]
 struct MutationRecordPrototypeDeclaration {
     #[webapi(accessor_property = "type", getter = attribute_getter, data = callback_data_index_value(scope, 0))]
     record_type: (),

@@ -5,14 +5,14 @@ use moli_geometry::DomMatrixComponents;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CanvasRenderingContext2D, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CanvasRenderingContext2D, enumerable)]
 struct CanvasTransformPrototypeDeclaration {
     #[webapi(method = "getTransform", length = 0, callback = get_transform_callback)]
     get_transform: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OffscreenCanvasRenderingContext2D, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvasRenderingContext2D, enumerable)]
 struct OffscreenCanvasTransformPrototypeDeclaration {
     #[webapi(method = "getTransform", length = 0, callback = get_transform_callback)]
     get_transform: (),

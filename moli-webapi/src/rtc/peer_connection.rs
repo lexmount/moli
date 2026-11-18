@@ -106,7 +106,7 @@ struct RtcDataChannelObjectDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCPeerConnection, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::RTCPeerConnection, enumerable)]
 struct RtcPeerConnectionPrototypeDeclaration {
     #[webapi(accessor_property, getter = rtc_peer_connection_state_getter, data = callback_data_index_value(scope, 0))]
     signaling_state: (),
@@ -124,9 +124,9 @@ struct RtcPeerConnectionPrototypeDeclaration {
     #[webapi(accessor_property = "pendingLocalDescription", getter = rtc_peer_connection_description_getter, data = callback_data_index_value(scope, 2))]
     pending_local_description: (),
 
-    #[webapi(method, length = 0, callback = configuration::get_configuration, receiver = web_api_interfaces::RTCPeerConnection::is_instance)]
+    #[webapi(method, length = 0, callback = configuration::get_configuration)]
     get_configuration: (),
-    #[webapi(method, length = 0, callback = configuration::set_configuration, receiver = web_api_interfaces::RTCPeerConnection::is_instance)]
+    #[webapi(method, length = 0, callback = configuration::set_configuration)]
     set_configuration: (),
     #[webapi(method = "createDataChannel", length = 1, callback = rtc_peer_connection_create_data_channel_callback)]
     create_data_channel: (),
@@ -139,7 +139,7 @@ struct RtcPeerConnectionPrototypeDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCDataChannel, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::RTCDataChannel, enumerable)]
 struct RtcDataChannelPrototypeDeclaration {
     #[webapi(accessor_property, getter = rtc_data_channel_value_getter, data = callback_data_index_value(scope, 0))]
     label: (),

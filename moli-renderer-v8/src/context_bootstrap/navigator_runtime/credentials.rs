@@ -5,7 +5,7 @@ mod container;
 mod signals;
 pub(super) use container::build as build_container;
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PublicKeyCredential, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::PublicKeyCredential, enumerable)]
 struct PublicKeyCredentialSignalsDeclaration {
     #[webapi(static_method, returns_promise, length = 1, callback = signals::unknown_credential)]
     signal_unknown_credential: (),

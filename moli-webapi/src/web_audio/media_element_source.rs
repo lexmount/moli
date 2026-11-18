@@ -14,7 +14,7 @@ struct MediaElementSourceObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaElementAudioSourceNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MediaElementAudioSourceNode, enumerable)]
 struct MediaElementSourcePrototypeDeclaration {
     #[webapi(accessor_property, getter = media_element)]
     media_element: (),

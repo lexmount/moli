@@ -55,7 +55,7 @@ struct ObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WebTransportError, receiver, enumerable)]
+#[webapi(interface = web_api_interfaces::WebTransportError, enumerable)]
 struct PrototypeDeclaration {
     #[webapi(accessor_property, getter = slot_getter, data = v8str(scope, SOURCE_SLOT))]
     source: (),

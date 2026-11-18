@@ -83,7 +83,7 @@ struct ErrorEventArgs<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCPeerConnectionIceEvent, receiver, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCPeerConnectionIceEvent, enumerable)]
 struct IceEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = event_member_getter, data = callback_data_index_value(scope, 0))]
     candidate: (),
@@ -92,14 +92,14 @@ struct IceEventPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCDataChannelEvent, receiver, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCDataChannelEvent, enumerable)]
 struct DataChannelEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = event_member_getter, data = callback_data_index_value(scope, 2))]
     channel: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCErrorEvent, receiver, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCErrorEvent, enumerable)]
 struct ErrorEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = event_member_getter, data = callback_data_index_value(scope, 3))]
     error: (),

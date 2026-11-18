@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLTrackElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLTrackElement, enumerable)]
 pub(super) struct HtmlTrackElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "default",
@@ -159,21 +159,18 @@ pub(super) struct HtmlObjectElementPrototypeDeclaration {
     height: (),
     #[webapi(
         accessor_property,
-        getter = frame_owner_content_document_getter_function,
-        receiver = web_api_interfaces::HTMLObjectElement::is_instance
+        getter = frame_owner_content_document_getter_function
     )]
     content_document: (),
     #[webapi(
         accessor_property,
-        getter = frame_owner_content_window_getter_function,
-        receiver = web_api_interfaces::HTMLObjectElement::is_instance
+        getter = frame_owner_content_window_getter_function
     )]
     content_window: (),
     #[webapi(
         method = "getSVGDocument",
         length = 0,
-        callback = super::resource_elements::frame_owner_get_svg_document_function,
-        receiver = web_api_interfaces::HTMLObjectElement::is_instance
+        callback = super::resource_elements::frame_owner_get_svg_document_function
     )]
     get_svg_document: (),
     #[webapi(

@@ -1552,7 +1552,6 @@ pub(super) struct SvgImageElementPrototypeDeclaration {
         method,
         length = 0,
         callback = image_decode_callback,
-        receiver = web_api_interfaces::SVGImageElement::is_instance,
         returns_promise
     )]
     decode: (),
@@ -1917,8 +1916,7 @@ pub(super) struct HtmlEmbedElementUrlPrototypeDeclaration {
     #[webapi(
         method = "getSVGDocument",
         length = 0,
-        callback = frame_owner_get_svg_document_function,
-        receiver = web_api_interfaces::HTMLEmbedElement::is_instance
+        callback = frame_owner_get_svg_document_function
     )]
     get_svg_document: (),
 }
@@ -1975,14 +1973,12 @@ pub(super) struct HtmlFrameElementLegacyPrototypeDeclaration {
     margin_width: (),
     #[webapi(
         accessor_property,
-        getter = frame_owner_content_document_getter_function,
-        receiver = web_api_interfaces::HTMLFrameElement::is_instance
+        getter = frame_owner_content_document_getter_function
     )]
     content_document: (),
     #[webapi(
         accessor_property,
-        getter = frame_owner_content_window_getter_function,
-        receiver = web_api_interfaces::HTMLFrameElement::is_instance
+        getter = frame_owner_content_window_getter_function
     )]
     content_window: (),
 }
@@ -1990,8 +1986,10 @@ pub(super) struct HtmlFrameElementLegacyPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::HTMLIFrameElement, enumerable)]
 pub(super) struct HtmlIFrameElementPrototypeDeclaration {
+    // The getter returns an empty src on the interface prototype.
     #[webapi(
         accessor_property,
+        receiver = false,
         getter = iframe_src_getter_function,
         setter = iframe_src_setter_function
     )]
@@ -2099,21 +2097,18 @@ pub(super) struct HtmlIFrameElementPrototypeDeclaration {
     margin_width: (),
     #[webapi(
         accessor_property,
-        getter = frame_owner_content_document_getter_function,
-        receiver = web_api_interfaces::HTMLIFrameElement::is_instance
+        getter = frame_owner_content_document_getter_function
     )]
     content_document: (),
     #[webapi(
         accessor_property,
-        getter = frame_owner_content_window_getter_function,
-        receiver = web_api_interfaces::HTMLIFrameElement::is_instance
+        getter = frame_owner_content_window_getter_function
     )]
     content_window: (),
     #[webapi(
         method = "getSVGDocument",
         length = 0,
-        callback = frame_owner_get_svg_document_function,
-        receiver = web_api_interfaces::HTMLIFrameElement::is_instance
+        callback = frame_owner_get_svg_document_function
     )]
     get_svg_document: (),
 }
@@ -2217,7 +2212,7 @@ pub(super) struct HtmlLinkElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLStyleElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLStyleElement, enumerable)]
 pub(super) struct HtmlStyleElementPrototypeDeclaration {
     #[webapi(
         accessor_property,

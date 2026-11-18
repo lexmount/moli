@@ -8,7 +8,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use super::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CharacterData, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CharacterData, enumerable)]
 struct CharacterDataPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -31,7 +31,7 @@ struct CharacterDataPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Text, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Text, enumerable)]
 struct TextPrototypeDeclaration {
     #[webapi(accessor_property, getter = text_whole_text_getter_callback)]
     whole_text: (),
@@ -40,7 +40,7 @@ struct TextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ProcessingInstruction, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ProcessingInstruction, enumerable)]
 struct ProcessingInstructionPrototypeDeclaration {
     #[webapi(accessor_property, getter = processing_instruction_target_getter_callback)]
     target: (),

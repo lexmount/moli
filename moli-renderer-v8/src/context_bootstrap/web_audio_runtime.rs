@@ -191,7 +191,7 @@ struct OfflineAudioCompletePayloadDeclaration<'scope> {
 struct AudioContextTemplateDeclaration {
     #[webapi(method = "close", length = 0, callback = audio_context_close_callback)]
     close: (),
-    #[webapi(method = "createMediaElementSource", length = 1, callback = media_element_source::create, receiver = web_api_interfaces::AudioContext::is_instance)]
+    #[webapi(method = "createMediaElementSource", length = 1, callback = media_element_source::create)]
     create_media_element_source: (),
 }
 
@@ -209,8 +209,7 @@ struct AudioWorkletNodeTemplateDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onprocessorerror"),
         setter_data = v8str(scope, "onprocessorerror"),
-        enumerable,
-        receiver = web_api_interfaces::AudioWorkletNode::is_instance
+        enumerable
     )]
     onprocessorerror: (),
 }
@@ -218,7 +217,7 @@ struct AudioWorkletNodeTemplateDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
-    #[webapi(accessor_property, getter = listener::get, enumerable, receiver = web_api_interfaces::BaseAudioContext::is_instance)]
+    #[webapi(accessor_property, getter = listener::get, enumerable)]
     listener: (),
 
     #[webapi(
@@ -227,34 +226,33 @@ struct BaseAudioContextPrototypeDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "onstatechange"),
         setter_data = v8str(scope, "onstatechange"),
-        enumerable,
-        receiver = web_api_interfaces::BaseAudioContext::is_instance
+        enumerable
     )]
     onstatechange: (),
 
-    #[webapi(accessor_property, receiver = web_api_interfaces::BaseAudioContext::is_instance, getter = offline_context::render_quantum_size_getter)]
+    #[webapi(accessor_property, getter = offline_context::render_quantum_size_getter)]
     render_quantum_size: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 3, callback = buffer::create)]
+    #[webapi(method, length = 3, callback = buffer::create)]
     create_buffer: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = wave_shaper::create)]
+    #[webapi(method, length = 0, callback = wave_shaper::create)]
     create_wave_shaper: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = convolver::create)]
+    #[webapi(method, length = 0, callback = convolver::create)]
     create_convolver: (),
-    #[webapi(method = "createIIRFilter", receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 2, callback = iir::create)]
+    #[webapi(method = "createIIRFilter", length = 2, callback = iir::create)]
     create_iir_filter: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 2, callback = periodic_wave::create)]
+    #[webapi(method, length = 2, callback = periodic_wave::create)]
     create_periodic_wave: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_merger)]
+    #[webapi(method, length = 0, callback = channel_nodes::create_channel_merger)]
     create_channel_merger: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = channel_nodes::create_channel_splitter)]
+    #[webapi(method, length = 0, callback = channel_nodes::create_channel_splitter)]
     create_channel_splitter: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_delay)]
+    #[webapi(method, length = 0, callback = param_nodes::create_delay)]
     create_delay: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = param_nodes::create_stereo_panner)]
+    #[webapi(method, length = 0, callback = param_nodes::create_stereo_panner)]
     create_stereo_panner: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = source::create_buffer_source)]
+    #[webapi(method, length = 0, callback = source::create_buffer_source)]
     create_buffer_source: (),
-    #[webapi(method, receiver = web_api_interfaces::BaseAudioContext::is_instance, length = 0, callback = source::create_constant_source)]
+    #[webapi(method, length = 0, callback = source::create_constant_source)]
     create_constant_source: (),
     #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
     create_biquad_filter: (),
@@ -265,7 +263,6 @@ struct BaseAudioContextPrototypeDeclaration {
     #[webapi(
         method = "createOscillator",
         length = 0,
-        receiver = web_api_interfaces::BaseAudioContext::is_instance,
         callback = oscillator::create
     )]
     create_oscillator: (),
@@ -286,7 +283,7 @@ struct BaseAudioContextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OfflineAudioContext, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::OfflineAudioContext, enumerable)]
 struct OfflineAudioContextPrototypeDeclaration {
     #[webapi(
         accessor_property = "oncomplete",
@@ -294,8 +291,7 @@ struct OfflineAudioContextPrototypeDeclaration {
         setter = simple_event_target_handler_setter_callback,
         data = v8str(scope, "oncomplete"),
         setter_data = v8str(scope, "oncomplete"),
-        enumerable,
-        receiver = web_api_interfaces::OfflineAudioContext::is_instance
+        enumerable
     )]
     oncomplete: (),
 
@@ -444,7 +440,7 @@ fn audio_context_close_callback<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Worklet, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Worklet, enumerable)]
 struct WorkletPrototypeDeclaration {
     #[webapi(method = "addModule", length = 1, returns_promise, callback = audio_worklet_add_module_callback)]
     add_module: (),

@@ -100,7 +100,7 @@ pub(super) struct HtmlMediaElementPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLImageElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::HTMLImageElement, enumerable)]
 pub(super) struct HtmlImageElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = image_decode_callback, returns_promise)]
     decode: (),

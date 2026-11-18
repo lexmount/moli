@@ -33,7 +33,7 @@ impl AudioEventKind {
     }
 }
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioProcessingEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::AudioProcessingEvent, enumerable)]
 struct AudioProcessingEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, INPUT_BUFFER_SLOT))]
     input_buffer: (),
@@ -44,7 +44,7 @@ struct AudioProcessingEventPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OfflineAudioCompletionEvent, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::OfflineAudioCompletionEvent, enumerable)]
 struct OfflineAudioCompletionEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, RENDERED_BUFFER_SLOT))]
     rendered_buffer: (),

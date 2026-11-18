@@ -151,7 +151,7 @@ struct MessagePortObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MessagePort, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::MessagePort, enumerable)]
 struct MessagePortPrototypeDeclaration {
     #[webapi(method, length = 1, callback = message_port_post_message_callback)]
     post_message: (),
@@ -183,7 +183,7 @@ struct MessagePortPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MessageChannel, receiver)]
+#[webapi(interface = web_api_interfaces::MessageChannel)]
 struct MessageChannelPrototypeDeclaration {
     #[webapi(
         accessor_property,

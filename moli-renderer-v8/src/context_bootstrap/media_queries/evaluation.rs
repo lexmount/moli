@@ -34,7 +34,7 @@ struct MediaQueryListObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaQueryList, receiver)]
+#[webapi(interface = web_api_interfaces::MediaQueryList)]
 struct MediaQueryListPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

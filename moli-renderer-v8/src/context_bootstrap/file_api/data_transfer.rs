@@ -167,7 +167,7 @@ struct DataTransferShellDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransfer, receiver)]
+#[webapi(interface = web_api_interfaces::DataTransfer)]
 struct DataTransferPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_files_getter, enumerable)]
     files: (),
@@ -209,7 +209,7 @@ struct DataTransferItemListObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItemList, receiver)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList)]
 struct DataTransferItemListPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_item_list_length_getter, enumerable)]
     length: (),
@@ -260,7 +260,7 @@ struct DataTransferItemViewDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, receiver)]
+#[webapi(interface = web_api_interfaces::DataTransferItem)]
 struct DataTransferItemPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_item_kind_getter, enumerable)]
     kind: (),
@@ -320,7 +320,8 @@ struct FileSystemDirectoryEntryObjectDeclaration<'s, 'full_path, 'name> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileSystemEntry)]
+// The legacy entry getters return empty values when the receiver has no entry.
+#[webapi(interface = web_api_interfaces::FileSystemEntry, receiver = false)]
 struct FileSystemEntryPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_system_entry_filesystem_getter, enumerable)]
     filesystem: (),

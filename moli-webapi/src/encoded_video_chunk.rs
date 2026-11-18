@@ -70,7 +70,7 @@ struct EncodedVideoChunkObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::EncodedVideoChunk, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::EncodedVideoChunk, enumerable)]
 struct EncodedVideoChunkPrototypeDeclaration {
     #[webapi(accessor_property = "type", getter = slot_getter, data = v8str(scope, TYPE_SLOT))]
     kind: (),

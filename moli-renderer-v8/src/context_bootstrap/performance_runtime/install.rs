@@ -81,7 +81,7 @@ struct PerformanceObserverRuntimeStateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable)]
 struct PerformancePrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = performance_now_callback)]
     now: (),
@@ -112,7 +112,7 @@ struct PerformancePrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable)]
 struct PerformancePrototypeCommonAccessorsDeclaration {
     #[webapi(
         accessor_property,

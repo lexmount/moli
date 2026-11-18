@@ -4,7 +4,7 @@ use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CustomElementRegistry, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CustomElementRegistry, enumerable)]
 struct CustomElementRegistryPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 2, callback = custom_elements_define_callback)]
     define: (),

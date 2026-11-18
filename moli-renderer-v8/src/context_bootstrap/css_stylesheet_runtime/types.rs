@@ -541,7 +541,7 @@ pub struct CssRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSGroupingRule, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CSSGroupingRule, enumerable)]
 pub struct CssGroupingRulePrototypeDeclaration {
     #[webapi(accessor_property, getter = css_grouping_rule_css_rules_getter_callback)]
     pub css_rules: (),
@@ -579,7 +579,7 @@ pub struct CssSupportsRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSContainerRule, enumerable, receiver = web_api_interfaces::CSSContainerRule::is_instance)]
+#[webapi(interface = web_api_interfaces::CSSContainerRule, enumerable)]
 pub struct CssContainerRulePrototypeDeclaration {
     #[webapi(accessor_property, getter = css_container_rule_conditions_getter_callback)]
     pub conditions: (),
@@ -656,7 +656,7 @@ pub struct CssMarginRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSFontFeatureValuesRule, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CSSFontFeatureValuesRule, enumerable)]
 pub struct CssFontFeatureValuesRulePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -682,7 +682,7 @@ pub struct CssFontFeatureValuesRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSPropertyRule, enumerable, receiver = web_api_interfaces::CSSPropertyRule::is_instance)]
+#[webapi(interface = web_api_interfaces::CSSPropertyRule, enumerable)]
 pub struct CssPropertyRulePrototypeDeclaration {
     #[webapi(accessor_property, getter = css_property_rule_name_getter_callback)]
     pub name: (),
@@ -715,7 +715,7 @@ pub struct CssPageRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSKeyframesRule, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CSSKeyframesRule, enumerable)]
 pub struct CssKeyframesRulePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -741,7 +741,7 @@ pub struct CssKeyframesRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSKeyframeRule, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CSSKeyframeRule, enumerable)]
 pub struct CssKeyframeRulePrototypeDeclaration {
     #[webapi(
         accessor_property,

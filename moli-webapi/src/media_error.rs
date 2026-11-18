@@ -70,6 +70,9 @@ pub fn new_media_error_value<'s>(
     if object.set_prototype(scope, prototype.into()) != Some(true) {
         return None;
     }
+    web_api_interfaces::MediaError::DESCRIPTOR
+        .initialize(scope, object)
+        .ok()?;
     set_private_value(
         scope,
         object,

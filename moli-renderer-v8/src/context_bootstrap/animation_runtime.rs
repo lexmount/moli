@@ -23,13 +23,13 @@ const CSS_ANIMATION_TARGET_SLOT: &str = "__moliCssAnimationTarget";
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Animation, enumerable)]
 struct AnimationPrototypeMethodsDeclaration {
-    #[webapi(method, length = 0, callback = animation_play_callback)]
+    #[webapi(method, length = 0, callback = animation_play_callback, receiver = false)]
     play: (),
     #[webapi(method, length = 0, callback = animation_pause_callback)]
     pause: (),
     #[webapi(method, length = 0, callback = animation_cancel_callback)]
     cancel: (),
-    #[webapi(method, length = 0, callback = animation_finish_callback)]
+    #[webapi(method, length = 0, callback = animation_finish_callback, receiver = false)]
     finish: (),
     #[webapi(method, length = 0, callback = animation_reverse_callback)]
     reverse: (),
@@ -38,7 +38,7 @@ struct AnimationPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ElementAnimationPrototypeDeclaration {
     #[webapi(method, length = 0, callback = element_animate_callback)]
     animate: (),

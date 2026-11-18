@@ -17,7 +17,7 @@ struct SetResourceTimingBufferSizeArgs {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable)]
 struct PerformanceResourceTimingBufferMembersDeclaration {
     #[webapi(method, length = 0, callback = clear_resource_timings_callback)]
     clear_resource_timings: (),

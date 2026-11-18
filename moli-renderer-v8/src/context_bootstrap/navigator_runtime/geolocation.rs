@@ -29,7 +29,7 @@ struct GeolocationObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Geolocation, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Geolocation, enumerable)]
 struct GeolocationPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = geolocation_get_current_position_callback)]
     get_current_position: (),

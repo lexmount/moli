@@ -23,7 +23,7 @@ struct ClipboardObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Clipboard, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Clipboard, enumerable)]
 struct ClipboardPrototypeDeclaration {
     #[webapi(method, length = 0, callback = clipboard_read_callback, returns_promise)]
     read: (),

@@ -10,8 +10,7 @@ const FETCH_EVENT_PROTOTYPE_SLOT: &str = "__moliFetchEventPrototype";
     interface = web_api_interfaces::FetchEvent,
     constructor_callback = fetch_event_constructor_callback,
     constructor_length = 2,
-    readonly_prototype,
-    receiver = web_api_interfaces::FetchEvent::is_instance
+    readonly_prototype
 )]
 struct FetchEventTemplateDeclaration {
     #[webapi(method = "respondWith", enumerable, callback = fetch_event_respond_with_callback, length = 1)]

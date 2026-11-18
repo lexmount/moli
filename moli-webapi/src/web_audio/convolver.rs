@@ -9,7 +9,7 @@ const ACQUIRED_CONTENT: &str = "__moliConvolverAcquiredContent";
 const ACQUIRED_NORMALIZE: &str = "__moliConvolverAcquiredNormalize";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ConvolverNode, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ConvolverNode, enumerable)]
 struct PrototypeDeclaration {
     #[webapi(accessor_property, getter = slot_getter, setter = buffer_setter, data = v8str(scope, BUFFER))]
     buffer: (),

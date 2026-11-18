@@ -21,7 +21,7 @@ struct RecordDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBRecord, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBRecord, enumerable)]
 struct RecordPrototype {
     #[webapi(accessor_property, getter = key_getter)]
     key: (),

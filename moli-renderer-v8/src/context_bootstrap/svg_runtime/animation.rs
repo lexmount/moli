@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGAnimationElement, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::SVGAnimationElement, enumerable)]
 struct SvgAnimationDeclaration {
     #[webapi(accessor_property = "targetElement", getter = target_element_getter)]
     target_element: (),

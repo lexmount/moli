@@ -9,7 +9,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBFactory, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBFactory, enumerable)]
 struct IdbFactoryPrototypeDeclaration {
     #[webapi(method, length = 1, callback = idb_factory_open_callback)]
     open: (),
@@ -22,7 +22,7 @@ struct IdbFactoryPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::IDBRequest, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::IDBRequest, enumerable)]
 struct IdbRequestPrototypeDeclaration {
     #[webapi(accessor_property, getter = idb_request_result_getter)]
     result: (),

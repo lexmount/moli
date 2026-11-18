@@ -308,7 +308,7 @@ pub(crate) const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentMetadataPrototypeDeclaration {
     #[webapi(accessor_property = "URL", getter = document_url_getter_function)]
     url: (),
@@ -336,7 +336,7 @@ struct DocumentMetadataPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentStructurePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -367,7 +367,7 @@ struct DocumentStructurePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentViewPrototypeDeclaration {
     #[webapi(
         accessor_property = "defaultView",
@@ -377,7 +377,7 @@ struct DocumentViewPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentFocusPrototypeDeclaration {
     #[webapi(
         accessor_property = "activeElement",
@@ -387,7 +387,7 @@ struct DocumentFocusPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentStatePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -429,7 +429,7 @@ struct DocumentStatePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentCollectionAccessorsPrototypeDeclaration {
     #[webapi(accessor_property, getter = document_forms_getter_function)]
     forms: (),
@@ -450,7 +450,7 @@ struct DocumentCollectionAccessorsPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentCollectionQueryPrototypeDeclaration {
     #[webapi(
         method,
@@ -479,7 +479,7 @@ struct DocumentCollectionQueryPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentObsoleteMethodsPrototypeDeclaration {
     #[webapi(method, length = 0, callback = document_obsolete_noop_callback)]
     clear: (),
@@ -1339,14 +1339,14 @@ pub(crate) fn install_document_template_bindings<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentGetElementByIdTemplateDeclaration {
     #[webapi(method = "getElementById", length = 1, callback = node_get_element_by_id_callback)]
     get_element_by_id: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentPrototypeMethodsDeclaration {
     #[webapi(method = "createElement", length = 1, callback = node_create_element_callback)]
     create_element: (),

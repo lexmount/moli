@@ -27,9 +27,7 @@ pub struct IntersectionObserverEntryDeclaration<'scope> {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
     interface = web_api_interfaces::IntersectionObserverEntry,
-    enumerable,
-    receiver
-)]
+    enumerable)]
 struct IntersectionObserverEntryPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = intersection_observer_entry_attribute_getter_callback, data = callback_data_index_value(scope, 0))]
     time: (),

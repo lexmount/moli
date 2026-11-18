@@ -155,7 +155,7 @@ struct DomMatrixJsonDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMPoint, receiver)]
+#[webapi(interface = web_api_interfaces::DOMPoint)]
 struct DomPointPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -192,7 +192,7 @@ struct DomPointPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMPointReadOnly, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::DOMPointReadOnly, enumerable)]
 struct DomPointReadOnlyPrototypeMethodsDeclaration {
     #[webapi(
         method = "matrixTransform",
@@ -206,7 +206,7 @@ struct DomPointReadOnlyPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMPointReadOnly, receiver)]
+#[webapi(interface = web_api_interfaces::DOMPointReadOnly)]
 struct DomPointReadOnlyPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = dom_point_getter_callback, data = callback_data_index_value(scope, 0), enumerable)]
     x: (),

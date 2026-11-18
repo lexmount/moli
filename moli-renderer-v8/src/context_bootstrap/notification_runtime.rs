@@ -47,7 +47,7 @@ pub(crate) struct NotificationOptionsPayload {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Notification, receiver)]
+#[webapi(interface = web_api_interfaces::Notification)]
 struct NotificationObjectDeclaration<'scope> {
     #[webapi(slot = NOTIFICATION_TITLE_SLOT)]
     title: String,
@@ -102,7 +102,7 @@ struct NotificationObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Notification, receiver)]
+#[webapi(interface = web_api_interfaces::Notification)]
 struct NotificationPrototypeDeclaration {
     #[webapi(
         accessor_property = "onclick",

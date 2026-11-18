@@ -27,11 +27,11 @@ struct ModelContextObject<'s> {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::ModelContext, enumerable)]
 struct ModelContextPrototype {
-    #[webapi(method = "registerTool", length = 1, callback = api::register_tool_callback)]
+    #[webapi(returns_promise, method = "registerTool", length = 1, callback = api::register_tool_callback)]
     register_tool: (),
-    #[webapi(method = "getTools", length = 0, callback = api::get_tools_callback)]
+    #[webapi(returns_promise, method = "getTools", length = 0, callback = api::get_tools_callback)]
     get_tools: (),
-    #[webapi(method = "executeTool", length = 1, callback = api::execute_tool_callback)]
+    #[webapi(returns_promise, method = "executeTool", length = 1, callback = api::execute_tool_callback)]
     execute_tool: (),
     #[webapi(accessor_property = "ontoolchange", getter = events::handler_getter, setter = events::handler_setter, data = v8::Integer::new(scope, 0))]
     on_tool_change: (),
@@ -42,7 +42,7 @@ struct ModelContextPrototype {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentModelContextPrototype {
     #[webapi(accessor_property = "modelContext", getter = model_context_getter)]
     model_context: (),

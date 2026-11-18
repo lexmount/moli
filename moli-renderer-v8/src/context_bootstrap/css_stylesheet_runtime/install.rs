@@ -10,7 +10,7 @@ struct CssFontFeatureValuesMapObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSFontFeatureValuesMap, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CSSFontFeatureValuesMap, enumerable)]
 struct CssFontFeatureValuesMapPrototypeDeclaration {
     #[webapi(accessor_property, getter = css_font_feature_values_map_size_getter_callback)]
     size: (),

@@ -19,7 +19,7 @@ struct ImageBitmapObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ImageBitmap, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::ImageBitmap, enumerable)]
 struct ImageBitmapPrototypeDeclaration {
     #[webapi(
         accessor_property,

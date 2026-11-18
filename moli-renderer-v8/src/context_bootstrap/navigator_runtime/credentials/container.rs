@@ -26,7 +26,7 @@ struct ContainerObject<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CredentialsContainer, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::CredentialsContainer, enumerable)]
 struct ContainerPrototype {
     #[webapi(method, returns_promise, length = 0, callback = get)]
     get: (),

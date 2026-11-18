@@ -182,7 +182,7 @@ struct LightweightCssPageDescriptorsDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSStyleProperties)]
+#[webapi(interface = web_api_interfaces::CSSStyleDeclaration)]
 struct LightweightCssStylePrototypeDeclaration {
     #[webapi(
         accessor_property,
