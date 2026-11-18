@@ -1,6 +1,7 @@
 (function locationEntrySettings(config) {
   const methods = {
-    same: ['href', 'reflect', 'descriptor', 'window', 'document', 'assign', 'replace', 'expando'],
+    same: ['href', 'reflect', 'descriptor', 'window', 'document', 'assign', 'replace', 'expando',
+      'href-empty', 'assign-empty', 'replace-empty'],
     cross: ['href', 'reflect', 'descriptor', 'window', 'replace']
   };
   const cases = Object.entries(methods).flatMap(([origin, kinds]) =>
@@ -64,11 +65,14 @@
     window.locationEntryLoaded = entry => {
       const incumbent = entry.document.getElementById('incumbent').contentWindow;
       const navigate = incumbent.Function('target', 'entry', 'kind', 'label', `
+        const empty = kind.endsWith('-empty');
         const input = {toString() {
-          entry.document.querySelector('base').href = '/converted/' + label + '/';
-          return 'target.html?case=' + label;
+          const base = '/converted/' + label + '/';
+          const relative = 'target.html?case=' + label;
+          entry.document.querySelector('base').href = empty ? base + relative + '#discard' : base;
+          return empty ? '' : relative;
         }};
-        switch (kind) {
+        switch (kind.replace(/-empty$/, '')) {
           case 'href': target.location.href = input; break;
           case 'reflect': Reflect.set(target.location, 'href', input); break;
           case 'descriptor': Object.getOwnPropertyDescriptor(target.location, 'href').set.call(target.location, input); break;

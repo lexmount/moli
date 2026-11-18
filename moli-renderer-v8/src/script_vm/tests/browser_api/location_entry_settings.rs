@@ -4,9 +4,9 @@ use super::*;
 async fn location_proxy_forwarding_preserves_entry_settings_and_caller_exceptions() {
     let script = include_str!("../../../../tests/fixtures/location-entry-settings.js");
     let child = format!("<!doctype html><body><script>({script})({{role:'child'}})</script>");
-    // One entry document, its incumbent and 26 navigation targets, each loaded
+    // One entry document, its incumbent and 32 navigation targets, each loaded
     // before and after its Location operation.
-    let server = StaticHttpServer::spawn_with_bodies(vec![child; 54]).await;
+    let server = StaticHttpServer::spawn_with_bodies(vec![child; 66]).await;
     let loader = static_http_loader([
         server.resolve_entry("localhost"),
         server.resolve_entry("127.0.0.1"),
@@ -36,15 +36,15 @@ async fn location_proxy_forwarding_preserves_entry_settings_and_caller_exception
     .await;
     let result: serde_json::Value =
         serde_json::from_str(&vm.eval("JSON.stringify(locationEntryResult)").unwrap()).unwrap();
-    assert_eq!(result["checks"], 60, "{result}");
+    assert_eq!(result["checks"], 72, "{result}");
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
     let requests = server.finish_targets().await;
-    assert_eq!(requests.len(), 54);
+    assert_eq!(requests.len(), 66);
     assert_eq!(
         requests
             .iter()
             .filter(|path| path.starts_with("/converted/"))
             .count(),
-        26,
+        32,
     );
 }
