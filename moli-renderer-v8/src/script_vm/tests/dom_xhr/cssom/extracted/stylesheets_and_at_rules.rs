@@ -756,6 +756,38 @@ fn constructed_css_stylesheets_reject_or_ignore_import_rules() {
     assert_eq!(async_result, "true,1,.next { color: green; }");
 }
 #[test]
+fn css_stylesheet_replace_rejects_binding_errors() {
+    let mut vm = new_storage_test_vm("https://css-replace-binding-errors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const sheet = new CSSStyleSheet();
+  const reason = new Error('conversion failed');
+  const rejected = [
+    CSSStyleSheet.prototype.replace.call({}, ''),
+    sheet.replace(),
+    sheet.replace({ toString() { throw reason; } }),
+  ];
+  globalThis.replaceErrors = [];
+  rejected.forEach((promise, index) => promise.then(
+    () => replaceErrors.push(false),
+    error => replaceErrors.push(index === 2 ? error === reason : error instanceof TypeError)
+  ));
+  return rejected.every(promise => promise instanceof Promise);
+})()
+"#,
+        )
+        .expect("replace binding errors must return promises");
+
+    assert_eq!(result, "true");
+    assert_eq!(
+        vm.eval("replaceErrors.join('|')").unwrap(),
+        "true|true|true"
+    );
+}
+#[test]
 fn constructed_css_stylesheet_insert_and_delete_rules_match_cssom_defaults() {
     let mut vm = new_storage_test_vm("https://css-constructed-rule-mutation.test/");
 

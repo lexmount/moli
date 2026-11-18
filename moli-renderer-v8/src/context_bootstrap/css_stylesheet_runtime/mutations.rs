@@ -738,18 +738,6 @@ pub(crate) fn freeze_css_rule_wrapper_from_retained_native_binding<'s>(
     true
 }
 
-pub(crate) fn rejected_type_error_promise<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    message: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let resolver = v8::PromiseResolver::new(scope)?;
-    let promise = resolver.get_promise(scope);
-    let reason = v8_string(scope, message)?;
-    let exception = v8::Exception::type_error(scope, reason);
-    let _ = resolver.reject(scope, exception);
-    Some(promise.into())
-}
-
 pub(crate) fn nested_rule_block_text_from_stylo_mutation(
     mutation: CssDetachedRuleListMutation,
 ) -> String {
