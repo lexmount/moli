@@ -9,10 +9,10 @@ mod lifecycle;
 mod lookup;
 mod network_owner;
 mod page_owner;
+mod resource_target;
 mod runtime_owner;
 mod session_owner;
 mod target_session_owner;
-mod worker_resource;
 
 pub(crate) use emulation_owner::TargetEmulationStateUpdate;
 pub(crate) use page_owner::PageLifecycleEventsEnableResult;
