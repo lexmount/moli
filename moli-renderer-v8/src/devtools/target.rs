@@ -201,6 +201,12 @@ impl RendererDevToolsTargetHandle {
         self.io.terminate_execution_for_target_close()
     }
 
+    /// The renderer owner has reached teardown. Pending close interrupts have
+    /// served their purpose and must leave the final lifecycle callbacks alone.
+    pub(crate) fn begin_page_teardown(&self) {
+        self.io.begin_page_teardown();
+    }
+
     /// Executes Chromium's terminal `Page.crash` IO control boundary.
     ///
     /// Unlike ordinary IO-agent commands, a crash must not wait for or occupy

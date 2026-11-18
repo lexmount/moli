@@ -2007,6 +2007,7 @@ impl PageVm {
         let Some(vm) = self.vm.as_mut() else {
             return;
         };
+        vm.devtools_target().begin_page_teardown();
         // A native auxiliary Window is closed on the protocol owner's task.
         // Settle its Navigation API while the exact realm and callbacks remain
         // registered, before clearing the context's resources.

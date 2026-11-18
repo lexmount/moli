@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 #[cfg(feature = "devtools")]
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
@@ -28,9 +28,16 @@ use crate::runtime::{RendererInspectorPauseCommandEffect, RendererRuntimeInspect
 type RendererInspectorInterruptCallback =
     unsafe extern "C" fn(v8::UnsafeRawIsolatePtr, *mut c_void);
 
+#[repr(u8)]
+enum PageCloseInterruptState {
+    Idle,
+    Requested,
+    Teardown,
+}
+
 pub(crate) struct RendererInspectorInterruptTarget {
     route_id: RendererInspectorSessionExecutorRouteId,
-    close_requested: AtomicBool,
+    close_interrupt: AtomicU8,
     page_scoped: bool,
 }
 
@@ -39,8 +46,24 @@ impl RendererInspectorInterruptTarget {
         self.route_id
     }
 
+    fn request_close_interrupt(&self) -> bool {
+        self.close_interrupt
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                (state != PageCloseInterruptState::Teardown as u8)
+                    .then_some(PageCloseInterruptState::Requested as u8)
+            })
+            .is_ok()
+    }
+
     pub(crate) fn take_close_request(&self) -> bool {
-        self.close_requested.swap(false, Ordering::AcqRel)
+        self.close_interrupt
+            .compare_exchange(
+                PageCloseInterruptState::Requested as u8,
+                PageCloseInterruptState::Idle as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
 }
 
@@ -461,7 +484,7 @@ impl RendererInspectorIoIngress {
                         callback,
                         target: Arc::new(RendererInspectorInterruptTarget {
                             route_id,
-                            close_requested: AtomicBool::new(false),
+                            close_interrupt: AtomicU8::new(PageCloseInterruptState::Idle as u8),
                             page_scoped,
                         }),
                     }
@@ -525,11 +548,24 @@ impl RendererInspectorIoIngress {
             // related Pages and any bootstrap that has no context yet.
             return route.isolate.terminate_execution();
         }
-        route.target.close_requested.store(true, Ordering::Release);
+        if !route.target.request_close_interrupt() {
+            return false;
+        }
         // Do not coalesce this terminal interrupt with ordinary IO work. An
-        // already-running callback may have checked close_requested before
-        // this store and must not consume the only opportunity to stop JS.
+        // already-running callback may have checked for a close request
+        // before publication and must not consume the only chance to stop JS.
         self.post_interrupt()
+    }
+
+    pub(crate) fn begin_page_teardown(&self) {
+        if let Some(route) = &self.shared.interrupt_route
+            && route.target.page_scoped
+        {
+            route
+                .target
+                .close_interrupt
+                .store(PageCloseInterruptState::Teardown as u8, Ordering::Release);
+        }
     }
 
     pub(crate) fn configure_owner_wake(
