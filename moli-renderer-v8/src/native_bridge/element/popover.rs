@@ -803,6 +803,42 @@ fn hide_popover_stack_until(
     }
 }
 
+pub(super) fn hide_popovers_for_dialog(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    dialog: DomHandle,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(document) = runtime.dom_host().owner_document_handle(dialog) else {
+        return;
+    };
+    let ancestor = topmost_popover_ancestor(runtime, document, dialog, None);
+    let hint_endpoint = ancestor.map(|(handle, _)| handle);
+    hide_popover_stack_until(
+        scope,
+        runtime_ptr,
+        document,
+        hint_endpoint,
+        PopoverStack::Hint,
+        HidePopover::DISMISS,
+    );
+    let auto_endpoint = match ancestor {
+        Some((_, PopoverStack::Hint)) => (unsafe { &*runtime_ptr })
+            .document_popovers
+            .get(&document)
+            .and_then(|state| state.hint_parent),
+        _ => hint_endpoint,
+    };
+    hide_popover_stack_until(
+        scope,
+        runtime_ptr,
+        document,
+        auto_endpoint,
+        PopoverStack::Auto,
+        HidePopover::DISMISS,
+    );
+}
+
 fn parse_popover_invocation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,

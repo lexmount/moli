@@ -17,7 +17,7 @@ use super::focus::{
     apply_modal_dialog_focus_fixup, remember_dialog_previously_focused_element,
     restore_dialog_focus_after_close, run_dialog_focusing_steps,
 };
-use super::popover::popover_is_open;
+use super::popover::{hide_popovers_for_dialog, popover_is_open};
 use super::toggle_event::{construct_toggle_event_with_source, queue_element_toggle_event};
 use super::{
     construct_simple_event, dispatch_public_event, has_reflected_attribute,
@@ -485,6 +485,7 @@ pub(super) fn dialog_show_callback<'s>(
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, false);
     remember_dialog_previously_focused_element(runtime_ptr, handle);
+    hide_popovers_for_dialog(scope, runtime_ptr, handle);
     run_dialog_focusing_steps(scope, runtime_ptr, handle);
 }
 
@@ -549,6 +550,7 @@ fn show_modal_dialog(
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
     remember_dialog_previously_focused_element(runtime_ptr, handle);
+    hide_popovers_for_dialog(scope, runtime_ptr, handle);
     apply_modal_dialog_focus_fixup(scope, runtime_ptr, handle);
     run_dialog_focusing_steps(scope, runtime_ptr, handle);
 }
