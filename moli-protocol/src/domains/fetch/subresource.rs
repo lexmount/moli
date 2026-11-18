@@ -181,7 +181,7 @@ fn prepare_subresource_fetch_pause_sources(
             .map(crate::conn::PendingSubresourceFetchResidence::Page)
     });
     let Some((fetch_snapshot, frame_id)) = (|| {
-        let target_frame_id = if conn.worker_resource_identity_for_owner(owner).is_some() {
+        let target_frame_id = if conn.owner_has_worker_resource_target(owner) {
             String::new()
         } else {
             conn.target_session_owner_frame_tree_identity_for_owner(owner)

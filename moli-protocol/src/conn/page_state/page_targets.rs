@@ -15,6 +15,27 @@ use crate::automation::{
 };
 use moli_core::network::SharedWebStorageStore;
 
+impl crate::conn::TargetRuntimeSlot {
+    pub(crate) fn start_page_policy_update(
+        &self,
+        navigation_engine: Option<&moli_core::runtime::NavigationEngine>,
+        update: moli_core::page::RendererPageRequestPolicyUpdate,
+        loaded: impl FnOnce(&moli_core::page::Page) -> Result<moli_core::page::PendingPageCommand>,
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
+        let Some(source) = self.page_slot().prepared_document_policy_page() else {
+            return self.loaded_page().map(loaded).transpose();
+        };
+        navigation_engine
+            .ok_or(crate::conn::NoDocumentLoaded)?
+            .start_page_request_policy_update(
+                source.owner_local_host_id(),
+                source.page_id(),
+                update,
+            )
+            .map(Some)
+    }
+}
+
 impl BrowserContext {
     /// Policy follows native commit admission, not the later projection of
     /// its Document identity. The restricted update cannot query an unbound
@@ -28,18 +49,9 @@ impl BrowserContext {
         let target = self
             .page_target(target_id)
             .ok_or(crate::conn::NoDocumentLoaded)?;
-        let slot = target.runtime_slot();
-        let Some(source) = slot.page_slot().prepared_document_policy_page() else {
-            return slot.loaded_page().map(loaded).transpose();
-        };
-        self.page_navigation_engine(target_id)
-            .ok_or(crate::conn::NoDocumentLoaded)?
-            .start_page_request_policy_update(
-                source.owner_local_host_id(),
-                source.page_id(),
-                update,
-            )
-            .map(Some)
+        target
+            .runtime_slot()
+            .start_page_policy_update(target.navigation_engine(), update, loaded)
     }
 
     pub(crate) fn take_page_target_for_close(&mut self, target_id: &str) -> Option<PageTargetHost> {

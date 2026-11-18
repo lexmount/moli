@@ -219,6 +219,22 @@ impl PageTargetHost {
         self.navigation_engine.as_ref()
     }
 
+    pub(crate) fn resource_parts_mut(
+        &mut self,
+    ) -> (
+        &str,
+        &mut TargetFetchOwner,
+        &mut TargetRuntimeSlot,
+        Option<&NavigationEngine>,
+    ) {
+        (
+            &self.target_id,
+            &mut self.fetch_owner,
+            &mut self.runtime_slot,
+            self.navigation_engine.as_ref(),
+        )
+    }
+
     pub(crate) fn navigation_engine_mut(&mut self) -> Option<&mut NavigationEngine> {
         self.navigation_engine.as_mut()
     }

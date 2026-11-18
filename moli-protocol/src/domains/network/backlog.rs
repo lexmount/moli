@@ -517,7 +517,7 @@ fn emit_staged_subresource_request_started(
             slot.record_fetch_pause_announced_redirect(request_id);
         }
     }
-    if conn.worker_resource_identity_for_owner(owner).is_some()
+    if conn.owner_has_worker_resource_target(owner)
         && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
     {
         slot.record_fetch_pause_announced_request_id(request_id.to_owned());
@@ -793,7 +793,7 @@ pub(crate) fn emit_prepared_renderer_network_live_background_events(
     prepared: &mut TargetNetworkBacklogPreparedDelivery,
 ) {
     let Some((frame_id, snapshot)) = (|| {
-        let frame_id = if conn.worker_resource_identity_for_owner(owner).is_some() {
+        let frame_id = if conn.owner_has_worker_resource_target(owner) {
             String::new()
         } else {
             conn.target_owner_identity_for_owner(owner)?.1?
