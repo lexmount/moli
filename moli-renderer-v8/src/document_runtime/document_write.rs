@@ -32,12 +32,6 @@ enum DocumentWriteParserPumpInput<'a> {
     QueuedOrBuffered,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum HtmlFragmentParserContextMode {
-    Standard,
-    RangeCreateContextualFragment,
-}
-
 struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
     runtime: &'a mut DocumentRuntime,
     scope: &'a mut v8::PinScope<'scope, 'pin>,
@@ -523,7 +517,7 @@ impl DocumentRuntime {
         }
     }
 
-    fn build_fragment_from_html_with_context_mode(
+    fn build_fragment_from_html_internal(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
@@ -532,7 +526,6 @@ impl DocumentRuntime {
         html: &str,
         scripts_already_started: bool,
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
-        context_mode: HtmlFragmentParserContextMode,
         scripting_enabled: bool,
         allow_declarative_shadow_roots: bool,
     ) -> Option<DomHandle> {
@@ -543,16 +536,10 @@ impl DocumentRuntime {
             .and_then(Node::namespace)
             .unwrap_or("http://www.w3.org/1999/xhtml")
             .to_owned();
-        let mut context_local_name = context_node
+        let context_local_name = context_node
             .and_then(Node::local_name)
             .unwrap_or("body")
             .to_owned();
-        if context_mode == HtmlFragmentParserContextMode::RangeCreateContextualFragment
-            && context_namespace == "http://www.w3.org/1999/xhtml"
-            && context_local_name.eq_ignore_ascii_case("html")
-        {
-            context_local_name = "body".to_owned();
-        }
         let is_frameset_context = context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("frameset");
         let registry_association =
@@ -647,7 +634,7 @@ impl DocumentRuntime {
         html: &str,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_with_context_mode(
+        self.build_fragment_from_html_internal(
             scope,
             host_ptr,
             document_handle,
@@ -655,7 +642,6 @@ impl DocumentRuntime {
             html,
             false,
             HtmlFragmentCustomElementUpgradeTiming::InReturnedFragment,
-            HtmlFragmentParserContextMode::RangeCreateContextualFragment,
             scripting_enabled,
             false,
         )
@@ -672,7 +658,7 @@ impl DocumentRuntime {
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_with_context_mode(
+        self.build_fragment_from_html_internal(
             scope,
             host_ptr,
             document_handle,
@@ -680,7 +666,6 @@ impl DocumentRuntime {
             html,
             scripts_already_started,
             custom_element_upgrade_timing,
-            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             false,
         )
@@ -696,7 +681,7 @@ impl DocumentRuntime {
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_with_context_mode(
+        self.build_fragment_from_html_internal(
             scope,
             host_ptr,
             document_handle,
@@ -704,7 +689,6 @@ impl DocumentRuntime {
             html,
             true,
             custom_element_upgrade_timing,
-            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             true,
         )

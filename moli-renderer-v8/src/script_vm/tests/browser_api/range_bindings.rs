@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn range_contextual_fragments_use_native_context_and_preserve_receiver_realm() {
+    let mut vm = new_parsed_test_vm(
+        "https://range-contextual-fragments.test/",
+        "<!doctype html><iframe id=child></iframe>",
+    );
+    let result = vm
+        .eval(include_str!(
+            "../../../../tests/fixtures/range-contextual-fragment-native-context.js"
+        ))
+        .expect("Contextual fragment context matrix should complete");
+    assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "420");
+    assert_eq!(
+        result,
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__uiEventResults.rows.filter(row => !row.passed))")
+            .unwrap(),
+    );
+}
+
+#[test]
 fn range_members_validate_native_receivers_before_argument_conversion() {
     let mut vm = new_parsed_test_vm(
         "https://range-native-receivers.test/",
