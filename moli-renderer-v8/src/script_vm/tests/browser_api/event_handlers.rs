@@ -567,11 +567,14 @@ fn window_document_and_shadow_handlers_share_listener_registration_order() {
   window.addEventListener("message", () => windowOrder.push("THREE"));
   window.dispatchEvent(new MessageEvent("message"));
 
-  const documentOrder = [];
-  document.addEventListener("readystatechange", () => documentOrder.push("ONE"));
-  document.onreadystatechange = () => documentOrder.push("TWO");
-  document.addEventListener("readystatechange", () => documentOrder.push("THREE"));
-  document.dispatchEvent(new Event("readystatechange"));
+  const documentOrder = {};
+  for (const type of ["readystatechange", "visibilitychange"]) {
+    const order = documentOrder[type] = [];
+    document.addEventListener(type, () => order.push("ONE"));
+    document[`on${type}`] = () => order.push("TWO");
+    document.addEventListener(type, () => order.push("THREE"));
+    document.dispatchEvent(new Event(type));
+  }
 
   const shadowOrder = [];
   const shadow = document.createElement("div").attachShadow({ mode: "open" });
@@ -598,7 +601,7 @@ fn window_document_and_shadow_handlers_share_listener_registration_order() {
 
     assert_eq!(
         result,
-        r#"{"window":["ONE","TWO","THREE"],"document":["ONE","TWO","THREE"],"shadow":["ONE","TWO","THREE"],"customExpandoCalled":false}"#,
+        r#"{"window":["ONE","TWO","THREE"],"document":{"readystatechange":["ONE","TWO","THREE"],"visibilitychange":["ONE","TWO","THREE"]},"shadow":["ONE","TWO","THREE"],"customExpandoCalled":false}"#,
     );
 }
 

@@ -127,6 +127,7 @@ const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onpointerlockerror",
     "onreadystatechange",
     "onresume",
+    "onvisibilitychange",
 ];
 pub(in crate::native_bridge::element) const ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES: &[&str] =
     &[ON_FULLSCREEN_CHANGE, ON_FULLSCREEN_ERROR];
