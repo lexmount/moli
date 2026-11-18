@@ -2299,6 +2299,7 @@ fn unregister_last_controlled_client_queues_waiting_activation() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: waiting_script_url.clone(),
@@ -2575,6 +2576,7 @@ fn startup_restored_registrations_filter_client_observation_by_storage_key() {
     resource_store
         .lock()
         .store_registration(ServiceWorkerStoredRegistration {
+            registration_order: 1,
             storage_key: "https://other-top-level.example".to_string(),
             scope_url: scope_url.clone(),
             script_url: wrong_script_url.clone(),
@@ -2592,6 +2594,7 @@ fn startup_restored_registrations_filter_client_observation_by_storage_key() {
     resource_store
         .lock()
         .store_registration(ServiceWorkerStoredRegistration {
+            registration_order: 1,
             storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&document_url),
             scope_url: scope_url.clone(),
             script_url: script_url.clone(),
@@ -2668,6 +2671,7 @@ fn client_observation_uses_explicit_partitioned_storage_key() {
         resource_store
             .lock()
             .store_registration(ServiceWorkerStoredRegistration {
+                registration_order: 1,
                 storage_key,
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -3007,6 +3011,7 @@ fn message_completion_releases_event_accounting_and_can_idle_stop() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
@@ -3083,6 +3088,7 @@ fn notification_action_navigate_routes_to_page_owner_without_click_event() {
             registration_id,
             ServiceWorkerRegistration {
                 id: registration_id,
+                registration_order: registration_id.as_u64(),
                 storage_key: ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
                 scope_url: scope_url.clone(),
                 script_url: script_url.clone(),
