@@ -707,46 +707,11 @@ impl PageScriptHost {
             }
             return;
         }
-        // Publish admission before awaiting the source. A hung parser script
-        // must remain visible as an in-flight request to automation clients.
-        let resource_load = if matches!(script_for_load.source, ScriptSource::External) {
-            let load = loader
-                .register_load(
-                    ResourceLoadKind::Script,
-                    ResourceLoadDisposition::Ordinary,
-                    None,
-                )
-                .expect(
-                    "child classic source start requires an active Document resource authority",
-                );
-            let request_handle = self.next_subresource_network_request_handle();
-            let request = crate::planning::external_script_request(
-                &script_for_load,
-                &loader.fetch_context().request_origin(),
-                None,
-            );
-            let (request_headers, cookie_report) = loader
-                .request_client()
-                .prepare_subresource_request_observation(request);
-            self.record_subresource_request_started(SubresourceRequestSnapshot::new(
-                request_handle,
-                network_attribution.frame_id.clone(),
-                network_attribution.document_url.clone(),
-                network_attribution.request_url.clone(),
-                "GET".to_owned(),
-                request_headers,
-                None,
-                SubresourceResourceType::Script,
-                SubresourceRequestInitiatorType::Script,
-                cookie_report,
-            ));
-            network_attribution.request_handle = Some(request_handle);
-            self.pending_child_classic_script_network_loads
-                .insert(request_handle, load.clone());
-            Some(load)
-        } else {
-            None
-        };
+        let resource_load = self.begin_child_classic_script_network_load(
+            &script_for_load,
+            &loader,
+            &mut network_attribution,
+        );
         let task_loader = loader.clone();
         let browser_context_runtime = self.browser_context_runtime();
         let client_id = self.service_worker_client_id_for_subresource_owner(
@@ -778,6 +743,49 @@ impl PageScriptHost {
                 network_attribution,
             });
         });
+    }
+
+    fn begin_child_classic_script_network_load(
+        &mut self,
+        script: &PreparedScript,
+        loader: &crate::network::context::DocumentResourceLoader,
+        attribution: &mut ChildClassicScriptNetworkAttribution,
+    ) -> Option<crate::network::loads::ResourceLoadLease> {
+        if !matches!(script.source, ScriptSource::External) {
+            return None;
+        }
+        let load = loader
+            .register_load(
+                ResourceLoadKind::Script,
+                ResourceLoadDisposition::Ordinary,
+                None,
+            )
+            .expect("child classic source start requires an active Document resource authority");
+        let handle = self.next_subresource_network_request_handle();
+        let request = crate::planning::external_script_request(
+            script,
+            &loader.fetch_context().request_origin(),
+            None,
+        );
+        let (headers, cookie_report) = loader
+            .request_client()
+            .prepare_subresource_request_observation(request);
+        self.record_subresource_request_started(SubresourceRequestSnapshot::new(
+            handle,
+            attribution.frame_id.clone(),
+            attribution.document_url.clone(),
+            attribution.request_url.clone(),
+            "GET".to_owned(),
+            headers,
+            None,
+            SubresourceResourceType::Script,
+            SubresourceRequestInitiatorType::Script,
+            cookie_report,
+        ));
+        attribution.request_handle = Some(handle);
+        self.pending_child_classic_script_network_loads
+            .insert(handle, load.clone());
+        Some(load)
     }
 
     fn child_classic_script_source_load_client_for_owner(
