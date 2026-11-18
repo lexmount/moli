@@ -1,4 +1,5 @@
 use crate::content_security_policy::ContentSecurityPolicy;
+use crate::context_bootstrap::FetchResourceTiming;
 
 use super::super::PageScriptHost;
 use super::{
@@ -25,6 +26,7 @@ struct LoadedWorkerScript {
     final_url: Url,
     source: WorkerScriptSource,
     network_response: crate::protocol_types::NavigationResponse,
+    from_service_worker: bool,
     response_referrer_policy: Option<String>,
     network_partition_key: Option<String>,
     policy_context: SubresourcePolicyContext,
@@ -37,6 +39,7 @@ struct LoadedWorkerScript {
 struct WorkerScriptLoadFailure {
     error_message: String,
     network_response: Option<Box<crate::protocol_types::NavigationResponse>>,
+    from_service_worker: bool,
 }
 
 impl WorkerScriptLoadFailure {
@@ -44,16 +47,19 @@ impl WorkerScriptLoadFailure {
         Self {
             error_message: error.to_string(),
             network_response: None,
+            from_service_worker: false,
         }
     }
 
     fn with_response(
         error: impl std::fmt::Display,
         response: crate::protocol_types::NavigationResponse,
+        from_service_worker: bool,
     ) -> Self {
         Self {
             error_message: error.to_string(),
             network_response: Some(Box::new(response)),
+            from_service_worker,
         }
     }
 }
@@ -279,6 +285,7 @@ impl PageScriptHost {
 
     pub(crate) fn start_worker_script_load(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         worker_id: DedicatedWorkerId,
         script_url: Url,
         initiator_url: Url,
@@ -310,6 +317,13 @@ impl PageScriptHost {
         let Some(outside_settings_load) = outside_settings_load else {
             return false;
         };
+        let creator = client_event_producer.owner().execution_context();
+        let timing = self
+            .document_resource_loader_for_dispatch_scope(creator.dispatch_scope())
+            .map(|loader| {
+                let origin = loader.fetch_context().request_origin();
+                (FetchResourceTiming::capture(scope, &origin), origin)
+            });
         let request_client = outside_settings_load.request_client();
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         outside_settings_load.attach_cancel_handle(cancel_handle.clone());
@@ -335,8 +349,23 @@ impl PageScriptHost {
                 reserved_service_worker_client_id,
             )
             .await;
+            let timing = timing.map(|(timing, origin)| {
+                let (response, from_service_worker) = match &result {
+                    Ok(loaded) => (Some(&loaded.network_response), loaded.from_service_worker),
+                    Err(error) => (error.network_response.as_deref(), error.from_service_worker),
+                };
+                let mut resource_url = script_url.clone();
+                resource_url.set_fragment(None);
+                timing.completed_worker_script(
+                    &resource_url,
+                    &origin,
+                    script_kind,
+                    response,
+                    from_service_worker,
+                )
+            });
             outside_settings_load.finish();
-            match result {
+            let event = match result {
                 Ok(mut loaded) => {
                     let final_url = &mut loaded.final_url;
                     if final_url.fragment().is_none() {
@@ -345,34 +374,29 @@ impl PageScriptHost {
                     let secure_context =
                         WorkerSecureContextPolicy::Inherited(creator_secure_context)
                             .resolve(final_url);
-                    let _ = client_event_producer.send(
-                        RendererDedicatedWorkerClientEvent::ScriptLoaded {
-                            script_url: final_url.to_string(),
-                            script_source: loaded.source,
-                            network_response: Box::new(loaded.network_response),
-                            script_kind,
-                            secure_context,
-                            response_referrer_policy: loaded.response_referrer_policy,
-                            network_partition_key: loaded.network_partition_key,
-                            policy_context: loaded.policy_context,
-                            content_security_policies: loaded.content_security_policies,
-                            content_security_report_only_policies: loaded
-                                .content_security_report_only_policies,
-                            content_security_reporting_endpoints: loaded
-                                .content_security_reporting_endpoints,
-                        },
-                    );
+                    RendererDedicatedWorkerClientEvent::ScriptLoaded {
+                        script_url: final_url.to_string(),
+                        script_source: loaded.source,
+                        network_response: Box::new(loaded.network_response),
+                        script_kind,
+                        secure_context,
+                        response_referrer_policy: loaded.response_referrer_policy,
+                        network_partition_key: loaded.network_partition_key,
+                        policy_context: loaded.policy_context,
+                        content_security_policies: loaded.content_security_policies,
+                        content_security_report_only_policies: loaded
+                            .content_security_report_only_policies,
+                        content_security_reporting_endpoints: loaded
+                            .content_security_reporting_endpoints,
+                    }
                 }
-                Err(error) => {
-                    let _ = client_event_producer.send(
-                        RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
-                            script_url: script_url.to_string(),
-                            error_message: error.error_message,
-                            network_response: error.network_response,
-                        },
-                    );
-                }
-            }
+                Err(error) => RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
+                    script_url: script_url.to_string(),
+                    error_message: error.error_message,
+                    network_response: error.network_response,
+                },
+            };
+            let _ = client_event_producer.send_with_resource_timing(event, timing);
         });
         match self.workers.get_mut(&worker_id) {
             Some(state) => match &mut state.execution {
@@ -1218,6 +1242,7 @@ async fn fetch_worker_script_source(
             creator_policy_context,
             script_kind,
             request_client.web_security_disabled(),
+            true,
         );
     }
     let observed = request_client
@@ -1240,6 +1265,7 @@ async fn fetch_worker_script_source(
         creator_policy_context,
         script_kind,
         request_client.web_security_disabled(),
+        false,
     )
 }
 
@@ -1250,6 +1276,7 @@ fn loaded_worker_script_from_navigation_response(
     creator_policy_context: SubresourcePolicyContext,
     script_kind: WorkerScriptKind,
     web_security_disabled: bool,
+    from_service_worker: bool,
 ) -> Result<LoadedWorkerScript, WorkerScriptLoadFailure> {
     let response_head = response.head();
     if !web_security_disabled
@@ -1259,12 +1286,20 @@ fn loaded_worker_script_from_navigation_response(
             &response.final_url,
         )
     {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
+        return Err(WorkerScriptLoadFailure::with_response(
+            error,
+            response,
+            from_service_worker,
+        ));
     }
     if let Err(error) =
         moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
     {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
+        return Err(WorkerScriptLoadFailure::with_response(
+            error,
+            response,
+            from_service_worker,
+        ));
     }
     let content_security_policies =
         crate::content_security_policy::content_security_policy_headers(&response.headers);
@@ -1294,6 +1329,7 @@ fn loaded_worker_script_from_navigation_response(
             content_security_report_only_policies,
             content_security_reporting_endpoints,
             network_response: response,
+            from_service_worker,
         });
     }
     if let Err(error) = crate::worker::ensure_worker_script_mime_acceptable(
@@ -1301,7 +1337,11 @@ fn loaded_worker_script_from_navigation_response(
         &response.headers,
         response.body_bytes(),
     ) {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
+        return Err(WorkerScriptLoadFailure::with_response(
+            error,
+            response,
+            from_service_worker,
+        ));
     }
 
     Ok(LoadedWorkerScript {
@@ -1314,6 +1354,7 @@ fn loaded_worker_script_from_navigation_response(
         content_security_report_only_policies,
         content_security_reporting_endpoints,
         network_response: response,
+        from_service_worker,
     })
 }
 

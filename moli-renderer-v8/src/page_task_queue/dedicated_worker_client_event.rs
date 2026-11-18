@@ -41,7 +41,6 @@ impl RendererPageDedicatedWorkerClientEventOwner {
         }
     }
 
-    #[cfg(test)]
     pub(crate) const fn root_document(self) -> RendererDocumentToken {
         self.root_document
     }
@@ -140,14 +139,26 @@ impl RendererDedicatedWorkerClientEvent {
 pub(crate) struct RendererPageDedicatedWorkerClientEventTask {
     owner: RendererPageDedicatedWorkerClientEventOwner,
     event: RendererDedicatedWorkerClientEvent,
+    resource_timing: Option<Box<crate::context_bootstrap::ResourcePerformanceEntry>>,
 }
 
 impl RendererPageDedicatedWorkerClientEventTask {
     fn new(
         owner: RendererPageDedicatedWorkerClientEventOwner,
         event: RendererDedicatedWorkerClientEvent,
+        resource_timing: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
     ) -> Self {
-        Self { owner, event }
+        Self {
+            owner,
+            event,
+            resource_timing: resource_timing.map(Box::new),
+        }
+    }
+
+    pub(crate) fn take_resource_timing(
+        &mut self,
+    ) -> Option<crate::context_bootstrap::ResourcePerformanceEntry> {
+        self.resource_timing.take().map(|entry| *entry)
     }
 
     pub(crate) const fn owner(&self) -> RendererPageDedicatedWorkerClientEventOwner {
@@ -239,10 +250,18 @@ impl RendererPageDedicatedWorkerClientEventProducer {
         &self,
         event: RendererDedicatedWorkerClientEvent,
     ) -> Result<(), RendererPageDedicatedWorkerClientEventRouteClosed> {
+        self.send_with_resource_timing(event, None)
+    }
+
+    pub(crate) fn send_with_resource_timing(
+        &self,
+        event: RendererDedicatedWorkerClientEvent,
+        resource_timing: Option<crate::context_bootstrap::ResourcePerformanceEntry>,
+    ) -> Result<(), RendererPageDedicatedWorkerClientEventRouteClosed> {
+        let task =
+            RendererPageDedicatedWorkerClientEventTask::new(self.owner, event, resource_timing);
         self.task_route
-            .send_and_signal_if_newly_ready(ReadyPageTask::new(
-                RendererPageDedicatedWorkerClientEventTask::new(self.owner, event),
-            ))
+            .send_and_signal_if_newly_ready(ReadyPageTask::new(task))
             .map_err(|_| RendererPageDedicatedWorkerClientEventRouteClosed)
     }
 

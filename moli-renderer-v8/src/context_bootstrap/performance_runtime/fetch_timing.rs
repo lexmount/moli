@@ -58,6 +58,50 @@ impl FetchResourceTiming {
         entry
     }
 
+    pub(crate) fn completed_worker_script(
+        &self,
+        url: &Url,
+        origin: &WebOrigin,
+        script_kind: crate::worker::WorkerScriptKind,
+        response: Option<&crate::protocol_types::NavigationResponse>,
+        from_service_worker: bool,
+    ) -> ResourcePerformanceEntry {
+        let initiator_type = match script_kind {
+            crate::worker::WorkerScriptKind::Classic => "other",
+            crate::worker::WorkerScriptKind::Module => "script",
+        };
+        let Some(response) = response else {
+            return ResourcePerformanceEntry::from_network_failure(
+                url.as_str(),
+                initiator_type,
+                Some(self.start_unix_millis),
+            );
+        };
+        let head = response.head();
+        let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
+            url.as_str(),
+            initiator_type,
+            Some(self.start_unix_millis),
+            &head,
+            response.body_bytes().len(),
+        );
+        if head.url_list().has_cross_origin_url(origin) {
+            entry.response_status = 0.0;
+            entry.content_type.clear();
+        } else if head.cache_state == ResponseCacheState::None {
+            entry.initiator_url.clone_from(&self.initiator_url);
+        }
+        if from_service_worker {
+            entry.transfer_size = 0.0;
+        }
+        if !head.timing_allow_passed(origin) {
+            entry.transfer_size = 0.0;
+            entry.encoded_body_size = 0.0;
+            entry.decoded_body_size = 0.0;
+        }
+        entry
+    }
+
     pub(crate) fn failed(&self, url: &Url) -> ResourcePerformanceEntry {
         ResourcePerformanceEntry::from_network_failure(
             url.as_str(),
