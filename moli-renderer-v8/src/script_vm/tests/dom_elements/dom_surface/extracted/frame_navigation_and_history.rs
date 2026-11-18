@@ -3635,3 +3635,43 @@ fn main_window_indexed_child_deletion_is_live_and_not_cached() {
         r#"{"absentDeletesSucceeded":true,"presentAfterAbsent":false,"presentDeletesFailed":true,"absentAfterPresent":true}"#
     );
 }
+
+#[tokio::test]
+async fn nested_initial_blank_load_compiles_inline_handlers_before_the_first_script() {
+    let server = StaticHttpServer::spawn_with_bodies(vec![
+        r#"<!doctype html>
+<body onload="parent.recordNestedLoad('window')">
+<iframe onload="parent.recordNestedLoad('first:' + document.compatMode)"></iframe>
+<iframe onload="parent.recordNestedLoad('second:' + document.compatMode)"></iframe>"#
+            .to_owned(),
+    ])
+    .await;
+    let loader = static_http_loader([server.resolve_entry("www.example.test")]);
+    let parent_url = server.url_for_host("www.example.test", "/parent.html");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    vm.exec(
+        r#"
+globalThis.nestedLoadEvents = [];
+globalThis.recordNestedLoad = value => nestedLoadEvents.push(value);
+const frame = document.createElement('iframe');
+frame.src = '/child.html';
+frame.onload = () => nestedLoadEvents.push('owner');
+(document.body || document.documentElement || document).appendChild(frame);
+"#,
+        None,
+    )
+    .expect("nested frame setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(nestedLoadEvents.includes('owner'))",
+        "true",
+        "the outer iframe load should finish",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("nestedLoadEvents.join('|')").unwrap(),
+        "first:CSS1Compat|second:CSS1Compat|window|owner"
+    );
+    assert_eq!(server.finish_targets().await, ["/child.html"]);
+}
