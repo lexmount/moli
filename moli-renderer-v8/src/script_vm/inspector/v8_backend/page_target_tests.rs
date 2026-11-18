@@ -194,6 +194,35 @@ fn closing_running_page_leaves_peer_isolate_usable() {
 
 #[cfg(feature = "devtools")]
 #[test]
+fn pending_page_close_interrupt_preserves_teardown_callbacks() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let backend = RendererInspectorIsolateBackend::new(&mut isolate);
+    let page = super::super::DocumentInspectorBinding::new(
+        backend.handle().new_page_handle(&mut isolate).unwrap(),
+    );
+    let context = context_for_page(&mut isolate, &backend, &page, None);
+    let target = page.devtools_target();
+    assert!(target.close("close requested while the Page is idle"));
+    target.begin_page_teardown();
+    assert!(!target.close("second close during teardown"));
+    assert_eq!(
+        evaluate(
+            &mut isolate,
+            &context,
+            "let sum = 0; for (let i = 0; i < 100; ++i) sum += i; sum",
+        )
+        .as_deref(),
+        Some("4950")
+    );
+
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    backend.context_destroyed(v8::Local::new(scope, &context));
+}
+
+#[cfg(feature = "devtools")]
+#[test]
 fn closing_peer_preserves_debugger_pause_and_its_resume_route() {
     use crate::runtime::{
         PageId, RendererOutputStreamIdentity, RendererOwnerLocalHostId, RendererTurnOutputJournal,

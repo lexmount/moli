@@ -8,6 +8,10 @@ use crate::{
     native_bridge::OwnerDispatchScope,
     page_task_queue::RendererPagePopupCloseOwner,
     runtime::{AuthorizedCurrentPagePopupClose, RendererDocumentToken},
+    v8_execution_watchdog::{
+        SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
+        V8ExecutionWatchdogOutcome,
+    },
 };
 
 impl ScriptVm {
@@ -18,6 +22,11 @@ impl ScriptVm {
             return Ok(());
         }
         self.with_default_context_scope(|scope, host_ptr| {
+            let watchdog = V8ExecutionWatchdog::arm(
+                V8ExecutionWatchdogKind::LifecycleEvent,
+                scope.thread_safe_handle(),
+                SCRIPT_TURN_WATCHDOG_TIMEOUT,
+            );
             let window = scope.get_current_context().global(scope);
             // Closing from pagehide/unload must not settle the outgoing
             // Document's Navigation API promises after its unload has begun.
@@ -31,6 +40,10 @@ impl ScriptVm {
             crate::native_bridge::PageScriptHost::dispatch_main_document_unload_for_navigation_commit(
                 scope, host_ptr,
             );
+            let timeout = watchdog.timeout();
+            if watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut {
+                anyhow::bail!("Window close lifecycle exceeded {timeout:?} and was terminated");
+            }
             Ok(())
         })
     }
