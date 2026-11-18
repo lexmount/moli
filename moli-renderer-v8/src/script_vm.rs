@@ -1112,12 +1112,6 @@ impl Drop for ScriptVmCommandTurnOutputScope {
     }
 }
 
-struct LiveChildDefaultContextEntry {
-    handle: DomHandle,
-    frame_id: String,
-    owner_realm_id: Option<FrameRealmId>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct ActiveTouchPoint {
     pub x: f64,

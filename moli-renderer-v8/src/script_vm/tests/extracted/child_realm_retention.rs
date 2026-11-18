@@ -37,7 +37,6 @@ fn retired_child_content_surfaces_do_not_root_unreachable_realms() {
                 "#,
             )
             .expect("create, expose and remove child content surfaces");
-            vm.prune_stale_child_default_execution_contexts();
         }
         assert_eq!(vm.child_frame_realm_store.len(), 0, "{policy:?}");
         assert_eq!(
@@ -75,7 +74,6 @@ fn retained_child_content_surfaces_preserve_author_state_until_released() {
             "#,
         )
         .expect("retain author references across child detachment");
-        vm.prune_stale_child_default_execution_contexts();
         assert!(
             collected_native_context_count(&mut vm) > baseline,
             "{policy:?}: an author reference must retain its realm"
@@ -145,7 +143,6 @@ fn promoted_child_content_surfaces_follow_author_reachability() {
         );
         vm.eval("savedFrame.remove(); savedFrame = undefined; 'removed'")
             .unwrap();
-        vm.prune_stale_child_default_execution_contexts();
         assert_eq!(vm.child_frame_realm_store.len(), 0);
         assert!(collected_native_context_count(&mut vm) > baseline);
         assert_eq!(
@@ -231,7 +228,6 @@ fn churn_child_content_surfaces_for_inventory(vm: &mut StandaloneScriptVmHarness
             "#,
         )
         .expect("create, expose and normally detach child content surfaces");
-        vm.prune_stale_child_default_execution_contexts();
     }
 }
 
@@ -302,7 +298,6 @@ fn child_content_surface_maintenance_preserves_author_identity() {
             "#,
         )
         .expect("hold author-owned content surfaces across normal child detachment");
-        vm.prune_stale_child_default_execution_contexts();
         churn_child_content_surfaces_for_inventory(&mut vm, 4);
         assert!(collected_native_context_count(&mut vm) > baseline_contexts);
         vm.notify_renderer_document_isolate_memory_pressure()

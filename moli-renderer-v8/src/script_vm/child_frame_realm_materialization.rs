@@ -127,7 +127,7 @@ impl ScriptVm {
         // child Window. V8 callbacks are re-entrant, and a repeated exposure
         // during this boundary must observe the existing reservation rather
         // than enqueue a second durable Page task.
-        self.prune_stale_child_default_execution_contexts();
+        self.apply_pending_child_document_owner_retirements();
         match self.materialize_child_frame_realm_context_id_for_owner(
             handle,
             owner,
@@ -183,7 +183,7 @@ impl ScriptVm {
         // Realm prebootstrap can precede the durable owner turn. A same-Page
         // stale task therefore owns both the exact request and any detached
         // prebootstrapped V8 context left behind by that child Document.
-        self.prune_stale_child_default_execution_contexts();
+        self.apply_pending_child_document_owner_retirements();
         let RendererPageChildFrameTaskTarget::RealmMaterialization(target) = owner.target() else {
             return false;
         };
@@ -242,11 +242,10 @@ impl ScriptVm {
     /// by `apply_current_child_realm_materialization()` after the stable Page
     /// arbiter authorizes the corresponding typed task.
     pub(super) fn current_child_frame_realm_id_for_owner(
-        &mut self,
+        &self,
         handle: DomHandle,
         owner: FrameDocumentTaskOwner,
     ) -> Result<FrameRealmId> {
-        self.prune_stale_child_default_execution_contexts();
         let snapshot = self
             ._context_host
             .borrow()
@@ -272,7 +271,7 @@ impl ScriptVm {
     }
 
     pub(super) fn current_child_frame_realm_id_for_document_owner(
-        &mut self,
+        &self,
         handle: DomHandle,
         owner: FrameDocumentOwner,
     ) -> Result<FrameRealmId> {
@@ -292,10 +291,13 @@ impl ScriptVm {
     /// replacement realm or provide a second materialization executor.
     #[cfg(test)]
     pub(crate) fn retire_child_frame_realm_for_test(&mut self, handle: DomHandle) {
-        self._context_host
-            .borrow_mut()
-            .clear_child_default_execution_context_id(handle);
-        self.prune_stale_child_default_execution_contexts();
+        let owner = self
+            ._context_host
+            .borrow()
+            .current_child_document_task_owner(handle);
+        if let Some(owner) = owner {
+            self.retire_child_default_context_for_window(handle, owner.local_window_id);
+        }
     }
 
     /// Refresh bindings as part of an already-selected materialization body.

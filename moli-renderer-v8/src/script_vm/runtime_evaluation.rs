@@ -301,7 +301,7 @@ impl ScriptVm {
     }
 
     pub(super) fn runtime_binding_document_owner(
-        &mut self,
+        &self,
         execution_context_id: Option<i64>,
     ) -> Result<FrameDocumentTaskOwner> {
         if execution_context_id.is_none()
@@ -330,7 +330,6 @@ impl ScriptVm {
             return Ok(owner);
         }
 
-        self.prune_stale_child_default_execution_contexts();
         let child_handle = self
             .child_frame_realm_store
             .get(&execution_context_id)
