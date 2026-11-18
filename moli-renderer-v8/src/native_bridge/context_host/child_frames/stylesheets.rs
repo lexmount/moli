@@ -272,14 +272,14 @@ impl PageScriptHost {
                 continue;
             }
             // Ordinary resource failures still create an empty owner sheet.
-            let ready_response = terminal.ready_response();
-            let Some(response) = ready_response else {
+            let Some((response, text)) = terminal.ready_response().zip(terminal.stylesheet_text())
+            else {
                 // A failed terminal exposes no response body to CSS parsing and
                 // cannot admit stylesheet-dependent resource requests.
                 continue;
             };
             for resource in crate::css_resource_urls::stylesheet_load_blocking_font_resources(
-                response.body_text(),
+                text,
                 &response.final_url,
                 optional_resource_fetch_mask,
             ) {
@@ -403,9 +403,7 @@ impl PageScriptHost {
             if terminal.failed_integrity() {
                 return;
             }
-            let text = terminal
-                .ready_response()
-                .map_or("", |response| response.body_text());
+            let text = terminal.stylesheet_text().unwrap_or_default();
             let base_url = match terminal.physical() {
                 crate::stylesheet_blocking::StylesheetPhysicalOutcome::Response(response) => {
                     response.final_url.clone()

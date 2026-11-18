@@ -8,7 +8,7 @@ use super::*;
 use crate::live_stylesheet::import_url_identity;
 use crate::stylesheet_blocking::{StylesheetFetchOptions, StylesheetFetcher};
 use futures_util::future::{BoxFuture, join_all};
-use moli_encoding::decode_text_for_legacy_web;
+use moli_encoding::decode_css_stylesheet;
 use moli_web_mime::{data_url_body_and_mime_type, mime_charset};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,25 +62,23 @@ impl ConnectedNetworkStyleImportGraph {
     ) -> Vec<Url> {
         let request_identity = import_url_identity(result.request_url());
         self.requested_identities.insert(request_identity.clone());
-        let Some(response) = result.terminal().ready_response() else {
+        let terminal = result.terminal();
+        let Some((response, text)) = terminal.ready_response().zip(terminal.stylesheet_text())
+        else {
             return Vec::new();
         };
         let response_identity = import_url_identity(&response.final_url);
-        crate::style_engine::stylesheet_top_level_import_urls(
-            response.body_text(),
-            &response.final_url,
-            false,
-        )
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|url| {
-            let identity = import_url_identity(url);
-            // The response cannot import itself through either URL. Its final
-            // URL is not a globally admitted request: a sibling importing it
-            // must still pass Fetch and its own request-time CSP check.
-            identity != request_identity && identity != response_identity
-        })
-        .collect()
+        crate::style_engine::stylesheet_top_level_import_urls(text, &response.final_url, false)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|url| {
+                let identity = import_url_identity(url);
+                // The response cannot import itself through either URL. Its final
+                // URL is not a globally admitted request: a sibling importing it
+                // must still pass Fetch and its own request-time CSP check.
+                identity != request_identity && identity != response_identity
+            })
+            .collect()
     }
 
     fn take_pending(&mut self) -> Vec<Url> {
@@ -224,14 +222,16 @@ fn fetch_data_stylesheet_import(
     let Some((body, mime_type)) = data_url_body_and_mime_type(url.as_str()) else {
         return StylesheetFetchTerminal::network_error("invalid data stylesheet import");
     };
-    let css_text = decode_text_for_legacy_web(&body, mime_charset(&mime_type).as_deref());
+    let css_text = decode_css_stylesheet(&body, mime_charset(&mime_type).as_deref(), None).0;
+    let head = crate::protocol_types::NavigationResponse::from_text_body(
+        url.clone(),
+        200,
+        vec![("Content-Type".to_owned(), mime_type.into_bytes())],
+        String::new(),
+    )
+    .head();
     StylesheetFetchTerminal::ready(
-        crate::protocol_types::NavigationResponse::from_text_body(
-            url.clone(),
-            200,
-            vec![("Content-Type".to_owned(), b"text/css".to_vec())],
-            css_text,
-        ),
+        crate::protocol_types::NavigationResponse::from_head_and_body(head, css_text, body),
         true,
     )
 }
@@ -252,7 +252,7 @@ pub(in crate::document_runtime) fn data_stylesheet_import_readiness(
     // when its media type is omitted or is not text/css. HTTP response MIME
     // enforcement belongs to the network stylesheet response validator and
     // must not be reused for this local-scheme path.
-    let css_text = decode_text_for_legacy_web(&body, mime_charset(&mime_type).as_deref());
+    let css_text = decode_css_stylesheet(&body, mime_charset(&mime_type).as_deref(), None).0;
     let Ok(urls) =
         crate::style_engine::stylesheet_top_level_import_urls(&css_text, stylesheet_url, true)
     else {

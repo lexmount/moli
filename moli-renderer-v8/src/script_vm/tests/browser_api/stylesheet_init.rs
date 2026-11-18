@@ -31,3 +31,18 @@ fn stylesheet_constructor_derives_options_and_uses_native_media_list_state() {
         "true"
     );
 }
+
+#[test]
+fn data_stylesheet_import_honors_css_charset_in_cssom() {
+    let mut vm = new_storage_html_test_vm("https://stylesheet-encoding.test/");
+    let result = vm.eval(r#"
+        (() => {
+            const sheet = document.createElement('style');
+            sheet.textContent = '@import url("data:text/css,%40charset%20%22windows-1252%22%3B%20span%7Bcontent%3A%22%80%22%7D");';
+            document.head.appendChild(sheet);
+            const importedRule = sheet.sheet.cssRules[0].styleSheet.cssRules[0];
+            return importedRule.style.getPropertyValue('content');
+        })()
+    "#).unwrap();
+    assert_eq!(result, r#""€""#);
+}

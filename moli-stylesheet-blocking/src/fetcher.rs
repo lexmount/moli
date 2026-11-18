@@ -192,12 +192,19 @@ impl StylesheetUsability {
     }
 }
 
+#[derive(Debug, Default)]
+struct StylesheetDecoding {
+    fallback_encoding: Option<&'static str>,
+    text: OnceLock<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StylesheetFetchTerminal {
     physical: StylesheetPhysicalOutcome,
     usability: StylesheetUsability,
     origin_clean: Option<bool>,
     network_observed: bool,
+    decoding: Arc<StylesheetDecoding>,
 }
 
 impl StylesheetFetchTerminal {
@@ -219,6 +226,7 @@ impl StylesheetFetchTerminal {
             usability,
             origin_clean: Some(origin_clean),
             network_observed: false,
+            decoding: Arc::default(),
         }
     }
 
@@ -247,6 +255,7 @@ impl StylesheetFetchTerminal {
             usability: StylesheetUsability::Failed { reason },
             origin_clean: None,
             network_observed: false,
+            decoding: Arc::default(),
         }
     }
 
@@ -282,6 +291,34 @@ impl StylesheetFetchTerminal {
 
     pub fn origin_clean(&self) -> Option<bool> {
         self.origin_clean
+    }
+
+    pub fn with_fallback_encoding(mut self, label: Option<&str>) -> Self {
+        let fallback_encoding = label
+            .and_then(moli_encoding::encoding_for_label)
+            .map(|encoding| encoding.name());
+        if self.decoding.fallback_encoding != fallback_encoding {
+            self.decoding = Arc::new(StylesheetDecoding {
+                fallback_encoding,
+                text: OnceLock::new(),
+            });
+        }
+        self
+    }
+
+    pub fn stylesheet_text(&self) -> Option<&str> {
+        let response = self.ready_response()?;
+        Some(
+            self.decoding.text.get_or_init(|| {
+                Self::decode_response_text(response, self.decoding.fallback_encoding)
+            }),
+        )
+    }
+
+    pub fn decode_response_text(response: &NavigationResponse, fallback: Option<&str>) -> String {
+        let protocol_encoding = moli_encoding::encoding_from_response_headers(&response.headers)
+            .map(|encoding| encoding.name());
+        moli_encoding::decode_css_stylesheet(response.body_bytes(), protocol_encoding, fallback).0
     }
 
     pub fn ready_response(&self) -> Option<&NavigationResponse> {
@@ -469,4 +506,62 @@ pub struct StylesheetFetchNetworkResult {
     pub owner_node_ids: Vec<NodeId>,
     pub start_unix_millis: f64,
     pub terminal: Arc<StylesheetFetchTerminal>,
+}
+
+#[cfg(test)]
+mod decoding_tests {
+    use super::*;
+
+    #[test]
+    fn stylesheet_decoding_keeps_physical_response_bytes() {
+        let url = Url::parse("https://example.test/style.css").unwrap();
+        let cases = [
+            (
+                b"@charset \"windows-1252\"; .target { content: \"\x80\"; }".as_slice(),
+                "text/css",
+                None,
+                "€",
+            ),
+            (
+                b"@charset \"windows-1252\"; .target { content: \"\x80\"; }".as_slice(),
+                "text/css; charset=utf-8",
+                None,
+                "\u{fffd}",
+            ),
+            (
+                b"\xef\xbb\xbf.target { content: \"\xc3\xa9\"; }".as_slice(),
+                "text/css; charset=windows-1252",
+                None,
+                "é",
+            ),
+            (
+                b".target { content: \"\x80\"; }".as_slice(),
+                "text/css",
+                Some("windows-1252"),
+                "€",
+            ),
+        ];
+        for (bytes, content_type, fallback, expected) in cases {
+            let head = NavigationResponse::from_text_body(
+                url.clone(),
+                200,
+                vec![("Content-Type".to_owned(), content_type.as_bytes().to_vec())],
+                String::new(),
+            )
+            .head();
+            let response = NavigationResponse::from_head_and_body(
+                head,
+                "transport-decoded text".to_owned(),
+                bytes.to_vec(),
+            );
+            let terminal =
+                StylesheetFetchTerminal::ready(response, true).with_fallback_encoding(fallback);
+            assert!(terminal.stylesheet_text().unwrap().contains(expected));
+            assert_eq!(terminal.ready_response().unwrap().body_bytes(), bytes);
+            assert_eq!(
+                terminal.ready_response().unwrap().body_text(),
+                "transport-decoded text"
+            );
+        }
+    }
 }
