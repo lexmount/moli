@@ -42,7 +42,6 @@ use std::sync::{
 use tokio::sync::mpsc;
 #[cfg(test)]
 use tokio::sync::mpsc::error::TryRecvError;
-#[cfg(any(test, feature = "devtools"))]
 #[cfg(test)]
 use tokio::sync::oneshot;
 

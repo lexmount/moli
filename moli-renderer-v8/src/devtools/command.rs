@@ -5,7 +5,6 @@ use moli_command_types::InspectorPauseEffect as RendererInspectorPauseCommandEff
 
 mod nested;
 
-#[cfg(feature = "devtools")]
 use crate::runtime::RendererInspectorPageCommand;
 use crate::runtime::{RendererPageCommand, RendererRuntimeInspectorResponseSender};
 use crate::script_execution_control::RendererScriptExecutionControl;
@@ -41,7 +40,6 @@ pub struct RendererInspectorIngressTicket {
 }
 
 impl RendererInspectorIngressTicket {
-    #[cfg(feature = "devtools")]
     pub fn new(
         attachment: Option<RendererAgentAttachmentId>,
         inspector_session_id: Option<String>,
@@ -136,7 +134,6 @@ pub(crate) enum RendererDevToolsIoCommandKind {
 }
 
 impl RendererDevToolsIoCommandEnvelope {
-    #[cfg(feature = "devtools")]
     pub(crate) fn inspector(envelope: RendererInspectorCommandEnvelope) -> Self {
         assert_eq!(
             envelope.ticket().route(),
@@ -149,7 +146,6 @@ impl RendererDevToolsIoCommandEnvelope {
         }
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn performance_get_metrics(ticket: RendererInspectorIngressTicket) -> Self {
         Self::new_agent_command(
             ticket,
@@ -160,7 +156,6 @@ impl RendererDevToolsIoCommandEnvelope {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn performance_get_metrics_with_response(
         ticket: RendererInspectorIngressTicket,
         result: Value,
@@ -175,7 +170,6 @@ impl RendererDevToolsIoCommandEnvelope {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn set_script_execution_disabled(
         ticket: RendererInspectorIngressTicket,
         control: RendererScriptExecutionControl,
@@ -191,7 +185,6 @@ impl RendererDevToolsIoCommandEnvelope {
         )
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn set_script_execution_disabled_with_response(
         ticket: RendererInspectorIngressTicket,
         control: RendererScriptExecutionControl,
@@ -208,7 +201,6 @@ impl RendererDevToolsIoCommandEnvelope {
         )
     }
 
-    #[cfg(feature = "devtools")]
     fn new_agent_command(
         ticket: RendererInspectorIngressTicket,
         payload: RendererDevToolsIoCommandPayload,
@@ -221,7 +213,6 @@ impl RendererDevToolsIoCommandEnvelope {
         Self { ticket, payload }
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
         &self.ticket
     }
@@ -240,7 +231,6 @@ impl RendererDevToolsIoCommandEnvelope {
         }
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
         match &self.payload {
             RendererDevToolsIoCommandPayload::Inspector(envelope) => Some(envelope),
@@ -248,7 +238,6 @@ impl RendererDevToolsIoCommandEnvelope {
         }
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_envelope_mut(
         &mut self,
     ) -> Option<&mut RendererInspectorCommandEnvelope> {
@@ -320,17 +309,14 @@ impl RendererDevToolsMainCommandEnvelope {
         }
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
         &self.ticket
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
         self.payload.nested_dispatch()
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
         match self.payload.as_ref() {
             RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)) => {
@@ -345,7 +331,6 @@ impl RendererDevToolsMainCommandEnvelope {
             .and_then(RendererInspectorCommandEnvelope::response)
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn into_nested_inspector_envelope(self) -> RendererInspectorCommandEnvelope {
         assert_eq!(
             self.nested_dispatch(),
@@ -386,7 +371,6 @@ enum RendererInspectorCommandPayload {
 }
 
 impl RendererInspectorCommandEnvelope {
-    #[cfg(feature = "devtools")]
     pub(crate) fn new(
         inspector_session_id: Option<String>,
         command: RendererInspectorPageCommand,
@@ -404,7 +388,6 @@ impl RendererInspectorCommandEnvelope {
     }
 
     #[doc(hidden)]
-    #[cfg(feature = "devtools")]
     pub fn new_main_protocol(
         ticket: RendererInspectorIngressTicket,
         owner_context_resolution_action: Option<String>,
@@ -445,7 +428,6 @@ impl RendererInspectorCommandEnvelope {
     }
 
     #[doc(hidden)]
-    #[cfg(feature = "devtools")]
     pub fn new_io(
         ticket: RendererInspectorIngressTicket,
         raw_json: String,
@@ -465,7 +447,6 @@ impl RendererInspectorCommandEnvelope {
         }
     }
 
-    #[cfg(feature = "devtools")]
     pub fn ticket(&self) -> &RendererInspectorIngressTicket {
         &self.ticket
     }
@@ -534,7 +515,6 @@ impl RendererInspectorCommandEnvelope {
         self.ticket.bind_attachment(attachment);
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn into_main_thread_parts(
         self,
     ) -> (RendererInspectorIngressTicket, RendererInspectorPageCommand) {
@@ -544,7 +524,6 @@ impl RendererInspectorCommandEnvelope {
         (self.ticket, command)
     }
 
-    #[cfg(feature = "devtools")]
     fn main_thread_payload(&self) -> &RendererInspectorPageCommand {
         let RendererInspectorCommandPayload::MainThread(command) = &self.payload else {
             panic!("an Inspector IO envelope cannot enter Page owner dispatch");
@@ -572,7 +551,6 @@ impl RendererInspectorCommandEnvelope {
             .expect("only a deferred Main protocol command can enter the nested receiver")
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn into_main_protocol_parts(
         self,
     ) -> (

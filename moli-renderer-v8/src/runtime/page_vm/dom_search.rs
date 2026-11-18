@@ -20,7 +20,6 @@ pub(super) enum DocumentSearchMatch {
 }
 
 impl PageVm {
-    #[cfg(feature = "devtools")]
     pub(crate) fn document_perform_search(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -49,7 +48,6 @@ impl PageVm {
     }
 }
 
-#[cfg(feature = "devtools")]
 fn search_document_matches(
     dom_host: &DomHost,
     documents: &[DomHandle],
@@ -97,7 +95,6 @@ fn search_document_matches(
     results.into_vec()
 }
 
-#[cfg(feature = "devtools")]
 fn collect_selector_matches(
     dom_host: &DomHost,
     document: DomHandle,
@@ -130,7 +127,6 @@ fn collect_selector_matches(
     );
 }
 
-#[cfg(feature = "devtools")]
 fn collect_shadow_selector_matches(
     dom_host: &DomHost,
     handle: DomHandle,
@@ -168,7 +164,6 @@ fn collect_shadow_selector_matches(
     }
 }
 
-#[cfg(feature = "devtools")]
 fn collect_manual_matches(
     dom_host: &DomHost,
     handle: DomHandle,
@@ -220,7 +215,6 @@ fn collect_manual_matches(
     }
 }
 
-#[cfg(feature = "devtools")]
 fn generated_user_agent_shadow_root(
     dom_host: &DomHost,
     host: DomHandle,
@@ -229,7 +223,6 @@ fn generated_user_agent_shadow_root(
     user_agent_shadow_root_snapshot(dom_host, &originating_element, -1, true)
 }
 
-#[cfg(feature = "devtools")]
 fn generated_search_match(
     host: DomHandle,
     snapshot: &DocumentNodeSnapshot,
@@ -240,7 +233,6 @@ fn generated_search_match(
     })
 }
 
-#[cfg(feature = "devtools")]
 fn collect_generated_manual_matches(
     host: DomHandle,
     snapshot: &DocumentNodeSnapshot,
@@ -271,7 +263,6 @@ fn collect_generated_manual_matches(
     }
 }
 
-#[cfg(feature = "devtools")]
 fn generated_selector_matches(
     source_dom_host: &DomHost,
     host: DomHandle,
@@ -307,7 +298,6 @@ fn generated_selector_matches(
         .collect()
 }
 
-#[cfg(feature = "devtools")]
 fn append_generated_selector_projection(
     projection: &mut DomHost,
     parent: DomHandle,
@@ -348,21 +338,18 @@ struct OrderedSearchMatches {
 }
 
 impl OrderedSearchMatches {
-    #[cfg(feature = "devtools")]
     fn insert(&mut self, search_match: DocumentSearchMatch) {
         if self.seen.insert(search_match) {
             self.values.push(search_match);
         }
     }
 
-    #[cfg(feature = "devtools")]
     fn extend(&mut self, matches: impl IntoIterator<Item = DocumentSearchMatch>) {
         for search_match in matches {
             self.insert(search_match);
         }
     }
 
-    #[cfg(feature = "devtools")]
     fn into_vec(self) -> Vec<DocumentSearchMatch> {
         self.values
     }
@@ -377,7 +364,6 @@ struct ManualSearchQuery {
 }
 
 impl ManualSearchQuery {
-    #[cfg(feature = "devtools")]
     fn new(query: &str) -> Self {
         let (tag_query, tag_match) = tag_name_query(query);
         let (attribute_value_query, exact_attribute_value) = attribute_value_query(query);
@@ -390,12 +376,10 @@ impl ManualSearchQuery {
         }
     }
 
-    #[cfg(feature = "devtools")]
     fn matches_node_value(&self, value: &str) -> bool {
         value.to_lowercase().contains(&self.raw_lowercase)
     }
 
-    #[cfg(feature = "devtools")]
     fn matches_element_name(&self, name: &str) -> bool {
         let name = name.to_lowercase();
         match self.tag_match {
@@ -406,12 +390,10 @@ impl ManualSearchQuery {
         }
     }
 
-    #[cfg(feature = "devtools")]
     fn matches_attribute_name(&self, name: &str) -> bool {
         name.to_lowercase().contains(&self.raw_lowercase)
     }
 
-    #[cfg(feature = "devtools")]
     fn matches_attribute_value(&self, value: &str) -> bool {
         let value = value.to_lowercase();
         if self.exact_attribute_value {
@@ -430,7 +412,6 @@ enum TagNameMatch {
     Suffix,
 }
 
-#[cfg(feature = "devtools")]
 fn tag_name_query(query: &str) -> (&str, TagNameMatch) {
     let (query, has_start) = if let Some(query) = query.strip_prefix("</") {
         (query, true)
@@ -451,7 +432,6 @@ fn tag_name_query(query: &str) -> (&str, TagNameMatch) {
     (query, match_type)
 }
 
-#[cfg(feature = "devtools")]
 fn attribute_value_query(query: &str) -> (&str, bool) {
     let has_start = query.starts_with('"');
     let has_end = query.ends_with('"');

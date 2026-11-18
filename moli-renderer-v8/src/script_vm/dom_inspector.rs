@@ -3,7 +3,6 @@ use anyhow::Result;
 use super::ScriptVm;
 use crate::document_runtime::DomHandle;
 use crate::dom::native::{Attribute, NativeDom, Node, NodeType};
-#[cfg(feature = "devtools")]
 use crate::native_bridge::element::focus_live_element_for_inspector;
 use crate::native_bridge::element::mutate_live_element_attribute_for_inspector;
 use crate::native_bridge::{
@@ -54,7 +53,6 @@ pub(crate) enum DomInspectorEditOutcome {
     MutationFailed,
 }
 
-#[cfg(feature = "devtools")]
 fn first_element_in_subtree(document: &NativeDom, root: DomHandle) -> Option<DomHandle> {
     let mut stack = vec![root];
     while let Some(handle) = stack.pop() {
@@ -66,7 +64,6 @@ fn first_element_in_subtree(document: &NativeDom, root: DomHandle) -> Option<Dom
     None
 }
 
-#[cfg(feature = "devtools")]
 fn parsed_inspector_attributes(
     runtime: &PageScriptHost,
     handle: DomHandle,
@@ -132,7 +129,6 @@ fn parsed_inspector_attributes(
         .map(|element| element.attributes().to_vec())
 }
 
-#[cfg(feature = "devtools")]
 fn clone_element_attributes(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
@@ -174,7 +170,6 @@ fn clone_element_attributes(
     true
 }
 
-#[cfg(feature = "devtools")]
 fn create_renamed_element(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
@@ -209,7 +204,6 @@ fn create_renamed_element(
     runtime.initialize_new_native_node_owner_document(owner_document, handle)
 }
 
-#[cfg(feature = "devtools")]
 fn move_node_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
@@ -262,7 +256,6 @@ fn move_node_for_inspector(
     }
 }
 
-#[cfg(feature = "devtools")]
 fn set_attributes_as_text_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
@@ -343,7 +336,6 @@ fn set_attributes_as_text_for_inspector(
     DomInspectorEditOutcome::Applied { result_node: None }
 }
 
-#[cfg(feature = "devtools")]
 fn set_node_name_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
@@ -435,7 +427,6 @@ fn set_node_name_for_inspector(
         .unwrap_or(DomInspectorEditOutcome::MutationFailed)
 }
 
-#[cfg(feature = "devtools")]
 fn run_dom_inspector_edit(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
@@ -506,7 +497,6 @@ impl ScriptVm {
     /// browser command therefore owns one explicit Page-agent checkpoint after
     /// the body is settled, followed by child-record synchronization. This is
     /// deliberately narrower than generic runtime-work draining.
-    #[cfg(feature = "devtools")]
     pub(super) fn finish_devtools_live_dom_command<T>(&mut self, body: Result<T>) -> Result<T> {
         let checkpoint = self.perform_owner_lane_task_microtask_checkpoints();
         match body {
@@ -527,7 +517,6 @@ impl ScriptVm {
         }
     }
 
-    #[cfg(feature = "devtools")]
     pub(super) fn child_execution_context_id_for_live_dom_handle(
         &self,
         handle: DomHandle,
@@ -540,7 +529,6 @@ impl ScriptVm {
             .map(|child| runtime.child_default_execution_context_id(child))
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn edit_document_node(
         &mut self,
         edit: DomInspectorEdit,
@@ -565,7 +553,6 @@ impl ScriptVm {
         self.finish_devtools_live_dom_command(body)
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn mutate_document_node_attribute(
         &mut self,
         handle: DomHandle,
@@ -582,7 +569,6 @@ impl ScriptVm {
         self.finish_devtools_live_dom_command(body)
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn focus_document_node(
         &mut self,
         handle: DomHandle,

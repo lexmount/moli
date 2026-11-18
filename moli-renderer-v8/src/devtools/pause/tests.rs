@@ -1,5 +1,4 @@
 use super::*;
-#[cfg(feature = "devtools")]
 use crate::runtime::RendererInspectorCommandRoute;
 
 fn io_ingress(
@@ -8,7 +7,6 @@ fn io_ingress(
     crate::devtools::ingress::io::RendererInspectorIoIngress::new(bridge.pause_loop_wake(), None)
 }
 
-#[cfg(feature = "devtools")]
 fn main_ingress(
     bridge: &RendererInspectorPauseBridge,
 ) -> crate::devtools::ingress::main::RendererInspectorMainIngress {
@@ -47,7 +45,6 @@ fn outbound_route_with_io(
     )
 }
 
-#[cfg(feature = "devtools")]
 fn enqueue_command(
     ingress: &crate::devtools::ingress::io::RendererInspectorIoIngress,
     agent_token: RendererDevToolsAgentToken,
