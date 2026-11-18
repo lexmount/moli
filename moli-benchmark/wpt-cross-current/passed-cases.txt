@@ -928,6 +928,7 @@ css/css-conditional/container-queries/at-container-style-serialization.html
 css/css-conditional/container-queries/container-inheritance.html
 css/css-conditional/container-queries/container-name-computed.html
 css/css-conditional/container-queries/container-name-parsing.html
+css/css-conditional/container-queries/container-rule-cssom.html
 css/css-conditional/container-queries/container-type-computed.html
 css/css-conditional/container-queries/container-type-parsing.html
 css/css-conditional/container-queries/custom-property-style-query-change.html
@@ -3644,6 +3645,7 @@ css/css-variables/variable-invalidation.html
 css/css-variables/variable-pseudo-element.html
 css/css-variables/variable-recalc-with-initial.html
 css/css-variables/variable-reference-cssom.html
+css/css-variables/variable-reference-refresh.html
 css/css-variables/variable-reference-shorthands-cssom.html
 css/css-variables/variable-reference-shorthands.html
 css/css-variables/variable-reference-variable.html
@@ -6464,6 +6466,7 @@ html/browsers/the-window-object/open-close/open-features-tokenization-noopener.h
 html/browsers/the-window-object/open-close/open-features-tokenization-noreferrer.html
 html/browsers/the-window-object/proxy-getOwnPropertyDescriptor.html
 html/browsers/the-window-object/window-aliases.html
+html/browsers/the-window-object/window-indexed-properties-delete-no-cache.html
 html/browsers/the-window-object/window-open-invalid-url.html
 html/browsers/the-window-object/window-open-noopener.html?_parent
 html/browsers/the-window-object/window-open-noopener.html?_self
@@ -6506,6 +6509,8 @@ html/cross-origin-embedder-policy/no-secure-context.html
 html/cross-origin-opener-policy/no-https.html
 html/dom/access-key-label.html
 html/dom/aria-attribute-reflection.html
+html/dom/aria-element-reflection-disconnected.html
+html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.body.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html
@@ -6591,6 +6596,7 @@ html/dom/partial-updates/tentative/template-for-parsing-only.html
 html/dom/partial-updates/tentative/template-for-reverse.html
 html/dom/partial-updates/tentative/template-for-scripting-nested.html
 html/dom/partial-updates/tentative/template-for-superseded-by-shadowrootmode.html
+html/dom/reflection-embedded.html
 html/dom/reflection-forms-weekmonth.html
 html/dom/reflection-forms.html
 html/dom/reflection-grouping.html
@@ -6657,6 +6663,7 @@ html/interaction/focus/processing-model/preventScroll.html
 html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/focus-tabindex-default-value.html
 html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter-frame.html
 html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter.html
+html/interaction/focus/the-autofocus-attribute/autofocus-area.html
 html/interaction/focus/the-autofocus-attribute/autofocus-in-not-fully-active-document.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-valid.html
 html/interaction/focus/the-autofocus-attribute/first-when-later.html
@@ -7172,6 +7179,8 @@ html/semantics/forms/the-select-element/common-HTMLOptionsCollection.html
 html/semantics/forms/the-select-element/customizable-select/nested-select-crash.html
 html/semantics/forms/the-select-element/customizable-select/option-color-inheritance.html
 html/semantics/forms/the-select-element/customizable-select/option-disabled-invalid-nesting.html
+html/semantics/forms/the-select-element/customizable-select/option-form-ancestor-select.html
+html/semantics/forms/the-select-element/customizable-select/option-list.html
 html/semantics/forms/the-select-element/customizable-select/select-highlight-crash.html
 html/semantics/forms/the-select-element/customizable-select/select-optgroup-crash.html
 html/semantics/forms/the-select-element/customizable-select/select-options-id.html
@@ -7683,7 +7692,6 @@ html/semantics/tabular-data/the-tr-element/deleteCell.html
 html/semantics/tabular-data/the-tr-element/insertCell.html
 html/semantics/tabular-data/the-tr-element/rowIndex.html
 html/semantics/tabular-data/the-tr-element/sectionRowIndex.html
-html/semantics/text-level-semantics/historical.html
 html/semantics/text-level-semantics/the-a-element/a-click-handler-with-null-browsing-context-crash.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-404.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-redirect-to-javascript.html
@@ -8663,6 +8671,7 @@ old-tests/submission/Microsoft/selection/removeAllRanges.htm
 old-tests/submission/Microsoft/selection/removeRange.htm
 old-tests/submission/Microsoft/selection/selectAllChildren.htm
 orientation-sensor/OrientationSensor_insecure_context.html
+page-lifecycle/idlharness.html
 page-visibility/test_attributes_exist.html
 page-visibility/test_child_document.html
 page-visibility/test_default_view.html
@@ -8911,11 +8920,13 @@ service-workers/service-worker/ServiceWorkerGlobalScope/postmessage.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/service-worker-error-event.https.html
 service-workers/service-worker/activate-event-after-install-state-change.https.html
 service-workers/service-worker/activation-after-registration.https.html
+service-workers/service-worker/claim-affect-other-registration.https.html
 service-workers/service-worker/claim-fetch.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
 service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
+service-workers/service-worker/clients-get-cross-origin.https.html
 service-workers/service-worker/clients-matchall-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
 service-workers/service-worker/controller-on-load.https.html
@@ -8931,6 +8942,7 @@ service-workers/service-worker/fetch-event-after-navigation-within-page.https.ht
 service-workers/service-worker/fetch-event-async-respond-with.https.html
 service-workers/service-worker/fetch-event-handled.https.html
 service-workers/service-worker/fetch-event-network-error.https.html
+service-workers/service-worker/fetch-event-referrer-policy.https.html
 service-workers/service-worker/fetch-event-respond-with-argument.https.html
 service-workers/service-worker/fetch-event-respond-with-body-loaded-in-chunk.https.html
 service-workers/service-worker/fetch-event-respond-with-partial-stream.https.html
@@ -8964,6 +8976,7 @@ service-workers/service-worker/postmessage-blob-url.https.html
 service-workers/service-worker/postmessage-from-waiting-serviceworker.https.html
 service-workers/service-worker/postmessage-msgport-to-client.https.html
 service-workers/service-worker/postmessage-to-client.https.html
+service-workers/service-worker/referer.https.html
 service-workers/service-worker/register-closed-window.https.html
 service-workers/service-worker/register-default-scope.https.html
 service-workers/service-worker/register-same-scope-different-script-url.https.html
@@ -9342,6 +9355,7 @@ svg/extensibility/foreignObject/foreign-object-circular-filter-reference-crash.h
 svg/extensibility/foreignObject/foreign-object-under-clip-path-crash.html
 svg/extensibility/foreignObject/foreign-object-under-defs-crash.html
 svg/geometry/svg-baseval-in-display-none.html
+svg/geometry/svg-get-bounding-client-rect-in-non-rendered-elements.html
 svg/historical.html
 svg/interact/script-common.html
 svg/interact/scripted/async-02.html
@@ -9350,6 +9364,7 @@ svg/interact/scripted/async-04.html
 svg/interact/scripted/defer-02.html
 svg/interact/scripted/module-02.html
 svg/linking/scripted/a.rel-noopener-policy.html
+svg/linking/scripted/href-script-element-markup.html
 svg/linking/scripted/xlink-href-compat.html
 svg/path/parsing/arc-commands.html
 svg/path/parsing/curveto-commands.html
@@ -9544,6 +9559,7 @@ trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
 trusted-types/trusted-types-navigation.html?06-10
 trusted-types/trusted-types-navigation.html?16-20
+trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -10336,7 +10352,6 @@ xhr/setrequestheader-before-open.htm
 xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
-xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/setrequestheader-open-setrequestheader.htm
