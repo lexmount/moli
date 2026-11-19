@@ -7836,6 +7836,7 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
+html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
@@ -8879,6 +8880,19 @@ loading/preloader-css-import-single-quote.html
 loading/preloader-css-import.html
 loading/preloader-link-media.html
 loading/preloader-template.html
+longtask-timing/containerNames.html
+longtask-timing/longtask-attributes.html
+longtask-timing/longtask-detach-frame.html
+longtask-timing/longtask-in-childiframe-crossorigin.html
+longtask-timing/longtask-in-childiframe.html
+longtask-timing/longtask-in-externalscript.html
+longtask-timing/longtask-in-parentiframe.html
+longtask-timing/longtask-in-raf.html
+longtask-timing/longtask-in-sibling-iframe-crossorigin.html
+longtask-timing/longtask-in-sibling-iframe.html
+longtask-timing/longtask-promise.html
+longtask-timing/longtask-tojson.html
+longtask-timing/shared-renderer/longtask-in-new-window.html
 magnetometer/Magnetometer_insecure_context.html
 media-capabilities/decodingInfoEncryptedMedia.http.html
 navigation-api/currententrychange-event/anchor-click.html
