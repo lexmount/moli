@@ -173,7 +173,6 @@ pub struct RendererRuntimeInspectorMainCommandRoute {
     session_response_settlement_rx:
         Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>>,
     ingress: RendererInspectorMainIngress,
-    cancel_on_drop: bool,
 }
 
 impl RendererRuntimeInspectorMainCommandRoute {
@@ -321,12 +320,10 @@ impl RendererRuntimeInspectorMainCommandRoute {
 
 impl Drop for RendererRuntimeInspectorMainCommandRoute {
     fn drop(&mut self) {
-        if self.cancel_on_drop {
-            self.ingress.cancel_queued_command(
-                self.command_id,
-                "Runtime inspector Main route was canceled before dispatch",
-            );
-        }
+        self.ingress.cancel_queued_command(
+            self.command_id,
+            "Runtime inspector Main route was canceled before dispatch",
+        );
     }
 }
 
@@ -500,7 +497,6 @@ impl RendererInspectorMainIngress {
                 RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)),
             ),
             RendererPageStateCapturePolicy::ProtocolTurn,
-            false,
         )
     }
 
@@ -518,7 +514,6 @@ impl RendererInspectorMainIngress {
                 RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)),
             ),
             capture_policy,
-            false,
         )
     }
 
@@ -538,7 +533,6 @@ impl RendererInspectorMainIngress {
                 inspector_session_id,
             ),
             capture_policy,
-            false,
         )
     }
 
@@ -549,9 +543,8 @@ impl RendererInspectorMainIngress {
         command: RendererPageCommand,
         inspector_session_id: Option<String>,
     ) {
-        // Only the target's initialization path admits an unobserved command.
-        // The existing owner scheduler retains unobserved work through parking.
-        drop(self.enqueue_with_policy(
+        // Target-owned work has no claim/reply observer, including while parked.
+        self.admit_command(
             page_token,
             agent_token,
             RendererDevToolsMainCommandEnvelope::from_protocol_command_in_session(
@@ -559,8 +552,9 @@ impl RendererInspectorMainIngress {
                 inspector_session_id,
             ),
             RendererPageStateCapturePolicy::BackgroundInitialization,
-            true,
-        ));
+            None,
+            None,
+        );
     }
 
     fn enqueue_with_policy(
@@ -569,33 +563,57 @@ impl RendererInspectorMainIngress {
         agent_token: RendererDevToolsAgentToken,
         envelope: RendererDevToolsMainCommandEnvelope,
         capture_policy: RendererPageStateCapturePolicy,
-        detached: bool,
     ) -> RendererRuntimeInspectorMainCommandRoute {
-        assert_eq!(
-            envelope.ticket().route(),
-            RendererInspectorCommandRoute::MainThread,
-            "only MainThread DevTools commands may enter RendererInspectorMainIngress"
-        );
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let (owner_reply_tx, owner_reply_rx) = tokio::sync::oneshot::channel();
         let session_response_settlement_rx = envelope.response().and_then(
             RendererRuntimeInspectorResponseSender::take_session_response_settlement_receiver,
         );
+        let ticket = envelope.ticket().clone();
+        let command_id = ticket.sequence();
+        self.admit_command(
+            page_token,
+            agent_token,
+            envelope,
+            capture_policy,
+            Some(claim_tx),
+            Some(owner_reply_tx),
+        );
+        RendererRuntimeInspectorMainCommandRoute {
+            command_id,
+            ticket,
+            claim_rx: Some(claim_rx),
+            owner_reply_rx: Some(owner_reply_rx),
+            session_response_settlement_rx,
+            ingress: self.clone(),
+        }
+    }
+
+    fn admit_command(
+        &self,
+        page_token: RendererPageToken,
+        agent_token: RendererDevToolsAgentToken,
+        envelope: RendererDevToolsMainCommandEnvelope,
+        capture_policy: RendererPageStateCapturePolicy,
+        claim_tx: Option<tokio::sync::oneshot::Sender<RendererInspectorMainCommandClaim>>,
+        owner_reply_tx: Option<tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>>,
+    ) {
+        assert_eq!(
+            envelope.ticket().route(),
+            RendererInspectorCommandRoute::MainThread,
+            "only MainThread DevTools commands may enter RendererInspectorMainIngress"
+        );
         let mut state = self.shared.state.lock();
         let lane_key =
             RendererDevToolsSessionLaneKey::new(agent_token, envelope.ticket().session().clone());
-        let ticket = envelope.ticket().clone();
-        let command_id = ticket.sequence();
         let command = RendererInspectorMainCommand {
-            command_id,
+            command_id: envelope.ticket().sequence(),
             page_token,
             agent_token,
             capture_policy,
             envelope,
-            claim_tx: Some(claim_tx),
-            // A target-owned initialization has no Browser observer. The
-            // existing owner scheduler's absent reply slot survives parking.
-            owner_reply_tx: (!detached).then_some(owner_reply_tx),
+            claim_tx,
+            owner_reply_tx,
             claimed_by: None,
             cleanup_authority: false,
             connection: state.connections.admission(&lane_key),
@@ -605,21 +623,11 @@ impl RendererInspectorMainIngress {
         } else {
             Err(command)
         };
+        drop(state);
         if let Err(command) = admitted {
-            drop(state);
             fail_main_command(command, "Inspector Main session or target is closed");
         } else {
-            drop(state);
             self.notify_execution_opportunities();
-        }
-        RendererRuntimeInspectorMainCommandRoute {
-            command_id,
-            ticket,
-            claim_rx: Some(claim_rx),
-            owner_reply_rx: (!detached).then_some(owner_reply_rx),
-            session_response_settlement_rx,
-            ingress: self.clone(),
-            cancel_on_drop: !detached,
         }
     }
 

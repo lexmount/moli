@@ -4,7 +4,6 @@ use serde_json::Value;
 use crate::automation::{AutomationEvent, DevToolsTargetId, DevToolsTargetInfo};
 #[cfg(test)]
 use crate::automation::{DevToolsSessionId, TargetAttachmentEvent, TargetDetachmentEvent};
-use crate::domains::command_output::CommandOutputPlan;
 
 pub(super) trait CdpTargetAutomationEventSink {
     fn push_target_background_event(&mut self, event: crate::conn::BackgroundProtocolEvent);
@@ -22,12 +21,6 @@ pub(super) struct TargetProtocolSideEffects {
 }
 
 impl TargetProtocolSideEffects {
-    pub(super) fn background_events_mut(
-        &mut self,
-    ) -> &mut Vec<crate::conn::BackgroundProtocolEvent> {
-        &mut self.events
-    }
-
     pub(super) fn into_background_events(self) -> Vec<crate::conn::BackgroundProtocolEvent> {
         self.events
     }
@@ -37,14 +30,6 @@ impl TargetProtocolSideEffects {
         events: impl IntoIterator<Item = crate::conn::BackgroundProtocolEvent>,
     ) {
         self.events.extend(events);
-    }
-
-    pub(super) fn drain_into_plan(&mut self) -> CommandOutputPlan {
-        let mut plan = CommandOutputPlan::default();
-        for event in std::mem::take(&mut self.events) {
-            plan.push_background_event(event);
-        }
-        plan
     }
 }
 
@@ -569,19 +554,18 @@ mod tests {
     }
 
     #[test]
-    fn target_protocol_side_effects_keep_event_order_before_background_event_mutation() {
+    fn target_protocol_side_effects_keep_event_order_when_extending_events() {
         let mut out = super::TargetProtocolSideEffects::default();
         super::emit_target_destroyed(&mut out, "TID-before-background");
 
-        out.background_events_mut()
-            .push(crate::conn::BackgroundProtocolEvent::target_detached(
-                TargetDetachmentEvent {
-                    target_id: DevToolsTargetId::from("TID-after-background"),
-                    session_id: DevToolsSessionId::from("SID-after-background"),
-                    parent_session_id: None,
-                    reason: None,
-                },
-            ));
+        out.extend_background_events([crate::conn::BackgroundProtocolEvent::target_detached(
+            TargetDetachmentEvent {
+                target_id: DevToolsTargetId::from("TID-after-background"),
+                session_id: DevToolsSessionId::from("SID-after-background"),
+                parent_session_id: None,
+                reason: None,
+            },
+        )]);
 
         let mut events = out.into_background_events();
         assert_eq!(events.len(), 2);

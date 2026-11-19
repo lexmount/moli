@@ -915,6 +915,9 @@ mod tests {
             }))
             .await;
         context.expect_result(1, json!({"identifier": "1"}), Some("SID-direct-state"));
+        let script_owner = context.with_fixture(|conn| {
+            crate::conn::CommandOwnerScope::capture(conn, Some("SID-direct-state"))
+        });
         let owner = context.state;
         let handle = owner.handle();
         let pending = handle
@@ -931,7 +934,9 @@ mod tests {
             let completed = pending.wait().await;
             ready.send(()).unwrap();
             released.await.unwrap();
-            task_handle.with_state(|state| completed.finish(Some(state.connection)))
+            task_handle.with_state(|state| {
+                completed.finish(state.connection.loaded_page_mut_for_owner(&script_owner))
+            })
         };
         tokio::pin!(workflow);
         tokio::time::timeout(std::time::Duration::from_secs(30), async {

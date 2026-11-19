@@ -342,7 +342,7 @@ pub(crate) enum PreparedSessionHandlerDisposal {
         protocol: Vec<BackgroundProtocolEvent>,
     },
     Page {
-        scripts: crate::conn::SessionScriptCleanup,
+        scripts: crate::conn::SessionPageUpdates,
         events: Vec<BackgroundProtocolEvent>,
     },
     PageUpdates(crate::conn::SessionPageUpdates),
@@ -472,7 +472,7 @@ impl PreparedSessionHandlerDisposal {
                 let removed_scripts = scripts.wait().await;
                 let identity = identity.clone();
                 driver.with_state(move |state| {
-                    state.finish_session_script_cleanup(&identity, removed_scripts)
+                    state.finish_session_page_updates(&identity, removed_scripts)
                 })
             }
             Self::PageUpdates(updates) => {

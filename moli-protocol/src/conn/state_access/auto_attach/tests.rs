@@ -234,6 +234,35 @@ fn start(
     *pending
 }
 
+fn disable(
+    handle: &ProtocolStateHandle,
+    id: u64,
+    owner: &str,
+) -> (Vec<Value>, Vec<crate::conn::CdpSchedulerEvent>) {
+    let command = ParsedCdpCommand::from_serializable(json!({
+        "id":id,"sessionId":owner,"method":"Target.setAutoAttach",
+        "params":{"autoAttach":false,"waitForDebuggerOnStart":false,"flatten":true},
+    }))
+    .unwrap();
+    let CdpCommandTaskStep::Complete(outcome) = handle
+        .with_state(|state| {
+            state.start_parsed_command_dispatch_with_context(&command, &mut Default::default())
+        })
+        .unwrap()
+    else {
+        panic!("Browser disable has no asynchronous commit window");
+    };
+    let (events, scheduler, predecessors) = outcome.into_protocol_event_parts();
+    assert!(predecessors.is_empty());
+    (
+        events
+            .into_iter()
+            .map(|event| event.into_protocol_message())
+            .collect(),
+        scheduler,
+    )
+}
+
 fn recover(
     handle: &ProtocolStateHandle,
     id: u64,
@@ -352,14 +381,7 @@ async fn auto_attach_enable_owns_browser_commit_and_rejects_retired_policy_after
         let mut replacement = None;
         let mut replacement_context = CommandDispatchContext::default();
         if phase == 3 || phase == 4 {
-            let mut disabled_context = CommandDispatchContext::default();
-            let disabled = start(&handle, 1902, &owner_session, false, &mut disabled_context)
-                .wait()
-                .await;
-            success(
-                &finish(&handle, disabled, &mut disabled_context).await,
-                1902,
-            );
+            success(&disable(&handle, 1902, &owner_session).0, 1902);
             if phase == 4 {
                 let reenabled = Box::pin(
                     start(
@@ -445,142 +467,42 @@ async fn auto_attach_enable_owns_browser_commit_and_rejects_retired_policy_after
 }
 
 #[tokio::test]
-async fn auto_attach_disable_revokes_browser_route_before_native_cleanup_and_preserves_successor() {
-    for phase in 0..4 {
-        let (fixture, owner_session) = fixture().await;
-        let owner = fixture.state;
-        let handle = owner.handle();
-        let mut enabled_context = CommandDispatchContext::default();
-        let enabled = start(&handle, 1910, &owner_session, true, &mut enabled_context)
-            .wait()
-            .await;
-        let enabled = finish(&handle, enabled, &mut enabled_context).await;
-        let old_session = attached(&enabled).pop().unwrap();
-        // Install a real session-owned Native script. Empty session disposal
-        // can finish synchronously and would not exercise the cleanup wait.
-        let preload = ParsedCdpCommand::parse_str(
-            json!({
-                "id":1915,"sessionId":old_session,"method":"Page.addScriptToEvaluateOnNewDocument",
-                "params":{"source":"globalThis.autoAttachCleanup = true"},
-            })
-            .to_string(),
+async fn auto_attach_disable_commits_synchronously_while_native_cleanup_waits() {
+    let (mut fixture, owner_session) = fixture().await;
+    fixture
+        .process_async(
+            json!({"id":1910,"sessionId":owner_session,"method":"Target.setAutoAttach",
+        "params":{"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":true,
+        "filter":[{"type":"page"},{"exclude":true}]}}),
         )
-        .unwrap();
-        let mut preload_context = CommandDispatchContext::default();
-        let preload = handle
-            .with_state(|state| {
-                state.start_parsed_command_dispatch_with_context(&preload, &mut preload_context)
-            })
-            .unwrap();
-        if let CdpCommandTaskStep::Pending(preload) = preload {
-            finish(&handle, preload.wait().await, &mut preload_context).await;
-        }
-        let (gate, guard, entered, release) = handle
-            .with_state(|state| {
-                // The test-only setup owns no state borrow while the Native gate waits.
-                let page = state
-                    .connection
-                    .loaded_page_mut_for_protocol_access(Some("SID-auto-owned"))
-                    .unwrap();
-                let (entered, waiting) = tokio::sync::oneshot::channel();
-                let (release, held) = std::sync::mpsc::channel();
-                let (gate, guard) = page
-                    .start_cdp_call(
-                        1999,
-                        None,
-                        moli_core::RendererNativeOperation::then(
-                            moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                            move |_| {
-                                let _ = entered.send(());
-                                let _ = held.recv();
-                                moli_core::RendererNativeOperationStep::Complete(
-                                    moli_core::RendererNativeProtocolResponse::success(json!({})),
-                                )
-                            },
-                        ),
-                    )
-                    .unwrap();
-                (gate, guard, waiting, ReleaseOnDrop(Some(release)))
-            })
-            .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), entered)
-            .await
-            .unwrap()
-            .unwrap();
-        let mut context = CommandDispatchContext::default();
-        let mut waiting =
-            Box::pin(start(&handle, 1911, &owner_session, false, &mut context).wait());
-        peer(&handle);
-        if phase == 1 {
-            drop(waiting);
-            waiting = Box::pin(recover(&handle, 1911, &owner_session, &mut context).wait());
-        }
-        let mut replacement_context = CommandDispatchContext::default();
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-            .await
-            .unwrap();
-        let replacement = if phase == 3 {
-            let pending = Box::pin(
-                start(
-                    &handle,
-                    1912,
-                    &owner_session,
-                    true,
-                    &mut replacement_context,
-                )
-                .wait(),
-            );
-            Some(pending)
-        } else {
-            None
-        };
-        drop(release);
-        gate.wait().await.unwrap();
-        drop(guard);
-        let completed = if phase == 2 {
-            drop(completed);
-            recover(&handle, 1911, &owner_session, &mut context)
-                .wait()
-                .await
-        } else {
-            completed
-        };
-        let messages = finish(&handle, completed, &mut context).await;
-        success(&messages, 1911);
-        assert_eq!(
-            messages
-                .iter()
-                .filter(|message| message["method"] == "Target.detachedFromTarget"
-                    && message["params"]["sessionId"] == old_session)
-                .count(),
-            1,
-            "{messages:?}"
-        );
-        let expected = if let Some(replacement) = replacement {
-            let ready = tokio::time::timeout(std::time::Duration::from_secs(5), replacement)
-                .await
-                .unwrap();
-            let messages = finish(&handle, ready, &mut replacement_context).await;
-            success(&messages, 1912);
-            let sessions = attached(&messages);
-            assert_eq!(sessions.len(), 1);
-            assert_ne!(sessions[0], old_session);
-            sessions
-        } else {
-            Vec::new()
-        };
-        handle
-            .with_state(|state| {
-                assert!(!state.connection.has_attached_devtools_session(&old_session));
-                assert_eq!(
-                    state
-                        .connection
-                        .auto_attached_sessions_for_owner(Some(&owner_session)),
-                    expected
-                );
-            })
-            .unwrap();
-    }
+        .await;
+    let old_session = attached(&fixture.take_all()).pop().unwrap();
+    fixture
+        .process_async(json!({"id":1915,"sessionId":old_session,
+        "method":"Page.addScriptToEvaluateOnNewDocument",
+        "params":{"source":"globalThis.autoAttachCleanup = true"}}))
+        .await;
+    let (gate, guard, release) = hold_renderer(&mut fixture).await;
+    let (messages, work) = disable(&fixture.handle(), 1911, &owner_session);
+    success(&messages, 1911);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["method"] == "Target.detachedFromTarget"
+                && message["params"]["sessionId"] == old_session)
+            .count(),
+        1
+    );
+    fixture.with_fixture(|conn| assert!(conn.session_route(Some(&old_session)).is_none()));
+    fixture
+        .route_direct_command_output_for_test(Vec::new(), work)
+        .await;
+    drop(release);
+    gate.wait().await.unwrap();
+    drop(guard);
+    fixture
+        .wait_for_direct_command_work_completion_for_test("disabled auto-attach native work")
+        .await;
 }
 
 #[tokio::test]

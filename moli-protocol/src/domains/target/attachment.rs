@@ -50,42 +50,6 @@ fn attach_session_events_then_result_step(
     TargetCommandTaskStep::Complete(plan)
 }
 
-#[derive(Default)]
-struct TargetCommandOutput {
-    plan: CommandOutputPlan,
-    side_effects: events::TargetProtocolSideEffects,
-}
-
-impl TargetCommandOutput {
-    fn background_events_mut(&mut self) -> &mut Vec<BackgroundProtocolEvent> {
-        self.side_effects.background_events_mut()
-    }
-
-    fn target_events_mut(&mut self) -> &mut events::TargetProtocolSideEffects {
-        &mut self.side_effects
-    }
-
-    fn push_success(&mut self) {
-        self.flush_side_effects();
-        self.plan.push_success();
-    }
-
-    fn push_error(&mut self, code: i32, message: impl std::fmt::Display) {
-        self.flush_side_effects();
-        self.plan
-            .push_error_without_session(code, format!("{message:#}"));
-    }
-
-    fn into_plan(mut self) -> CommandOutputPlan {
-        self.flush_side_effects();
-        self.plan
-    }
-
-    fn flush_side_effects(&mut self) {
-        self.plan.extend(self.side_effects.drain_into_plan());
-    }
-}
-
 pub(super) fn start_attach_to_target_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -455,7 +419,6 @@ struct DetachParams {
 
 mod detachment;
 pub(crate) use detachment::TargetDetachment;
-pub(crate) use detachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
 
 pub(super) fn start_detach_from_target_command(
     conn: &mut CdpConnection,

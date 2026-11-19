@@ -415,11 +415,7 @@ impl CdpConnection {
             session_key: moli_page_types::DevToolsSessionKey::Primary,
         });
         if let Some(slot) = self.runtime_session_owner_slot_for_owner(&owner)
-            && (slot.has_loaded_page()
-                || slot
-                    .page_slot()
-                    .prepared_document_inspector_endpoint()
-                    .is_some())
+            && slot.current_inspector_endpoint().is_some()
         {
             // Existing sessions keep their own ordered configuration; a new
             // attachment initializes only its own backend connection.

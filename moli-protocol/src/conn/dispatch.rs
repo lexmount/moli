@@ -49,12 +49,12 @@ impl CdpCommandTaskStep {
     }
 }
 
-enum PageCommandAdoptionWaiter {
+enum SessionCommandPageWaiter {
     Initial(InitialDocumentPageBuildWaiter),
     Navigation(crate::conn::CommandWaitLifetime),
 }
 
-impl PageCommandAdoptionWaiter {
+impl SessionCommandPageWaiter {
     async fn wait(self) -> Result<()> {
         match self {
             Self::Initial(waiter) => waiter.wait().await.map_err(anyhow::Error::msg),
@@ -66,15 +66,15 @@ impl PageCommandAdoptionWaiter {
     }
 }
 
-struct PendingInitialDocumentCommand {
-    waiter: Option<PageCommandAdoptionWaiter>,
+struct PendingSessionCommandAdmission {
+    waiter: Option<SessionCommandPageWaiter>,
     admission: crate::conn::session_command_admission::SessionCommandAdmission,
     command: ParsedCdpCommand,
     host: ProtocolPageHostScope,
 }
 
 enum PendingCdpCommandDispatchKind {
-    InitialDocument(PendingInitialDocumentCommand),
+    SessionAdmission(PendingSessionCommandAdmission),
     Workflow(super::command_workflow::PendingCommandWorkflowRecovery),
     Native(crate::domains::native::PendingNativeCommand),
     Runtime(Box<crate::domains::runtime::PendingRuntimeCommandDispatch>),
@@ -98,7 +98,7 @@ enum PendingCdpCommandDispatchKind {
 }
 
 enum CompletedCdpCommandDispatchKind {
-    InitialDocument {
+    SessionAdmission {
         command: ParsedCdpCommand,
         host: ProtocolPageHostScope,
         result: Result<()>,
@@ -129,7 +129,7 @@ enum CompletedCdpCommandDispatchKind {
 impl PendingCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
-            Self::InitialDocument { .. } => "InitialDocument",
+            Self::SessionAdmission { .. } => "SessionAdmission",
             Self::Workflow(_) => "Workflow",
             Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
@@ -157,7 +157,7 @@ impl PendingCdpCommandDispatchKind {
 impl CompletedCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
-            Self::InitialDocument { .. } => "InitialDocument",
+            Self::SessionAdmission { .. } => "SessionAdmission",
             Self::Workflow(_) => "Workflow",
             Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
@@ -219,7 +219,7 @@ impl PendingCdpCommandDispatch {
 
     pub fn command_id(&self) -> Option<u64> {
         match &self.inner {
-            PendingCdpCommandDispatchKind::InitialDocument(pending) => {
+            PendingCdpCommandDispatchKind::SessionAdmission(pending) => {
                 Some(pending.command.request().id())
             }
             PendingCdpCommandDispatchKind::Native(pending) => Some(pending.command_id()),
@@ -230,7 +230,7 @@ impl PendingCdpCommandDispatch {
 
     pub fn session_id(&self) -> Option<&str> {
         match &self.inner {
-            PendingCdpCommandDispatchKind::InitialDocument(pending) => {
+            PendingCdpCommandDispatchKind::SessionAdmission(pending) => {
                 pending.command.request().session_id()
             }
             PendingCdpCommandDispatchKind::Native(pending) => pending.session_id(),
@@ -333,8 +333,8 @@ impl PendingCdpCommandDispatch {
             );
         }
         let inner = match self.inner {
-            PendingCdpCommandDispatchKind::InitialDocument(pending) => {
-                let PendingInitialDocumentCommand {
+            PendingCdpCommandDispatchKind::SessionAdmission(pending) => {
+                let PendingSessionCommandAdmission {
                     command,
                     host,
                     mut admission,
@@ -350,7 +350,7 @@ impl PendingCdpCommandDispatch {
                     } => result,
                     _ = host.wait_for_binding_retirement() => Err(NoDocumentLoaded.into()),
                 };
-                CompletedCdpCommandDispatchKind::InitialDocument {
+                CompletedCdpCommandDispatchKind::SessionAdmission {
                     admission,
                     command,
                     host,
@@ -775,6 +775,34 @@ impl CdpConnection {
         self.start_admitted_command_dispatch(command, command_context, None)
     }
 
+    fn session_command_page_waiter(
+        &self,
+        owner: &CommandOwnerScope,
+        command: &ParsedCdpCommand,
+    ) -> Option<SessionCommandPageWaiter> {
+        if !command.requires_initial_document_adoption() {
+            return None;
+        }
+        let slot = self.runtime_session_owner_slot_for_owner(owner)?;
+        if let Some(waiter) = slot.initial_document_page_build_waiter() {
+            return Some(SessionCommandPageWaiter::Initial(waiter));
+        }
+        // Browser observers can subscribe before parsing finishes. Inspector
+        // IO needs only the exact prepared endpoint; ordinary Main work waits
+        // for the navigation's Page adoption.
+        if command.renderer_access() == CdpRendererCommandAccess::OwnerIndependent
+            || (command.can_use_prepared_inspector_endpoint()
+                && slot
+                    .page_slot()
+                    .prepared_document_inspector_endpoint()
+                    .is_some())
+        {
+            return None;
+        }
+        slot.navigation_page_adoption_waiter()
+            .map(SessionCommandPageWaiter::Navigation)
+    }
+
     fn start_admitted_command_dispatch(
         &mut self,
         command: &ParsedCdpCommand,
@@ -864,36 +892,9 @@ impl CdpConnection {
         // concrete per-session Main/IO receiver. A completed Page build must
         // not let a newer command overtake an older, still-waking waiter.
         let mut direct_admission = admitted;
-        if command.requires_initial_document_adoption() || req.method() == "Runtime.disable" {
+        if command.requires_session_command_admission() {
             let owner = CommandOwnerScope::capture(self, req.session_id());
-            // Disable can retire Browser state without a Page, while still
-            // following earlier Main commands waiting for Page adoption.
-            let waiter = command
-                .requires_initial_document_adoption()
-                .then(|| {
-                    self.runtime_session_owner_slot_for_owner(&owner)
-                        .and_then(|slot| {
-                            slot.initial_document_page_build_waiter()
-                                .map(PageCommandAdoptionWaiter::Initial)
-                                .or_else(|| {
-                                    // Browser Page observers can subscribe to a prepared
-                                    // Document; they must not wait for parsing to finish.
-                                    (command.renderer_access()
-                                        != CdpRendererCommandAccess::OwnerIndependent
-                                        && !(command.renderer_access()
-                                            == CdpRendererCommandAccess::Io
-                                            && matches!(domain, "Runtime" | "Debugger")
-                                            && slot
-                                                .page_slot()
-                                                .prepared_document_inspector_endpoint()
-                                                .is_some()))
-                                    .then(|| slot.navigation_page_adoption_waiter())
-                                    .flatten()
-                                    .map(PageCommandAdoptionWaiter::Navigation)
-                                })
-                        })
-                })
-                .flatten();
+            let waiter = self.session_command_page_waiter(&owner, command);
             if let Some(session) = self.target_devtools_session_state_for_owner(&owner) {
                 let queue = if command.renderer_access() == CdpRendererCommandAccess::Io {
                     &session.lifecycle.io_admission
@@ -913,8 +914,8 @@ impl CdpConnection {
                     {
                         let command = ParsedCdpCommand::parse_str(command.json())
                             .expect("already parsed command");
-                        return self.pending_step(PendingCdpCommandDispatchKind::InitialDocument(
-                            PendingInitialDocumentCommand {
+                        return self.pending_step(PendingCdpCommandDispatchKind::SessionAdmission(
+                            PendingSessionCommandAdmission {
                                 waiter,
                                 admission,
                                 command,
@@ -1467,7 +1468,7 @@ impl CdpConnection {
     ) -> CdpCommandTaskStep {
         let mut out = Vec::new();
         match *completed.inner {
-            CompletedCdpCommandDispatchKind::InitialDocument {
+            CompletedCdpCommandDispatchKind::SessionAdmission {
                 command,
                 host,
                 result,

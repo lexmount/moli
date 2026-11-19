@@ -105,6 +105,16 @@ pub(crate) struct DevToolsSessionState {
 }
 
 impl DevToolsSessionState {
+    fn needs_runtime_inspector_restore(&self) -> bool {
+        self.inspector_session_state.v8_state.is_some()
+            || self.runtime_session_state.runtime_frontend_enabled
+            || self.web_mcp_enabled
+            || !self.runtime_bindings.is_empty()
+            || self.console_output_session_state.console_enabled
+            || !self.dom_debugger_event_listener_breakpoints.is_empty()
+            || !self.dom_debugger_xhr_breakpoints.is_empty()
+    }
+
     pub(crate) fn is_closing(&self) -> bool {
         self.lifecycle.is_closing()
     }
@@ -597,29 +607,28 @@ impl DevToolsSessionRegistry {
         bindings
     }
 
+    pub(crate) fn runtime_inspector_connections(
+        &self,
+    ) -> impl Iterator<Item = (&DevToolsSessionKey, &[RuntimeBindingDefinition])> {
+        self.states
+            .iter()
+            .filter(|(_, state)| {
+                !state.is_closing()
+                    && (state.lifecycle.is_registered() || state.needs_runtime_inspector_restore())
+            })
+            .map(|(key, state)| (key, state.runtime_bindings.as_slice()))
+    }
+
     pub(crate) fn runtime_inspector_restore_snapshots(
         &self,
-    ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
-        self.runtime_inspector_session_snapshots(false)
-    }
-
-    pub(crate) fn runtime_inspector_connection_snapshots(
-        &self,
-    ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
-        self.runtime_inspector_session_snapshots(true)
-    }
-
-    fn runtime_inspector_session_snapshots(
-        &self,
-        include_empty_connections: bool,
     ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
         self.states
             .iter()
             .filter_map(|(key, state)| {
-                if state.is_closing() {
+                if state.is_closing() || !state.needs_runtime_inspector_restore() {
                     return None;
                 }
-                let restore = RendererInspectorSessionRestoreSnapshot {
+                Some(RendererInspectorSessionRestoreSnapshot {
                     inspector_session_id: key.wire_session_id().map(str::to_owned),
                     v8_attach: V8InspectorSessionAttach::from_optional_state(
                         state.inspector_session_state.v8_state.clone(),
@@ -638,14 +647,7 @@ impl DevToolsSessionRegistry {
                             .clone(),
                         dom_debugger_xhr_breakpoints: state.dom_debugger_xhr_breakpoints.clone(),
                     },
-                };
-                // Configured internal/implicit sessions keep their existing
-                // restore contract. Empty endpoints belong only to committed
-                // Browser sessions, never to attachment preparation drafts.
-                ((include_empty_connections && state.lifecycle.is_registered())
-                    || restore.protocol_configuration.requires_restore()
-                    || state.inspector_session_state.v8_state.is_some())
-                .then_some(restore)
+                })
             })
             .collect()
     }
@@ -1515,21 +1517,18 @@ mod tests {
         let mut sessions = DevToolsSessionRegistry::default();
         sessions.ensure_attached("SID-preparing");
         sessions.ensure_attached("SID-committed");
-        assert!(sessions.runtime_inspector_connection_snapshots().is_empty());
+        assert!(sessions.runtime_inspector_connections().next().is_none());
 
         let committed = sessions.ensure_attached("SID-committed").lifecycle.clone();
         committed.mark_registered();
-        let snapshots = sessions.runtime_inspector_connection_snapshots();
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(
-            snapshots[0].inspector_session_id.as_deref(),
-            Some("SID-committed")
-        );
+        let connections = sessions.runtime_inspector_connections().collect::<Vec<_>>();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].0.wire_session_id(), Some("SID-committed"));
         assert!(sessions.runtime_inspector_restore_snapshots().is_empty());
 
         committed.mark_closing();
         committed.mark_registered();
-        assert!(sessions.runtime_inspector_connection_snapshots().is_empty());
+        assert!(sessions.runtime_inspector_connections().next().is_none());
 
         sessions
             .primary_mut()
@@ -1538,6 +1537,10 @@ mod tests {
         let snapshots = sessions.runtime_inspector_restore_snapshots();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].inspector_session_id, None);
+        let connections = sessions.runtime_inspector_connections().collect::<Vec<_>>();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].0, &DevToolsSessionKey::Primary);
+        assert_eq!(connections[0].1, &[binding("internal")]);
     }
 
     #[test]

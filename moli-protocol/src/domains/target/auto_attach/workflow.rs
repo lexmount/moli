@@ -24,7 +24,7 @@ impl AutoAttachSweepRollback {
             .retain(|session| session.session_id() != session_id);
     }
 
-    pub(in crate::domains::target) async fn run(self, driver: &mut ProtocolWorkflowDriver) {
+    async fn run(self, driver: &mut ProtocolWorkflowDriver) {
         let sessions = std::mem::take(&mut *self.0.borrow_mut());
         for session in sessions {
             if let Err(error) = super::super::opening::rollback_attachment(driver, session).await {
@@ -45,10 +45,9 @@ impl AutoAttachSweepRollback {
     }
 }
 
-pub(crate) struct PreparedAutoAttachCommand {
+pub(crate) struct PreparedAutoAttachEnable {
     owner_session_id: Option<String>,
-    policy: Option<AutoAttachPolicyIdentity>,
-    detach: Option<super::super::attachment::TargetDetachment>,
+    policy: AutoAttachPolicyIdentity,
     rollback: AutoAttachSweepRollback,
 }
 
@@ -65,23 +64,14 @@ pub(crate) struct PreparedAutoAttachSweep {
     rollback: AutoAttachSweepRollback,
 }
 
-impl PreparedAutoAttachCommand {
+impl PreparedAutoAttachEnable {
     pub(in crate::domains::target) fn prepare(
         conn: &mut CdpConnection,
-        enabled: bool,
         owner_session_id: Option<&str>,
     ) -> Self {
         Self {
-            policy: enabled.then(|| {
-                AutoAttachPolicyIdentity::capture(conn, owner_session_id)
-                    .expect("an enabled auto-attach command retains its installed policy")
-            }),
-            detach: (!enabled).then(|| {
-                super::super::attachment::TargetDetachment::prepare_auto_attached_sessions(
-                    conn,
-                    owner_session_id,
-                )
-            }),
+            policy: AutoAttachPolicyIdentity::capture(conn, owner_session_id)
+                .expect("an enabling command retains its installed policy"),
             owner_session_id: owner_session_id.map(str::to_owned),
             rollback: AutoAttachSweepRollback::default(),
         }
@@ -91,57 +81,23 @@ impl PreparedAutoAttachCommand {
         self,
         access: ProtocolStateHandle,
     ) -> PreparedCommandWorkflow {
-        let detached_cleanup = self.detach.as_ref().map(|detach| detach.failure_cleanup());
         let rollback = self.rollback.clone();
         let recovery_access = access.clone();
         PreparedCommandWorkflow::new(move |mut context| async move {
-            match Box::pin(self.run(&mut ProtocolWorkflowDriver::new(access), &mut context)).await {
+            match self.run(&mut ProtocolWorkflowDriver::new(access), &mut context) {
                 Ok(()) => context.complete(CommandOutputPlan::default()),
                 Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
             }
         })
-        .with_failure_cleanup(move |response| {
-            let Some(cleanup) = detached_cleanup else {
-                return rollback.into_recovery(recovery_access, response);
-            };
-            PreparedCommandWorkflow::new(move |mut context| async move {
-                let mut driver = ProtocolWorkflowDriver::new(recovery_access);
-                let recovery = context.with_state(&mut driver, move |state, context| {
-                    state.prepare_auto_attach_detachment_recovery(
-                        cleanup,
-                        response,
-                        context.context_mut(),
-                    )
-                });
-                match recovery {
-                    Ok(recovery) => {
-                        let recovery = recovery.wait().await;
-                        context.complete_in_owner_turn(
-                            CommandOutputPlan::default(),
-                            move |state, _| state.finish_auto_attach_detachment_recovery(recovery),
-                        )
-                    }
-                    Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-                }
-            })
-        })
+        .with_failure_cleanup(move |response| rollback.into_recovery(recovery_access, response))
     }
 
-    pub(in crate::domains::target) async fn run(
+    fn run(
         self,
         driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
-        // Browser policy/registration never waits for an initial Page.
-        if let Some(detach) = self.detach {
-            context.defer_owner_turn_completion(move |state, _| {
-                state.commit_auto_attach_detachment(detach)
-            });
-            return Ok(());
-        }
-        let policy = self
-            .policy
-            .expect("an enabling command retains its policy identity");
+        let policy = self.policy;
         let rollback = self.rollback;
         let prepared_rollback = rollback.clone();
         let mut sweep = driver.with_state(move |state| {

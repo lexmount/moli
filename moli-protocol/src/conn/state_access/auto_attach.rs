@@ -1,10 +1,7 @@
 use super::ProtocolWorkflowState;
-use crate::conn::{AutoAttachPolicyIdentity, CommandDispatchContext};
+use crate::conn::AutoAttachPolicyIdentity;
 use crate::domains::command_output::CommandOutputPlan;
-use crate::domains::target::{
-    AutoAttachSweepRollback, PreparedAutoAttachSweep, TargetDetachmentFailureCleanup,
-    TargetDetachmentRecovery,
-};
+use crate::domains::target::{AutoAttachSweepRollback, PreparedAutoAttachSweep};
 
 impl ProtocolWorkflowState<'_> {
     pub(crate) fn prepare_auto_attach_sweep(
@@ -56,29 +53,6 @@ impl ProtocolWorkflowState<'_> {
         sweep: PreparedAutoAttachSweep,
     ) -> CommandOutputPlan {
         sweep.finish(self.connection)
-    }
-
-    pub(crate) fn commit_auto_attach_detachment(
-        self,
-        detachment: crate::domains::target::TargetDetachment,
-    ) -> CommandOutputPlan {
-        detachment.commit_in_browser(self.connection)
-    }
-
-    pub(crate) fn prepare_auto_attach_detachment_recovery(
-        self,
-        cleanup: TargetDetachmentFailureCleanup,
-        response: CommandOutputPlan,
-        context: &mut CommandDispatchContext,
-    ) -> TargetDetachmentRecovery {
-        cleanup.prepare(self.connection, context, response)
-    }
-
-    pub(crate) fn finish_auto_attach_detachment_recovery(
-        self,
-        recovery: TargetDetachmentRecovery,
-    ) -> CommandOutputPlan {
-        recovery.finish(self.connection)
     }
 }
 
