@@ -3463,6 +3463,9 @@ impl WorkerBootstrapCompletionReporter {
         source: WorkerErrorSource,
         parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     ) -> bool {
+        if crate::worker::worker_termination_requested(scope) {
+            return false;
+        }
         let WorkerBootstrapError {
             report,
             exception,

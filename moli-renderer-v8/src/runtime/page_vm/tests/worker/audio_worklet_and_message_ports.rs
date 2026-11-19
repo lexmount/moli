@@ -368,6 +368,8 @@ async fn busy_worker_terminate_interrupts_execution_and_drops_queued_messages() 
                         globalThis.__busyWorkerDone = false;
                         globalThis.__busyWorkerLast = -1;
                         globalThis.__busyWorkerUnexpected = false;
+                        const errors = globalThis.__busyWorkerErrors = [];
+                        addEventListener("error", (event) => errors.push(event.message));
                         const source = `
                             onmessage = function() {
                                 for (let i = 0; true; i++) {
@@ -378,6 +380,7 @@ async fn busy_worker_terminate_interrupts_execution_and_drops_queued_messages() 
                             };
                         `;
                         const worker = new Worker("data:text/javascript," + encodeURIComponent(source));
+                        worker.onerror = (event) => errors.push(event.message);
                         worker.onmessage = (event) => {
                             globalThis.__busyWorkerLast = event.data;
                             if (event.data >= 10000) {
@@ -401,9 +404,9 @@ async fn busy_worker_terminate_interrupts_execution_and_drops_queued_messages() 
                 )
                 .await?;
                 let result = page_vm.vm_mut().eval(
-                    "JSON.stringify({last: globalThis.__busyWorkerLast, unexpected: globalThis.__busyWorkerUnexpected})",
+                    "JSON.stringify({last: globalThis.__busyWorkerLast, unexpected: globalThis.__busyWorkerUnexpected, errors: globalThis.__busyWorkerErrors})",
                 )?;
-                assert_eq!(result, r#"{"last":10000,"unexpected":false}"#);
+                assert_eq!(result, r#"{"last":10000,"unexpected":false,"errors":[]}"#);
                 anyhow::Ok(())
             })
             .await
