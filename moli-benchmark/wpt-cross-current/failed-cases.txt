@@ -1755,7 +1755,6 @@ css/css-typed-om/the-stylepropertymap/properties/border-image-repeat.html
 css/css-typed-om/the-stylepropertymap/properties/border-radius.html
 css/css-typed-om/the-stylepropertymap/properties/break.html
 css/css-typed-om/the-stylepropertymap/properties/clip-path.html
-css/css-typed-om/the-stylepropertymap/properties/column-count.html
 css/css-typed-om/the-stylepropertymap/properties/column-height.html
 css/css-typed-om/the-stylepropertymap/properties/column-rule-style.html
 css/css-typed-om/the-stylepropertymap/properties/column-rule-width.html
@@ -1777,7 +1776,6 @@ css/css-typed-om/the-stylepropertymap/properties/object-position.html
 css/css-typed-om/the-stylepropertymap/properties/offset-anchor.html
 css/css-typed-om/the-stylepropertymap/properties/offset-position.html
 css/css-typed-om/the-stylepropertymap/properties/offset-rotate.html
-css/css-typed-om/the-stylepropertymap/properties/orphans.html
 css/css-typed-om/the-stylepropertymap/properties/overflow-clip-margin.html
 css/css-typed-om/the-stylepropertymap/properties/overflow-wrap.html
 css/css-typed-om/the-stylepropertymap/properties/paint-order.html
@@ -1802,7 +1800,6 @@ css/css-typed-om/the-stylepropertymap/properties/touch-action.html
 css/css-typed-om/the-stylepropertymap/properties/transform-style.html
 css/css-typed-om/the-stylepropertymap/properties/transition.html
 css/css-typed-om/the-stylepropertymap/properties/white-space.html
-css/css-typed-om/the-stylepropertymap/properties/widows.html
 css/css-typed-om/the-stylepropertymap/properties/will-change.html
 css/css-typed-om/the-stylepropertymap/properties/word-wrap.html
 css/css-typed-om/the-stylepropertymap/properties/writing-mode.html

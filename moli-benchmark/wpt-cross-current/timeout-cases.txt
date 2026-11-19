@@ -83,6 +83,7 @@ html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
+html/semantics/tabular-data/processing-model-1/span-limits.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
 infrastructure/channels/test_call.html
 infrastructure/channels/test_postMessage.html

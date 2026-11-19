@@ -3659,6 +3659,7 @@ css/css-typed-om/the-stylepropertymap/properties/clip-rule.html
 css/css-typed-om/the-stylepropertymap/properties/clip.html
 css/css-typed-om/the-stylepropertymap/properties/color-interpolation.html
 css/css-typed-om/the-stylepropertymap/properties/color.html
+css/css-typed-om/the-stylepropertymap/properties/column-count.html
 css/css-typed-om/the-stylepropertymap/properties/column-rule-color.html
 css/css-typed-om/the-stylepropertymap/properties/column-span.html
 css/css-typed-om/the-stylepropertymap/properties/column-width.html
@@ -3734,6 +3735,7 @@ css/css-typed-om/the-stylepropertymap/properties/offset-path.html
 css/css-typed-om/the-stylepropertymap/properties/offset.html
 css/css-typed-om/the-stylepropertymap/properties/opacity.html
 css/css-typed-om/the-stylepropertymap/properties/order.html
+css/css-typed-om/the-stylepropertymap/properties/orphans.html
 css/css-typed-om/the-stylepropertymap/properties/outline-color.html
 css/css-typed-om/the-stylepropertymap/properties/outline-offset.html
 css/css-typed-om/the-stylepropertymap/properties/outline-style.html
@@ -3794,6 +3796,7 @@ css/css-typed-om/the-stylepropertymap/properties/user-select.html
 css/css-typed-om/the-stylepropertymap/properties/vector-effect.html
 css/css-typed-om/the-stylepropertymap/properties/vertical-align.html
 css/css-typed-om/the-stylepropertymap/properties/visibility.html
+css/css-typed-om/the-stylepropertymap/properties/widows.html
 css/css-typed-om/the-stylepropertymap/properties/width.html
 css/css-typed-om/the-stylepropertymap/properties/word-break.html
 css/css-typed-om/the-stylepropertymap/properties/word-spacing.html
@@ -8263,7 +8266,6 @@ html/semantics/tabular-data/historical.html
 html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
-html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
 html/semantics/tabular-data/the-table-element/createTBody.html
