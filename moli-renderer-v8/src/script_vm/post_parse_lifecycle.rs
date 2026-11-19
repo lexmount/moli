@@ -190,7 +190,7 @@ impl ScriptVm {
     }
 
     pub(super) fn runtime_script_work_has_immediately_runnable_work(&mut self) -> bool {
-        self.document_runtime.accept_ready_runtime_script_events();
+        self.accept_ready_runtime_script_events();
         self.document_runtime
             .runtime_script_work_mut()
             .has_immediately_runnable_work()
@@ -1210,7 +1210,7 @@ impl ScriptVm {
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
         lease: MainDocumentScriptLoadDelayLease,
     ) {
-        let work = self.plan_script_failure_lifecycle_work(
+        let work = self.document_runtime.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
@@ -1261,7 +1261,7 @@ impl ScriptVm {
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
         lease: MainDocumentScriptLoadDelayLease,
     ) -> RuntimeScriptFailureTerminalBodySettlement {
-        let work = self.plan_script_failure_lifecycle_work(
+        let work = self.document_runtime.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
@@ -2094,7 +2094,7 @@ impl ScriptVm {
     }
 
     fn runtime_script_work_has_pre_domcontentloaded_dynamic_candidate(&mut self) -> bool {
-        self.document_runtime.accept_ready_runtime_script_events();
+        self.accept_ready_runtime_script_events();
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts
@@ -2106,7 +2106,7 @@ impl ScriptVm {
     fn runtime_script_work_has_immediately_runnable_dynamic_work_before_domcontentloaded(
         &mut self,
     ) -> bool {
-        self.document_runtime.accept_ready_runtime_script_events();
+        self.accept_ready_runtime_script_events();
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts
@@ -2240,7 +2240,7 @@ impl ScriptVm {
     }
 
     pub(super) fn runtime_script_work_should_signal_immediate_progress(&mut self) -> bool {
-        self.document_runtime.accept_ready_runtime_script_events();
+        self.accept_ready_runtime_script_events();
         if self.document_runtime.runtime_script_work_mut().is_idle() {
             return false;
         }

@@ -12,10 +12,29 @@ const STACK_MAX_BYTES: usize = 16 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DiagnosticSource {
-    Page { page_id: u64 },
-    DedicatedWorker { instance_id: u64 },
-    SharedWorker { instance_id: u64 },
-    ServiceWorker { version_id: u64 },
+    /// A top-level Page and all of its descendant frames share this identity.
+    Page {
+        page_id: u64,
+    },
+    DedicatedWorker {
+        instance_id: u64,
+    },
+    SharedWorker {
+        instance_id: u64,
+    },
+    ServiceWorker {
+        version_id: u64,
+    },
+}
+
+/// The error reporting entry point that produced a runtime exception diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ExceptionOrigin {
+    /// An uncaught exception or an explicit error report such as `reportError()`.
+    UncaughtException,
+    /// A Promise reported by the `unhandledrejection` algorithm.
+    UnhandledRejection,
 }
 
 /// A structured, best-effort observation from a Browser.
@@ -25,6 +44,7 @@ pub enum DiagnosticEvent {
     /// A reported script exception or promise rejection.
     RuntimeException {
         source: DiagnosticSource,
+        origin: ExceptionOrigin,
         message: String,
         filename: String,
         /// One-based source line, or zero when unavailable.
@@ -33,13 +53,16 @@ pub enum DiagnosticEvent {
         colno: u32,
         /// Native stack frames, when available.
         stack: Option<String>,
-        /// Whether the source realm canceled default reporting.
-        handled: bool,
+        /// Whether the source realm canceled default reporting for the event.
+        default_prevented: bool,
     },
-    /// A script whose source could not be loaded.
+    /// A script entry or dependency could not be loaded.
     ScriptLoadFailure {
         source: DiagnosticSource,
-        url: String,
+        /// URL of the entry script, or its Document URL for an inline module.
+        entry_url: String,
+        /// Request URL of the resource that failed to load.
+        resource_url: String,
         message: String,
     },
 }
@@ -53,28 +76,35 @@ pub type DiagnosticsSubscription = broadcast::Receiver<Arc<DiagnosticEvent>>;
 impl DiagnosticEvent {
     pub(crate) fn runtime_exception(
         source: DiagnosticSource,
+        origin: ExceptionOrigin,
         message: &str,
         filename: &str,
-        lineno: u32,
-        colno: u32,
+        (lineno, colno): (u32, u32),
         stack: Option<&str>,
-        handled: bool,
+        default_prevented: bool,
     ) -> Self {
         Self::RuntimeException {
             source,
+            origin,
             message: bounded(message, TEXT_MAX_BYTES),
             filename: bounded(filename, TEXT_MAX_BYTES),
             lineno,
             colno,
             stack: stack.map(|stack| bounded(stack, STACK_MAX_BYTES)),
-            handled,
+            default_prevented,
         }
     }
 
-    pub(crate) fn script_load_failure(source: DiagnosticSource, url: &str, message: &str) -> Self {
+    pub(crate) fn script_load_failure(
+        source: DiagnosticSource,
+        entry_url: &str,
+        resource_url: &str,
+        message: &str,
+    ) -> Self {
         Self::ScriptLoadFailure {
             source,
-            url: bounded(url, TEXT_MAX_BYTES),
+            entry_url: bounded(entry_url, TEXT_MAX_BYTES),
+            resource_url: bounded(resource_url, TEXT_MAX_BYTES),
             message: bounded(message, TEXT_MAX_BYTES),
         }
     }
@@ -128,6 +158,7 @@ mod tests {
             diagnostics.emit(|| {
                 Some(DiagnosticEvent::script_load_failure(
                     DiagnosticSource::Page { page_id: 1 },
+                    "https://example.test/missing.js",
                     "https://example.test/missing.js",
                     &message,
                 ))

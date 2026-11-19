@@ -128,9 +128,9 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
     )?;
     if let Some(event) = event {
         unsafe { &*host_ptr }.emit_diagnostic(|source| {
-            let handled =
+            let default_prevented =
                 crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
-            let stack = if handled {
+            let stack = if default_prevented {
                 None
             } else {
                 error_value.and_then(|value| {
@@ -139,12 +139,12 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
             };
             Some(crate::DiagnosticEvent::runtime_exception(
                 source,
+                crate::ExceptionOrigin::UncaughtException,
                 message,
                 filename,
-                lineno,
-                colno,
+                (lineno, colno),
                 stack.as_deref(),
-                handled,
+                default_prevented,
             ))
         });
     }

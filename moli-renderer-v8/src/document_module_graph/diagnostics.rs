@@ -1,3 +1,4 @@
+use super::key::ModuleMapKey;
 use crate::types::ScriptErrorConstructorKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +16,7 @@ pub(crate) struct ModuleLoadError {
     message: String,
     error_constructor: Option<ScriptErrorConstructorKind>,
     top_level_module_load_failure: bool,
+    failed_resource: Option<Box<ModuleMapKey>>,
 }
 
 impl ModuleLoadError {
@@ -24,7 +26,17 @@ impl ModuleLoadError {
             message: message.into(),
             error_constructor: None,
             top_level_module_load_failure: false,
+            failed_resource: None,
         }
+    }
+
+    pub(crate) fn with_failed_resource(mut self, key: ModuleMapKey) -> Self {
+        self.failed_resource = Some(Box::new(key));
+        self
+    }
+
+    pub(crate) fn failed_resource(&self) -> Option<&ModuleMapKey> {
+        self.failed_resource.as_deref()
     }
 
     pub(crate) fn with_error_constructor(

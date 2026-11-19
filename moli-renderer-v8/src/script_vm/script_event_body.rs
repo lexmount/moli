@@ -12,41 +12,40 @@ use crate::context_bootstrap::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT, dispatch_window_error_event_with_details,
 };
-use crate::host::{ModuleFailurePolicy, ScriptEventKind, ScriptEventTask};
-use crate::module_runtime::ModuleEntryId;
-use crate::page_task_queue::PostParseLifecycleWork;
-use crate::planning::PreparedScript;
-use crate::types::{ScriptErrorConstructorKind, ScriptSourceKind};
+use crate::host::ScriptEventTask;
+use crate::module_runtime::{ModuleEntryId, ModuleLoadError};
 use crate::util::{get_private_value, v8_string, v8str};
 
 impl ScriptVm {
+    pub(super) fn accept_ready_runtime_script_events(&mut self) {
+        let host = &self._context_host;
+        self.document_runtime
+            .accept_ready_runtime_script_events(|url, message| {
+                host.borrow().emit_script_load_failure(url, message);
+            });
+    }
+
     pub(crate) fn emit_script_load_failure(&self, url: &str, message: &str) {
         self._context_host
             .borrow()
             .emit_script_load_failure(url, message);
     }
 
-    pub(super) fn plan_script_failure_lifecycle_work(
-        &mut self,
-        script: &PreparedScript,
-        message: &str,
-        module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
-    ) -> Vec<PostParseLifecycleWork> {
-        let work = self.document_runtime.plan_script_failure_lifecycle_work(
-            script,
-            message,
-            module_failure_policy,
-            error_constructor,
-        );
-        self._context_host.borrow().emit_diagnostic(|source| {
-            let reports_source_failure = script.source_kind == ScriptSourceKind::External
-                && work.iter().any(|item| matches!(item, PostParseLifecycleWork::DispatchScriptEvent(task) if task.kind == ScriptEventKind::Error));
-            reports_source_failure.then(|| {
-                crate::DiagnosticEvent::script_load_failure(source, script.url.as_str(), message)
-            })
-        });
-        work
+    pub(crate) fn emit_module_script_load_failure(
+        &self,
+        entry_url: &url::Url,
+        error: &ModuleLoadError,
+    ) {
+        if let Some(resource) = error.failed_resource() {
+            self._context_host.borrow().emit_diagnostic(|source| {
+                Some(crate::DiagnosticEvent::script_load_failure(
+                    source,
+                    entry_url.as_str(),
+                    resource.url().as_str(),
+                    error.message(),
+                ))
+            });
+        }
     }
 
     pub(crate) fn dispatch_script_event_body_best_effort(&mut self, task: &ScriptEventTask) {

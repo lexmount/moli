@@ -209,6 +209,8 @@ impl FrameModuleScriptDocumentScriptHooks for ChildModuleScriptExecutionOwner<'_
         &'owner mut self,
         work: &DocumentModuleGraphFailedWork,
     ) -> Self::Output<'owner> {
+        self.vm
+            .emit_module_script_load_failure(&work.script().url, work.error());
         self.complete_parser_deferred_module_script(
             work.owner(),
             work.realm_id(),

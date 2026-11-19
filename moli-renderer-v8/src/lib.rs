@@ -223,7 +223,9 @@ pub(crate) use context_bootstrap::{
     form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
     snapshot_form_data_value,
 };
-pub use diagnostics::{DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription};
+pub use diagnostics::{
+    DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription, ExceptionOrigin,
+};
 pub use document_cookie_owner::{
     DocumentCookieBackendConnectionState, DocumentCookieBrowserContextSnapshot,
     DocumentCookieGetFreshnessStatus, DocumentCookieOwnerSnapshot,

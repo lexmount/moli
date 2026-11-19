@@ -1985,42 +1985,62 @@ impl DynamicScriptOwner {
         self.promote_ready_work_matching(predicate);
     }
 
-    pub(super) fn apply_owner_event(&mut self, event: DynamicScriptOwnerEvent) {
-        match event {
-            DynamicScriptOwnerEvent::Completion(completion) => {
-                self.in_flight_loads = self.in_flight_loads.saturating_sub(1);
-                self.apply_completion(completion);
-                self.refresh_followup_work();
-            }
-        }
+    pub(super) fn apply_owner_event(
+        &mut self,
+        event: DynamicScriptOwnerEvent,
+        on_load_failure: impl FnOnce(&str, &str),
+    ) {
+        let DynamicScriptOwnerEvent::Completion(completion) = event;
+        self.in_flight_loads = self.in_flight_loads.saturating_sub(1);
+        self.apply_completion(completion, on_load_failure);
+        self.refresh_followup_work();
     }
 
-    fn apply_completion(&mut self, completion: DynamicScriptLoadCompletion) {
+    fn apply_completion(
+        &mut self,
+        completion: DynamicScriptLoadCompletion,
+        on_load_failure: impl FnOnce(&str, &str),
+    ) {
+        let Some(entry) = self
+            .script_lanes
+            .in_order
+            .iter_mut()
+            .chain(&mut self.script_lanes.importmap_in_order)
+            .chain(&mut self.script_lanes.module_in_order)
+            .chain(&mut self.script_lanes.async_scripts)
+            .find(|entry| entry.id == completion.id)
+        else {
+            return;
+        };
         let order = self.next_ready_order;
-        if Self::apply_completion_to_queue(&mut self.script_lanes.in_order, &completion, order) {
-            self.next_ready_order += 1;
-            return;
-        }
-        if Self::apply_completion_to_queue(
-            &mut self.script_lanes.importmap_in_order,
-            &completion,
-            order,
-        ) {
-            self.next_ready_order += 1;
-            return;
-        }
-        if Self::apply_completion_to_queue(
-            &mut self.script_lanes.module_in_order,
-            &completion,
-            order,
-        ) {
-            self.next_ready_order += 1;
-            return;
-        }
-        if Self::apply_completion_to_queue(&mut self.script_lanes.async_scripts, &completion, order)
-        {
-            self.next_ready_order += 1;
-        }
+        let outcome = completion.outcome;
+        entry.ready_state = match outcome.source_result {
+            Ok(source) => {
+                entry.script = prepared_script_with_loaded_source(
+                    entry.script.clone(),
+                    source,
+                    outcome.source_bytes,
+                );
+                DynamicScriptReadyState::Ready {
+                    order,
+                    source_network_result: outcome.network_result,
+                }
+            }
+            Err(message) => {
+                on_load_failure(entry.script.url.as_str(), &message);
+                let failure = DynamicScriptFailure::with_kind(
+                    message,
+                    Self::module_load_failure_kind(
+                        &entry.script,
+                        crate::module_runtime::ModuleLoadStage::Fetch,
+                    ),
+                    Some(ModuleFailurePolicy::TopLevelLoadFailure),
+                )
+                .with_source_network_result(outcome.network_result);
+                DynamicScriptReadyState::Failed { failure, order }
+            }
+        };
+        self.next_ready_order += 1;
     }
 
     fn promote_ready_work(&mut self) {
@@ -2096,42 +2116,6 @@ impl DynamicScriptOwner {
             return Some(update);
         }
         None
-    }
-
-    fn apply_completion_to_queue(
-        queue: &mut VecDeque<DynamicScriptEntry>,
-        completion: &DynamicScriptLoadCompletion,
-        order: u64,
-    ) -> bool {
-        let Some(entry) = queue.iter_mut().find(|entry| entry.id == completion.id) else {
-            return false;
-        };
-        match completion.outcome.source_result.clone() {
-            Ok(source) => {
-                entry.script = prepared_script_with_loaded_source(
-                    entry.script.clone(),
-                    source,
-                    completion.outcome.source_bytes.clone(),
-                );
-                entry.ready_state = DynamicScriptReadyState::Ready {
-                    order,
-                    source_network_result: completion.outcome.network_result.clone(),
-                };
-            }
-            Err(message) => {
-                let failure = DynamicScriptFailure::with_kind(
-                    message.clone(),
-                    Self::module_load_failure_kind(
-                        &entry.script,
-                        crate::module_runtime::ModuleLoadStage::Fetch,
-                    ),
-                    Some(ModuleFailurePolicy::TopLevelLoadFailure),
-                )
-                .with_source_network_result(completion.outcome.network_result.clone());
-                entry.ready_state = DynamicScriptReadyState::Failed { failure, order };
-            }
-        }
-        true
     }
 
     fn take_entry(entry: Option<DynamicScriptEntry>) -> Option<DynamicScriptRunnable> {
@@ -2990,7 +2974,10 @@ mod tests {
             "loading in-order front should block later module until completion"
         );
 
-        owner.apply_completion(load_completion_ok(0, "window.frontLoaded = true;"));
+        owner.apply_completion(
+            load_completion_ok(0, "window.frontLoaded = true;"),
+            |_, _| {},
+        );
 
         let first = owner
             .next_runnable_script()
@@ -3027,7 +3014,10 @@ mod tests {
             "external async should not be runnable before completion"
         );
 
-        owner.apply_completion(load_completion_ok(0, "window.asyncLoaded = true;"));
+        owner.apply_completion(
+            load_completion_ok(0, "window.asyncLoaded = true;"),
+            |_, _| {},
+        );
 
         let runnable = owner
             .next_runnable_script()
@@ -3058,8 +3048,14 @@ mod tests {
             .async_scripts
             .push_back(loading_entry(1, 1, ScriptMode::Async));
 
-        owner.apply_completion(load_completion_ok(1, "window.asyncLoaded = true;"));
-        owner.apply_completion(load_completion_ok(0, "window.inOrderLoaded = true;"));
+        owner.apply_completion(
+            load_completion_ok(1, "window.asyncLoaded = true;"),
+            |_, _| {},
+        );
+        owner.apply_completion(
+            load_completion_ok(0, "window.inOrderLoaded = true;"),
+            |_, _| {},
+        );
 
         let first = owner
             .next_runnable_script()
@@ -3098,7 +3094,10 @@ mod tests {
                 },
             });
 
-        owner.apply_completion(load_completion_err(0, "opaque source load failure"));
+        owner.apply_completion(
+            load_completion_err(0, "opaque source load failure"),
+            |_, _| {},
+        );
         assert!(
             !owner.has_pending_module_script_graph(),
             "top-level source load failure should not look like a pending graph"
@@ -3147,7 +3146,7 @@ mod tests {
             .recv()
             .await
             .expect("completion source should deliver the concrete payload");
-        owner.apply_owner_event(event);
+        owner.apply_owner_event(event, |_, _| {});
         let poll = owner.poll_nonblocking();
         let DynamicScriptOwnerPoll::Work(work) = poll else {
             panic!("completed async should surface directly as owner work");
@@ -3200,7 +3199,7 @@ mod tests {
             })
             .expect("captured runner should complete the external load")
             .expect("external load should publish its completion");
-        owner.apply_owner_event(event);
+        owner.apply_owner_event(event, |_, _| {});
 
         assert!(matches!(
             owner.poll_nonblocking(),
@@ -3242,7 +3241,7 @@ mod tests {
             .expect("completion send should succeed");
 
         for event in events.drain_ready() {
-            owner.apply_owner_event(event);
+            owner.apply_owner_event(event, |_, _| {});
         }
         let poll = owner.poll_nonblocking();
         let DynamicScriptOwnerPoll::Work(work) = poll else {

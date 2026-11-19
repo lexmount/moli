@@ -539,7 +539,7 @@ impl ScriptVm {
 
     pub(super) fn refresh_script_vm_local_document_state(&mut self) {
         self.apply_pending_main_document_owner_transitions();
-        self.document_runtime.accept_ready_runtime_script_events();
+        self.accept_ready_runtime_script_events();
         self.sync_live_document_style_sources_if_pending();
     }
 
@@ -573,7 +573,7 @@ impl ScriptVm {
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
         load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
     ) -> Result<FollowupPageTaskDisposition> {
-        let mut planned_failure_work = self.plan_script_failure_lifecycle_work(
+        let mut planned_failure_work = self.document_runtime.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,

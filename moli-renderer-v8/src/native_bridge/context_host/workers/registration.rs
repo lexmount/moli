@@ -773,6 +773,7 @@ impl PageScriptHost {
             Some(crate::DiagnosticEvent::script_load_failure(
                 crate::DiagnosticSource::DedicatedWorker { instance_id },
                 &script_url,
+                &script_url,
                 &error_message,
             ))
         });

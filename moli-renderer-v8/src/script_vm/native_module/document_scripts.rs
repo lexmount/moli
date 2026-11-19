@@ -606,6 +606,7 @@ impl ScriptVm {
             }
             Err(error) => {
                 self.record_css_modulepreload_failure_for_owner(&fetch_key);
+                let error = error.with_failed_resource(fetch_key.clone());
                 self.document_runtime
                     .mark_native_module_failed(fetch_key, error)
             }

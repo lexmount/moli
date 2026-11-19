@@ -144,7 +144,7 @@ impl PageScriptHost {
     pub(crate) fn emit_script_load_failure(&self, url: &str, message: &str) {
         self.emit_diagnostic(|source| {
             Some(crate::DiagnosticEvent::script_load_failure(
-                source, url, message,
+                source, url, url, message,
             ))
         });
     }

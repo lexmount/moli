@@ -370,8 +370,12 @@ impl DocumentRuntime {
         self.script_lifecycle.take_parser_no_execution_runs()
     }
 
-    pub(crate) fn accept_ready_runtime_script_events(&mut self) {
-        self.script_lifecycle.accept_ready_runtime_script_events();
+    pub(crate) fn accept_ready_runtime_script_events(
+        &mut self,
+        on_load_failure: impl FnMut(&str, &str),
+    ) {
+        self.script_lifecycle
+            .accept_ready_runtime_script_events(on_load_failure);
     }
 
     pub(crate) fn deferred_page_tasks_mut(&mut self) -> &mut DeferredPageTaskState {

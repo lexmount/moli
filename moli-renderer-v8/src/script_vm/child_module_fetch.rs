@@ -395,7 +395,8 @@ impl<'vm> ChildModuleFetchOwner<'vm> {
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
                 format!("child modulepreload fetch completion {load_id} failed: {error}"),
-            )),
+            )
+            .with_failed_resource(request.module_key().clone())),
         };
         let action = FrameDocumentModulepreloadFetchCompletionAction::new(
             task_owner, realm_id, load_id, request, source,
