@@ -389,7 +389,8 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
                 }
             }
             FrameDocumentModuleFetchTerminalResult::Failed(error) => {
-                let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error);
+                let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error)
+                    .with_failed_resource(request_key.clone());
                 trace_child_parser_module_root_failure(
                     task_owner,
                     realm_id,

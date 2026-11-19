@@ -1,8 +1,9 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use moli_core::{
-    DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription,
+    DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription, ExceptionOrigin,
+    page::Page,
     runtime::{Browser, BrowserConfig},
 };
 use tokio::{
@@ -38,6 +39,8 @@ async fn browser_diagnostics_are_isolated_and_do_not_read_author_stack_propertie
                     const element = document.createElement("button");
                     element.setAttribute("onclick", "return )");
                     void element.onclick;
+                    const frame = document.body.appendChild(document.createElement("iframe")).contentWindow;
+                    frame.reportError(new frame.Error("child frame exception"));
                     return JSON.stringify([getterCalls, prepareCalls]);
                 } finally {
                     delete Error.prepareStackTrace;
@@ -47,15 +50,21 @@ async fn browser_diagnostics_are_isolated_and_do_not_read_author_stack_propertie
         .await?;
     assert_eq!(result["value"], "[0,0]");
 
-    for marker in ["with custom stack", "with lazy stack", "SyntaxError"] {
+    for marker in [
+        "with custom stack",
+        "with lazy stack",
+        "SyntaxError",
+        "child frame exception",
+    ] {
         let event = diagnostics.try_recv()?;
         assert!(
             matches!(
                 event.as_ref(),
                 DiagnosticEvent::RuntimeException {
                     source: DiagnosticSource::Page { page_id },
+                    origin: ExceptionOrigin::UncaughtException,
                     message,
-                    handled: false,
+                    default_prevented: false,
                     ..
                 } if *page_id == page.page_id() && message.contains(marker)
             ),
@@ -76,14 +85,15 @@ async fn parser_script_failures_emit_one_diagnostic_and_one_dom_event_each() -> 
     let result = page
         .evaluate_runtime_expression_async("scriptEvents.slice().sort().join(',')")
         .await?;
-    assert_eq!(result["value"], "blocking,defer,written");
+    assert_eq!(result["value"], "async,blocking,defer,written");
 
     let mut urls = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..4 {
         let event = diagnostics.try_recv()?;
         let DiagnosticEvent::ScriptLoadFailure {
             source: DiagnosticSource::Page { page_id },
-            url,
+            entry_url,
+            resource_url,
             message,
         } = event.as_ref()
         else {
@@ -91,13 +101,134 @@ async fn parser_script_failures_emit_one_diagnostic_and_one_dom_event_each() -> 
         };
         assert_eq!(*page_id, page.page_id());
         assert!(message.contains("404"), "{message}");
-        urls.push(url.clone());
+        assert_eq!(entry_url, resource_url);
+        urls.push(entry_url.clone());
     }
     urls.sort();
     assert_eq!(
         urls,
-        ["/blocking.js", "/defer.js", "/written.js"].map(|path| server.url(path))
+        ["/async.js", "/blocking.js", "/defer.js", "/written.js"].map(|path| server.url(path))
     );
+    append_missing_script(&mut page, "/dynamic.js", "text/javascript").await?;
+    assert_page_load_failure(
+        diagnostics.try_recv()?.as_ref(),
+        page.page_id(),
+        &server.url("/dynamic.js"),
+        &server.url("/dynamic.js"),
+    );
+    assert_empty(&mut diagnostics);
+    Ok(())
+}
+
+#[tokio::test]
+async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_reuse() -> Result<()>
+{
+    let server = DiagnosticFixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser.subscribe_diagnostics();
+    let mut page = browser.fetch(&server.url("/module")).await?;
+    let result = page
+        .evaluate_runtime_expression_async("moduleError")
+        .await?;
+    assert_eq!(result["value"], "root");
+    assert_page_load_failure(
+        diagnostics
+            .try_recv()
+            .context("parser-owned module failure diagnostic")?
+            .as_ref(),
+        page.page_id(),
+        &server.url("/root.js"),
+        &server.url("/missing-dependency.js"),
+    );
+    assert_empty(&mut diagnostics);
+
+    append_missing_script(&mut page, "/second-root.js", "module").await?;
+    assert_page_load_failure(
+        diagnostics
+            .try_recv()
+            .context("cached module failure diagnostic")?
+            .as_ref(),
+        page.page_id(),
+        &server.url("/second-root.js"),
+        &server.url("/missing-dependency.js"),
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"new Promise(resolve => {
+                window.addEventListener("error", event => resolve(event.message), { once: true });
+                const script = document.createElement("script");
+                script.type = "module";
+                script.src = "/throws.js";
+                document.head.append(script);
+            })"#,
+            true,
+        ),
+    )
+    .await??;
+    assert!(
+        result["value"]
+            .as_str()
+            .is_some_and(|message| message.contains("module exception"))
+    );
+    let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv()).await??;
+    assert!(
+        matches!(
+            event.as_ref(),
+            DiagnosticEvent::RuntimeException { origin: ExceptionOrigin::UncaughtException, message, .. }
+                if message.contains("module exception")
+        ),
+        "{event:?}"
+    );
+    assert_empty(&mut diagnostics);
+    Ok(())
+}
+
+#[tokio::test]
+async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellation() -> Result<()> {
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser.subscribe_diagnostics();
+    let mut page = browser.fetch("about:blank").await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"new Promise(resolve => {
+                window.addEventListener("unhandledrejection", event => {
+                    event.preventDefault();
+                    resolve("prevented");
+                }, { once: true });
+                const script = document.createElement("script");
+                script.textContent = 'throw new Error("same message")';
+                document.head.append(script);
+                Promise.reject(new Error("same message"));
+            })"#,
+            true,
+        ),
+    )
+    .await??;
+    assert_eq!(result["value"], "prevented", "{result}");
+
+    for (expected_origin, prevented) in [
+        (ExceptionOrigin::UncaughtException, false),
+        (ExceptionOrigin::UnhandledRejection, true),
+    ] {
+        let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv()).await??;
+        assert!(
+            matches!(
+                event.as_ref(),
+                DiagnosticEvent::RuntimeException {
+                    source: DiagnosticSource::Page { page_id },
+                    origin,
+                    message,
+                    default_prevented,
+                    ..
+                } if *page_id == page.page_id() && *origin == expected_origin
+                    && *default_prevented == prevented && message.contains("same message")
+            ),
+            "{event:?}",
+        );
+    }
     assert_empty(&mut diagnostics);
     Ok(())
 }
@@ -127,14 +258,29 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
         assert_eq!(result["value"], "ready", "{result}");
     }
 
-    for (page, marker) in [(&mut first, "first"), (&mut second, "second")] {
+    for (page, marker, expected_origin, prevented) in [
+        (
+            &mut first,
+            "first",
+            ExceptionOrigin::UncaughtException,
+            false,
+        ),
+        (
+            &mut second,
+            "second",
+            ExceptionOrigin::UnhandledRejection,
+            true,
+        ),
+    ] {
         page.evaluate_runtime_expression_async(&format!("worker.port.postMessage({marker:?})"))
             .await?;
         let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv()).await??;
         let DiagnosticEvent::RuntimeException {
             source: DiagnosticSource::SharedWorker { instance_id },
+            origin,
             message,
             filename,
+            default_prevented,
             ..
         } = event.as_ref()
         else {
@@ -142,6 +288,8 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
         };
         assert!(message.contains(marker), "{message}");
         assert_eq!(filename, &server.url("/shared.js"));
+        assert_eq!(*origin, expected_origin);
+        assert_eq!(*default_prevented, prevented);
         assert_eq!(*instance.get_or_insert(*instance_id), *instance_id);
     }
     let result = tokio::time::timeout(
@@ -162,14 +310,59 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
             failure.as_ref(),
             DiagnosticEvent::ScriptLoadFailure {
                 source: DiagnosticSource::SharedWorker { instance_id },
-                url,
+                entry_url,
+                resource_url,
                 message,
-            } if Some(*instance_id) != instance && url == &server.url("/missing.js") && message.contains("404")
+            } if Some(*instance_id) != instance && entry_url == &server.url("/missing.js")
+                && entry_url == resource_url && message.contains("404")
         ),
         "{failure:?}"
     );
     assert_empty(&mut diagnostics);
     Ok(())
+}
+
+async fn append_missing_script(page: &mut Page, path: &str, script_type: &str) -> Result<()> {
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            &format!(
+                r#"new Promise(resolve => {{
+                const script = document.createElement("script");
+                script.type = {script_type:?};
+                script.src = {path:?};
+                script.onerror = () => resolve("error");
+                script.onload = () => resolve("load");
+                document.head.append(script);
+            }})"#
+            ),
+            true,
+        ),
+    )
+    .await??;
+    assert_eq!(result["value"], "error", "{result}");
+    Ok(())
+}
+
+fn assert_page_load_failure(
+    event: &DiagnosticEvent,
+    expected_page: u64,
+    expected_entry: &str,
+    expected_resource: &str,
+) {
+    assert!(
+        matches!(
+            event,
+            DiagnosticEvent::ScriptLoadFailure {
+                source: DiagnosticSource::Page { page_id },
+                entry_url,
+                resource_url,
+                message,
+            } if *page_id == expected_page && entry_url == expected_entry
+                && resource_url == expected_resource && message.contains("404")
+        ),
+        "{event:?}",
+    );
 }
 
 fn assert_empty(diagnostics: &mut DiagnosticsSubscription) {
@@ -235,17 +428,40 @@ fn fixture_response(path: Option<&str>) -> (&'static str, &'static str, &'static
             <script>globalThis.scriptEvents = [];</script>
             <script src="/blocking.js" onerror="scriptEvents.push('blocking')"></script>
             <script defer src="/defer.js" onerror="scriptEvents.push('defer')"></script>
+            <script async src="/async.js" onerror="scriptEvents.push('async')"></script>
             <script>
                 document.write(`<script src="/written.js" onerror="scriptEvents.push('written')"><\/script>`);
             </script>"#,
+        ),
+        Some("/module") => (
+            "200 OK",
+            "text/html",
+            r#"<!doctype html>
+            <script>globalThis.moduleError = "";</script>
+            <script type="module" src="/root.js" onerror="moduleError = 'root'"></script>"#,
+        ),
+        Some("/root.js" | "/second-root.js") => (
+            "200 OK",
+            "text/javascript",
+            "import './missing-dependency.js';",
+        ),
+        Some("/throws.js") => (
+            "200 OK",
+            "text/javascript",
+            "throw new Error('module exception');",
         ),
         Some("/page") => ("200 OK", "text/html", "<!doctype html>"),
         Some("/shared.js") => (
             "200 OK",
             "text/javascript",
-            "onconnect = event => {
+            "addEventListener('unhandledrejection', event => event.preventDefault());
+            onconnect = event => {
                 const port = event.ports[0];
-                port.onmessage = event => { throw new Error(event.data); };
+                port.onmessage = event => {
+                    const error = new Error(event.data);
+                    if (event.data === 'second') Promise.reject(error);
+                    else throw error;
+                };
                 port.postMessage('ready');
             };",
         ),

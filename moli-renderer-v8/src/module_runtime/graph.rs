@@ -893,7 +893,7 @@ impl NativeModuleGraphJob {
                 "module graph fetch request was missing its module tree client token",
             )
         })?;
-        if let Err(error) = &source {
+        let source = if let Err(error) = source {
             let key = request.pending_fetch_key().cloned().ok_or_else(|| {
                 ModuleLoadError::new(
                     ModuleLoadStage::Fetch,
@@ -901,9 +901,13 @@ impl NativeModuleGraphJob {
                 )
             })?;
             // Settle the shared fetch before failing this graph, so joined
-            // clients and later imports observe the cached fetch failure.
+            // clients and later imports observe the same failed resource.
+            let error = error.with_failed_resource(key.clone());
             owner.mark_module_failed(key, error.clone());
-        }
+            Err(error)
+        } else {
+            source
+        };
         self.finish_pending_chromium_tree_fetch_for_client_with_owner(
             owner, client, request, source,
         )
@@ -1928,6 +1932,9 @@ fn local_graph(graph: module_tree::ModuleGraphHandle) -> ModuleGraphHandle {
 fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
     let mut converted =
         module_tree::ModuleLoadError::new(chromium_load_stage(error.stage()), error.message());
+    if let Some(key) = error.failed_resource() {
+        converted = converted.with_key(chromium_module_key(key));
+    }
     if let Some(constructor) = error.error_constructor() {
         let constructor = match constructor {
             ScriptErrorConstructorKind::Error => module_tree::ModuleErrorConstructorKind::Error,
@@ -1951,6 +1958,12 @@ fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
 
 fn local_error(error: module_tree::ModuleLoadError) -> ModuleLoadError {
     let mut converted = ModuleLoadError::new(local_load_stage(error.stage), error.message);
+    if error.stage == module_tree::ModuleLoadStage::Fetch
+        && let Some(key) = error.key.as_deref()
+        && let Ok(key) = local_module_key(key)
+    {
+        converted = converted.with_failed_resource(key);
+    }
     if let Some(constructor) = error.error_constructor {
         converted = converted.with_error_constructor(local_error_constructor(constructor));
     }
@@ -5149,7 +5162,10 @@ import "./shared.mjs";
             Ok(_) => panic!("the owning runtime module graph should fail"),
             Err(error) => error,
         };
-        assert_eq!(error, fetch_error);
+        assert_eq!(
+            error,
+            fetch_error.with_failed_resource(dependency_key.clone())
+        );
 
         let dependency_entry = vm
             .document_runtime
@@ -5160,6 +5176,10 @@ import "./shared.mjs";
                 .native_module_entry_state(dependency_entry),
             ModuleMapEntryState::Failed,
             "the fetch owner must settle the shared module map entry before its graph fails"
+        );
+        assert_eq!(
+            vm.document_runtime.native_module_failure(dependency_entry),
+            Some(error),
         );
 
         let event = vm

@@ -461,6 +461,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                         crate::DiagnosticEvent::script_load_failure(
                             source,
                             resolved_url.as_str(),
+                            resolved_url.as_str(),
                             &message,
                         )
                     });

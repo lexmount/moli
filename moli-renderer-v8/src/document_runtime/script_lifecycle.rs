@@ -205,14 +205,18 @@ impl DocumentScriptLifecycle {
         )
     }
 
-    pub(crate) fn accept_ready_runtime_script_events(&mut self) {
+    pub(crate) fn accept_ready_runtime_script_events(
+        &mut self,
+        mut on_load_failure: impl FnMut(&str, &str),
+    ) {
         let events = self.runtime_script_events.drain_ready();
         if events.is_empty() {
             return;
         }
         let mut work = self.runtime_script_work.borrow_mut();
         for event in events {
-            work.dynamic_scripts.apply_owner_event(event);
+            work.dynamic_scripts
+                .apply_owner_event(event, &mut on_load_failure);
         }
     }
 

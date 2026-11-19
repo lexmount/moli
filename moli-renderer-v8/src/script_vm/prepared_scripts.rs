@@ -134,6 +134,9 @@ impl ScriptVm {
                         None,
                     )
                     .await;
+                if let Err(error) = &outcome.source_result {
+                    self.emit_script_load_failure(script.url.as_str(), error);
+                }
                 if let Some(network_result) = outcome.network_result.as_deref() {
                     self._context_host
                         .borrow_mut()
@@ -466,8 +469,10 @@ impl ScriptVm {
             completion_owner,
         )
         .await
-        .map_err(PreparedScriptExecutionError::from_module_load_error)?
-        {
+        .map_err(|error| {
+            self.emit_module_script_load_failure(&script.url, &error);
+            PreparedScriptExecutionError::from_module_load_error(error)
+        })? {
             ModuleScriptExecutionOutcome::CompletedModuleGraph(graph) => {
                 Ok(LoadedScriptExecutionOutcome::CompletedModuleGraph(graph))
             }
@@ -642,8 +647,10 @@ impl ScriptVm {
                     completion_owner,
                 )
                 .await
-                .map_err(PreparedScriptExecutionError::from_module_load_error)?
-                {
+                .map_err(|error| {
+                    self.emit_module_script_load_failure(script_url, &error);
+                    PreparedScriptExecutionError::from_module_load_error(error)
+                })? {
                     ModuleScriptExecutionOutcome::CompletedModuleGraph(graph) => {
                         Ok(LoadedScriptExecutionOutcome::CompletedModuleGraph(graph))
                     }

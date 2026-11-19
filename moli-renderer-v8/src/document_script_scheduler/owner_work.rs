@@ -20,6 +20,7 @@ use super::{DocumentScriptExecutionLane, DocumentScriptSourceFailureLane};
 #[derive(Debug)]
 pub(crate) struct PageOwnedDocumentScriptSourceFailure {
     message: String,
+    source_load: bool,
     module_failure_policy: Option<ModuleFailurePolicy>,
     error_constructor: Option<ScriptErrorConstructorKind>,
 }
@@ -28,6 +29,7 @@ impl PageOwnedDocumentScriptSourceFailure {
     pub(crate) fn from_source_load(message: String) -> Self {
         Self {
             message,
+            source_load: true,
             module_failure_policy: None,
             error_constructor: None,
         }
@@ -40,9 +42,14 @@ impl PageOwnedDocumentScriptSourceFailure {
     ) -> Self {
         Self {
             message,
+            source_load: false,
             module_failure_policy,
             error_constructor,
         }
+    }
+
+    pub(crate) fn is_source_load(&self) -> bool {
+        self.source_load
     }
 
     #[cfg(test)]

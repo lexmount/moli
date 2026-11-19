@@ -952,7 +952,7 @@ impl ScriptVm {
         let mut processed_runnable_this_turn = false;
 
         loop {
-            self.document_runtime.accept_ready_runtime_script_events();
+            self.accept_ready_runtime_script_events();
             let only_domcontentloaded_gated_scripts = wait_for_dynamic_loads && {
                 let mut work = runtime_script_work.borrow_mut();
                 !work.dynamic_scripts.is_idle()

@@ -116,10 +116,9 @@ impl NativeDocumentModulator {
                 );
             }
             Err(error) => {
-                self.mark_failed(
-                    request_key,
-                    ModuleLoadError::new(ModuleLoadStage::Fetch, error),
-                );
+                let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error)
+                    .with_failed_resource(request_key.clone());
+                self.mark_failed(request_key, error);
             }
         }
     }

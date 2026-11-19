@@ -412,7 +412,7 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
             );
         }
         with_worker_diagnostic(scope, |scope, source| {
-            crate::exception_reporting::diagnostic_from_exception(
+            crate::exception_reporting::diagnostic_from_unhandled_rejection(
                 scope,
                 source,
                 reason,
@@ -3560,16 +3560,19 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
         };
         crate::DiagnosticEvent::runtime_exception(
             source,
+            crate::ExceptionOrigin::UncaughtException,
             &report.summary,
             report.source.as_deref().unwrap_or(script_url),
-            report
-                .line
-                .and_then(|line| u32::try_from(line).ok())
-                .unwrap_or(0),
-            report
-                .column
-                .and_then(|column| u32::try_from(column).ok())
-                .unwrap_or(0),
+            (
+                report
+                    .line
+                    .and_then(|line| u32::try_from(line).ok())
+                    .unwrap_or(0),
+                report
+                    .column
+                    .and_then(|column| u32::try_from(column).ok())
+                    .unwrap_or(0),
+            ),
             stack.as_deref(),
             handled,
         )

@@ -97,6 +97,7 @@ fn finish_loading_with_runtime_service(
                                 crate::DiagnosticEvent::script_load_failure(
                                     source,
                                     params.key.script_url(),
+                                    params.key.script_url(),
                                     &message,
                                 )
                             });

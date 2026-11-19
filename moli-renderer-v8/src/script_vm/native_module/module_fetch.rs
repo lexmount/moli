@@ -530,6 +530,7 @@ impl ScriptVm {
                     );
             }
             Err(error) => {
+                let error = error.with_failed_resource(fetch_key.clone());
                 self.document_runtime
                     .mark_native_module_failed(fetch_key, error);
             }
@@ -1196,6 +1197,7 @@ impl ScriptVm {
                 error,
             } => {
                 self.clear_runtime_owned_module_script_graph_waits_for_owner(&continuation, &error);
+                self.emit_module_script_load_failure(&continuation.script.url, &error);
                 NativeModuleOwnerActions::from_runtime_module_failure(*continuation, error)
             }
         }
@@ -1250,6 +1252,7 @@ impl ScriptVm {
         continuation: ModuleScriptContinuation,
         error: ModuleLoadError,
     ) -> Option<(ModuleScriptContinuation, ModuleLoadError)> {
+        self.emit_module_script_load_failure(&continuation.script.url, &error);
         match continuation.completion_owner() {
             ModuleScriptCompletionOwner::Parser => {
                 self.queue_main_parser_module_graph_failure_work(ParserModuleScriptFailure {

@@ -163,27 +163,27 @@ pub(crate) fn exception_message_details<'s>(
     (message, filename, lineno, colno)
 }
 
-pub(crate) fn diagnostic_from_exception<'s>(
+pub(crate) fn diagnostic_from_unhandled_rejection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: crate::DiagnosticSource,
     value: Option<v8::Local<'s, v8::Value>>,
-    handled: bool,
+    default_prevented: bool,
 ) -> crate::DiagnosticEvent {
     let value = value.unwrap_or_else(|| v8::undefined(scope).into());
     let (message, filename, lineno, colno) = exception_message_details(scope, value);
-    let stack = if handled {
+    let stack = if default_prevented {
         None
     } else {
         captured_exception_stack(scope, value)
     };
     crate::DiagnosticEvent::runtime_exception(
         source,
+        crate::ExceptionOrigin::UnhandledRejection,
         &message,
         &filename,
-        lineno,
-        colno,
+        (lineno, colno),
         stack.as_deref(),
-        handled,
+        default_prevented,
     )
 }
 
