@@ -357,3 +357,96 @@ fn child_document_factories_allocate_results_in_document_realm() {
 
     assert_eq!(result, "");
 }
+
+#[test]
+fn document_point_queries_skip_dynamic_inert_flat_tree_subtrees() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-point-query-inert.test/",
+        r#"<!doctype html><style>
+html, body { margin: 0; }
+#under, #container, #target { position: absolute; inset: 0; width: 100px; height: 100px; }
+#under { background: red; }
+#container { background: blue; }
+#target { background: green; }
+</style>
+<div id="under"></div><div id="container"><div id="target"></div></div>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const container = document.getElementById('container');
+  const target = document.getElementById('target');
+  const top = () => document.elementFromPoint(1, 1);
+  const list = () => document.elementsFromPoint(1, 1)
+    .map(element => element.id || element.localName)
+    .join(',');
+  const values = [top() === target];
+
+  container.inert = true;
+  values.push(top()?.id, list());
+  container.inert = false;
+  values.push(top() === target);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('style', 'position:fixed;inset:0;width:100px;height:100px');
+  const rect = document.createElementNS(svg.namespaceURI, 'rect');
+  rect.setAttribute('width', '100');
+  rect.setAttribute('height', '100');
+  svg.appendChild(rect);
+  document.body.appendChild(svg);
+  const svgHit = top();
+  svg.setAttribute('inert', '');
+  values.push(top() === svgHit);
+
+  const inertHtmlAncestor = document.createElement('div');
+  inertHtmlAncestor.inert = true;
+  inertHtmlAncestor.appendChild(svg);
+  document.body.appendChild(inertHtmlAncestor);
+  values.push(top() === target);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("dynamic inert point-query probe should evaluate");
+
+    assert_eq!(result, "true|under|under,html|true|true|true");
+}
+
+#[test]
+fn shadow_point_queries_hit_text_slotted_into_a_modal_dialog() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-modal-point-query.test/",
+        r#"<!doctype html><div id="host">MMMM</div>"#,
+    );
+    vm.eval(
+        r#"
+const host = document.getElementById('host');
+const shadow = host.attachShadow({mode: 'open'});
+shadow.innerHTML = `
+  <style>dialog { inset: 30px auto auto 30px; margin: 0; border: 0; padding: 8px; font: 36px monospace; }</style>
+  <dialog id="modal"><slot style="display: contents"></slot></dialog>`;
+shadow.querySelector('dialog').showModal();
+"#,
+    )
+    .expect("modal dialog should open");
+    publish_layout_for_test(&mut vm);
+
+    let result = vm
+        .eval(
+            r#"
+const range = document.createRange();
+range.selectNodeContents(host.firstChild);
+const rect = range.getBoundingClientRect();
+const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+JSON.stringify([
+  shadow.elementFromPoint(x, y)?.id,
+  shadow.elementsFromPoint(x, y).map(element => element.id || element.localName)
+]);
+"#,
+        )
+        .expect("slotted text point queries should evaluate");
+
+    assert_eq!(result, r#"["host",["modal","html"]]"#);
+}

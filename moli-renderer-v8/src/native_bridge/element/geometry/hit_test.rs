@@ -28,6 +28,13 @@ pub(crate) struct InputSurfaceHit {
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputHitTestMode {
+    Dom,
+    Mouse,
+    Wheel,
+}
+
 #[derive(Clone, Copy)]
 struct FrameHitTest {
     document: DomHandle,
@@ -73,7 +80,8 @@ pub(crate) fn observable_input_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<InputHit>, LayoutError> {
-    input_surface_hit_test(runtime, document, point, false, false).map(|hit| hit.input)
+    input_surface_hit_test(runtime, document, point, false, InputHitTestMode::Dom)
+        .map(|hit| hit.input)
 }
 
 #[cfg(test)]
@@ -82,9 +90,11 @@ pub(crate) fn observable_scrollbar_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
-    input_surface_hit_test(runtime, document, point, false, true).map(|hit| match hit.control {
-        Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
-        Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
+    input_surface_hit_test(runtime, document, point, false, InputHitTestMode::Mouse).map(|hit| {
+        match hit.control {
+            Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
+            Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
+        }
     })
 }
 
@@ -95,7 +105,7 @@ pub(crate) fn input_surface_hit_test(
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
-    include_scrollbars: bool,
+    mode: InputHitTestMode,
 ) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
         return input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none)
@@ -113,7 +123,7 @@ pub(crate) fn input_surface_hit_test(
                 point,
                 LayoutTransform2D::IDENTITY,
                 ignore_pointer_events_none,
-                include_scrollbars,
+                mode,
                 0,
             )
         })
@@ -127,11 +137,15 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(
-        input_surface_hit_test(runtime, document, point, ignore_pointer_events_none, false)?
-            .input
-            .map(|hit| hit.handle),
-    )
+    Ok(input_surface_hit_test(
+        runtime,
+        document,
+        point,
+        ignore_pointer_events_none,
+        InputHitTestMode::Dom,
+    )?
+    .input
+    .map(|hit| hit.handle))
 }
 
 fn input_hit_test_via_documents(
@@ -180,14 +194,23 @@ fn input_surface_hit_test_in_tree(
     point: LayoutPoint,
     root_to_frame: LayoutTransform2D,
     ignore_pointer_events_none: bool,
-    include_scrollbars: bool,
+    mode: InputHitTestMode,
     depth: usize,
 ) -> Result<InputSurfaceHit, LayoutError> {
-    let live_dom_hit = if include_scrollbars {
+    let live_dom_hit = if mode == InputHitTestMode::Mouse {
         let mut live_dom_hit = None;
         for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
             match surface {
                 LayoutPaintedSurfaceHit::Control(mut control) => {
+                    let source = match &control {
+                        LayoutControlSurfaceHit::Scrollbar(hit) => hit.source,
+                        LayoutControlSurfaceHit::ScrollbarCorner(hit) => hit.source,
+                    };
+                    // Viewport scrollbars remain interactive when the document root is inert.
+                    let is_viewport_control = source == tree.source_root();
+                    if !is_live_hit_source(runtime, source, is_viewport_control) {
+                        continue;
+                    }
                     match &mut control {
                         LayoutControlSurfaceHit::Scrollbar(hit) => {
                             hit.viewport_to_local =
@@ -204,13 +227,15 @@ fn input_surface_hit_test_in_tree(
                     });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
-                    let Some(target) = element_for_hit_source(runtime, layout_hit.source) else {
+                    let Some(target) = live_interaction_target(
+                        runtime,
+                        layout_hit.source,
+                        ignore_pointer_events_none,
+                    ) else {
                         continue;
                     };
-                    if runtime.dom_host().is_connected(target) {
-                        live_dom_hit = Some((layout_hit, target));
-                        break;
-                    }
+                    live_dom_hit = Some((layout_hit, target));
+                    break;
                 }
             }
         }
@@ -219,7 +244,14 @@ fn input_surface_hit_test_in_tree(
         live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
     };
     let Some((layout_hit, target)) = live_dom_hit else {
-        return Ok(InputSurfaceHit::default());
+        // Wheel scrolling still belongs to this viewport when its DOM is inert.
+        return Ok(InputSurfaceHit {
+            input: (mode == InputHitTestMode::Wheel).then_some(InputHit {
+                handle: tree.source_root(),
+                root_to_frame,
+            }),
+            control: None,
+        });
     };
     let target_hit = InputHit {
         handle: target,
@@ -268,7 +300,7 @@ fn input_surface_hit_test_in_tree(
         frame_to_child.map_point(point),
         frame_to_child.concatenate(root_to_frame),
         ignore_pointer_events_none,
-        include_scrollbars,
+        mode,
         depth + 1,
     )?;
     if child_hit.input.is_some() || child_hit.control.is_some() {
@@ -288,25 +320,17 @@ fn live_hit_in_tree(
     ignore_pointer_events_none: bool,
 ) -> Option<(LayoutHit<DomHandle>, DomHandle)> {
     let first_hit = tree.hit_test(point, ignore_pointer_events_none);
-    let live_first_hit = first_hit.and_then(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    });
+    let resolve_hit = |hit: LayoutHit<DomHandle>| {
+        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
+            .map(|target| (hit, target))
+    };
+    let live_first_hit = first_hit.and_then(resolve_hit);
     if live_first_hit.is_some() || first_hit.is_none() {
         return live_first_hit;
     }
     tree.hit_test_all(point, ignore_pointer_events_none)
         .into_iter()
-        .find_map(|hit| {
-            let target = element_for_hit_source(runtime, hit.source)?;
-            runtime
-                .dom_host()
-                .is_connected(target)
-                .then_some((hit, target))
-        })
+        .find_map(resolve_hit)
 }
 
 fn live_hit_in_frame(
@@ -320,17 +344,15 @@ fn live_hit_in_frame(
         frame.point,
         ignore_pointer_events_none,
     )?;
-    let live_first_hit = first_hit.and_then(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    });
+    let resolve_hit = |hit: LayoutHit<DomHandle>| {
+        live_interaction_target(runtime, hit.source, ignore_pointer_events_none)
+            .map(|target| (hit, target))
+    };
+    let live_first_hit = first_hit.and_then(resolve_hit);
     // A latest-layout snapshot may still contain a text fragment whose DOM
-    // node was replaced after the snapshot was published. Walk the sampled
-    // paint stack only on that stale-source path until it identifies a
-    // currently connected element. This live DOM check neither refreshes nor
+    // node was replaced after publication, and `inert` can change without
+    // changing geometry. Walk the sampled paint stack only when the live DOM
+    // rejects the foremost candidate. This check neither refreshes nor
     // invalidates layout; the common case retains the single-hit fast path.
     if live_first_hit.is_some() || first_hit.is_none() {
         return Ok(live_first_hit);
@@ -341,13 +363,7 @@ fn live_hit_in_frame(
         frame.point,
         ignore_pointer_events_none,
     )?;
-    Ok(hits.into_iter().find_map(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    }))
+    Ok(hits.into_iter().find_map(resolve_hit))
 }
 
 /// Resolve the foremost painted hit and the viewport sampled by the same
@@ -386,7 +402,10 @@ pub(crate) fn observable_hit_test(
     }
 }
 
-fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Option<DomHandle> {
+pub(in crate::native_bridge) fn element_for_hit_source(
+    runtime: &PageScriptHost,
+    mut source: DomHandle,
+) -> Option<DomHandle> {
     loop {
         let node = runtime.dom_host().node(source)?;
         if node.is_element() {
@@ -398,4 +417,25 @@ fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Op
         }
         source = parent;
     }
+}
+
+pub(super) fn is_live_hit_source(
+    runtime: &PageScriptHost,
+    source: DomHandle,
+    ignore_inert: bool,
+) -> bool {
+    let dom = runtime.dom_host();
+    dom.is_connected(source) && (ignore_inert || !dom.is_inert_in_document(source))
+}
+
+pub(in crate::native_bridge) fn live_interaction_target(
+    runtime: &PageScriptHost,
+    source: DomHandle,
+    ignore_pointer_events_none: bool,
+) -> Option<DomHandle> {
+    // Slotted text can be inside a modal dialog while its DOM parent is inert.
+    if !is_live_hit_source(runtime, source, ignore_pointer_events_none) {
+        return None;
+    }
+    element_for_hit_source(runtime, source)
 }

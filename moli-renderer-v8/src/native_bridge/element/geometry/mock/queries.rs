@@ -137,54 +137,40 @@ pub(crate) fn answer_query(
         }
         LayoutQuery::HitTest {
             point,
-            ignore_pointer_events_none: _,
-        } => LayoutQueryAnswer::HitTest(
-            mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y)).map(
-                |source| LayoutHit {
-                    source,
-                    fragment: None,
-                    paint_order: None,
-                    local_point: *point,
-                    is_text: false,
-                    local_content_box: None,
-                    viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
-                },
-            ),
-        ),
+            ignore_pointer_events_none,
+        } => LayoutQueryAnswer::HitTest(mock_layout_hit(
+            runtime,
+            document,
+            *point,
+            *ignore_pointer_events_none,
+        )),
         LayoutQuery::HitTestAll {
             point,
-            ignore_pointer_events_none: _,
+            ignore_pointer_events_none,
         } => LayoutQueryAnswer::HitTestAll(
-            mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y))
-                .map(|source| {
-                    vec![LayoutHit {
-                        source,
-                        fragment: None,
-                        paint_order: None,
-                        local_point: *point,
-                        is_text: false,
-                        local_content_box: None,
-                        viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
-                    }]
-                })
-                .unwrap_or_default(),
+            mock_layout_hit(runtime, document, *point, *ignore_pointer_events_none)
+                .into_iter()
+                .collect(),
         ),
         LayoutQuery::CaretPosition { point } => LayoutQueryAnswer::CaretPosition(
-            mock_hit_test_handle(runtime, document, f64::from(point.x), f64::from(point.y)).map(
-                |source| {
-                    let model = mock_box_model(runtime, source);
-                    LayoutCaretPosition {
-                        source,
-                        utf16_offset: None,
-                        rect: model
-                            .map(|model| model.border)
-                            .unwrap_or_else(|| quad_from_client_rect(zero_client_rect())),
-                        ancestor_boxes: model
-                            .map(|model| vec![(source, model)])
-                            .unwrap_or_default(),
-                    }
-                },
-            ),
+            mock_hit_test_handle(
+                runtime,
+                document,
+                f64::from(point.x),
+                f64::from(point.y),
+                true,
+            )
+            .map(|source| {
+                let model = mock_box_model(runtime, source);
+                LayoutCaretPosition {
+                    source,
+                    utf16_offset: None,
+                    rect: model
+                        .map(|model| model.border)
+                        .unwrap_or_else(|| quad_from_client_rect(zero_client_rect())),
+                    ancestor_boxes: model.map(|model| vec![(source, model)]).unwrap_or_default(),
+                }
+            }),
         ),
         LayoutQuery::EventOffset { source, point } => {
             let rect = compute_mock_client_rect(runtime, *source);
@@ -194,6 +180,30 @@ pub(crate) fn answer_query(
             )))
         }
     }
+}
+
+fn mock_layout_hit(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+) -> Option<LayoutHit<DomHandle>> {
+    let source = mock_hit_test_handle(
+        runtime,
+        document,
+        f64::from(point.x),
+        f64::from(point.y),
+        ignore_pointer_events_none,
+    )?;
+    Some(LayoutHit {
+        source,
+        fragment: None,
+        paint_order: None,
+        local_point: point,
+        is_text: false,
+        local_content_box: None,
+        viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
+    })
 }
 
 fn mock_box_model(runtime: &PageScriptHost, source: DomHandle) -> Option<LayoutBoxModel> {

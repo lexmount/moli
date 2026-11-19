@@ -31,7 +31,7 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    InputEventCoordinates, TextEditInputType, TextInputSource, TouchEventPoint,
+    InputEventCoordinates, InputHitTestMode, TextEditInputType, TextInputSource, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_after_touch_release,
     activate_handle_via_keyboard, cache_input_files_from_selected_files,
     construct_drag_event_with_related_target, construct_keyboard_event,
@@ -697,11 +697,13 @@ fn release_pointer_capture_after_pointer_end(
     );
 }
 
-fn dispatch_drag_pointer_suppression_boundaries(
+fn dispatch_pointer_exit_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     target: DomHandle,
     coordinates: InputEventCoordinates,
+    button: i32,
+    buttons: i32,
     pointer: &RendererPointerEventProperties,
     modifiers: u8,
 ) {
@@ -712,8 +714,8 @@ fn dispatch_drag_pointer_suppression_boundaries(
         scope,
         "pointerout",
         coordinates,
-        -1,
-        0,
+        button,
+        buttons,
         pointer,
         None,
         modifiers,
@@ -736,8 +738,8 @@ fn dispatch_drag_pointer_suppression_boundaries(
             scope,
             "pointerleave",
             coordinates,
-            -1,
-            0,
+            button,
+            buttons,
             pointer,
             None,
             modifiers,
@@ -1037,12 +1039,17 @@ impl ScriptVm {
         y: f64,
         event_name: &str,
     ) -> Result<crate::native_bridge::element::InputSurfaceHit> {
+        let mode = match event_name {
+            "wheel" => InputHitTestMode::Wheel,
+            "mousedown" | "mouseup" | "mousemove" => InputHitTestMode::Mouse,
+            _ => InputHitTestMode::Dom,
+        };
         Ok(input_surface_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),
             false,
-            matches!(event_name, "mousedown" | "mouseup" | "mousemove"),
+            mode,
         )?)
     }
 
@@ -1296,11 +1303,12 @@ impl ScriptVm {
                     .active_pointer_capture_target(MOUSE_POINTER_ID)
             })
             .flatten();
-        if tracks_mouse_hover_for_event(event_name) {
+        let tracks_hover = tracks_mouse_hover_for_event(event_name);
+        if tracks_hover {
             let mut context_host = self._context_host.borrow_mut();
             context_host.set_hovered_element_for_input(hit_handle);
         }
-        let wheel_fallback_handle = (event_name == "wheel")
+        let wheel_fallback_handle = (event_name == "wheel" && hit_handle.is_none())
             .then(|| {
                 self._context_host
                     .borrow()
@@ -1308,7 +1316,29 @@ impl ScriptVm {
                     .document_element_handle()
             })
             .flatten();
-        let Some(handle) = capture_handle.or(hit_handle).or(wheel_fallback_handle) else {
+        let handle = capture_handle.or(hit_handle).or(wheel_fallback_handle);
+        let restarting_pointer_stream = pointer_event_name.is_some()
+            && self.hovered_mouse_handle.is_some()
+            && self._context_host.borrow().mouse_event_target().is_none();
+        if pointer_event_name.is_some() {
+            self._context_host
+                .borrow_mut()
+                .set_mouse_event_target(handle);
+        }
+        let root_to_frame = match handle {
+            Some(handle) => self.mouse_input_root_to_frame(handle, surface_hit)?,
+            None => moli_layout::LayoutTransform2D::IDENTITY,
+        };
+        let hover_transition = if tracks_hover {
+            let previous = self.hovered_mouse_handle;
+            let previous_root_to_frame = self.hovered_mouse_root_to_frame;
+            self.hovered_mouse_handle = handle;
+            self.hovered_mouse_root_to_frame = root_to_frame;
+            (previous != handle).then_some((previous, previous_root_to_frame))
+        } else {
+            None
+        };
+        let Some(handle) = handle else {
             if event_name == "mouseup" && button == 0 {
                 self.finish_active_drag(DragFinishReason::Rejected, modifiers)?;
             } else if event_name == "mousemove" {
@@ -1329,35 +1359,43 @@ impl ScriptVm {
                     Ok(())
                 })?;
             }
+            if let Some((Some(previous), previous_root_to_frame)) = hover_transition {
+                let point = previous_root_to_frame.map_point(root_point);
+                let coordinates = InputEventCoordinates::from_root(x, y)
+                    .with_client(f64::from(point.x), f64::from(point.y));
+                self.with_default_context_scope(|scope, runtime_ptr| {
+                    if !restarting_pointer_stream {
+                        dispatch_pointer_exit_events(
+                            scope,
+                            runtime_ptr,
+                            previous,
+                            coordinates,
+                            button,
+                            buttons,
+                            &pointer,
+                            modifiers,
+                        );
+                    }
+                    dispatch_mouse_boundary_events(
+                        scope,
+                        runtime_ptr,
+                        Some(previous),
+                        None,
+                        coordinates,
+                        coordinates,
+                        button,
+                        buttons,
+                        modifiers,
+                    );
+                    Ok(())
+                })?;
+            }
             return Ok(input_dispatch_outcome(false));
         };
-        let restarting_pointer_stream = pointer_event_name.is_some()
-            && self.hovered_mouse_handle.is_some()
-            && self._context_host.borrow().mouse_event_target().is_none();
-        if pointer_event_name.is_some() {
-            self._context_host
-                .borrow_mut()
-                .set_mouse_event_target(handle);
-        }
-        let root_to_frame = self.mouse_input_root_to_frame(handle, surface_hit)?;
         let client_point = root_to_frame.map_point(root_point);
         let client_x = f64::from(client_point.x);
         let client_y = f64::from(client_point.y);
         let coordinates = InputEventCoordinates::from_root(x, y).with_client(client_x, client_y);
-        let hover_transition = if tracks_mouse_hover_for_event(event_name) {
-            let previous = self.hovered_mouse_handle;
-            if previous != Some(handle) {
-                let previous_root_to_frame = self.hovered_mouse_root_to_frame;
-                self.hovered_mouse_handle = Some(handle);
-                self.hovered_mouse_root_to_frame = root_to_frame;
-                Some((previous, previous_root_to_frame))
-            } else {
-                self.hovered_mouse_root_to_frame = root_to_frame;
-                None
-            }
-        } else {
-            None
-        };
         // Dragging suppresses pointer boundaries without moving the legacy
         // mouse hover target. A resumed pointer enters from outside even when
         // the first ordinary mouse event hits that same element again.
@@ -1542,7 +1580,8 @@ impl ScriptVm {
                         .active_pointer_capture_target(MOUSE_POINTER_ID)
                         .or(hit_handle)
                         .unwrap_or(pointer_dispatch_handle);
-                    unsafe { &mut *runtime_ptr }.set_mouse_event_target(pointer_dispatch_handle);
+                    unsafe { &mut *runtime_ptr }
+                        .set_mouse_event_target(Some(pointer_dispatch_handle));
                 }
             }
             if let Some((previous_handle, previous_root_to_frame)) = hover_transition {
@@ -1757,11 +1796,13 @@ impl ScriptVm {
                         &cancel_pointer,
                         modifiers,
                     );
-                    dispatch_drag_pointer_suppression_boundaries(
+                    dispatch_pointer_exit_events(
                         scope,
                         runtime_ptr,
                         cancel_target,
                         coordinates,
+                        -1,
+                        0,
                         &cancel_pointer,
                         modifiers,
                     );

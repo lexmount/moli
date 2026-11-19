@@ -240,6 +240,35 @@ fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root(
         "[25,40]"
     );
 }
+
+#[cfg(feature = "devtools")]
+#[test]
+fn wheel_input_stays_in_a_child_viewport_with_an_inert_root() {
+    let mut vm = new_storage_html_test_vm("https://inert-child-wheel.test/");
+    vm.eval(r#"
+        document.body.style.cssText = 'margin:0;min-height:1200px';
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'position:absolute;left:70px;top:40px;width:350px;height:250px;border:0';
+        document.body.appendChild(frame);
+        const child = frame.contentWindow;
+        child.document.body.style.cssText = 'margin:0;min-height:1200px';
+        window.wheelEvents = [];
+        window.addEventListener('wheel', () => wheelEvents.push('parent'));
+        child.addEventListener('wheel', event => wheelEvents.push([event.clientX, event.clientY]));
+    "#).unwrap();
+    publish_layout_for_test(&mut vm);
+
+    vm.eval("child.document.documentElement.inert = true")
+        .unwrap();
+    vm.dispatch_mouse_event_at_point(115.0, 100.0, "wheel", -1, Some(0), 0.0, 140.0)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([scrollY, child.scrollY, wheelEvents])")
+            .unwrap(),
+        "[0,140,[[45,60]]]",
+    );
+}
+
 #[cfg(feature = "devtools")]
 #[test]
 fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_events() {
@@ -376,6 +405,44 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
     assert!(result["top"].as_f64().is_some_and(|value| value > 100.0));
     assert_eq!(result["events"], serde_json::json!([]));
 }
+#[cfg(feature = "devtools")]
+#[test]
+fn viewport_scrollbar_drag_works_with_an_inert_document_root() {
+    let mut vm = new_rendered_test_vm(
+        "https://inert-viewport-scrollbar.test/",
+        r#"<!doctype html><style>body { margin: 0; }</style>
+        <dialog>modal</dialog><div style="height: 200vh"></div>"#,
+    );
+
+    for (setup, publish_layout) in [
+        ("document.documentElement.inert = true", false),
+        (
+            "window.scrollTo(0, 0); document.documentElement.inert = false; document.querySelector('dialog').showModal()",
+            true,
+        ),
+    ] {
+        vm.eval(setup).expect("document root should become inert");
+        if publish_layout {
+            publish_layout_for_test(&mut vm);
+        }
+        let x = vm
+            .eval("document.documentElement.clientWidth + 5")
+            .expect("viewport scrollbar position should evaluate")
+            .parse::<f64>()
+            .expect("viewport scrollbar position should be numeric");
+        assert_eq!(vm.eval("window.scrollY").unwrap(), "0");
+
+        vm.dispatch_mouse_event_at_point(x, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+            .expect("viewport thumb press should dispatch");
+        vm.dispatch_mouse_event_at_point(x, 150.0, "mousemove", -1, Some(1), 0.0, 0.0)
+            .expect("viewport thumb drag should dispatch");
+        vm.dispatch_mouse_event_at_point(x, 150.0, "mouseup", 0, Some(0), 0.0, 0.0)
+            .expect("viewport thumb release should dispatch");
+
+        assert_eq!(vm.eval("window.scrollY > 0").unwrap(), "true", "{setup}");
+    }
+}
+
 #[cfg(feature = "devtools")]
 #[test]
 fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
