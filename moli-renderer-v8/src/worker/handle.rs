@@ -353,20 +353,6 @@ impl WorkerErrorReport {
             );
         }
     }
-
-    pub(crate) fn into_text(mut self) -> (String, String) {
-        self.complete(|| ErrorReportOutcome::Interrupted);
-        (
-            std::mem::take(&mut self.message),
-            std::mem::take(&mut self.filename),
-        )
-    }
-}
-
-impl Drop for WorkerErrorReport {
-    fn drop(&mut self) {
-        self.complete(|| ErrorReportOutcome::Interrupted);
-    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1082,42 +1068,46 @@ mod error_report_tests {
     };
 
     #[test]
-    fn worker_error_publishes_once_when_completed_or_interrupted() {
+    fn worker_error_publishes_once_only_when_completed() {
         let diagnostics = DiagnosticEmitter::default();
         let mut receiver = diagnostics.subscribe().expect("first subscription");
         let source = DiagnosticSource::DedicatedWorker { instance_id: 2 };
         for expected in [
-            ErrorReportOutcome::Canceled,
-            ErrorReportOutcome::Interrupted,
+            None,
+            Some(ErrorReportOutcome::Canceled),
+            Some(ErrorReportOutcome::Uncanceled),
         ] {
-            let mut report = WorkerErrorReport::new(
-                "worker exception".into(),
-                "worker.js".into(),
-                (1, 2),
-                WorkerParentErrorEventKind::ErrorEvent,
-                WorkerErrorPhase::Runtime,
-                WorkerErrorSource::Runtime,
-            );
-            report.diagnostic =
-                diagnostics.prepare_worker_exception(source, || Some("at throwFromWorker".into()));
-            assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
-            if expected == ErrorReportOutcome::Canceled {
-                report.complete(|| expected);
+            {
+                let mut report = WorkerErrorReport::new(
+                    "worker exception".into(),
+                    "worker.js".into(),
+                    (1, 2),
+                    WorkerParentErrorEventKind::ErrorEvent,
+                    WorkerErrorPhase::Runtime,
+                    WorkerErrorSource::Runtime,
+                );
+                report.diagnostic = diagnostics
+                    .prepare_worker_exception(source, || Some("at throwFromWorker".into()));
+                assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+                if let Some(outcome) = expected {
+                    report.complete(|| outcome);
+                }
             }
-            drop(report);
-            assert_eq!(
-                receiver.try_recv(),
-                Ok(DiagnosticEvent::RuntimeException {
-                    source,
-                    origin: ExceptionOrigin::UncaughtException,
-                    message: "worker exception".into(),
-                    filename: "worker.js".into(),
-                    lineno: 1,
-                    colno: 2,
-                    stack: Some("at throwFromWorker".into()),
-                    outcome: expected,
-                })
-            );
+            if let Some(outcome) = expected {
+                assert_eq!(
+                    receiver.try_recv(),
+                    Ok(DiagnosticEvent::RuntimeException {
+                        source,
+                        origin: ExceptionOrigin::UncaughtException,
+                        message: "worker exception".into(),
+                        filename: "worker.js".into(),
+                        lineno: 1,
+                        colno: 2,
+                        stack: Some("at throwFromWorker".into()),
+                        outcome,
+                    })
+                );
+            }
             assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
         }
     }

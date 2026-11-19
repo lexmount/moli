@@ -267,8 +267,10 @@ impl Browser {
     /// calls return `None`. Closing or dropping the receiver permanently stops
     /// diagnostics for this Browser. Consume events regularly to limit the
     /// memory used by the unbounded queue.
-    /// Runtime exceptions arrive after reporting finishes. A momentarily
-    /// empty queue can still have reports in flight.
+    ///
+    /// Runtime exception diagnostics describe completed reports, including
+    /// reports canceled by event handlers. A momentarily empty queue can
+    /// still have reports in flight.
     pub fn subscribe_diagnostics(&self) -> Option<crate::DiagnosticsSubscription> {
         self.js_runtime
             .browser_context_runtime()

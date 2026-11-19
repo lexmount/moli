@@ -460,10 +460,7 @@ async fn dedicated_worker_report_respects_window_retirement_during_error_dispatc
         .subscribe_diagnostics()
         .context("first subscription")?;
     let mut page = browser.fetch("about:blank").await?;
-    for (instance_id, cancel, expected_outcome) in [
-        (1, false, ErrorReportOutcome::Interrupted),
-        (2, true, ErrorReportOutcome::Canceled),
-    ] {
+    for (instance_id, cancel) in [(1, false), (2, true)] {
         let result = tokio::time::timeout(
             Duration::from_secs(15),
             page.evaluate_runtime_expression_with_await_async(
@@ -498,23 +495,24 @@ async fn dedicated_worker_report_respects_window_retirement_during_error_dispatc
         .await??;
         assert_eq!(result["value"], "worker|false", "{result}");
 
-        let diagnostic = diagnostics
-            .try_recv()
-            .context("retired Window worker diagnostic")?;
-        assert!(
-            matches!(
-                &diagnostic,
-                DiagnosticEvent::RuntimeException {
-                    source: DiagnosticSource::DedicatedWorker { instance_id: source_id },
-                    origin: ExceptionOrigin::UncaughtException,
-                    message,
-                    outcome,
-                    ..
-                } if *source_id == instance_id && message.contains("retiring iframe worker")
-                    && *outcome == expected_outcome
-            ),
-            "expected {expected_outcome:?} for Worker {instance_id}, got {diagnostic:?}"
-        );
+        if cancel {
+            let diagnostic = diagnostics
+                .try_recv()
+                .context("canceled worker diagnostic")?;
+            assert!(
+                matches!(
+                    &diagnostic,
+                    DiagnosticEvent::RuntimeException {
+                        source: DiagnosticSource::DedicatedWorker { instance_id: source_id },
+                        origin: ExceptionOrigin::UncaughtException,
+                        message,
+                        outcome: ErrorReportOutcome::Canceled,
+                        ..
+                    } if *source_id == instance_id && message.contains("retiring iframe worker")
+                ),
+                "expected Canceled for Worker {instance_id}, got {diagnostic:?}"
+            );
+        }
         assert_empty(&mut diagnostics);
     }
     Ok(())

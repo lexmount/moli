@@ -24,7 +24,7 @@ impl RendererSharedWorkerHost {
             WorkerToParentMessage::Error(error) => {
                 if error.phase == WorkerErrorPhase::Bootstrap {
                     let (lineno, colno, event_kind) = (error.lineno, error.colno, error.event_kind);
-                    let (message, filename) = error.into_text();
+                    let (message, filename) = (error.message, error.filename);
                     if event_kind == WorkerParentErrorEventKind::ErrorEvent {
                         self.notify_all_clients_error_with_location(
                             message, filename, lineno, colno, event_kind,

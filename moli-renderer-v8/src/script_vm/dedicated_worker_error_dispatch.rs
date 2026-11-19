@@ -62,12 +62,11 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     // `error` event at the Worker object. Runtime script errors additionally
     // propagate to the owning Window when that Worker event is not canceled.
     if unhandled && error.phase == WorkerErrorPhase::Runtime {
-        // The Worker listener may have retired its Window. Dropping the report
-        // records the interruption.
+        // The Worker listener may have retired its Window during dispatch.
         if !unsafe { &*host_ptr }.window_execution_context_identity_is_current(owner_window) {
             return Ok(());
         }
-        let event = crate::context_bootstrap::dispatch_window_error_event(
+        let Some(event) = crate::context_bootstrap::dispatch_window_error_event(
             scope,
             host_ptr,
             &error.message,
@@ -76,17 +75,14 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
             error.colno,
             None,
         )
-        .map_err(anyhow::Error::msg)?;
+        .map_err(anyhow::Error::msg)?
+        else {
+            return Ok(());
+        };
         error.complete(|| {
-            event.map_or(ErrorReportOutcome::Interrupted, |event| {
-                ErrorReportOutcome::from_default_prevented(
-                    crate::context_bootstrap::event_bool_attribute(
-                        scope,
-                        event,
-                        "defaultPrevented",
-                    ),
-                )
-            })
+            ErrorReportOutcome::from_default_prevented(
+                crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented"),
+            )
         });
     } else {
         error.complete(|| ErrorReportOutcome::from_default_prevented(!unhandled));
