@@ -1,4 +1,7 @@
 use crate::web_api_interfaces;
+use moli_webapi::events::dispatch_init::{
+    PromiseRejectionEventInitDeclaration, ServiceWorkerExtendableMessageEventInitDeclaration,
+};
 use moli_webapi::events::fallback::PlainPromiseRejectionEventDeclaration;
 use std::{
     cell::{Cell, RefCell},
@@ -76,17 +79,6 @@ const SERVICE_WORKER_PERIODIC_SYNC_EVENT_ID_SLOT: &str = "__lmServiceWorkerPerio
 const MAX_REPORTED_WORKER_PROMISE_REJECTIONS: usize = 1024;
 
 #[derive(WebApiObject)]
-#[webapi(plain)]
-struct WorkerPromiseRejectionEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-    #[webapi(data_property, enumerable)]
-    promise: v8::Local<'scope, v8::Promise>,
-    #[webapi(data_property, enumerable)]
-    reason: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
 struct WorkerBasicEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
@@ -150,21 +142,6 @@ struct ServiceWorkerMessageEventDeclaration<'scope> {
     prevent_default: (),
     #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct ServiceWorkerExtendableMessageEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    data: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    origin: v8::Local<'scope, v8::String>,
-    #[webapi(data_property = "lastEventId", enumerable)]
-    last_event_id: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    source: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    ports: v8::Local<'scope, v8::Array>,
 }
 
 #[derive(Default, WebApiObject)]
@@ -604,7 +581,7 @@ fn new_worker_promise_rejection_event<'s>(
         .get(scope, v8str(scope, "PromiseRejectionEvent").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     {
-        let init = WorkerPromiseRejectionEventInitDeclaration::new(
+        let init = PromiseRejectionEventInitDeclaration::new(
             event_type == "unhandledrejection",
             promise,
             reason.unwrap_or_else(|| v8::null(scope).into()),

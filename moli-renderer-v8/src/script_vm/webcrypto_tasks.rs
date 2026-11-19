@@ -7,15 +7,6 @@ use crate::{
     runtime::AuthorizedCurrentPageWebCryptoTask,
     util::{v8_string, v8str},
 };
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct CryptoKeyPairResultDeclaration<'scope> {
-    private_key: v8::Local<'scope, v8::Object>,
-    public_key: v8::Local<'scope, v8::Object>,
-}
-
 impl ScriptVm {
     #[cfg(test)]
     pub(crate) fn register_pending_webcrypto_task_producer_for_executor_test(
@@ -168,12 +159,11 @@ pub(crate) fn settle_webcrypto_task_result<'s>(
                 crate::context_bootstrap::crypto_key_object_from_clone_payload(scope, *public_key);
             match (private_key, public_key) {
                 (Some(private_key), Some(public_key)) => {
-                    let pair = CryptoKeyPairResultDeclaration {
+                    let pair = moli_webapi::crypto_key::build_crypto_key_pair(
+                        scope,
                         private_key,
                         public_key,
-                    }
-                    .bind(scope)
-                    .expect("CryptoKeyPair declaration should bind");
+                    );
                     let _ = resolver.resolve(scope, pair.into());
                 }
                 _ => reject_webcrypto_task(scope, resolver, WebCryptoRejection::Type),

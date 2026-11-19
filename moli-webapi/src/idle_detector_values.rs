@@ -2,6 +2,7 @@
 use crate::{event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, interfaces as web_api_interfaces};
 use moli_v8_util::throw_type_error;
 use moli_webapi_declare::WebApiObject;
+use moli_webidl as webidl;
 
 pub const IDLE_DETECTOR_STARTED_SLOT: &str = "__lmIdleDetectorStarted";
 pub const IDLE_DETECTOR_USER_ACTIVE_SLOT: &str = "__lmIdleDetectorUserActive";
@@ -53,4 +54,15 @@ pub fn idle_detector_constructor_callback<'s>(
         return;
     }
     rv.set(detector.into());
+}
+
+pub const MINIMUM_IDLE_THRESHOLD_MS: u32 = 60_000;
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "IdleOptions")]
+pub struct IdleOptions<'s> {
+    #[webidl(converter = "raw")]
+    pub signal: Option<crate::abort_signal::ResolvedAbortSignal<'s>>,
+    #[webidl(default = MINIMUM_IDLE_THRESHOLD_MS, converter = "enforce_range_unsigned_long")]
+    pub threshold: u32,
 }

@@ -8,7 +8,9 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 
 pub mod base64url;
 mod json_options;
+pub mod options;
 pub mod schema;
+pub mod signal_options;
 pub mod value;
 
 use crate::interfaces as web_api_interfaces;

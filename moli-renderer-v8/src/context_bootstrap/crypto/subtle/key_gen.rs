@@ -1,15 +1,4 @@
 use super::*;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct CryptoKeyPairDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    private_key: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, enumerable)]
-    public_key: v8::Local<'scope, v8::Object>,
-}
-
 pub(crate) fn crypto_subtle_digest_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -79,12 +68,8 @@ pub(crate) fn resolve_crypto_key_pair_payloads<'s>(
     let public_key = crypto_key_object_from_clone_payload(scope, public_payload);
     match (private_key, public_key) {
         (Some(private_key), Some(public_key)) => {
-            let pair = CryptoKeyPairDeclaration {
-                private_key,
-                public_key,
-            }
-            .bind(scope)
-            .expect("CryptoKeyPair declaration should bind");
+            let pair =
+                moli_webapi::crypto_key::build_crypto_key_pair(scope, private_key, public_key);
             promise.resolve(scope, pair.into());
         }
         _ => promise.reject_webcrypto(scope, WebCryptoRejection::Type),

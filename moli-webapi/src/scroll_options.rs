@@ -1,4 +1,4 @@
-use crate::webidl;
+use moli_webidl as webidl;
 
 #[derive(webidl::WebIdlEnum)]
 #[webidl(name = "ScrollBehavior", rename_all = "kebab-case")]
@@ -43,13 +43,13 @@ struct ScrollNumericArgs {
     y: f64,
 }
 
-pub(crate) struct ScrollCoordinates {
+pub struct ScrollCoordinates {
     left: Option<f64>,
     top: Option<f64>,
 }
 
 impl ScrollCoordinates {
-    pub(crate) fn resolve(self, current_x: f64, current_y: f64, relative: bool) -> (f64, f64) {
+    pub fn resolve(self, current_x: f64, current_y: f64, relative: bool) -> (f64, f64) {
         let normalize = |value: f64| if value.is_finite() { value } else { 0.0 };
         let left = self.left.map(normalize);
         let top = self.top.map(normalize);
@@ -64,7 +64,7 @@ impl ScrollCoordinates {
     }
 }
 
-pub(crate) fn coordinates<'s>(
+pub fn coordinates<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<ScrollCoordinates> {
@@ -94,7 +94,7 @@ pub(crate) fn coordinates<'s>(
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "ScrollLogicalPosition", rename_all = "kebab-case")]
-pub(crate) enum ScrollLogicalPosition {
+pub enum ScrollLogicalPosition {
     Start,
     Center,
     End,
@@ -129,7 +129,7 @@ struct ScrollIntoViewArgs {
     options: ScrollIntoViewOptions,
 }
 
-pub(crate) fn into_view_alignments<'s>(
+pub fn into_view_alignments<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<(ScrollLogicalPosition, ScrollLogicalPosition)> {

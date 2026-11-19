@@ -103,9 +103,8 @@ pub(crate) use self::fetch_surface::{
     request_slot_string, set_response_slot_bool,
 };
 pub(crate) use self::fetch_surface::{
-    RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_OK_SLOT,
-    RESPONSE_REDIRECTED_SLOT, RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT,
-    RESPONSE_URL_SLOT, is_branded_response_object,
+    RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_STATUS_SLOT,
+    RESPONSE_STATUS_TEXT_SLOT, RESPONSE_URL_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
     consume_webassembly_streaming_response_value, install_request_bindings,

@@ -8,6 +8,12 @@ use moli_storage_service::{
     StorageOpfsWritableLease, StorageService, StorageServiceTaskError, SyncAccessMode,
     WritableCommand, WritableMode,
 };
+use moli_webapi::file_system_options::{
+    FileSystemCreateSyncAccessHandleOptions, FileSystemCreateWritableOptions,
+    FileSystemHandlePermissionDescriptor, FileSystemReadWriteOptions,
+    FileSystemSyncAccessHandleMode, FileSystemSyncAccessHandleTruncateArgs, FileSystemWritableMode,
+    FileSystemWriteCommandType, FileSystemWriteParams,
+};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 use serde::{Deserialize, Serialize};
 use uuid::Builder as UuidBuilder;
@@ -133,146 +139,6 @@ impl FileSystemSyncAccessHandleState {
     fn handle_id(&self) -> Option<OpfsSyncAccessHandleId> {
         OpfsSyncAccessHandleId::from_raw(self.handle_id)
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, webidl::WebIdlEnum)]
-#[webidl(name = "FileSystemWritableFileStreamMode", rename_all = "lowercase")]
-enum FileSystemWritableMode {
-    Exclusive,
-    #[default]
-    Siloed,
-}
-
-impl FileSystemWritableMode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Exclusive => "exclusive",
-            Self::Siloed => "siloed",
-        }
-    }
-}
-
-impl From<FileSystemWritableMode> for WritableMode {
-    fn from(value: FileSystemWritableMode) -> Self {
-        match value {
-            FileSystemWritableMode::Exclusive => Self::Exclusive,
-            FileSystemWritableMode::Siloed => Self::Siloed,
-        }
-    }
-}
-
-impl From<WritableMode> for FileSystemWritableMode {
-    fn from(value: WritableMode) -> Self {
-        match value {
-            WritableMode::Exclusive => Self::Exclusive,
-            WritableMode::Siloed => Self::Siloed,
-        }
-    }
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "FileSystemCreateWritableOptions")]
-struct FileSystemCreateWritableOptions {
-    #[webidl(name = "keepExistingData", default = false)]
-    keep_existing_data: bool,
-    #[webidl(
-        converter = "enum",
-        default = FileSystemWritableMode::Siloed
-    )]
-    mode: FileSystemWritableMode,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, webidl::WebIdlEnum)]
-#[webidl(name = "FileSystemSyncAccessHandleMode", rename_all = "kebab-case")]
-enum FileSystemSyncAccessHandleMode {
-    InPlace,
-    ReadOnly,
-    #[default]
-    Readwrite,
-    ReadwriteUnsafe,
-}
-
-impl FileSystemSyncAccessHandleMode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::InPlace => "in-place",
-            Self::ReadOnly => "read-only",
-            Self::Readwrite => "readwrite",
-            Self::ReadwriteUnsafe => "readwrite-unsafe",
-        }
-    }
-}
-
-impl From<FileSystemSyncAccessHandleMode> for SyncAccessMode {
-    fn from(value: FileSystemSyncAccessHandleMode) -> Self {
-        match value {
-            FileSystemSyncAccessHandleMode::InPlace | FileSystemSyncAccessHandleMode::Readwrite => {
-                Self::Readwrite
-            }
-            FileSystemSyncAccessHandleMode::ReadOnly => Self::ReadOnly,
-            FileSystemSyncAccessHandleMode::ReadwriteUnsafe => Self::ReadwriteUnsafe,
-        }
-    }
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "FileSystemCreateSyncAccessHandleOptions")]
-struct FileSystemCreateSyncAccessHandleOptions {
-    #[webidl(
-        converter = "enum",
-        default = FileSystemSyncAccessHandleMode::Readwrite
-    )]
-    mode: FileSystemSyncAccessHandleMode,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, webidl::WebIdlEnum)]
-#[webidl(name = "FileSystemPermissionMode", rename_all = "lowercase")]
-enum FileSystemPermissionMode {
-    #[default]
-    Read,
-    Readwrite,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "FileSystemHandlePermissionDescriptor")]
-struct FileSystemHandlePermissionDescriptor {
-    #[webidl(converter = "enum", default = FileSystemPermissionMode::Read)]
-    mode: FileSystemPermissionMode,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "FileSystemReadWriteOptions")]
-struct FileSystemReadWriteOptions {
-    #[webidl(converter = "enforce_range_unsigned_long_long")]
-    at: Option<u64>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "FileSystemSyncAccessHandle.truncate")]
-struct FileSystemSyncAccessHandleTruncateArgs {
-    #[webidl(required, converter = "enforce_range_unsigned_long_long")]
-    size: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, webidl::WebIdlEnum)]
-#[webidl(name = "WriteCommandType", rename_all = "lowercase")]
-enum FileSystemWriteCommandType {
-    Write,
-    Seek,
-    Truncate,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "WriteParams")]
-struct FileSystemWriteParams<'s> {
-    #[webidl(name = "type", required, converter = "enum")]
-    command_type: FileSystemWriteCommandType,
-    #[webidl(nullable)]
-    size: Option<u64>,
-    #[webidl(nullable)]
-    position: Option<u64>,
-    #[webidl(converter = "raw")]
-    data: Option<v8::Local<'s, v8::Value>>,
 }
 
 impl FileSystemHandleState {
@@ -2481,7 +2347,10 @@ fn file_system_file_create_writable_callback<'s>(
             return;
         }
     };
-    let mode = WritableMode::from(options.mode);
+    let mode = match options.mode {
+        FileSystemWritableMode::Exclusive => WritableMode::Exclusive,
+        FileSystemWritableMode::Siloed => WritableMode::Siloed,
+    };
     let lease_service = service.clone();
     dispatch_opfs_task(
         scope,
@@ -2541,7 +2410,13 @@ fn file_system_file_create_sync_access_handle_callback<'s>(
             return;
         }
     };
-    let mode = SyncAccessMode::from(options.mode);
+    let mode = match options.mode {
+        FileSystemSyncAccessHandleMode::InPlace | FileSystemSyncAccessHandleMode::Readwrite => {
+            SyncAccessMode::Readwrite
+        }
+        FileSystemSyncAccessHandleMode::ReadOnly => SyncAccessMode::ReadOnly,
+        FileSystemSyncAccessHandleMode::ReadwriteUnsafe => SyncAccessMode::ReadwriteUnsafe,
+    };
     let web_mode = options.mode.as_str().to_owned();
     let lease_service = service.clone();
     dispatch_opfs_task(
@@ -3778,7 +3653,10 @@ pub(crate) fn settle_opfs_task_result<'s>(
                 scope,
                 locator.clone(),
                 lease,
-                FileSystemWritableMode::from(mode),
+                match mode {
+                    WritableMode::Exclusive => FileSystemWritableMode::Exclusive,
+                    WritableMode::Siloed => FileSystemWritableMode::Siloed,
+                },
                 handle_access.cloned(),
             ) else {
                 reject_dom_exception(

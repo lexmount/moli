@@ -1,6 +1,7 @@
 //! Scope-local access to the runtime that owns an AbortSignal and its algorithms.
 
 use crate::embedding::realm_runtime;
+use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
 
 pub struct AbortSignalOwner {
@@ -87,4 +88,17 @@ impl<'s> ResolvedAbortSignal<'s> {
     ) -> bool {
         (self.owner.unregister_algorithm)(scope, self.signal, algorithm)
     }
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct AbortListenerOptionsDeclaration {
+    #[webapi(init = true)]
+    once: (),
+}
+
+pub fn abort_listener_options<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+    AbortListenerOptionsDeclaration::default()
+        .bind(scope)
+        .expect("abort listener options should bind")
 }

@@ -597,3 +597,20 @@ const CRYPTO_KEY_USAGES_SLOT: &str = "__moliCryptoKeyUsages";
 const CRYPTO_KEY_VISIBLE_ALGORITHM_SLOT: &str = "__moliCryptoKeyVisibleAlgorithm";
 const CRYPTO_KEY_VISIBLE_USAGES_SLOT: &str = "__moliCryptoKeyVisibleUsages";
 const CRYPTO_KEY_BYTES_SLOT: &str = "__moliCryptoKeyBytes";
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct CryptoKeyPairDeclaration<'scope> {
+    private_key: v8::Local<'scope, v8::Object>,
+    public_key: v8::Local<'scope, v8::Object>,
+}
+
+pub fn build_crypto_key_pair<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    private_key: v8::Local<'s, v8::Object>,
+    public_key: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    CryptoKeyPairDeclaration::new(private_key, public_key)
+        .bind(scope)
+        .expect("CryptoKeyPair declaration should bind")
+}

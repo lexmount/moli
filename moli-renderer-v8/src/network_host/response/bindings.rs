@@ -1,27 +1,13 @@
 mod init;
 
-pub(in crate::network_host) use self::init::ParsedResponseInit;
-use self::init::parse_response_init;
 use self::init::{install_response_body_stream, install_response_headers, response_body_init};
-use super::super::fetch_surface::{RESPONSE_BODY_USED_SLOT, mark_response_object};
+use super::super::fetch_surface::mark_response_object;
 use super::*;
 use crate::util::throw_range_error;
-use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Response)]
-struct ResponseInstanceDeclaration {
-    #[webapi(slot = RESPONSE_STATUS_SLOT)]
-    status: f64,
-    #[webapi(slot = RESPONSE_STATUS_TEXT_SLOT)]
-    status_text: String,
-    #[webapi(slot = RESPONSE_OK_SLOT)]
-    ok: bool,
-    #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
-    body_used: (),
-}
+use moli_webapi::fetch_response::{
+    ResponseInstanceDeclaration, parse_response_init, set_response_metadata,
+};
 
 pub(crate) fn response_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -83,7 +69,7 @@ pub(crate) fn response_constructor_callback<'s>(
         .initialize(scope, obj)
         .expect("Response instance declaration should initialize");
 
-    super::metadata::set_response_metadata(scope, obj, &Default::default());
+    set_response_metadata(scope, obj, &Default::default());
 
     let default_content_type = body.as_ref().and_then(|body| body.content_type.as_deref());
     install_response_headers(scope, obj, &init.headers, default_content_type);

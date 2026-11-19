@@ -1,26 +1,6 @@
 use super::*;
 use crate::web_api_interfaces;
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "WorkerOptions")]
-pub(in crate::context_bootstrap) struct WorkerOptionsMembers {
-    #[webidl(name = "type", default = WorkerScriptKind::Classic, converter = "enum")]
-    pub(in crate::context_bootstrap) worker_type: WorkerScriptKind,
-    #[webidl(default = "")]
-    pub(in crate::context_bootstrap) name: String,
-    #[webidl(name = "credentials", default = WorkerCredentials(moli_fetch::RequestCredentialsMode::SameOrigin), converter = "enum")]
-    pub(in crate::context_bootstrap) credentials_mode: WorkerCredentials,
-}
-
-#[derive(webidl::WebIdlEnum)]
-#[webidl(name = "RequestCredentials", parse_with = parse_credentials)]
-pub(in crate::context_bootstrap) struct WorkerCredentials(
-    pub(in crate::context_bootstrap) moli_fetch::RequestCredentialsMode,
-);
-
-fn parse_credentials(value: &str) -> Option<WorkerCredentials> {
-    value.parse().ok().map(WorkerCredentials)
-}
+use moli_webapi::worker_options::WorkerOptionsMembers;
 
 use crate::context_bootstrap::navigation_serialize::{
     current_document_content_security_policies, current_document_referrer_policy,

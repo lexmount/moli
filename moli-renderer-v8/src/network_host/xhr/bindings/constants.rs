@@ -5,22 +5,8 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use crate::webidl;
+use moli_webapi::interface_constants::XmlHttpRequestConstantsDeclaration;
 use moli_webapi_declare::WebApiFunctionTemplate;
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
-struct XmlHttpRequestConstantsDeclaration {
-    #[webapi(constant = "UNSENT", value = 0u32)]
-    _unsent: (),
-    #[webapi(constant = "OPENED", value = 1u32)]
-    _opened: (),
-    #[webapi(constant = "HEADERS_RECEIVED", value = 2u32)]
-    _headers_received: (),
-    #[webapi(constant = "LOADING", value = 3u32)]
-    _loading: (),
-    #[webapi(constant = "DONE", value = 4u32)]
-    _done: (),
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]

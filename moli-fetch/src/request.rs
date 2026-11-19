@@ -5,6 +5,7 @@ use moli_cookie_jar::{
     BrowserCookieFacadeContext, NetworkCookieRequestContext, NetworkStorageAccessStatus,
     advance_cookie_request_context,
 };
+pub use moli_fetch_types::{RequestCredentialsMode, RequestMode, RequestRedirectMode};
 use moli_url::{WebOrigin, same_origin};
 use url::Url;
 
@@ -457,53 +458,6 @@ impl RequestResourceType {
             | Self::Dictionary => ResourceLoadPriority::VeryLow,
         }
     }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    strum::AsRefStr,
-    strum::EnumString,
-    strum::IntoStaticStr,
-)]
-#[strum(serialize_all = "kebab-case")]
-pub enum RequestCredentialsMode {
-    Include,
-    SameOrigin,
-    Omit,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    strum::AsRefStr,
-    strum::EnumString,
-    strum::IntoStaticStr,
-)]
-#[strum(serialize_all = "kebab-case")]
-pub enum RequestMode {
-    Navigate,
-    SameOrigin,
-    NoCors,
-    Cors,
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, strum::AsRefStr, strum::EnumString, strum::IntoStaticStr,
-)]
-#[strum(serialize_all = "kebab-case")]
-pub enum RequestRedirectMode {
-    Follow,
-    Error,
-    Manual,
 }
 
 /// The valid combinations of Fetch redirect policy and redirect ownership.

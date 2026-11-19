@@ -63,11 +63,9 @@ pub(super) use entries::{
 pub(in crate::context_bootstrap) use entries::{
     performance_entry_slot_string, set_performance_entry_slot_number,
 };
+pub(crate) use install::finalize_window_performance_realm_bindings;
 pub(crate) use install::increment_performance_event_count;
 pub(crate) use install::project_document_lifecycle_timing;
-pub(crate) use install::{
-    finalize_performance_observer_realm_bindings, finalize_window_performance_realm_bindings,
-};
 pub(super) use install::{
     install_performance_template_bindings, install_worker_performance_runtime_state,
 };
@@ -75,6 +73,7 @@ pub(super) use marks_measures::{
     performance_clear_marks_callback, performance_clear_measures_callback,
     performance_mark_callback, performance_mark_constructor_callback, performance_measure_callback,
 };
+pub(crate) use moli_webapi::performance::observer::finalize_performance_observer_realm_bindings;
 pub(super) use resource_buffer::resource_timing_dropped_entries_count;
 pub(crate) use resource_buffer::run_resource_timing_buffer_full_task;
 pub(crate) use window_state::{bind_document_performance, bind_window_performance_seed};

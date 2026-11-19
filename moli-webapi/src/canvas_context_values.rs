@@ -1,5 +1,7 @@
 //! Initial 2D context values and OffscreenCanvas construction. Drawing and
 //! HTMLCanvasElement write-through remain embedding operations.
+pub mod transform;
+
 use crate::image_data::new_uint8_clamped_array_from_bytes;
 use crate::interfaces as web_api_interfaces;
 use moli_canvas::{DEFAULT_FILL_STYLE, DEFAULT_FONT};

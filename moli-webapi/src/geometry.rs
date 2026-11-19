@@ -2851,7 +2851,7 @@ const DOM_MATRIX_ATTRIBUTES: &[DomMatrixAttribute] = &[
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMMatrix2DInit")]
-struct DomMatrix2DInit {
+pub(crate) struct DomMatrix2DInit {
     a: Option<f64>,
     b: Option<f64>,
     c: Option<f64>,
@@ -2864,6 +2864,19 @@ struct DomMatrix2DInit {
     m22: Option<f64>,
     m41: Option<f64>,
     m42: Option<f64>,
+}
+
+impl DomMatrix2DInit {
+    pub(crate) fn affine_aliases(&self) -> [(Option<f64>, Option<f64>, f64); 6] {
+        [
+            (self.a, self.m11, 1.0),
+            (self.b, self.m12, 0.0),
+            (self.c, self.m21, 0.0),
+            (self.d, self.m22, 1.0),
+            (self.e, self.m41, 0.0),
+            (self.f, self.m42, 0.0),
+        ]
+    }
 }
 
 pub fn dom_matrix_2d_init_arg<'s>(
@@ -2918,6 +2931,6 @@ fn validated_dom_matrix_2d_alias(
     Some(matrix.or(alias).unwrap_or(default))
 }
 
-fn same_dom_matrix_2d_number(lhs: f64, rhs: f64) -> bool {
+pub(crate) fn same_dom_matrix_2d_number(lhs: f64, rhs: f64) -> bool {
     lhs == rhs || (lhs.is_nan() && rhs.is_nan())
 }

@@ -3,7 +3,6 @@ use super::super::fetch_surface::{
     RESPONSE_INTERNAL_STATUS_TEXT_SLOT, body_already_used, mark_response_object,
     response_slot_number,
 };
-use super::metadata::{response_metadata, set_response_metadata};
 use super::*;
 use crate::network_host::headers::headers_list;
 use crate::types::NetworkBodySourceId;
@@ -11,7 +10,10 @@ use crate::web_api_interfaces;
 use moli_fetch::RequestMode;
 use moli_fetch_types::{FetchResponseMetadata, FetchResponseType as FetchResponseFilter};
 use moli_url::WebOrigin;
-use moli_webapi_declare::WebApiObject;
+use moli_webapi::fetch_response::{
+    FetchResponseBodyDeclaration, FetchResponseHeadDeclaration, response_metadata,
+    set_response_metadata,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct FetchResponseRequest<'a> {
@@ -21,26 +23,6 @@ pub(crate) struct FetchResponseRequest<'a> {
 
 fn has_null_body(method: &str, status: u16) -> bool {
     matches!(method, "HEAD" | "CONNECT") || matches!(status, 101 | 103 | 204 | 205 | 304)
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, prototype = "Response")]
-struct FetchResponseHeadDeclaration {
-    #[webapi(slot = RESPONSE_STATUS_SLOT)]
-    status: f64,
-    #[webapi(slot = RESPONSE_OK_SLOT)]
-    ok: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct FetchResponseBodyDeclaration<'scope> {
-    #[webapi(slot = RESPONSE_STATUS_TEXT_SLOT)]
-    status_text: String,
-    #[webapi(slot = RESPONSE_BODY_SLOT)]
-    body: v8::Local<'scope, v8::Value>,
-    #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
-    body_used: (),
 }
 
 /// Classifies a network response using the whole redirect chain. A no-cors

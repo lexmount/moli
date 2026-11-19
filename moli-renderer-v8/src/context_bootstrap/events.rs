@@ -20,7 +20,6 @@ use moli_webapi::events::value;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
 pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
-pub(in crate::context_bootstrap) use ui::initialize_legacy_ui_event;
 mod wrappers;
 
 pub(in crate::context_bootstrap) use moli_webapi::events::{audio, speech};
@@ -30,7 +29,6 @@ pub(in crate::context_bootstrap) use device::{
     install_device_event_template_bindings,
 };
 
-pub(in crate::context_bootstrap) use modifiers::initialize_legacy_event_modifiers;
 pub(in crate::context_bootstrap) use value::{
     ValueEventKind, build_value_event_template, install_value_event_template_bindings,
 };
@@ -117,8 +115,7 @@ pub(crate) use base::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, define_event_property, event_backing,
     event_initialized, event_internal_bool_flag, event_is_dispatching, initialize_event_object,
-    mark_event_trusted, reinitialize_event_object, set_event_composed_path,
-    set_event_internal_flag, set_event_trusted,
+    mark_event_trusted, set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
 
 pub(crate) fn event_is_error_event<'s>(

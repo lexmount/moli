@@ -79,13 +79,6 @@ struct WebSocketStreamAbortListenerDataDeclaration<'scope> {
     stream: v8::Local<'scope, v8::Object>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebSocketStreamAbortListenerOptionsDeclaration {
-    #[webapi(data_property, enumerable)]
-    once: bool,
-}
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "WebSocket")]
 struct WebSocketConstructorArgs<'s> {
@@ -468,9 +461,7 @@ fn install_websocket_stream_abort_listener<'s>(
     else {
         return;
     };
-    let options = WebSocketStreamAbortListenerOptionsDeclaration::new(true)
-        .bind(scope)
-        .expect("WebSocketStream abort listener options declaration should bind");
+    let options = moli_webapi::abort_signal::abort_listener_options(scope);
     let _ = add_event_listener.call(
         scope,
         signal.into(),

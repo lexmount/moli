@@ -3,7 +3,7 @@ use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct DetachedNamespaceAttributeRecordDeclaration<'scope> {
+pub(in crate::native_bridge::document) struct DetachedNamespaceAttributeRecordDeclaration<'scope> {
     name: v8::Local<'scope, v8::String>,
     value: v8::Local<'scope, v8::String>,
     #[webapi(data_property = "namespaceURI")]

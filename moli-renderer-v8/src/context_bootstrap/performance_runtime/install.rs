@@ -58,21 +58,6 @@ struct WorkerPerformanceObjectDeclaration {
     entries: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct PerformanceJsonSnapshotDeclaration<'scope> {
-    time_origin: Option<v8::Local<'scope, v8::Value>>,
-    timing: Option<v8::Local<'scope, v8::Value>>,
-    navigation: Option<v8::Local<'scope, v8::Value>>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(fragment, prototype = "PerformanceObserver")]
-struct PerformanceObserverConstructorDeclaration {
-    #[webapi(data_property = "supportedEntryTypes")]
-    supported_entry_types: &'static [&'static str],
-}
-
 #[derive(Default, WebApiObject)]
 #[webapi(fragment)]
 struct PerformanceObserverRuntimeStateDeclaration {
@@ -316,16 +301,6 @@ pub(super) fn apply_pending_window_performance_state<'s>(
 
     let pending_counts = super::window_state::take_pending_event_counts(scope, window);
     merge_pending_performance_event_counts(scope, performance, &pending_counts);
-}
-
-pub(crate) fn finalize_performance_observer_realm_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    constructor: v8::Local<'s, v8::Object>,
-    supported_entry_types: &'static [&'static str],
-) -> anyhow::Result<()> {
-    PerformanceObserverConstructorDeclaration::new(supported_entry_types)
-        .initialize(scope, constructor)
-        .map_err(|error| anyhow::anyhow!("failed to finalize PerformanceObserver: {error}"))
 }
 
 pub(crate) fn finalize_window_performance_realm_bindings<'s>(
@@ -842,26 +817,4 @@ fn ensure_pending_performance_event_counts<'s>(
         values.into(),
     );
     values
-}
-
-pub(in crate::context_bootstrap) fn performance_to_json_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let timing = object_property_as_object(scope, args.this(), "timing").map(|timing| {
-        object_json_snapshot(scope, timing, PERFORMANCE_TIMING_ATTRIBUTE_NAMES).into()
-    });
-    let navigation =
-        object_property_as_object(scope, args.this(), "navigation").map(|navigation| {
-            object_json_snapshot(scope, navigation, PERFORMANCE_NAVIGATION_JSON_KEYS).into()
-        });
-    let output = PerformanceJsonSnapshotDeclaration {
-        time_origin: args.this().get(scope, v8str(scope, "timeOrigin").into()),
-        timing,
-        navigation,
-    }
-    .bind(scope)
-    .expect("Performance toJSON snapshot declaration should bind");
-    rv.set(output.into());
 }

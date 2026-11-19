@@ -11,6 +11,8 @@ pub struct Coordinates {
     pub speed: Option<f64>,
 }
 
+use moli_webidl as webidl;
+
 use crate::interfaces as web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -316,4 +318,42 @@ pub fn build_error<'s>(
     GeolocationPositionErrorObjectDeclaration::new(code, message.to_owned())
         .bind(scope)
         .ok()
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "PositionOptions")]
+pub struct PositionOptions {
+    #[webidl(name = "enableHighAccuracy", default = false)]
+    pub enable_high_accuracy: bool,
+
+    #[webidl(with = clamped_unsigned_long_position_option)]
+    pub timeout: u32,
+
+    #[webidl(name = "maximumAge", with = clamped_unsigned_long_position_option)]
+    pub maximum_age: u32,
+}
+
+fn clamped_unsigned_long_position_option<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> std::result::Result<u32, webidl::WebIdlError> {
+    let default = if name == "timeout" { u32::MAX } else { 0 };
+    let value = webidl::optional_member::<webidl::UnrestrictedDouble>(
+        scope,
+        object,
+        name,
+        webidl::Context::member("PositionOptions", name),
+    )?;
+    Ok(value.map_or(default, |value| clamp_unsigned_long(value.0)))
+}
+
+fn clamp_unsigned_long(value: f64) -> u32 {
+    if value.is_nan() || value <= 0.0 {
+        return 0;
+    }
+    if value >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    value.round_ties_even() as u32
 }

@@ -1,5 +1,7 @@
-use super::*;
-use crate::web_api_interfaces;
+use crate::constructors::illegal_constructor_callback;
+use crate::interfaces as web_api_interfaces;
+use crate::webgl::{WEBGL_CONSTANTS, WEBGL2_CONSTANTS};
+use moli_v8_util::v8str;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
@@ -126,7 +128,7 @@ struct MediaElementPrototypeConstantsDeclaration {
     _have_enough_data: (),
 }
 
-pub(in crate::context_bootstrap) fn install_constructor_constant_template_bindings<'s>(
+pub fn install_constructor_constant_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
@@ -148,7 +150,7 @@ pub(in crate::context_bootstrap) fn install_constructor_constant_template_bindin
             );
         }
         "WebGLRenderingContext" | "WebGL2RenderingContext" => {
-            for (name, value) in super::super::canvas::WEBGL_CONSTANTS {
+            for (name, value) in WEBGL_CONSTANTS {
                 let value = v8::Number::new(scope, *value as f64);
                 template.set_with_attr(
                     v8str(scope, name).into(),
@@ -162,7 +164,7 @@ pub(in crate::context_bootstrap) fn install_constructor_constant_template_bindin
                 );
             }
             if interface_name == "WebGL2RenderingContext" {
-                for (name, value) in super::super::canvas::WEBGL2_CONSTANTS {
+                for (name, value) in WEBGL2_CONSTANTS {
                     let value = v8::Number::new(scope, *value as f64);
                     template.set_with_attr(
                         v8str(scope, name).into(),
@@ -181,7 +183,7 @@ pub(in crate::context_bootstrap) fn install_constructor_constant_template_bindin
     }
 }
 
-pub(in crate::context_bootstrap) fn install_node_filter_constants<'s>(
+pub fn install_node_filter_constants<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) {
@@ -200,3 +202,38 @@ pub(in crate::context_bootstrap) fn install_node_filter_constants<'s>(
         .initialize(scope, global)
         .expect("NodeFilter global declaration should initialize");
 }
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::FileReader, enumerable)]
+pub struct FileReaderConstantsDeclaration {
+    #[webapi(constant = "EMPTY", value = 0u32)]
+    empty: (),
+    #[webapi(constant = "LOADING", value = 1u32)]
+    loading: (),
+    #[webapi(constant = "DONE", value = 2u32)]
+    done: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
+pub struct XmlHttpRequestConstantsDeclaration {
+    #[webapi(constant = "UNSENT", value = 0u32)]
+    _unsent: (),
+    #[webapi(constant = "OPENED", value = 1u32)]
+    _opened: (),
+    #[webapi(constant = "HEADERS_RECEIVED", value = 2u32)]
+    _headers_received: (),
+    #[webapi(constant = "LOADING", value = 3u32)]
+    _loading: (),
+    #[webapi(constant = "DONE", value = 4u32)]
+    _done: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::Notification)]
+pub struct NotificationConstructorConstantsDeclaration {
+    #[webapi(constant = "maxActions", value = NOTIFICATION_MAX_ACTIONS)]
+    max_actions: (),
+}
+
+pub const NOTIFICATION_MAX_ACTIONS: usize = 2;

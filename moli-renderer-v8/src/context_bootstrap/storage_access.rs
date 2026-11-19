@@ -1,6 +1,7 @@
 use crate::web_api_interfaces;
 use moli_storage_service::StorageBucketLocator;
 use moli_v8_util::reject_promise_with_type_error as reject_type_error;
+use moli_webapi::storage_values::StorageAccessTypes;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::opfs::resolve_opfs_root_with_handle_access;
@@ -55,59 +56,6 @@ impl StorageAccessRequestPolicy {
 struct StorageAccessRequestContext {
     ambient_storage_key: String,
     policy: StorageAccessRequestPolicy,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "StorageAccessTypes")]
-struct StorageAccessTypes {
-    #[webidl(default = false)]
-    all: bool,
-    #[webidl(default = false)]
-    cookies: bool,
-    #[webidl(name = "sessionStorage", default = false)]
-    session_storage: bool,
-    #[webidl(name = "localStorage", default = false)]
-    local_storage: bool,
-    #[webidl(name = "indexedDB", default = false)]
-    indexed_db: bool,
-    #[webidl(default = false)]
-    locks: bool,
-    #[webidl(default = false)]
-    caches: bool,
-    #[webidl(name = "getDirectory", default = false)]
-    get_directory: bool,
-    #[webidl(default = false)]
-    estimate: bool,
-    #[webidl(name = "createObjectURL", default = false)]
-    create_object_url: bool,
-    #[webidl(name = "revokeObjectURL", default = false)]
-    revoke_object_url: bool,
-    #[webidl(name = "BroadcastChannel", default = false)]
-    broadcast_channel: bool,
-    #[webidl(name = "SharedWorker", default = false)]
-    shared_worker: bool,
-}
-
-impl StorageAccessTypes {
-    fn requests_any_access(&self) -> bool {
-        self.all
-            || self.cookies
-            || self.session_storage
-            || self.local_storage
-            || self.indexed_db
-            || self.locks
-            || self.caches
-            || self.get_directory
-            || self.estimate
-            || self.create_object_url
-            || self.revoke_object_url
-            || self.broadcast_channel
-            || self.shared_worker
-    }
-
-    fn requests_get_directory(&self) -> bool {
-        self.all || self.get_directory
-    }
 }
 
 #[derive(WebApiObject)]

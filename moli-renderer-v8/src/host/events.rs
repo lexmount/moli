@@ -7,27 +7,10 @@ use crate::{
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
 };
-use moli_webapi_declare::WebApiObject;
+use moli_webapi::events::dispatch_init::{
+    DispatchedEventInitDeclaration, ReportedErrorEventInitDeclaration,
+};
 use std::collections::HashSet;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct HostErrorEventInitDeclaration<'scope> {
-    cancelable: bool,
-    bubbles: bool,
-    message: v8::Local<'scope, v8::String>,
-    filename: v8::Local<'scope, v8::String>,
-    lineno: f64,
-    colno: f64,
-    error: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct HostEventInitDeclaration {
-    bubbles: bool,
-    cancelable: bool,
-}
 
 struct EventListenerEntry {
     id: u64,
@@ -689,11 +672,11 @@ fn event_listener_error_event_from_report<'s>(
     let message = v8_string(scope, &report.summary).unwrap_or_else(|| v8str(scope, ""));
     let filename = v8_string(scope, report.source.as_deref().unwrap_or(""))
         .unwrap_or_else(|| v8str(scope, ""));
-    let init = HostErrorEventInitDeclaration::new(
+    let init = ReportedErrorEventInitDeclaration::new(
         true,
         false,
-        message,
-        filename,
+        message.into(),
+        filename.into(),
         report.line.unwrap_or(0) as f64,
         report.column.unwrap_or(0) as f64,
         error_value,
@@ -2091,7 +2074,7 @@ fn construct_event_instance<'s>(
     let constructor =
         crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Event")
             .map_err(|error| format!("failed to resolve intrinsic Event constructor: {error}"))?;
-    let init = HostEventInitDeclaration::new(bubbles, cancelable)
+    let init = DispatchedEventInitDeclaration::new(bubbles, cancelable)
         .bind(scope)
         .map_err(|error| format!("failed to build EventInit dictionary: {error}"))?;
     let event_type = v8_string(scope, event_type)
