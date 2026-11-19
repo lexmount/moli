@@ -91,6 +91,8 @@ mod objects;
 mod offscreen;
 mod path;
 mod path2d;
+#[cfg(test)]
+pub(crate) use self::state::try_append_canvas_path_rect_for_test;
 mod state;
 mod transform;
 use moli_webapi::webgl;

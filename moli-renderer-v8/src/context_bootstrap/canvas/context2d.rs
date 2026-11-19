@@ -1144,23 +1144,28 @@ pub(crate) fn canvas_context_fill_callback<'s>(
         return;
     };
     let current_path = canvas_path_state(scope, args.this());
-    if current_path.borrow().inverse_transform().is_none() {
-        return;
-    }
+    let transform = {
+        let current = current_path.borrow();
+        if current.inverse_transform().is_none() {
+            return;
+        }
+        current.transform()
+    };
     let (path, transform) = match path {
-        Some(path) => (
-            canvas_path_state(scope, path),
-            current_path.borrow().transform(),
-        ),
+        Some(path) => (canvas_path_state(scope, path), transform),
         None => (current_path, PaintTransform2D::IDENTITY),
     };
-    let path = path.borrow();
-    if path.is_empty() {
-        return;
-    }
+    let path = {
+        let path = path.borrow();
+        if path.is_empty() {
+            return;
+        }
+        // Canvas dimension reads during rasterization can run script.
+        path.paint_path()
+    };
     let fragment = PaintFragment::Fill {
         fill_rule: fill_rule.into(),
-        shape: PaintShape::Path(path.paint_path()),
+        shape: PaintShape::Path(path),
         brush: PaintBrush::Solid(context_fill_color(scope, args.this())),
         transform,
     };
@@ -1187,24 +1192,27 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
         return;
     };
     let current_path = canvas_path_state(scope, args.this());
-    let current_path = current_path.borrow();
-    let path = if let Some(path) = path {
-        let path = canvas_path_state(scope, path);
-        let path = path.borrow();
-        if path.is_empty() || current_path.inverse_transform().is_none() {
-            return;
-        }
-        path.paint_path()
-    } else {
-        if current_path.is_empty() {
-            return;
-        }
-        let Some(path) = current_path.stroke_path() else {
-            return;
+    let supplied_path = path.map(|path| canvas_path_state(scope, path));
+    let (path, transform) = {
+        let current = current_path.borrow();
+        let path = if let Some(path) = supplied_path {
+            let path = path.borrow();
+            if path.is_empty() || current.inverse_transform().is_none() {
+                return;
+            }
+            path.paint_path()
+        } else {
+            if current.is_empty() {
+                return;
+            }
+            let Some(path) = current.stroke_path() else {
+                return;
+            };
+            path
         };
-        path
+        (path, current.transform())
     };
-    let stroke = context_stroke(scope, args.this(), path, current_path.transform());
+    let stroke = context_stroke(scope, args.this(), path, transform);
     rasterize_canvas_fragment(scope, canvas, PaintFragment::Stroke(stroke));
 }
 
@@ -1618,13 +1626,15 @@ fn rasterize_canvas_fragment<'s>(
             _ => unreachable!("Canvas path drawing only rasterizes fills and strokes"),
         };
         let surface = kurbo::Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
-        let bounds = kurbo::Affine::new(transform.coefficients).transform_rect_bbox(bounds);
-        let region = if bounds.is_finite() && transform.is_finite() {
-            // Retain the antialiased fringe and preserve the canvas pixel grid.
-            surface.intersect(bounds.inflate(1.0, 1.0).expand())
-        } else {
-            surface
-        };
+        let transformed_bounds =
+            kurbo::Affine::new(transform.coefficients).transform_rect_bbox(bounds);
+        let region =
+            if bounds.is_finite() && transformed_bounds.is_finite() && transform.is_finite() {
+                // Retain the antialiased fringe and preserve the canvas pixel grid.
+                surface.intersect(transformed_bounds.inflate(1.0, 1.0).expand())
+            } else {
+                surface
+            };
         let region_width = region.width() as u32;
         let region_height = region.height() as u32;
         if region_width == 0 || region_height == 0 {

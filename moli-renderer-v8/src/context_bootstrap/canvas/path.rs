@@ -368,6 +368,9 @@ impl Canvas2dPathState {
 }
 
 fn path_bounds(elements: &[PaintPathElement]) -> PaintRect {
+    if elements.is_empty() {
+        return LayoutRect::ZERO;
+    }
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
@@ -389,15 +392,23 @@ fn path_bounds(elements: &[PaintPathElement]) -> PaintRect {
             PaintPathElement::Close => {}
         }
     }
-    if !min_x.is_finite() {
-        return LayoutRect::ZERO;
-    }
     LayoutRect::new(
         min_x as f32,
         min_y as f32,
-        (max_x - min_x) as f32,
-        (max_y - min_y) as f32,
+        enclosing_extent(min_x, max_x),
+        enclosing_extent(min_y, max_y),
     )
+}
+
+fn enclosing_extent(start: f64, end: f64) -> f32 {
+    let extent = (end - start) as f32;
+    // Reconstruct the far edge the same way as the raster crop. A rounded
+    // extent can lose pixels near the end of a path spanning large coordinates.
+    if start + f64::from(extent) < end {
+        extent.next_up()
+    } else {
+        extent
+    }
 }
 
 fn point(x: f64, y: f64) -> LayoutPoint {
