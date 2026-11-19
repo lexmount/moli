@@ -12,6 +12,7 @@ use moli_webapi::events::dispatch_init::{
 };
 use std::collections::HashSet;
 
+#[derive(Clone)]
 struct EventListenerEntry {
     id: u64,
     callback_id: crate::native_bridge::EventCallbackId,
@@ -26,10 +27,24 @@ struct EventListenerEntry {
     removed: bool,
 }
 
+enum EventListenerInvocation {
+    Listener(EventListenerEntry),
+    Handler(u64),
+}
+
+impl EventListenerInvocation {
+    fn registration_id(&self) -> u64 {
+        match self {
+            Self::Listener(entry) => entry.id,
+            Self::Handler(registration_id) => *registration_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ListenerFilter {
     Capturing,
-    Bubbling,
+    Bubbling(Option<u64>),
     All,
 }
 
@@ -273,7 +288,7 @@ fn invoke_event_handler_property<'s>(
     host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
     invocation_target_in_shadow_tree: bool,
-    target_object: v8::Local<'s, v8::Object>,
+    fallback_object: Option<v8::Local<'s, v8::Object>>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
@@ -288,6 +303,9 @@ fn invoke_event_handler_property<'s>(
             return;
         }
         None => {
+            let Some(target_object) = fallback_object else {
+                return;
+            };
             if !crate::context_bootstrap::event_handler_property_is_exposed(
                 scope,
                 target_object,
@@ -483,7 +501,7 @@ fn invoke_event_handler_property<'s>(
     }
 }
 
-fn invoke_event_target_handler_property<'s>(
+fn invoke_fallback_event_handler<'s>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
@@ -492,11 +510,14 @@ fn invoke_event_target_handler_property<'s>(
     target_object: v8::Local<'s, v8::Object>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
-) {
-    if matches!(target, EventTargetHandle::ChildWindow(_)) {
-        // Child Window event-handler properties share the native listener
-        // registry and are invoked in registration order by the listener phase.
-        return;
+) -> Option<u64> {
+    // Child Window and registered Node handlers run in their listener phase.
+    if matches!(target, EventTargetHandle::ChildWindow(_))
+        || registry
+            .node_handler_registration_id(target, event_type)
+            .is_some()
+    {
+        return None;
     }
     invoke_event_handler_property(
         registry,
@@ -504,10 +525,12 @@ fn invoke_event_target_handler_property<'s>(
         host_ptr,
         target,
         invocation_target_in_shadow_tree,
-        target_object,
+        Some(target_object),
         event_type,
         event,
     );
+    // A lazily compiled content attribute can register while running.
+    registry.node_handler_registration_id(target, event_type)
 }
 
 fn call_event_target_listeners_filtered<'s>(
@@ -518,7 +541,7 @@ fn call_event_target_listeners_filtered<'s>(
     invocation_target_in_shadow_tree: bool,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
-    capture_only: bool,
+    filter: ListenerFilter,
     at_target: bool,
 ) -> std::result::Result<DispatchStatus, String> {
     if let EventTargetHandle::ChildWindow(target) = target {
@@ -528,7 +551,7 @@ fn call_event_target_listeners_filtered<'s>(
                 target,
                 event_type,
                 event,
-                capture_only,
+                matches!(filter, ListenerFilter::Capturing),
                 at_target,
             ),
         );
@@ -540,11 +563,7 @@ fn call_event_target_listeners_filtered<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        if capture_only {
-            ListenerFilter::Capturing
-        } else {
-            ListenerFilter::Bubbling
-        },
+        filter,
         at_target,
     )
 }
@@ -836,6 +855,34 @@ impl HostEventTargetRegistry {
         };
         self.remove_event_type_registration_id_if_unused(target, event_type);
         callback_id
+    }
+
+    fn node_handler_registration_id(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+    ) -> Option<u64> {
+        if !matches!(target, EventTargetHandle::Node(_)) {
+            return None;
+        }
+        match self.handler_properties.get(&target)?.get(event_type)? {
+            EventHandlerPropertyEntry::Callback {
+                registration_id, ..
+            } => Some(*registration_id),
+            EventHandlerPropertyEntry::Null => None,
+        }
+    }
+
+    fn bubble_listener_filter(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+        invoked_fallback: Option<u64>,
+    ) -> ListenerFilter {
+        ListenerFilter::Bubbling(
+            self.node_handler_registration_id(target, event_type)
+                .filter(|&registration_id| Some(registration_id) != invoked_fallback),
+        )
     }
 
     fn event_handler_property_value(
@@ -1165,48 +1212,25 @@ impl HostEventTargetRegistry {
         filter: ListenerFilter,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
-        let snapshot: Vec<(
-            u64,
-            crate::native_bridge::EventCallbackId,
-            String,
-            i32,
-            Option<String>,
-            Option<u32>,
-            Option<u32>,
-            bool,
-            bool,
-            bool,
-        )> = {
-            let Some(target_map) = self.listeners.get(&target) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            let Some(entries) = target_map.get(event_type) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            entries
-                .iter()
-                .filter(|entry| !entry.removed)
-                .filter(|entry| match filter {
-                    ListenerFilter::Capturing => entry.capture,
-                    ListenerFilter::Bubbling => !entry.capture,
-                    ListenerFilter::All => true,
-                })
-                .map(|entry| {
-                    (
-                        entry.id,
-                        entry.callback_id,
-                        entry.function_name.clone(),
-                        entry.script_id,
-                        entry.script_url.clone(),
-                        entry.line_number,
-                        entry.column_number,
-                        entry.capture,
-                        entry.once,
-                        entry.passive,
-                    )
-                })
-                .collect()
-        };
+        let mut snapshot: Vec<_> = self
+            .listeners
+            .get(&target)
+            .and_then(|listeners| listeners.get(event_type))
+            .into_iter()
+            .flatten()
+            .filter(|entry| !entry.removed)
+            .filter(|entry| match filter {
+                ListenerFilter::Capturing => entry.capture,
+                ListenerFilter::Bubbling(_) => !entry.capture,
+                ListenerFilter::All => true,
+            })
+            .cloned()
+            .map(EventListenerInvocation::Listener)
+            .collect();
+        if let ListenerFilter::Bubbling(Some(registration_id)) = filter {
+            let index = snapshot.partition_point(|entry| entry.registration_id() < registration_id);
+            snapshot.insert(index, EventListenerInvocation::Handler(registration_id));
+        }
 
         if snapshot.is_empty() {
             return Ok(DispatchStatus::Continue);
@@ -1224,22 +1248,45 @@ impl HostEventTargetRegistry {
                 listener_count = snapshot.len(),
             );
         }
-        for (
-            listener_index,
-            (
-                listener_id,
+        for (listener_index, invocation) in snapshot.into_iter().enumerate() {
+            let entry = match invocation {
+                EventListenerInvocation::Listener(entry) => entry,
+                EventListenerInvocation::Handler(registration_id) => {
+                    // Replacing the handler preserves its slot. Removing and
+                    // re-adding it creates a registration outside this snapshot.
+                    if self.node_handler_registration_id(target, event_type)
+                        == Some(registration_id)
+                    {
+                        invoke_event_handler_property(
+                            self,
+                            scope,
+                            host_ptr,
+                            target,
+                            invocation_target_in_shadow_tree,
+                            None,
+                            event_type,
+                            event,
+                        );
+                        if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
+                            return Ok(DispatchStatus::StopImmediate);
+                        }
+                    }
+                    continue;
+                }
+            };
+            let EventListenerEntry {
+                id: listener_id,
                 callback_id,
                 function_name,
                 script_id,
                 script_url,
                 line_number,
                 column_number,
-                capture_flag,
-                is_once,
-                is_passive,
-            ),
-        ) in snapshot.into_iter().enumerate()
-        {
+                capture: capture_flag,
+                once: is_once,
+                passive: is_passive,
+                ..
+            } = entry;
             let still_registered = self
                 .listeners
                 .get(&target)
@@ -1515,7 +1562,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                true,
+                ListenerFilter::Capturing,
                 false,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1558,7 +1605,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
         )?;
         set_event_phase(scope, event, 2);
 
-        invoke_event_target_handler_property(
+        let invoked_fallback = invoke_fallback_event_handler(
             registry,
             scope,
             host_ptr,
@@ -1600,7 +1647,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(&dispatch_target),
                 &event_type,
                 event,
-                true,
+                ListenerFilter::Capturing,
                 true,
             )?;
             if status == DispatchStatus::StopPropagation {
@@ -1609,6 +1656,8 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
             if status == DispatchStatus::StopImmediate {
                 stopped = true;
             } else if !stopped {
+                let filter =
+                    registry.bubble_listener_filter(dispatch_target, &event_type, invoked_fallback);
                 let status = call_event_target_listeners_filtered(
                     registry,
                     scope,
@@ -1617,7 +1666,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                     invocation_targets_in_shadow_tree.contains(&dispatch_target),
                     &event_type,
                     event,
-                    false,
+                    filter,
                     true,
                 )?;
                 if status == DispatchStatus::StopImmediate
@@ -1679,7 +1728,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                true,
+                ListenerFilter::Capturing,
                 true,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1695,7 +1744,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                false,
+                ListenerFilter::Bubbling(None),
                 true,
             )?;
             if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
@@ -1757,7 +1806,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 event_phase_for_current_target(host_ptr, original_target, *ancestor, 3),
             );
 
-            invoke_event_target_handler_property(
+            let invoked_fallback = invoke_fallback_event_handler(
                 registry,
                 scope,
                 host_ptr,
@@ -1770,6 +1819,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
             if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
                 break;
             }
+            let filter = registry.bubble_listener_filter(*ancestor, &event_type, invoked_fallback);
             let status = call_event_target_listeners_filtered(
                 registry,
                 scope,
@@ -1778,7 +1828,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(ancestor),
                 &event_type,
                 event,
-                false,
+                filter,
                 false,
             )?;
             if status == DispatchStatus::StopImmediate
@@ -1916,7 +1966,7 @@ fn run_host_event_dispatch<'s>(
         host_ptr,
         dispatch_target,
         invocation_target_in_shadow_tree,
-        target_object,
+        Some(target_object),
         event_type,
         event,
     );
@@ -1953,7 +2003,7 @@ fn run_host_event_dispatch<'s>(
             invocation_target_in_shadow_tree,
             event_type,
             event,
-            ListenerFilter::Bubbling,
+            ListenerFilter::Bubbling(None),
             true,
         )?;
     }
