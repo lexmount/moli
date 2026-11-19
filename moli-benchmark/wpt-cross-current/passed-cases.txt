@@ -7861,12 +7861,12 @@ html/semantics/popovers/popover-move-documents.html
 html/semantics/popovers/popover-open-overflow-display-2.html
 html/semantics/popovers/popover-removal-2.html
 html/semantics/popovers/popover-removal.html
-html/semantics/popovers/popover-remove-attribute-during-focusing-steps.html
 html/semantics/popovers/popover-remove-reentrant-crash.html
 html/semantics/popovers/popover-root-crash.html
 html/semantics/popovers/popover-shadowhost-focus.html
 html/semantics/popovers/popover-show-after-show-crash.html
 html/semantics/popovers/popover-source-crash.html
+html/semantics/popovers/popover-stacking.html
 html/semantics/popovers/popover-target-element-disabled.html
 html/semantics/popovers/popover-toggle-source.html
 html/semantics/popovers/popover-types.html
