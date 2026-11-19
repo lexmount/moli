@@ -861,6 +861,7 @@ fn spawn_parent_message_pump(
                         event_kind,
                         phase,
                         source,
+                        ..
                     } => {
                         service.enqueue_target_exception_message(
                             version_id,

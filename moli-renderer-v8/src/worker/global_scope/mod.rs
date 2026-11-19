@@ -180,10 +180,10 @@ pub(crate) use messaging::{
     worker_broadcast_channel_wrapper, worker_message_port_registry,
     worker_message_port_wake_sender, worker_message_port_wrapper,
 };
-pub(super) use nested_workers::dispatch_nested_worker_event;
 pub(crate) use nested_workers::{
     NestedWorkerContext, forget_nested_worker_context, reserve_nested_worker_context,
 };
+pub(super) use nested_workers::{close_worker_owned_nested_workers, dispatch_nested_worker_event};
 pub(super) use network_state::{
     PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion,
 };

@@ -103,6 +103,7 @@ impl PageScriptHost {
                 event_kind,
                 phase,
                 source,
+                diagnostic,
             } => Ok(RendererDedicatedWorkerMessageEvent::Error {
                 message,
                 filename,
@@ -111,6 +112,7 @@ impl PageScriptHost {
                 event_kind,
                 phase,
                 source,
+                diagnostic,
             }),
             message => Err(Box::new(message)),
         }

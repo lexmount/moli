@@ -34,6 +34,7 @@ pub(crate) use dispatch::{
     dispatch_worker_error_event_with_kind, dispatch_worker_event,
     flush_pending_worker_messages_for_listener, worker_has_message_delivery_listener,
 };
+pub(crate) use methods::terminate_worker_handle;
 pub(super) use methods::{worker_post_message_callback, worker_terminate_callback};
 pub(super) use moli_webapi::events::fallback::new_worker_host_error_event;
 

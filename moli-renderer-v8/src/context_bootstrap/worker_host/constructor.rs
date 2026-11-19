@@ -478,6 +478,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                                 event_kind: crate::worker::WorkerParentErrorEventKind::Event,
                                 phase: crate::worker::WorkerErrorPhase::Bootstrap,
                                 source: crate::worker::WorkerErrorSource::Runtime,
+                                diagnostic: None,
                             }),
                         });
                 set_private_value(
