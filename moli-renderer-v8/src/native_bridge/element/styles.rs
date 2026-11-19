@@ -1,4 +1,6 @@
 use crate::util::{get_private_value, set_private_value, throw_type_error, v8_string, v8str};
+#[cfg(feature = "devtools")]
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use crate::document_runtime::DomHandle;
@@ -648,46 +650,84 @@ pub(crate) fn marker_pseudo_element_is_generated_for_document_snapshot(
     host: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<bool> {
-    let DocumentSnapshotStyleComputation::Available { context } =
-        style_computation_context_for_document_snapshot(host, handle)?
-    else {
-        return Some(false);
-    };
-    let style = ComputedStyleRead::new_with_context(host, handle, context);
-    if !style
-        .property("display")
-        .split_ascii_whitespace()
-        .any(|component| component.eq_ignore_ascii_case("list-item"))
-    {
-        return Some(false);
+    let mut observation = StyleObservation::new(host);
+    let context = document_snapshot_style_context(host, handle, |handle| {
+        observation.target_is_in_flat_tree(handle)
+    })?;
+    Some(
+        matches!(context, DocumentSnapshotStyleComputation::Available { .. })
+            && snapshot_element_has_marker(host, handle, &mut observation),
+    )
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn marker_hosts_for_document_snapshot(
+    host: &PageScriptHost,
+    handles: impl IntoIterator<Item = DomHandle>,
+) -> HashSet<DomHandle> {
+    let mut observation = StyleObservation::new(host);
+    let available = handles
+        .into_iter()
+        .filter(|&handle| {
+            matches!(
+                document_snapshot_style_context(host, handle, |handle| {
+                    observation.target_is_in_flat_tree(handle)
+                }),
+                Some(DocumentSnapshotStyleComputation::Available { .. })
+            )
+        })
+        .collect::<Vec<_>>();
+    if available.len() > 1 {
+        observation.prepare_targets(available.iter().copied());
     }
-    if document_snapshot_has_display_none_ancestor(host, handle, context) {
-        return Some(false);
+    available
+        .into_iter()
+        .filter(|&handle| snapshot_element_has_marker(host, handle, &mut observation))
+        .collect()
+}
+
+#[cfg(feature = "devtools")]
+fn snapshot_element_has_marker(
+    host: &PageScriptHost,
+    handle: DomHandle,
+    observation: &mut StyleObservation<'_>,
+) -> bool {
+    let style = observation.read(handle);
+    let list_item = style.computed_values().map_or_else(
+        || {
+            style
+                .property("display")
+                .split_ascii_whitespace()
+                .any(|component| component.eq_ignore_ascii_case("list-item"))
+        },
+        // Retained style can outlive a shadow host's connection.
+        |values| values.clone_display().is_list_item() && style.computed_style_applies(),
+    );
+    if !list_item || document_snapshot_has_display_none_ancestor(host, handle, observation) {
+        return false;
     }
 
     let content = style.raw_pseudo_property("marker", "content");
     if content.eq_ignore_ascii_case("none") {
-        return Some(false);
+        return false;
     }
     if !content.is_empty() && !content.eq_ignore_ascii_case("normal") {
-        return Some(true);
+        return true;
     }
 
-    Some(
-        !style
-            .property("list-style-type")
+    !style
+        .property("list-style-type")
+        .eq_ignore_ascii_case("none")
+        || !style
+            .property("list-style-image")
             .eq_ignore_ascii_case("none")
-            || !style
-                .property("list-style-image")
-                .eq_ignore_ascii_case("none"),
-    )
 }
 
 #[cfg(feature = "devtools")]
 fn document_snapshot_has_display_none_ancestor(
     host: &PageScriptHost,
     handle: DomHandle,
-    context: StyleComputationContext,
+    observation: &mut StyleObservation<'_>,
 ) -> bool {
     let mut current = document_snapshot_flat_tree_parent(host, handle);
     while let Some(candidate) = current {
@@ -695,8 +735,7 @@ fn document_snapshot_has_display_none_ancestor(
             .dom_host()
             .node(candidate)
             .is_some_and(crate::dom::native::Node::is_element)
-            && ComputedStyleRead::new_with_context(host, candidate, context).property("display")
-                == "none"
+            && observation.read(candidate).property("display") == "none"
         {
             return true;
         }

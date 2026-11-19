@@ -510,6 +510,17 @@ impl ScriptVm {
     }
 
     #[cfg(feature = "devtools")]
+    pub(crate) fn marker_hosts_for_document_snapshot(
+        &self,
+        handles: impl IntoIterator<Item = DomHandle>,
+    ) -> std::collections::HashSet<DomHandle> {
+        crate::native_bridge::element::marker_hosts_for_document_snapshot(
+            &self._context_host.borrow(),
+            handles,
+        )
+    }
+
+    #[cfg(feature = "devtools")]
     pub(crate) fn owner_style_sheet_text(&self, owner: DomHandle) -> Option<String> {
         self._context_host.borrow().owner_style_sheet_text(owner)
     }
