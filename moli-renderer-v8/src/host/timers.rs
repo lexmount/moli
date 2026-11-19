@@ -4,9 +4,7 @@ use crate::v8_execution_watchdog::{
     V8ExecutionWatchdog, V8ExecutionWatchdogKind, V8ExecutionWatchdogOutcome,
 };
 use crate::{
-    context_bootstrap::{
-        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, dispatch_window_error_event_with_details,
-    },
+    context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::DomHandle,
     native_bridge::{
         CALLBACK_ERROR_WINDOW_HANDLE_SLOT, OwnerDispatchScope, ResourceTimingBufferId,
@@ -1376,25 +1374,10 @@ fn report_window_timer_exception<'s>(
         .or_else(|| {
             relevant_identity.and_then(|identity| identity.dispatch_scope().child_window())
         });
-    if let Some(handle) = child_handle
-        && let Some(event) = timer_callback_error_event_from_report(scope, report)
-    {
-        unsafe { &mut *host_ptr }.dispatch_child_window_event(scope, handle, "error", event);
-        return;
-    }
-    let error_value = report
-        .exception
-        .as_ref()
-        .map(|exception| v8::Local::new(scope, exception));
-    let _ = dispatch_window_error_event_with_details(
-        scope,
-        host_ptr,
-        &report.summary,
-        report.source.as_deref().unwrap_or(""),
-        report.line.unwrap_or(0) as u32,
-        report.column.unwrap_or(0) as u32,
-        error_value,
-    );
+    let child_event = child_handle.and_then(|handle| {
+        timer_callback_error_event_from_report(scope, report).map(|event| (handle, event))
+    });
+    dispatch_window_callback_exception(scope, host_ptr, child_event, report);
 }
 
 fn callback_error_window_handle<'s>(

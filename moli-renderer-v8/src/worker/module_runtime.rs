@@ -35,11 +35,28 @@ use super::global_scope::worker_current_script_url;
 use super::handle::{WorkerParentErrorEventKind, WorkerScriptResource, WorkerScriptResourceKind};
 use crate::content_security_policy::ContentSecurityPolicyUrlViolation;
 
-pub(super) type WorkerBootstrapError = (
-    V8ExceptionReport,
-    Option<v8::Global<v8::Value>>,
-    WorkerParentErrorEventKind,
-);
+#[derive(Clone)]
+pub(super) struct WorkerBootstrapError {
+    pub(super) report: V8ExceptionReport,
+    pub(super) exception: Option<v8::Global<v8::Value>>,
+    pub(super) event_kind: WorkerParentErrorEventKind,
+    pub(super) failed_resource: Option<Url>,
+}
+
+impl WorkerBootstrapError {
+    pub(super) fn new(
+        report: V8ExceptionReport,
+        exception: Option<v8::Global<v8::Value>>,
+        event_kind: WorkerParentErrorEventKind,
+    ) -> Self {
+        Self {
+            report,
+            exception,
+            event_kind,
+            failed_resource: None,
+        }
+    }
+}
 
 pub(super) type WorkerModuleGraphFetchId = u64;
 pub(super) type WorkerModuleEvaluationId = u64;
@@ -183,7 +200,7 @@ impl From<String> for WorkerDynamicModuleImportError {
 
 impl From<Box<WorkerBootstrapError>> for WorkerDynamicModuleImportError {
     fn from(error: Box<WorkerBootstrapError>) -> Self {
-        let (report, _, _) = *error;
+        let WorkerBootstrapError { report, .. } = *error;
         Self {
             message: report.summary,
             kind: WorkerDynamicModuleImportErrorKind::Type,
@@ -577,7 +594,7 @@ fn finish_worker_module_bootstrap(
             let stack_trace = scope.stack_trace();
             let report =
                 build_event_handler_exception_report(scope, exception, message, stack_trace);
-            return Err(Box::new((
+            return Err(Box::new(WorkerBootstrapError::new(
                 report,
                 exception.map(|value| v8::Global::new(scope, value)),
                 WorkerParentErrorEventKind::Event,
@@ -590,7 +607,7 @@ fn finish_worker_module_bootstrap(
         let message = scope.message();
         let stack_trace = scope.stack_trace();
         let report = build_event_handler_exception_report(scope, exception, message, stack_trace);
-        return Err(Box::new((
+        return Err(Box::new(WorkerBootstrapError::new(
             report,
             exception.map(|value| v8::Global::new(scope, value)),
             WorkerParentErrorEventKind::ErrorEvent,
@@ -931,12 +948,16 @@ fn worker_bootstrap_tree_error(
     {
         return stored.clone();
     }
-    Box::new(worker_bootstrap_error(
+    let mut failure = worker_bootstrap_error(
         scope,
         script_url,
         &error.message,
         WorkerParentErrorEventKind::Event,
-    ))
+    );
+    if error.stage == module_tree::ModuleLoadStage::Fetch {
+        failure.failed_resource = error.key.map(|key| key.url);
+    }
+    Box::new(failure)
 }
 
 fn worker_dynamic_tree_error(
@@ -1855,7 +1876,7 @@ fn compile_worker_module_record(
         let stack_trace = scope.stack_trace();
         let report =
             build_event_handler_exception_report(&mut scope, exception, message, stack_trace);
-        return Err(Box::new((
+        return Err(Box::new(WorkerBootstrapError::new(
             report,
             exception.map(|value| v8::Global::new(&scope, value)),
             WorkerParentErrorEventKind::Event,
@@ -1892,7 +1913,7 @@ fn compile_worker_synthetic_module_record(
             let exception = scope.exception();
             let message = scope.message();
             let report = build_exception_report_without_stack(&mut scope, exception, message);
-            return Err(Box::new((
+            return Err(Box::new(WorkerBootstrapError::new(
                 report,
                 exception.map(|value| v8::Global::new(&scope, value)),
                 WorkerParentErrorEventKind::Event,
@@ -1951,7 +1972,7 @@ fn compile_worker_wasm_module_record(
                 report.summary
             );
             report.source.get_or_insert_with(|| source_url.to_string());
-            Box::new((
+            Box::new(WorkerBootstrapError::new(
                 report,
                 exception.map(|value| v8::Global::new(&scope, value)),
                 WorkerParentErrorEventKind::Event,
@@ -2125,7 +2146,7 @@ pub(super) fn worker_bootstrap_error(
 ) -> WorkerBootstrapError {
     let exception =
         v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
-    (
+    WorkerBootstrapError::new(
         V8ExceptionReport {
             summary: summary.to_owned(),
             source: Some(script_url.to_owned()),
@@ -2151,7 +2172,7 @@ fn worker_bootstrap_value_error(
         .to_string(scope)
         .map(|message| message.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "module worker evaluation failed".to_owned());
-    (
+    WorkerBootstrapError::new(
         V8ExceptionReport {
             summary,
             source: Some(script_url.to_owned()),

@@ -598,31 +598,12 @@ pub(crate) fn report_event_callback_exception<'s>(
             | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
         })
     });
-    if let Some(handle) = child_handle {
-        let event = {
-            let host = unsafe { &mut *host_ptr };
-            host.child_browsing_context_window_wrapper(scope, handle)
-                .and_then(|window| event_listener_error_event_from_report(scope, window, report))
-        };
-        if let Some(event) = event {
-            unsafe { &mut *host_ptr }.dispatch_child_window_event(scope, handle, "error", event);
-            return;
-        }
-    }
-
-    let error_value = report
-        .exception
-        .as_ref()
-        .map(|exception| v8::Local::new(scope, exception));
-    let _ = dispatch_window_error_event_with_details(
-        scope,
-        host_ptr,
-        &report.summary,
-        report.source.as_deref().unwrap_or(""),
-        report.line.unwrap_or(0) as u32,
-        report.column.unwrap_or(0) as u32,
-        error_value,
-    );
+    let child_event = child_handle.and_then(|handle| {
+        let host = unsafe { &mut *host_ptr };
+        let window = host.child_browsing_context_window_wrapper(scope, handle)?;
+        event_listener_error_event_from_report(scope, window, report).map(|event| (handle, event))
+    });
+    dispatch_window_callback_exception(scope, host_ptr, child_event, report);
 }
 
 fn callback_error_window_handle<'s>(

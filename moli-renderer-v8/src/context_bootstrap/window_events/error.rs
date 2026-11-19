@@ -1,4 +1,5 @@
 use super::*;
+use crate::{document_runtime::DomHandle, exception_reporting::V8ExceptionReport};
 use moli_webapi::events::dispatch_init::ReportedErrorEventInitDeclaration;
 
 const BODY_ONERROR_RESOLUTION_GUARD_SLOT: &str = "__moliBodyOnerrorResolutionGuard";
@@ -127,28 +128,86 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
         error_value,
     )?;
     if let Some(event) = event {
-        unsafe { &*host_ptr }.emit_diagnostic(|source| {
-            let default_prevented =
-                crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
-            let stack = if default_prevented {
-                None
-            } else {
-                error_value.and_then(|value| {
-                    crate::exception_reporting::captured_exception_stack(scope, value)
-                })
-            };
-            Some(crate::DiagnosticEvent::runtime_exception(
-                source,
-                crate::ExceptionOrigin::UncaughtException,
-                message,
-                filename,
-                (lineno, colno),
-                stack.as_deref(),
-                default_prevented,
-            ))
-        });
+        emit_window_exception_diagnostic(
+            scope,
+            unsafe { &*host_ptr },
+            event,
+            message,
+            filename,
+            (lineno, colno),
+            error_value,
+        );
     }
     Ok(())
+}
+
+pub(crate) fn dispatch_window_callback_exception<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut PageScriptHost,
+    child_event: Option<(DomHandle, v8::Local<'s, v8::Object>)>,
+    report: &V8ExceptionReport,
+) {
+    let filename = report.source.as_deref().unwrap_or("");
+    let lineno = report.line.unwrap_or(0) as u32;
+    let colno = report.column.unwrap_or(0) as u32;
+    if let Some((handle, event)) = child_event {
+        unsafe { &mut *host_ptr }.dispatch_child_window_event(scope, handle, "error", event);
+        emit_window_exception_diagnostic(
+            scope,
+            unsafe { &*host_ptr },
+            event,
+            &report.summary,
+            filename,
+            (lineno, colno),
+            report.exception.as_ref(),
+        );
+    } else {
+        let exception = report
+            .exception
+            .as_ref()
+            .map(|exception| v8::Local::new(scope, exception));
+        let _ = dispatch_window_error_event_with_details(
+            scope,
+            host_ptr,
+            &report.summary,
+            filename,
+            lineno,
+            colno,
+            exception,
+        );
+    }
+}
+
+fn emit_window_exception_diagnostic<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host: &PageScriptHost,
+    event: v8::Local<'s, v8::Object>,
+    message: &str,
+    filename: &str,
+    location: (u32, u32),
+    exception: Option<impl v8::Handle<Data = v8::Value>>,
+) {
+    host.emit_diagnostic(|source| {
+        let default_prevented =
+            crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented");
+        let stack = if default_prevented {
+            None
+        } else {
+            exception.and_then(|exception| {
+                let value = v8::Local::new(scope, exception);
+                crate::exception_reporting::captured_exception_stack(scope, value)
+            })
+        };
+        Some(crate::DiagnosticEvent::runtime_exception(
+            source,
+            crate::ExceptionOrigin::UncaughtException,
+            message,
+            filename,
+            location,
+            stack.as_deref(),
+            default_prevented,
+        ))
+    });
 }
 
 pub(crate) fn dispatch_window_error_event<'s>(

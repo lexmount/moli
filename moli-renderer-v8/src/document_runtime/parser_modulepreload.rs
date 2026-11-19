@@ -147,7 +147,8 @@ impl DocumentRuntime {
         let admission = csp_context.check_initial_request(key.url());
         let csp_violations = csp_context.take_violations();
         if let Err(error) = admission {
-            let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string());
+            let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string())
+                .with_failed_resource(key.clone());
             self.mark_native_module_failed(key, error.clone());
             return Ok(MainDocumentModulepreloadFetchOutcome {
                 job_run: Some(ModulePreloadJobRun::CompletedSynchronously),
