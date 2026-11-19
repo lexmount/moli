@@ -1818,17 +1818,37 @@ impl PageScriptHost {
             )
     }
 
-    pub(crate) fn prepare_style_observation_targets(
+    pub(crate) fn style_world_update_plan_for_observation(
         &self,
         document: DomHandle,
-        handles: &[DomHandle],
-    ) {
-        self.style_engine.prepare_style_observation_targets(
+        viewport: StyleViewport,
+        environment: StyloStyleEnvironment,
+        tree_scope_versions: crate::style_engine::StyleTreeScopeVersions,
+    ) -> Option<crate::style_engine::StyleWorldUpdatePlan> {
+        self.style_engine.style_world_update_plan_for_observation(
+            self.dom_host(),
+            document,
+            viewport,
+            environment,
+            tree_scope_versions,
+        )
+    }
+
+    pub(crate) fn with_style_resolution_pass<R>(
+        &self,
+        document: DomHandle,
+        update: Option<&PreparedStyleWorldUpdate>,
+        resolve: impl FnOnce(&mut crate::style_engine::StyleResolutionPass<'_, '_>) -> R,
+    ) -> R {
+        let source_context =
+            update.map(|_| self.style_source_document_context_for_read_document(document));
+        self.style_engine.with_style_resolution_pass(
             self.dom_host(),
             self.document_url(),
             document,
-            handles,
-        );
+            update.zip(source_context.as_ref().map(|context| context.as_ref())),
+            resolve,
+        )
     }
 
     pub(crate) fn computed_style_snapshot_from_current_observation(
@@ -1884,26 +1904,6 @@ impl PageScriptHost {
                 self.document_url(),
                 handle,
                 pseudo_element,
-                document_context.as_ref(),
-                read_document,
-            )
-    }
-
-    pub(crate) fn computed_anonymous_style_snapshot_from_current_observation(
-        &self,
-        owner: DomHandle,
-        parent_style: &style::properties::ComputedValues,
-        anonymous_kind: crate::style_engine::StyloAnonymousBoxKind,
-        document_context: &OwnedStyleSourceDocumentContext,
-        read_document: DomHandle,
-    ) -> Option<crate::style_engine::StyloComputedStyleSnapshot> {
-        self.style_engine
-            .computed_anonymous_style_snapshot_from_current_observation(
-                self.dom_host(),
-                self.document_url(),
-                owner,
-                parent_style,
-                anonymous_kind,
                 document_context.as_ref(),
                 read_document,
             )

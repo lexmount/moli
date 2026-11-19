@@ -1,7 +1,7 @@
 use crate::{
     DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutFlushReason, LayoutPassResult,
-    LayoutScrollbarAxis, LayoutSource, LayoutStyleResolver, LayoutViewport, PaintCaptureRequest,
-    PaintSnapshot, PaintViewport, build_layout_world,
+    LayoutScrollbarAxis, LayoutSource, LayoutStyleResolver, LayoutViewport, LayoutWorld,
+    PaintCaptureRequest, PaintSnapshot, PaintViewport, build_layout_world,
     form::prepare_form_controls,
     inline::prepare_inline_contexts,
     list::prepare_list_markers,
@@ -212,6 +212,38 @@ where
     R: LayoutStyleResolver<S::NodeId>,
     F: EmbeddedFrameRenderer<S::NodeId>,
 {
+    finish_prepared_layout_pass(
+        prepare_layout_pass(source, styles, request)?,
+        source,
+        services,
+        frames,
+    )
+}
+
+/// Owned box construction and control preparation for one layout demand.
+/// The style resolver can be released before shaping, geometry, and child
+/// document layout consume this value.
+pub struct PreparedLayoutPass<N>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    world: LayoutWorld<N>,
+    request: LayoutPassRequest,
+    started: Instant,
+    box_tree_elapsed: Duration,
+    list_marker_elapsed: Duration,
+    form_control_elapsed: Duration,
+}
+
+pub fn prepare_layout_pass<S, R>(
+    source: &S,
+    styles: &mut R,
+    request: LayoutPassRequest,
+) -> Result<PreparedLayoutPass<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+{
     let started = Instant::now();
     let phase_started = Instant::now();
     let mut world = build_layout_world(source, styles)?;
@@ -230,6 +262,34 @@ where
     let phase_started = Instant::now();
     prepare_form_controls(&mut world, styles)?;
     let form_control_elapsed = phase_started.elapsed();
+    Ok(PreparedLayoutPass {
+        world,
+        request,
+        started,
+        box_tree_elapsed,
+        list_marker_elapsed,
+        form_control_elapsed,
+    })
+}
+
+pub fn finish_prepared_layout_pass<S, F>(
+    prepared: PreparedLayoutPass<S::NodeId>,
+    source: &S,
+    services: &mut DocumentLayoutServices,
+    frames: &mut F,
+) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    F: EmbeddedFrameRenderer<S::NodeId>,
+{
+    let PreparedLayoutPass {
+        mut world,
+        request,
+        started,
+        box_tree_elapsed,
+        list_marker_elapsed,
+        form_control_elapsed,
+    } = prepared;
     let phase_started = Instant::now();
     prepare_inline_contexts(&mut world, services);
     let inline_preparation_elapsed = phase_started.elapsed();

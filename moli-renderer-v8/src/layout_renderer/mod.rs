@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, build_layout_pass_with_embedded_frames,
+    LayoutViewport, finish_prepared_layout_pass, prepare_layout_pass,
 };
 
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
@@ -63,15 +63,32 @@ fn build_native_layout_pass_recursive(
         request.requests_paint(),
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
-    let mut styles = style_resolver::NativeLayoutStyleResolver::new(
-        runtime,
-        root,
-        document,
-        request.viewport,
-        environment_override,
-    );
-    let styles_ready = profile_started.map(|_| std::time::Instant::now());
-    let result = {
+    let mut styles_ready = None;
+    let result = (|| {
+        let (prepared, resources) = style_resolver::with_layout_styles(
+            runtime,
+            document,
+            request.viewport,
+            environment_override,
+            |styles| -> Result<_, moli_layout::LayoutError> {
+                styles_ready = profile_started.map(|_| std::time::Instant::now());
+                let resources = if services.has_stylesheet_web_fonts() {
+                    Some(
+                        runtime
+                            .stylesheet_resource_snapshot_for_document(document)
+                            .ok_or_else(|| {
+                                moli_layout::LayoutError::source_contract(
+                                    "layout fonts",
+                                    "missing current stylesheet resource manifest",
+                                )
+                            })?,
+                    )
+                } else {
+                    None
+                };
+                Ok((prepare_layout_pass(&source, styles, request)?, resources))
+            },
+        )?;
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
             reason: request.reason,
@@ -81,43 +98,25 @@ fn build_native_layout_pass_recursive(
             document_stack,
             embedded_document_services,
         };
-        if services.has_stylesheet_web_fonts() {
-            if let Some(resources) = styles.stylesheet_resources(root) {
-                services.with_stylesheet_font_declarations(
-                    resources.web_fonts().iter().filter_map(|resource| {
-                        let font = resource.web_font()?;
-                        Some(moli_layout::WebFontDeclaration {
-                            slot: font.registration_slot(),
-                            source_key: font.resource_key(),
-                            face: font.face(),
-                        })
-                    }),
-                    |services| {
-                        build_layout_pass_with_embedded_frames(
-                            &source,
-                            &mut styles,
-                            services,
-                            request,
-                            &mut frames,
-                        )
-                    },
-                )
-            } else {
-                Err(moli_layout::LayoutError::source_contract(
-                    "layout fonts",
-                    "missing current stylesheet resource manifest",
-                ))
-            }
-        } else {
-            build_layout_pass_with_embedded_frames(
-                &source,
-                &mut styles,
-                services,
-                request,
-                &mut frames,
+        let finish = |services: &mut DocumentLayoutServices| {
+            finish_prepared_layout_pass(prepared, &source, services, &mut frames)
+        };
+        if let Some(resources) = resources {
+            services.with_stylesheet_font_declarations(
+                resources.web_fonts().iter().filter_map(|resource| {
+                    let font = resource.web_font()?;
+                    Some(moli_layout::WebFontDeclaration {
+                        slot: font.registration_slot(),
+                        source_key: font.resource_key(),
+                        face: font.face(),
+                    })
+                }),
+                finish,
             )
+        } else {
+            finish(services)
         }
-    };
+    })();
     if let (Some(started), Some(source_ready), Some(styles_ready)) =
         (profile_started, source_ready, styles_ready)
     {
@@ -136,7 +135,6 @@ fn build_native_layout_pass_recursive(
             success = result.is_ok(),
         );
     }
-    styles.trace_profile(document);
     document_stack.pop();
     result
 }
@@ -219,7 +217,7 @@ pub(crate) fn build_normalized_native_box_tree_for_test(
         .unwrap_or_else(|| runtime.document_handle());
     let viewport = runtime.layout_viewport_for_document(document);
     let source = source_view::NativeLayoutSourceView::new(runtime, root);
-    let mut styles =
-        style_resolver::NativeLayoutStyleResolver::new(runtime, root, document, viewport, None);
-    moli_layout::build_layout_world(&source, &mut styles).map(|world| world.normalized_tree())
+    style_resolver::with_layout_styles(runtime, document, viewport, None, |styles| {
+        moli_layout::build_layout_world(&source, styles).map(|world| world.normalized_tree())
+    })
 }
