@@ -9,14 +9,7 @@ use crate::context_bootstrap::indexed_db::{
 
 use crate::webidl;
 use moli_indexeddb::{DatabaseHandle, IndexedDbError};
-
-#[derive(Clone, Copy, webidl::WebIdlEnum)]
-#[webidl(name = "IDBTransactionMode")]
-enum TransactionModeWebIdl {
-    Readonly,
-    Readwrite,
-    Versionchange,
-}
+use moli_webapi::indexed_db_values::options::TransactionModeWebIdl;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBDatabase.transaction")]

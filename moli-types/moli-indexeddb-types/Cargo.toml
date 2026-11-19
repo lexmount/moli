@@ -14,6 +14,7 @@ sqlite-errors = ["dep:moli-sqlite", "dep:rusqlite"]
 moli-sqlite = { path = "../../moli-sqlite", optional = true }
 rusqlite = { version = "0.40.2", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 unicode-id-start = "1.4.0"
 
 [lints]

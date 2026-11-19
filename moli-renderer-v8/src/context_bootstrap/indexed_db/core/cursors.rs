@@ -20,10 +20,9 @@ pub(in crate::context_bootstrap::indexed_db) use self::accessors::{
     idb_cursor_value_getter,
 };
 
-pub(in crate::context_bootstrap::indexed_db) use self::direction::{
-    cursor_direction_from_cursor, parse_cursor_direction, parse_cursor_direction_with_context,
-};
+pub(in crate::context_bootstrap::indexed_db) use self::direction::cursor_direction_from_cursor;
 pub(in crate::context_bootstrap::indexed_db) use self::request::prepare_cursor_request;
 pub(in crate::context_bootstrap::indexed_db) use self::surface::{
     materialize_cursor_result_in_request_realm, refresh_cursor_surface,
 };
+pub(in crate::context_bootstrap::indexed_db) use moli_webapi::indexed_db_values::options::parse_cursor_direction;

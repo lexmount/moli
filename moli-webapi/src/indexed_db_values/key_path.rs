@@ -1,8 +1,9 @@
-use super::*;
-use crate::webidl;
+use moli_indexeddb_types::KeyPath;
+use moli_v8_util::v8_string;
 use moli_webapi_declare::WebApiValue;
+use moli_webidl as webidl;
 
-pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key_path<'s>(
+pub fn parse_idb_key_path<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     context: webidl::Context,
@@ -21,7 +22,7 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key_path<'s>(
         .map(|value| KeyPath::String(value.into()))
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn parse_optional_idb_key_path_member<'s>(
+pub fn parse_optional_idb_key_path_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     name: &'static str,
@@ -34,7 +35,7 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_optional_idb_key_path_memb
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn key_path_to_js_value<'s>(
+pub fn key_path_to_js_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key_path: &KeyPath,
 ) -> Option<v8::Local<'s, v8::Value>> {

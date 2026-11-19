@@ -1,4 +1,6 @@
 //! Storage-independent IndexedDB value models shared by bindings and SQL storage.
+mod cursor;
+pub use cursor::CursorDirection;
 mod error;
 mod key;
 mod key_codec;

@@ -3,6 +3,7 @@ use crate::context_bootstrap::indexed_db::{
     indexed_db_index_is_deleted, object_store_active_transaction,
 };
 use moli_indexeddb::{GetAllOptionsCandidate, should_parse_get_all_options};
+use moli_webapi::indexed_db_values::options::{GetAllOptions, parse_get_all_options};
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap::indexed_db) enum CollectionKind {
@@ -20,43 +21,6 @@ pub(in crate::context_bootstrap::indexed_db) struct CollectionRequest {
     pub(in crate::context_bootstrap::indexed_db) kind: CollectionKind,
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "IDBGetAllOptions")]
-struct GetAllOptions<'s> {
-    // WebIDL dictionary members are evaluated in lexicographic order.
-    #[webidl(converter = "enforce_range_unsigned_long")]
-    count: Option<u32>,
-    #[webidl(with = parse_direction_member)]
-    direction: CursorDirection,
-    query: Option<v8::Local<'s, v8::Value>>,
-}
-
-fn parse_direction_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<CursorDirection, webidl::WebIdlError> {
-    let context = webidl::Context::member("IDBGetAllOptions", name);
-    let value = webidl::property_result(scope, object, name, context)?
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    parse_cursor_direction_with_context(scope, value, context)
-}
-
-fn parse_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    operation: &'static str,
-) -> Result<GetAllOptions<'s>, webidl::WebIdlError> {
-    match webidl::dictionary_value(value, webidl::Context::argument(operation, 1))? {
-        Some(object) => webidl::parse_dictionary_object(scope, object),
-        None => Ok(GetAllOptions {
-            count: None,
-            direction: CursorDirection::default_next(),
-            query: None,
-        }),
-    }
-}
-
 pub(super) fn collection_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -69,7 +33,7 @@ pub(super) fn collection_callback<'s>(
     // APIs also convert the positional count even when a dictionary overrides
     // it. getAllRecords has only one argument and ignores an extra count.
     let converted = if matches!(kind, CollectionKind::Record) {
-        parse_options(scope, args.get(0), operation)
+        parse_get_all_options(scope, args.get(0), operation)
     } else {
         parse_optional_count(scope, args.get(1), operation).map(|count| GetAllOptions {
             query: Some(args.get(0)),
@@ -85,7 +49,7 @@ pub(super) fn collection_callback<'s>(
         }
     };
     if !matches!(kind, CollectionKind::Record) && should_parse_options(scope, args.get(0)) {
-        options = match parse_options(scope, args.get(0), operation) {
+        options = match parse_get_all_options(scope, args.get(0), operation) {
             Ok(options) => options,
             Err(error) => {
                 webidl::throw_error(scope, &error);
@@ -164,7 +128,7 @@ fn should_parse_options<'s>(
 mod tests {
     use std::pin::pin;
 
-    use super::{parse_options, should_parse_options};
+    use super::{parse_get_all_options, should_parse_options};
 
     #[test]
     fn boxed_primitives_use_dictionary_members_for_get_all_options() {
@@ -182,7 +146,7 @@ mod tests {
             let script = v8::Script::compile(scope, source, None).unwrap();
             let value = crate::script_execution::execute_compiled_script(scope, script).unwrap();
             assert!(should_parse_options(scope, value));
-            let Ok(options) = parse_options(scope, value, "IDBObjectStore.getAll") else {
+            let Ok(options) = parse_get_all_options(scope, value, "IDBObjectStore.getAll") else {
                 panic!("boxed primitives must be converted as dictionaries");
             };
             assert!(options.query.is_none());

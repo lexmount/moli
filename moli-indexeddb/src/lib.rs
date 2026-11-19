@@ -34,11 +34,13 @@ mod types;
 mod usage;
 
 pub use cursor::{
-    CursorDirection, apply_collection_direction, apply_cursor_direction_by_key,
-    compare_cursor_direction, compare_cursor_tuple_direction,
+    apply_collection_direction, apply_cursor_direction_by_key, compare_cursor_direction,
+    compare_cursor_tuple_direction,
 };
 pub use manager::IndexedDbManager;
-pub use moli_indexeddb_types::{IndexedDbError, Key, KeyNumber, KeyPath, KeyRange, MAX_KEY_DEPTH};
+pub use moli_indexeddb_types::{
+    CursorDirection, IndexedDbError, Key, KeyNumber, KeyPath, KeyRange, MAX_KEY_DEPTH,
+};
 pub use options::{
     GetAllOptionsCandidate, IndexOptionsValidationError, ObjectStoreOptionsValidationError,
     TransactionModeParseError, parse_regular_transaction_mode, should_parse_get_all_options,
