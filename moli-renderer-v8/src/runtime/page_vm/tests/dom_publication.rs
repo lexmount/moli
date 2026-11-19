@@ -159,6 +159,164 @@ fn inspector_descendants(snapshot: &DocumentNodeSnapshot) -> Vec<&DocumentNodeSn
     nodes
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn document_snapshot_batches_marker_styles_without_layout() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/inspector-markers")?,
+            );
+        page.vm_mut()
+            .set_layout_policy(crate::real_layout_test_policy());
+        page.vm_mut().eval(
+            r#"
+            document.body.innerHTML = `
+                <li id="native">native marker</li>
+                <div id="custom" style="display:list-item;list-style:none">custom marker</div>
+                <li id="suppressed" style="list-style:none">no marker</li>
+                <div id="hidden" style="display:none">
+                    <div id="revealed" style="display:list-item">hidden marker</div>
+                </div>
+                <div id="host">
+                    <div id="slotted" style="display:list-item" slot="shown">slotted</div>
+                    <div id="unslotted" style="display:list-item">unslotted</div>
+                </div>
+                <iframe id="frame" style="width:100px"></iframe>`;
+            const sheet = document.createElement('style');
+            sheet.textContent = '#custom::marker { content: "custom" }';
+            document.head.append(sheet);
+            document.getElementById('host').attachShadow({mode:'open'})
+                .innerHTML = '<slot name="shown"></slot>';
+        "#,
+        )?;
+        materialize_child_realm_through_page_turn_for_test(&mut page, "frame")?;
+        page.vm_mut().eval(
+            r#"
+            document.getElementById('frame').contentDocument.body.innerHTML =
+                '<style>@media (max-width:150px) { #child { display:list-item } }</style>' +
+                '<div id="child">frame marker</div>';
+        "#,
+        )?;
+
+        let marker_hosts = |page: &mut PageVm| {
+            let snapshot = page
+                .document_node_snapshot_for_document(Some("markers"), -1, true)
+                .expect("complete Inspector document");
+            inspector_descendants(&snapshot.snapshot)
+                .into_iter()
+                .filter(|node| {
+                    node.pseudo_elements
+                        .iter()
+                        .any(|pseudo| pseudo.pseudo_type.as_deref() == Some("marker"))
+                })
+                .filter_map(|node| node.attributes.iter().find(|attr| attr.local_name == "id"))
+                .map(|attr| attr.value.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let expected = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect();
+        assert_eq!(
+            marker_hosts(&mut page),
+            expected(&["native", "custom", "slotted", "child"])
+        );
+
+        page.vm_mut().eval(
+            r#"
+            document.getElementById('custom').style.display = 'block';
+            document.getElementById('hidden').style.display = 'block';
+        "#,
+        )?;
+        assert_eq!(
+            marker_hosts(&mut page),
+            expected(&["native", "revealed", "slotted", "child"])
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("marker snapshots must share style preparation and never force layout");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn document_snapshot_omits_markers_from_detached_iframe_shadow_tree() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/detached-inspector-marker")?,
+            );
+        page.vm_mut()
+            .set_layout_policy(crate::real_layout_test_policy());
+        page.vm_mut()
+            .eval("document.body.innerHTML = '<iframe id=\"frame\"></iframe>'")?;
+        materialize_child_realm_through_page_turn_for_test(&mut page, "frame")?;
+        page.vm_mut().eval(
+            r#"
+            const frame = document.getElementById('frame');
+            const child = frame.contentDocument;
+            globalThis.markerHost = child.body.appendChild(child.createElement('div'));
+            const shadow = markerHost.attachShadow({mode: 'open'});
+            shadow.innerHTML = '<li style="display:list-item">item</li>';
+            globalThis.markerItem = shadow.firstElementChild;
+            "#,
+        )?;
+
+        let messages = page.vm_mut().dispatch_inspector_protocol_message(
+            r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"markerItem"}}"#,
+        )?;
+        let object_id = messages
+            .iter()
+            .find(|message| message["id"] == 1)
+            .and_then(|message| message["result"]["result"]["objectId"].as_str())
+            .expect("Inspector must retain the shadow list item");
+        let describe = |page: &mut PageVm| {
+            page.document_node_snapshot_for_object_id(None, object_id, 1, false, true)
+                .expect("Inspector object lookup must succeed")
+                .expect("Inspector must still resolve the list item")
+                .snapshot
+        };
+
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let connected = describe(&mut page);
+        assert_eq!(connected.pseudo_elements.len(), 1);
+        let marker = &connected.pseudo_elements[0];
+        assert_eq!(marker.pseudo_type.as_deref(), Some("marker"));
+        let marker_id = marker
+            .backend_node_id
+            .expect("marker must have a backend id");
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("markerHost.remove(); frame.isConnected && !markerItem.isConnected")?,
+            "true"
+        );
+        let detached = describe(&mut page);
+        assert_eq!(detached.backend_node_id, connected.backend_node_id);
+        assert!(detached.pseudo_elements.is_empty());
+        assert!(
+            page.document_node_snapshot_for_backend_node_id(marker_id, 0, false)?
+                .is_none()
+        );
+
+        page.vm_mut()
+            .eval("frame.contentDocument.body.append(markerHost)")?;
+        let reconnected = describe(&mut page);
+        assert_eq!(reconnected.backend_node_id, connected.backend_node_id);
+        assert_eq!(reconnected.pseudo_elements.len(), 1);
+        assert_eq!(
+            reconnected.pseudo_elements[0].pseudo_type.as_deref(),
+            Some("marker")
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("marker snapshots must respect Shadow DOM attachment without forcing layout");
+}
+
 fn serialized_inspector_ids(snapshot: &DocumentNodeSnapshot) -> std::collections::HashSet<u32> {
     let wire = moli_protocol_cdp::node_snapshot_to_cdp(snapshot, None, None).unwrap();
     let mut pending = vec![&wire];

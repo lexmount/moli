@@ -135,14 +135,16 @@ impl PageVm {
                     pierce,
                     include_whitespace,
                 );
-                self.project_generated_pseudo_elements(&mut snapshot);
-                self.assign_renderer_dom_agent_ids_to_snapshot(
-                    inspector_session_id,
-                    &mut snapshot,
-                    include_whitespace,
-                );
                 snapshots.push(snapshot);
             }
+        }
+        self.project_generated_pseudo_elements(&mut snapshots);
+        for snapshot in &mut snapshots {
+            self.assign_renderer_dom_agent_ids_to_snapshot(
+                inspector_session_id,
+                snapshot,
+                include_whitespace,
+            );
         }
         Some(snapshots)
     }
@@ -177,7 +179,7 @@ impl PageVm {
                     include_whitespace,
                 );
             }
-            self.project_generated_pseudo_elements(snapshot);
+            self.project_generated_pseudo_elements(std::slice::from_mut(snapshot));
             self.project_renderer_dom_agent_ids_to_snapshot(
                 inspector_session_id,
                 snapshot,
@@ -371,14 +373,28 @@ impl PageVm {
         }
     }
 
-    fn project_generated_pseudo_elements(&self, snapshot: &mut DocumentNodeSnapshot) {
-        let mut stack = vec![snapshot];
+    fn project_generated_pseudo_elements(&self, snapshots: &mut [DocumentNodeSnapshot]) {
+        let mut handles = Vec::new();
+        let mut stack: Vec<_> = snapshots.iter().rev().collect();
+        while let Some(snapshot) = stack.pop() {
+            if snapshot.is_element && snapshot.inspector_identity.is_none() {
+                handles.push(snapshot.node_id);
+            }
+            stack.extend(snapshot.pseudo_elements.iter().rev());
+            stack.extend(snapshot.shadow_roots.iter().rev());
+            stack.extend(snapshot.associated_node());
+            stack.extend(snapshot.children.iter().rev());
+        }
+        let hosts = self.vm().marker_hosts_for_document_snapshot(handles);
+        if hosts.is_empty() {
+            return;
+        }
+
+        let mut stack: Vec<_> = snapshots.iter_mut().rev().collect();
         while let Some(snapshot) = stack.pop() {
             if snapshot.is_element
                 && snapshot.inspector_identity.is_none()
-                && self
-                    .vm()
-                    .marker_pseudo_element_is_generated_for_document_snapshot(snapshot.node_id)
+                && hosts.contains(&snapshot.node_id)
             {
                 snapshot
                     .pseudo_elements
