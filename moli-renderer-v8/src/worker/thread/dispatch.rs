@@ -3451,6 +3451,10 @@ pub(super) fn dispatch_worker_reported_error<'s>(
     script_url: &str,
     failed_resource: Option<&url::Url>,
 ) -> bool {
+    // Termination interrupts V8 before an author exception can be reported.
+    if crate::worker::worker_termination_requested(scope) {
+        return false;
+    }
     apply_worker_exception_location_overrides(scope, &mut report, exception);
     let mut report = WorkerErrorReport::new(
         report.summary,
