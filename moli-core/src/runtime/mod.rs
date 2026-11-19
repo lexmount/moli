@@ -271,6 +271,14 @@ impl Browser {
             .subscribe_diagnostics()
     }
 
+    /// Subscribe to script load failures and runtime exceptions whose reporting was not canceled.
+    /// Exceptions that propagate to a DedicatedWorker's owners are published after that dispatch.
+    pub fn subscribe_runtime_failures(&self) -> crate::DiagnosticsSubscription {
+        self.js_runtime
+            .browser_context_runtime()
+            .subscribe_runtime_failures()
+    }
+
     fn resource_request_client(&self) -> ResourceRequestClient {
         ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),

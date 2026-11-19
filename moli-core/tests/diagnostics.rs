@@ -234,6 +234,54 @@ async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellati
 }
 
 #[tokio::test]
+async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic() -> Result<()> {
+    let server = DiagnosticFixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser.subscribe_diagnostics();
+    let mut failures = browser.subscribe_runtime_failures();
+    let mut page = browser.fetch(&server.url("/page")).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"new Promise(resolve => {
+                const events = [];
+                const worker = new Worker("/dedicated.js");
+                worker.onerror = () => { events.push("worker"); };
+                addEventListener("error", event => {
+                    events.push("window");
+                    event.preventDefault();
+                }, {once: true});
+                worker.onmessage = () => {
+                    events.push("continued");
+                    worker.terminate();
+                    resolve(events.join(","));
+                };
+            })"#,
+            true,
+        ),
+    )
+    .await??;
+    assert_eq!(result["value"], "worker,window,continued", "{result}");
+
+    let diagnostic = diagnostics.try_recv()?;
+    assert!(
+        matches!(
+            diagnostic.as_ref(),
+            DiagnosticEvent::RuntimeException {
+                source: DiagnosticSource::DedicatedWorker { .. },
+                message,
+                default_prevented: false,
+                ..
+            } if message.contains("dedicated worker failure")
+        ),
+        "{diagnostic:?}"
+    );
+    assert_empty(&mut diagnostics);
+    assert_empty(&mut failures);
+    Ok(())
+}
+
+#[tokio::test]
 async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Result<()> {
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
@@ -451,6 +499,12 @@ fn fixture_response(path: Option<&str>) -> (&'static str, &'static str, &'static
             "throw new Error('module exception');",
         ),
         Some("/page") => ("200 OK", "text/html", "<!doctype html>"),
+        Some("/dedicated.js") => (
+            "200 OK",
+            "text/javascript",
+            r#"setTimeout(() => { throw new Error("dedicated worker failure"); }, 0);
+               setTimeout(() => postMessage("continued"), 20);"#,
+        ),
         Some("/shared.js") => (
             "200 OK",
             "text/javascript",

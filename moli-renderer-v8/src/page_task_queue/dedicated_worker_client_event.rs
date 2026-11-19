@@ -71,6 +71,7 @@ pub(crate) enum RendererDedicatedWorkerMessageEvent {
         event_kind: WorkerParentErrorEventKind,
         phase: WorkerErrorPhase,
         source: WorkerErrorSource,
+        diagnostic: Option<Box<crate::diagnostics::PendingWorkerException>>,
     },
 }
 

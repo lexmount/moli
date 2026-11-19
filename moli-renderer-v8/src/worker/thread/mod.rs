@@ -73,11 +73,11 @@ use runtime_inspector::WorkerRuntimeInspector;
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
     WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
-    close_worker_owned_message_ports, dispatch_nested_worker_event,
-    dispatch_worker_csp_violation_event, dispatch_worker_websocket_event,
-    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
-    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
-    drain_service_worker_get_notifications_result,
+    close_worker_owned_message_ports, close_worker_owned_nested_workers,
+    dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
+    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
+    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
+    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -2769,7 +2769,7 @@ async fn worker_main(
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                let result = dispatch_nested_worker_event(scope, &state, worker_id, &message);
+                let result = dispatch_nested_worker_event(scope, &state, worker_id, *message);
                 if let Some(error) = result.unhandled_error {
                     let global = ctx.global(scope);
                     let report = V8ExceptionReport {
@@ -2785,17 +2785,33 @@ async fn worker_main(
                     // Propagation to the owner's global uses omitError: the
                     // child exception cannot cross the worker agent boundary.
                     let omitted_error = v8::null(scope).into();
-                    if !dispatch_worker_error_event(
+                    let handled = dispatch_worker_error_event(
                         scope,
                         global,
                         &report,
                         Some(omitted_error),
                         &script_url,
-                    ) {
+                    );
+                    let diagnostic = if !handled
+                        && matches!(
+                            state.borrow().global_kind,
+                            WorkerGlobalKind::Dedicated { .. }
+                        ) {
+                        error.diagnostic
+                    } else {
+                        if let Some(diagnostic) = error.diagnostic {
+                            diagnostic.finish(handled);
+                        }
+                        None
+                    };
+                    if !handled {
                         report_exception_to_parent(
                             &report,
                             &script_url,
                             error.event_kind,
+                            WorkerErrorPhase::Runtime,
+                            WorkerErrorSource::Runtime,
+                            diagnostic,
                             &parent_tx,
                         );
                     }
@@ -3265,6 +3281,8 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, ctx);
+        close_worker_owned_nested_workers(scope, &state);
         retire_worker_module_runtime(ctx);
         crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);

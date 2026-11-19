@@ -176,6 +176,7 @@ impl ScriptVm {
                                     event_kind,
                                     phase,
                                     source,
+                                    diagnostic,
                                 } => crate::worker::WorkerToParentMessage::Error {
                                     message,
                                     filename,
@@ -184,6 +185,7 @@ impl ScriptVm {
                                     event_kind,
                                     phase,
                                     source,
+                                    diagnostic,
                                 },
                             };
                             let has_message_listener = matches!(
@@ -193,7 +195,7 @@ impl ScriptVm {
                                 scope,
                                 target.wrapper,
                             );
-                            match &parent_message {
+                            match parent_message {
                                 crate::worker::WorkerToParentMessage::Post(_) => {
                                     let _ = crate::context_bootstrap::dispatch_worker_event(
                                         scope,
@@ -209,6 +211,7 @@ impl ScriptVm {
                                     colno,
                                     event_kind,
                                     phase,
+                                    diagnostic,
                                     ..
                                 } => {
                                     if let Err(error) = super::dedicated_worker_error_dispatch::dispatch_error_and_maybe_propagate(
@@ -216,12 +219,13 @@ impl ScriptVm {
                                         host_ptr,
                                         target.wrapper,
                                         super::dedicated_worker_error_dispatch::DedicatedWorkerError {
-                                            message,
-                                            filename,
-                                            lineno: *lineno,
-                                            colno: *colno,
-                                            event_kind: *event_kind,
-                                            phase: *phase,
+                                            message: &message,
+                                            filename: &filename,
+                                            lineno,
+                                            colno,
+                                            event_kind,
+                                            phase,
+                                            diagnostic,
                                         },
                                     )
                                     {

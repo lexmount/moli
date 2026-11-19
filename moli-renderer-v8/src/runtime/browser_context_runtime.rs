@@ -9,7 +9,9 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::diagnostics::{DiagnosticEmitter, DiagnosticEvent, DiagnosticSource};
+use crate::diagnostics::{
+    DiagnosticEmitter, DiagnosticEvent, DiagnosticSource, PendingWorkerException,
+};
 use crate::planning::{
     PreparedScript, SharedScriptSourceLoadCompleter,
     external_script_source_load_outcome_from_result,
@@ -784,6 +786,10 @@ impl RendererBrowserContextRuntime {
         self.inner.diagnostics.subscribe()
     }
 
+    pub fn subscribe_runtime_failures(&self) -> crate::DiagnosticsSubscription {
+        self.inner.diagnostics.subscribe_runtime_failures()
+    }
+
     pub(crate) fn diagnostics(&self) -> &DiagnosticEmitter {
         &self.inner.diagnostics
     }
@@ -1088,6 +1094,19 @@ impl RendererWorkerContextRuntime {
 
     pub(crate) fn emit_diagnostic(&self, build: impl FnOnce(DiagnosticSource) -> DiagnosticEvent) {
         self.diagnostics.emit(|| self.diagnostic_source.map(build));
+    }
+
+    pub(crate) fn report_worker_exception(
+        &self,
+        handled: bool,
+        build: impl FnOnce(DiagnosticSource) -> DiagnosticEvent,
+    ) -> Option<Box<PendingWorkerException>> {
+        let source = self.diagnostic_source?;
+        if !handled && matches!(source, DiagnosticSource::DedicatedWorker { .. }) {
+            return self.diagnostics.defer_worker_exception(|| build(source));
+        }
+        self.diagnostics.emit(|| Some(build(source)));
+        None
     }
 
     pub(crate) fn message_port_registry(

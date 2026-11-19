@@ -35,6 +35,7 @@ pub(super) struct DedicatedWorkerError<'a> {
     pub(super) colno: u32,
     pub(super) event_kind: crate::worker::WorkerParentErrorEventKind,
     pub(super) phase: crate::worker::WorkerErrorPhase,
+    pub(super) diagnostic: Option<Box<crate::diagnostics::PendingWorkerException>>,
 }
 
 pub(super) fn dispatch_error_and_maybe_propagate<'s>(
@@ -57,7 +58,7 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     // A failure while creating the worker's initial script only fires an
     // `error` event at the Worker object. Runtime script errors additionally
     // propagate to the owning Window when that Worker event is not canceled.
-    if unhandled && error.phase == crate::worker::WorkerErrorPhase::Runtime {
+    let handled = if unhandled && error.phase == crate::worker::WorkerErrorPhase::Runtime {
         crate::context_bootstrap::dispatch_window_error_event(
             scope,
             host_ptr,
@@ -67,7 +68,17 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
             error.colno,
             None,
         )
-        .map_err(anyhow::Error::msg)?;
+        .map(|event| {
+            event.is_some_and(|event| {
+                crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented")
+            })
+        })
+        .map_err(anyhow::Error::msg)
+    } else {
+        Ok(!unhandled)
+    };
+    if let Some(diagnostic) = error.diagnostic {
+        diagnostic.finish(matches!(handled, Ok(true)));
     }
-    Ok(())
+    handled.map(|_| ())
 }

@@ -114,22 +114,100 @@ fn bounded(value: &str, max_bytes: usize) -> String {
     value[..value.floor_char_boundary(max_bytes)].to_owned()
 }
 
+type DiagnosticSender = broadcast::Sender<Arc<DiagnosticEvent>>;
+
+#[derive(Debug, Default)]
+struct DiagnosticSenders {
+    diagnostics: OnceLock<DiagnosticSender>,
+    failures: OnceLock<DiagnosticSender>,
+}
+
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DiagnosticEmitter(Arc<OnceLock<broadcast::Sender<Arc<DiagnosticEvent>>>>);
+pub(crate) struct DiagnosticEmitter(Arc<DiagnosticSenders>);
 
 impl DiagnosticEmitter {
     pub(crate) fn subscribe(&self) -> DiagnosticsSubscription {
         self.0
+            .diagnostics
+            .get_or_init(|| broadcast::Sender::new(CAPACITY))
+            .subscribe()
+    }
+
+    pub(crate) fn subscribe_runtime_failures(&self) -> DiagnosticsSubscription {
+        self.0
+            .failures
             .get_or_init(|| broadcast::Sender::new(CAPACITY))
             .subscribe()
     }
 
     pub(crate) fn emit(&self, build: impl FnOnce() -> Option<DiagnosticEvent>) {
-        if let Some(sender) = self.0.get()
-            && sender.receiver_count() != 0
-            && let Some(event) = build()
-        {
-            let _ = sender.send(Arc::new(event));
+        let _ = self.publish(build, false);
+    }
+
+    /// Report the diagnostic now and defer failure reporting to the owner.
+    pub(crate) fn defer_worker_exception(
+        &self,
+        build: impl FnOnce() -> DiagnosticEvent,
+    ) -> Option<Box<PendingWorkerException>> {
+        self.publish(|| Some(build()), true)
+    }
+
+    fn publish(
+        &self,
+        build: impl FnOnce() -> Option<DiagnosticEvent>,
+        wait_for_owner: bool,
+    ) -> Option<Box<PendingWorkerException>> {
+        let diagnostics = self
+            .0
+            .diagnostics
+            .get()
+            .filter(|sender| sender.receiver_count() != 0);
+        let failures = self
+            .0
+            .failures
+            .get()
+            .filter(|sender| sender.receiver_count() != 0);
+        if diagnostics.is_none() && failures.is_none() {
+            return None;
+        }
+
+        let event = Arc::new(build()?);
+        if let Some(sender) = diagnostics {
+            let _ = sender.send(Arc::clone(&event));
+        }
+
+        let sender = failures?;
+        if !matches!(
+            event.as_ref(),
+            DiagnosticEvent::RuntimeException {
+                default_prevented: false,
+                ..
+            } | DiagnosticEvent::ScriptLoadFailure { .. }
+        ) {
+            return None;
+        }
+        if wait_for_owner {
+            return Some(Box::new(PendingWorkerException {
+                sender: sender.clone(),
+                event,
+            }));
+        }
+        let _ = sender.send(event);
+        None
+    }
+}
+
+/// A DedicatedWorker exception waiting for its owner-side error dispatch.
+#[derive(Debug)]
+pub(crate) struct PendingWorkerException {
+    sender: DiagnosticSender,
+    event: Arc<DiagnosticEvent>,
+}
+
+impl PendingWorkerException {
+    pub(crate) fn finish(self, canceled: bool) {
+        if !canceled {
+            let _ = self.sender.send(self.event);
         }
     }
 }
@@ -141,10 +219,13 @@ mod tests {
     #[test]
     fn diagnostics_are_lazy_after_the_last_receiver_is_dropped() {
         let diagnostics = DiagnosticEmitter::default();
-        assert!(diagnostics.0.get().is_none());
+        assert!(diagnostics.0.diagnostics.get().is_none());
+        assert!(diagnostics.0.failures.get().is_none());
         diagnostics.emit(|| panic!("no receiver"));
         let receiver = diagnostics.subscribe();
+        let failures = diagnostics.subscribe_runtime_failures();
         drop(receiver);
+        drop(failures);
         diagnostics.emit(|| panic!("the receiver was dropped"));
     }
 
