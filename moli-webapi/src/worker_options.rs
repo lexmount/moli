@@ -2,6 +2,8 @@ use crate::fetch_request::RequestCredentialsModeWebIdl;
 use moli_fetch_types::RequestCredentialsMode;
 use moli_webidl as webidl;
 
+pub mod service_worker;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, webidl::WebIdlEnum)]
 #[webidl(name = "WorkerType", parse_with = Self::parse_webidl_token)]
 #[strum(serialize_all = "lowercase")]

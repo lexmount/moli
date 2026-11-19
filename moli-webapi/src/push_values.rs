@@ -4,7 +4,7 @@ use moli_v8_util::{
     array_buffer_from_bytes, get_private_value, new_uint8_array_from_bytes, set_private_value,
     v8_string, v8str,
 };
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 const SERVICE_WORKER_PUSH_MESSAGE_DATA_BYTES_SLOT: &str = "__lmServiceWorkerPushMessageDataBytes";
 
 #[derive(WebApiObject)]
@@ -137,4 +137,58 @@ pub fn new_subscription_options<'s>(
     ServiceWorkerPushSubscriptionOptionsDeclaration::new(user_visible_only, application_server_key)
         .bind(scope)
         .ok()
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PushSubscription)]
+struct PushSubscriptionDeclaration<'s> {
+    #[webapi(data_property, readonly)]
+    endpoint: String,
+    #[webapi(data_property = "expirationTime", readonly)]
+    expiration_time: v8::Local<'s, v8::Value>,
+    #[webapi(data_property, readonly)]
+    options: v8::Local<'s, v8::Object>,
+    #[webapi(data_property)]
+    unsubscribe: v8::Local<'s, v8::Function>,
+    #[webapi(method = "toJSON", callback = subscription_to_json, length = 0)]
+    to_json: (),
+}
+
+/// Build the subscription surface with the caller's own registration operation.
+pub fn new_subscription<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    endpoint: &str,
+    user_visible_only: bool,
+    unsubscribe: impl v8::MapFnTo<v8::FunctionCallback>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let options = new_subscription_options(scope, user_visible_only, v8::null(scope).into())?;
+    let unsubscribe = v8::Function::builder(unsubscribe)
+        .constructor_behavior(v8::ConstructorBehavior::Throw)
+        .build(scope)?;
+    unsubscribe.set_name(v8str(scope, "unsubscribe"));
+    PushSubscriptionDeclaration {
+        endpoint: endpoint.to_owned(),
+        expiration_time: v8::null(scope).into(),
+        options,
+        unsubscribe,
+        to_json: (),
+    }
+    .bind(scope)
+    .ok()
+}
+
+fn subscription_to_json<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let object = ObjectLiteralDeclaration::bind(scope);
+    for name in ["endpoint", "expirationTime", "options"] {
+        let value = args
+            .this()
+            .get(scope, v8str(scope, name).into())
+            .unwrap_or_else(|| v8::undefined(scope).into());
+        object.set_string_property(scope, name, value);
+    }
+    rv.set(object.into_value());
 }
