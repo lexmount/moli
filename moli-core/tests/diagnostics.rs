@@ -78,6 +78,10 @@ async fn browser_diagnostics_are_isolated_and_do_not_read_author_stack_propertie
     }
     assert_empty(&mut diagnostics);
     assert_empty(&mut other_diagnostics);
+    diagnostics.close();
+    assert!(browser.subscribe_diagnostics().is_none());
+    drop(other_diagnostics);
+    assert!(other.subscribe_diagnostics().is_none());
     Ok(())
 }
 

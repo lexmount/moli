@@ -263,9 +263,10 @@ fn initial_navigation_request(request: Request) -> Request {
 impl Browser {
     /// Subscribe to future diagnostics from this Browser's Pages and Workers.
     ///
-    /// Returns `None` while this Browser already has an open subscription.
-    /// Close or drop the receiver before subscribing again. Consume events
-    /// regularly to limit the memory used by the unbounded queue.
+    /// The first call creates this Browser's only subscription. Subsequent
+    /// calls return `None`. Closing or dropping the receiver permanently stops
+    /// diagnostics for this Browser. Consume events regularly to limit the
+    /// memory used by the unbounded queue.
     /// Runtime exceptions arrive after reporting finishes. A momentarily
     /// empty queue can still have reports in flight.
     pub fn subscribe_diagnostics(&self) -> Option<crate::DiagnosticsSubscription> {
