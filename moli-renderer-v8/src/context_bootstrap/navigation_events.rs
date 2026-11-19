@@ -5,8 +5,8 @@ use super::events::{
 use super::location_runtime::location_href_slot;
 use super::media_queries::dispatch_simple_event_target_event;
 use super::navigation_activation::{
-    navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
-    take_navigation_transition_committed_resolver,
+    existing_navigation_entry_from_snapshot, navigation_transition_matches_resolver,
+    precommit_transition_resolver_from_event, take_navigation_transition_committed_resolver,
 };
 use super::navigation_entry::{
     history_entries, navigation_current_entry, navigation_entries_share_document,
@@ -24,15 +24,16 @@ use super::navigation_lifecycle::{
 };
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, navigation_has_disabled_entries,
-    replace_navigation_unload_event_active, runtime_window_dispatch_scope,
-    runtime_window_document_is_fully_active, runtime_window_is_global, runtime_window_owner,
-    should_dispatch_hash_change, window_history_for_holder, window_location_for_holder,
-    window_task_target_for_runtime_owner,
+    child_browsing_context_handle_for_runtime_owner, navigation_document_has_disabled_entries,
+    navigation_has_disabled_entries, replace_navigation_unload_event_active,
+    runtime_window_dispatch_scope, runtime_window_document_is_fully_active,
+    runtime_window_is_global, runtime_window_owner, should_dispatch_hash_change,
+    window_history_for_holder, window_location_for_holder, window_task_target_for_runtime_owner,
 };
 use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::document_runtime::EventTargetHandle;
+use crate::native_bridge::NavigationActivationSeed;
 use crate::page_task_queue::RendererPageHashChangeData;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
@@ -596,6 +597,77 @@ pub(crate) fn dispatch_unload_for_runtime_owner<'s>(
         return;
     };
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "unload", event);
+}
+
+#[derive(Default)]
+pub(crate) struct PageSwapNavigation {
+    activation: Option<NavigationActivationSeed>,
+}
+
+impl PageSwapNavigation {
+    pub(crate) fn for_document(
+        activation: Option<&NavigationActivationSeed>,
+        final_url: &url::Url,
+        destination_origin: Option<String>,
+    ) -> Self {
+        let activation = activation.zip(destination_origin).map(|(seed, origin)| {
+            let mut seed = seed.clone();
+            seed.entry.url = final_url.as_str().to_owned();
+            seed.entry.document_origin = origin;
+            seed
+        });
+        Self { activation }
+    }
+}
+
+pub(crate) fn dispatch_pageswap_for_runtime_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    navigation: &PageSwapNavigation,
+) {
+    let activation = page_swap_activation(scope, owner, navigation);
+    let Some(event) =
+        moli_webapi::events::subclasses::construct_original_page_swap_event(scope, activation)
+    else {
+        return;
+    };
+    dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "pageswap", event);
+}
+
+fn page_swap_activation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    navigation: &PageSwapNavigation,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let activation = navigation.activation.as_ref()?;
+    let navigation_type = activation.navigation_type.as_deref()?;
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let source_scope = runtime_window_dispatch_scope(scope, owner)?;
+    let source_origin = unsafe { &*host_ptr }.window_document_origin(source_scope)?;
+    if !moli_url::parsed_same_origin(&source_origin, &activation.entry.document_origin)
+        || navigation_document_has_disabled_entries(scope, owner)
+    {
+        return None;
+    }
+    let from = navigation_current_entry(scope, owner)?;
+    let entry = match navigation_type {
+        "reload" => from,
+        "traverse" => existing_navigation_entry_from_snapshot(scope, from, &activation.entry)?,
+        "push" | "replace" => entry_wrappers::for_window(
+            scope,
+            owner,
+            super::navigation_seed::history_entry_from_snapshot(&activation.entry),
+        ),
+        _ => return None,
+    };
+    let navigation_type = v8_string(scope, navigation_type)?;
+    Some(moli_webapi::navigation_values::new_navigation_activation(
+        scope,
+        entry,
+        from.into(),
+        navigation_type.into(),
+        false,
+    ))
 }
 
 pub(crate) fn dispatch_pagehide_for_runtime_owner<'s>(

@@ -115,12 +115,23 @@ impl CommittedNavigationEntry {
     pub(super) fn commit_source(&mut self, commit: PageVmSourceDocumentCommit) {
         let reused_initial_window = match commit {
             PageVmSourceDocumentCommit::ReplaceWindow(commit) => {
-                let previous_unload = commit.unload_and_detach();
+                let previous_unload =
+                    commit.unload_and_detach(self.navigation.page_swap_navigation());
                 self.navigation
                     .set_previous_document_unload(previous_unload);
                 None
             }
-            PageVmSourceDocumentCommit::ReuseInitialWindow(window) => Some(window),
+            PageVmSourceDocumentCommit::ReuseInitialWindow(window) => {
+                if let Err(error) = self
+                    .entry
+                    .page_vm_mut()
+                    .vm_mut()
+                    .dispatch_main_page_swap(self.navigation.page_swap_navigation())
+                {
+                    tracing::debug!(%error, "could not dispatch pageswap before reusing the initial Window");
+                }
+                Some(window)
+            }
         };
         #[cfg(test)]
         self.navigation

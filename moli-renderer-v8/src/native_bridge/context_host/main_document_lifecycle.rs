@@ -76,6 +76,7 @@ impl PageScriptHost {
     pub(crate) fn dispatch_main_document_unload_for_navigation_commit(
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut Self,
+        page_swap: Option<&crate::context_bootstrap::PageSwapNavigation>,
     ) {
         let Some(owner) = unsafe { &mut *host_ptr }
             .frame_owner_store
@@ -96,7 +97,12 @@ impl PageScriptHost {
         let _unload = unsafe { &*host_ptr }.enter_document_unload(document);
         let previous =
             crate::context_bootstrap::replace_navigation_unload_event_active(scope, window, true);
-        crate::context_bootstrap::dispatch_pagehide_for_runtime_owner(scope, window);
+        if let Some(page_swap) = page_swap {
+            crate::context_bootstrap::dispatch_pageswap_for_runtime_owner(scope, window, page_swap);
+        }
+        if unsafe { &*host_ptr }.main_document_task_owner_is_current(owner) {
+            crate::context_bootstrap::dispatch_pagehide_for_runtime_owner(scope, window);
+        }
         if unsafe { &*host_ptr }.main_document_task_owner_is_current(owner)
             && unsafe { &*host_ptr }.document_activity().visible
             && unsafe { &mut *host_ptr }

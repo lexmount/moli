@@ -38,7 +38,7 @@ impl ScriptVm {
                 );
             }
             crate::native_bridge::PageScriptHost::dispatch_main_document_unload_for_navigation_commit(
-                scope, host_ptr,
+                scope, host_ptr, None,
             );
             let timeout = watchdog.timeout();
             if watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut {

@@ -564,10 +564,28 @@ impl ScriptVm {
         unsafe { &mut *host_ptr }.dispatch_main_document_tree_beforeunload(scope)
     }
 
+    pub(crate) fn dispatch_main_page_swap(
+        &mut self,
+        page_swap: crate::context_bootstrap::PageSwapNavigation,
+    ) -> anyhow::Result<()> {
+        if self.current_main_world().is_none() {
+            return Ok(());
+        }
+        self.with_default_context_scope(|scope, _host_ptr| {
+            let window = scope.get_current_context().global(scope);
+            crate::context_bootstrap::dispatch_pageswap_for_runtime_owner(
+                scope, window, &page_swap,
+            );
+            Ok(())
+        })
+    }
+
     pub(crate) fn unload_main_document_for_navigation_commit(&mut self) -> anyhow::Result<()> {
         let _unload_callbacks = self.devtools_target().pause_ref().begin_unload_callbacks();
         self.with_default_context_scope(|scope, host_ptr| {
-            PageScriptHost::dispatch_main_document_unload_for_navigation_commit(scope, host_ptr);
+            PageScriptHost::dispatch_main_document_unload_for_navigation_commit(
+                scope, host_ptr, None,
+            );
             Ok(())
         })
     }

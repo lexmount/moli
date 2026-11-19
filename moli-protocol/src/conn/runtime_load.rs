@@ -1694,7 +1694,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             final_url.clone(),
             load_inputs.navigation_initiator_url.clone(),
             response.redirected,
-            redirect_chain.len(),
+            redirect_chain,
             response_status,
             response_headers.clone(),
             raw_body,
@@ -3672,7 +3672,7 @@ async fn prepare_captured_document_response_with_engine_async(
     let response_status = head.status;
     let response_headers = head.headers;
     let redirected = head.redirected;
-    let redirect_count = head.redirect_chain.len();
+    let redirect_chain = head.redirect_chain.into_iter().map(Into::into).collect();
     let (body_tx, body_rx) = mpsc::channel(EXTERNAL_RAW_BODY_CHANNEL_CAPACITY);
     let (completion_tx, completion_rx) = oneshot::channel();
     let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx)
@@ -3690,7 +3690,7 @@ async fn prepare_captured_document_response_with_engine_async(
             final_url.clone(),
             load_inputs.navigation_initiator_url.clone(),
             redirected,
-            redirect_count,
+            redirect_chain,
             response_status,
             response_headers.clone(),
             raw_body,

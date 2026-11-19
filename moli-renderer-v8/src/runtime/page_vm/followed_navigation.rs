@@ -46,8 +46,51 @@ pub(super) enum FollowedLocationNavigationBootstrapBoundary {
     DocumentCommit,
 }
 
-#[cfg(test)]
 impl LoadedFollowedLocationNavigation {
+    fn page_swap_navigation(
+        &self,
+        env: &PageVmEnvConfig,
+        seed: Option<&crate::native_bridge::NavigationHistoryEntrySeed>,
+    ) -> crate::context_bootstrap::PageSwapNavigation {
+        let (final_url, headers, cross_origin_redirect) = match self {
+            Self::StreamingDocument { response, .. } => (
+                &response.final_url,
+                &response.headers,
+                response
+                    .redirect_chain
+                    .iter()
+                    .any(|redirect| !moli_url::same_origin(&redirect.from_url, &redirect.to_url)),
+            ),
+            Self::ExternalDocument {
+                final_url,
+                response_headers,
+                ..
+            } => (final_url, response_headers, false),
+            _ => unreachable!("only a Document response reaches navigation commit"),
+        };
+        let about_document = env.about_document_state.as_ref();
+        let policy = crate::document_runtime::DocumentPolicyContainer::for_navigation_response(
+            headers,
+            final_url,
+            about_document.map(crate::runtime::RendererAboutDocumentState::policy_container),
+            env.history_policy_container.as_ref(),
+            None,
+        )
+        .with_content_security_policy_bypass(env.document_settings.bypass_content_security_policy);
+        let destination_origin = (!cross_origin_redirect && !policy.sandbox.forces_opaque_origin)
+            .then(|| {
+                about_document
+                    .map(|state| state.origin().serialized_origin())
+                    .unwrap_or_else(|| moli_url::origin_ascii_serialization(final_url))
+            });
+        crate::context_bootstrap::PageSwapNavigation::for_document(
+            seed.and_then(|seed| seed.activation.as_ref()),
+            final_url,
+            destination_origin,
+        )
+    }
+
+    #[cfg(test)]
     fn has_header_for_test(&self, expected_name: &str) -> bool {
         let headers = match self {
             Self::NoDocument | Self::Download(_) => return false,
@@ -598,6 +641,7 @@ struct PreparedResponseBootstrapPayload {
     runtime_hooks: PageVmRuntimeHooks,
     request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
+    page_swap_origin: Option<String>,
 }
 
 /// Owns all continuation state after the source Document has committed away
@@ -617,6 +661,30 @@ pub(in crate::runtime) struct PageVmCommittedNavigationBootstrap {
 }
 
 impl PageVmCommittedNavigationBootstrap {
+    pub(in crate::runtime) fn page_swap_navigation(
+        &self,
+    ) -> crate::context_bootstrap::PageSwapNavigation {
+        match self
+            .payload
+            .as_ref()
+            .expect("committed bootstrap retains its payload")
+        {
+            PageVmCommittedNavigationBootstrapPayload::Followed(payload) => payload
+                .loaded
+                .page_swap_navigation(&payload.env, payload.navigation_bootstrap_entry.as_ref()),
+            PageVmCommittedNavigationBootstrapPayload::PreparedResponse(payload) => {
+                crate::context_bootstrap::PageSwapNavigation::for_document(
+                    payload
+                        .navigation_bootstrap_entry
+                        .as_ref()
+                        .and_then(|seed| seed.activation.as_ref()),
+                    &payload.request.final_url,
+                    payload.page_swap_origin.clone(),
+                )
+            }
+        }
+    }
+
     pub(in crate::runtime) fn set_previous_document_unload(
         &mut self,
         timing: Option<crate::network::context::DocumentUnloadTiming>,
@@ -685,6 +753,7 @@ impl PageVmCommittedNavigationBootstrap {
                     runtime_hooks,
                     request,
                     navigation_bootstrap_entry,
+                    ..
                 } = *payload;
                 let mut response = PageVmNavigationResponse {
                     requested_url: request.requested_url.clone(),
@@ -1279,6 +1348,12 @@ impl PageVm {
             &policy,
             bootstrap.initial_document_environment.as_ref(),
         )?;
+        let page_swap_origin = (!policy.sandbox.forces_opaque_origin
+            && !request
+                .navigation_redirect_chain
+                .iter()
+                .any(|redirect| !moli_url::same_origin(&redirect.from_url, &redirect.to_url)))
+        .then_some(origin);
         let mut runtime_hooks = self
             .runtime_hooks
             .clone()
@@ -1308,6 +1383,7 @@ impl PageVm {
                     runtime_hooks,
                     request,
                     navigation_bootstrap_entry,
+                    page_swap_origin,
                 }),
             )),
             browser_context_runtime,
@@ -1596,7 +1672,9 @@ impl PageVm {
         if runtime_hooks.has_renderer_page_script_environment() {
             let previous_unload = self
                 .prepare_main_window_proxy_navigation(self.page_id)?
-                .unload_and_detach();
+                .unload_and_detach(
+                    loaded.page_swap_navigation(&env, navigation_bootstrap_entry.as_ref()),
+                );
             request_client.set_previous_document_unload_seed(previous_unload);
             self.record_main_navigation_commit();
             self.retire_committed_main_script_vm();

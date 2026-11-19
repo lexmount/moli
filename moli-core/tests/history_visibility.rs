@@ -231,3 +231,60 @@ async fn same_document_traversal_keeps_visibility_and_skips_unload() -> Result<(
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_navigation_dispatches_pageswap_before_pagehide() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let start = Url::parse(&server.url("/compat/child-dynamic-markup-document?markup=before"))?;
+    let destination = server.url("/compat/child-dynamic-markup-document?markup=after");
+    let mut page = browser.fetch(start.as_str()).await?;
+    let source = r#"
+      (() => {
+        const events = [];
+        addEventListener("pageswap", event => {
+          const {activation} = event;
+          events.push({
+            type: event.type,
+            native: event instanceof PageSwapEvent && event.isTrusted,
+            targetsWindow: event.target === window && event.currentTarget === window,
+            fromCurrentEntry: activation?.from === navigation.currentEntry,
+            sameDocument: activation?.entry.sameDocument,
+            destination: activation?.entry.url,
+            navigationType: activation?.navigationType,
+          });
+        });
+        addEventListener("pagehide", event => {
+          events.push({type: event.type});
+          sessionStorage.setItem("navigation-events", JSON.stringify(events));
+        });
+        location.assign(DESTINATION);
+      })()
+    "#;
+    page.evaluate_runtime_expression_async(
+        &source.replace("DESTINATION", &serde_json::to_string(&destination)?),
+    )
+    .await?;
+    assert_eq!(page.final_url().as_str(), destination);
+    let result = page
+        .evaluate_runtime_expression_async("sessionStorage.getItem('navigation-events')")
+        .await?;
+    let events: Value = serde_json::from_str(result["value"].as_str().unwrap_or("null"))?;
+    assert_eq!(
+        events,
+        json!([
+            {
+                "type": "pageswap",
+                "native": true,
+                "targetsWindow": true,
+                "fromCurrentEntry": true,
+                "sameDocument": false,
+                "destination": destination,
+                "navigationType": "push"
+            },
+            {"type": "pagehide"}
+        ])
+    );
+    server.shutdown().await;
+    Ok(())
+}
