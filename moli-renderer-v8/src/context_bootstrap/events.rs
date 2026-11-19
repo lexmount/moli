@@ -15,7 +15,6 @@ mod subclasses;
 pub(crate) use moli_webapi::events::subclasses::submit::{
     mark_agent_submit_event, take_submit_event_response,
 };
-use moli_webapi::events::ui;
 use moli_webapi::events::value;
 pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
@@ -100,7 +99,7 @@ pub(crate) fn construct_original_text_input_event<'s>(
         v8::Boolean::new(scope, true).into(),
     );
     let view = scope.get_current_context().global(scope);
-    ui::initialize_legacy_ui_event(scope, backing, Some(view), 0);
+    moli_webapi::events::ui::initialize_legacy_ui_event(scope, backing, Some(view), 0);
     let data = v8_string(scope, text)?;
     define_event_property(scope, backing, "data", data.into());
     base::set_event_initialized(scope, backing, true);
