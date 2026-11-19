@@ -629,10 +629,31 @@ fn request_and_response_headers_share_intrinsic_prototype_methods() {
     const streamRequest = new Request('/stream', {method: 'POST', duplex: 'half',
       body: new ReadableStream({start(controller) {controller.close();}})});
     const response = new Response('body', {headers: {'x-test': 'response'}});
-    const error = Response.error();
-    const redirect = Response.redirect('/target');
+    const NativeResponse = Response;
+    const responseDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Response');
+    let error, redirect, json, customJson;
+    Object.defineProperty(globalThis, 'Response', {configurable: true, get() {
+      throw new Error('public Response lookup');
+    }});
+    try {
+      error = NativeResponse.error();
+      redirect = NativeResponse.redirect('/target', 307);
+      json = NativeResponse.json({ok: true}, {status: 201, headers: {'x-test': 'json'}});
+      customJson = NativeResponse.json({}, {headers: {'Content-Type': 'application/custom'}});
+    } finally {
+      Object.defineProperty(globalThis, 'Response', responseDescriptor);
+    }
+    for (const entry of [error, redirect, json, customJson]) {
+      check(Object.getPrototypeOf(entry) === NativeResponse.prototype, 'intrinsic Response prototype');
+    }
+    check(error.type === 'error' && error.status === 0 && error.body === null, 'error state');
+    check(redirect.status === 307 && redirect.headers.get('location') === new URL('/target', location.href).href,
+      'redirect state');
+    check(json.status === 201 && json.headers.get('x-test') === 'json' &&
+      json.headers.get('content-type') === 'application/json', 'JSON response state');
+    check(customJson.headers.get('content-type') === 'application/custom', 'custom JSON content type');
     const holders = [request, request.clone(), streamRequest, streamRequest.clone(),
-      response, response.clone(), error, error.clone(), redirect, redirect.clone()];
+      response, response.clone(), error, error.clone(), redirect, redirect.clone(), json, json.clone()];
     const methods = ['get', 'has', 'getSetCookie', 'set', 'delete', 'append',
       'keys', 'values', 'entries', 'forEach', Symbol.iterator];
     for (const holder of holders) {

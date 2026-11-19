@@ -1,6 +1,9 @@
-use crate::headers::{build_headers_object, clone_headers_object, headers_entries_from_init};
+use crate::headers::{clone_headers_object, headers_entries_from_init};
 use crate::interfaces as web_api_interfaces;
-use moli_v8_util::{get_private_object, get_private_value, set_private_value};
+use moli_fetch_types::FetchResponseMetadata;
+use moli_v8_util::{
+    get_private_object, get_private_value, set_private_value, throw_range_error, throw_type_error,
+};
 use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
 
@@ -31,7 +34,7 @@ struct ResponseCloneShellDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Response)]
-pub struct ResponseInstanceDeclaration {
+struct ResponseInstanceDeclaration {
     #[webapi(slot = RESPONSE_STATUS_SLOT)]
     status: f64,
     #[webapi(slot = RESPONSE_STATUS_TEXT_SLOT)]
@@ -60,14 +63,6 @@ pub struct FetchResponseBodyDeclaration<'scope> {
     body: v8::Local<'scope, v8::Value>,
     #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
     body_used: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct ResponseInitObjectDeclaration<'scope> {
-    status: Option<f64>,
-    status_text: Option<String>,
-    headers: Option<v8::Local<'scope, v8::Value>>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
@@ -118,42 +113,59 @@ impl Default for ParsedResponseInit {
     }
 }
 
-pub fn empty_response_init_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    ResponseInitObjectDeclaration::new(None, None, None)
-        .bind(scope)
-        .expect("Response error init declaration should bind")
-}
-
-pub fn build_response_init_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    mut parsed: ParsedResponseInit,
-    extra_headers: &[(&str, &str)],
-) -> v8::Local<'s, v8::Object> {
-    for (name, value) in extra_headers {
-        if !parsed
+impl ParsedResponseInit {
+    pub fn append_default_header(&mut self, name: &str, value: &str) {
+        if !self
             .headers
             .iter()
-            .any(|(entry_name, _): &(String, String)| entry_name.eq_ignore_ascii_case(name))
+            .any(|(entry, _)| entry.eq_ignore_ascii_case(name))
         {
-            parsed
-                .headers
-                .push((name.to_ascii_lowercase(), (*value).to_owned()));
+            self.headers
+                .push((name.to_ascii_lowercase(), value.to_owned()));
         }
     }
 
-    ResponseInitObjectDeclaration::new(
-        Some(parsed.status as f64),
-        (!parsed.status_text.is_empty()).then_some(parsed.status_text),
-        if parsed.headers.is_empty() {
-            None
-        } else {
-            Some(build_headers_object(scope, &parsed.headers).into())
-        },
-    )
-    .bind(scope)
-    .expect("Response init declaration should bind")
+    pub fn validate(&self, scope: &mut v8::PinScope<'_, '_>, has_body: bool) -> bool {
+        if !(200..=599).contains(&self.status) {
+            throw_range_error(
+                scope,
+                "Failed to construct 'Response': The status provided is outside the range [200, 599].",
+            );
+            return false;
+        }
+        if has_body && matches!(self.status, 204 | 205 | 304) {
+            throw_type_error(
+                scope,
+                "Failed to construct 'Response': Response with null body status cannot have body.",
+            );
+            return false;
+        }
+        if !self
+            .status_text
+            .chars()
+            .all(|ch| matches!(ch as u32, 0x09 | 0x20..=0x7e | 0x80..=0xff))
+        {
+            throw_type_error(
+                scope,
+                "Failed to construct 'Response': The statusText provided is not a valid reason phrase.",
+            );
+            return false;
+        }
+        true
+    }
+}
+
+pub fn initialize_response_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    status: u16,
+    status_text: String,
+    metadata: &FetchResponseMetadata,
+) {
+    ResponseInstanceDeclaration::new(f64::from(status), status_text, (200..300).contains(&status))
+        .initialize(scope, response)
+        .expect("Response instance declaration should initialize");
+    set_response_metadata(scope, response, metadata);
 }
 
 /// Project the Response state that does not require inspection of its live body.
