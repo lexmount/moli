@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::RendererPointerEventProperties;
-use moli_webapi::events::dispatch_init::{
-    DragEventInitDeclaration, PointerEventInitDeclaration, WheelEventInitDeclaration,
+use moli_webapi::events::subclasses::{
+    construct_native_drag_event, construct_native_pointer_event, construct_native_wheel_event,
 };
 
 pub(crate) fn construct_mouse_event_with_modifiers<'s>(
@@ -91,7 +91,7 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
         related_target,
         view,
     )?;
-    construct_event(scope, "MouseEvent", event_type, init)
+    construct_native_mouse_event(scope, event_type, init)
 }
 
 pub(crate) fn construct_pointer_event_with_modifiers<'s>(
@@ -126,41 +126,26 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let is_enter_or_leave = matches!(event_type, "pointerenter" | "pointerleave");
-    let pointer_type = v8_string(scope, &pointer.pointer_type)?;
-    let modifier_keys = modifier_key_state(modifiers);
-    let init = PointerEventInitDeclaration::new(
-        !is_enter_or_leave,
-        !is_enter_or_leave
-            && !matches!(
-                event_type,
-                "pointercancel" | "gotpointercapture" | "lostpointercapture"
-            ),
-        true,
-        coordinates.screen_x,
-        coordinates.screen_y,
-        coordinates.client_x,
-        coordinates.client_y,
+    let mouse = MouseEventInit::from_native(
+        scope,
+        EventInit {
+            bubbles: !is_enter_or_leave,
+            cancelable: !is_enter_or_leave
+                && !matches!(
+                    event_type,
+                    "pointercancel" | "gotpointercapture" | "lostpointercapture"
+                ),
+            composed: true,
+        },
+        coordinates,
+        0,
         button,
         buttons,
-        modifier_keys.alt,
-        modifier_keys.ctrl,
-        modifier_keys.meta,
-        modifier_keys.shift,
-        pointer_type,
-        pointer.pressure,
-        pointer.tangential_pressure,
-        pointer.tilt_x,
-        pointer.tilt_y,
-        pointer.twist,
-        f64::from(pointer.pointer_id),
-        1.0,
-        1.0,
-        pointer.is_primary,
+        modifiers,
         related_target,
-    )
-    .bind(scope)
-    .ok()?;
-    construct_event(scope, "PointerEvent", event_type, init)
+        None,
+    )?;
+    construct_native_pointer_event(scope, event_type, mouse, pointer)
 }
 
 pub(crate) fn construct_pointer_event<'s>(
@@ -211,27 +196,23 @@ pub(crate) fn construct_drag_event_with_related_target<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let modifier_keys = modifier_key_state(modifiers);
     let view = scope.get_current_context().global(scope);
-    let init = DragEventInitDeclaration::new(
-        true,
-        !matches!(event_type, "dragleave" | "dragend"),
-        true,
-        coordinates.screen_x,
-        coordinates.screen_y,
-        coordinates.client_x,
-        coordinates.client_y,
-        modifier_keys.alt,
-        modifier_keys.ctrl,
-        modifier_keys.meta,
-        modifier_keys.shift,
-        view,
-        data_transfer,
+    let mouse = MouseEventInit::from_native(
+        scope,
+        EventInit {
+            bubbles: true,
+            cancelable: !matches!(event_type, "dragleave" | "dragend"),
+            composed: true,
+        },
+        coordinates,
+        0,
+        0,
+        0,
+        modifiers,
         related_target,
-    )
-    .bind(scope)
-    .ok()?;
-    construct_event(scope, "DragEvent", event_type, init)
+        Some(view),
+    )?;
+    construct_native_drag_event(scope, event_type, mouse, data_transfer)
 }
 
 pub(crate) fn construct_wheel_event<'s>(
@@ -244,30 +225,23 @@ pub(crate) fn construct_wheel_event<'s>(
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let modifier_keys = modifier_key_state(modifiers);
-    let init = WheelEventInitDeclaration::new(
-        true,
-        true,
-        true,
-        coordinates.screen_x,
-        coordinates.screen_y,
-        coordinates.client_x,
-        coordinates.client_y,
-        delta_x,
-        delta_y,
+    let view = scope.get_current_context().global(scope);
+    let mouse = MouseEventInit::from_native(
+        scope,
+        EventInit {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+        },
+        coordinates,
+        0,
         button,
         buttons,
-        modifier_keys.alt,
-        modifier_keys.ctrl,
-        modifier_keys.meta,
-        modifier_keys.shift,
-        scope.get_current_context().global(scope),
-    )
-    .bind(scope)
-    .ok()?;
-    init.set_prototype(scope, v8::null(scope).into())?
-        .then_some(())?;
-    construct_event(scope, "WheelEvent", event_type, init)
+        modifiers,
+        None,
+        Some(view),
+    )?;
+    construct_native_wheel_event(scope, event_type, mouse, delta_x, delta_y)
 }
 
 pub(crate) fn construct_drop_input_event<'s>(

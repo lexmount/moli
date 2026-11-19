@@ -33,8 +33,8 @@ pub(in crate::network_host) const REQUEST_IS_RELOAD_NAVIGATION_SLOT: &str =
 pub(in crate::network_host) const REQUEST_BODY_SLOT: &str = "__lmRequestBody";
 pub(in crate::network_host) const REQUEST_BODY_USED_SLOT: &str = "__lmRequestBodyUsed";
 use moli_webapi::fetch_response::{
-    FetchResponseHeadDeclaration, ResponseCloneShellDeclaration, build_response_init_object,
-    empty_response_init_object,
+    FetchResponseHeadDeclaration, build_response_init_object, clone_response_surface,
+    empty_response_init_object, response_value_attribute,
 };
 pub(crate) use moli_webapi::fetch_response::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT,
@@ -455,17 +455,8 @@ fn response_slot_attribute_getter_callback<'s>(
         rv.set(v8::Boolean::new(scope, body_used).into());
         return;
     }
-    if matches!(
-        slot,
-        RESPONSE_TYPE_SLOT | RESPONSE_URL_SLOT | RESPONSE_REDIRECTED_SLOT
-    ) {
-        let value = super::response::response_metadata_attribute(scope, this, slot)
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        rv.set(value);
-        return;
-    }
     let value =
-        response_slot_value(scope, this, slot).unwrap_or_else(|| v8::undefined(scope).into());
+        response_value_attribute(scope, this, slot).unwrap_or_else(|| v8::undefined(scope).into());
     rv.set(value);
 }
 
@@ -785,11 +776,7 @@ fn response_clone_callback<'s>(
         return;
     };
     let scope = &mut v8::ContextScope::new(scope, realm);
-    let null_body = v8::null(scope).into();
-    let clone = ResponseCloneShellDeclaration::new(Some(null_body))
-        .bind(scope)
-        .expect("Response clone shell declaration should bind");
-    copy_response_surface_slots(scope, response, clone);
+    let clone = clone_response_surface(scope, response);
     if response_slot_number(scope, response, RESPONSE_STATUS_SLOT) == Some(0.0) {
         clone_filtered_response_internal_body_source(scope, response, clone);
     } else {
@@ -805,47 +792,6 @@ fn response_clone_callback<'s>(
     }
     mark_response_object(scope, clone);
     rv.set(clone.into());
-}
-
-fn copy_response_surface_slots<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    from: v8::Local<'s, v8::Object>,
-    to: v8::Local<'s, v8::Object>,
-) {
-    for slot in [
-        RESPONSE_STATUS_SLOT,
-        RESPONSE_STATUS_TEXT_SLOT,
-        RESPONSE_OK_SLOT,
-        RESPONSE_URL_SLOT,
-        RESPONSE_INTERNAL_STATUS_SLOT,
-        RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
-        super::response::RESPONSE_METADATA_SLOT,
-    ] {
-        if let Some(value) = response_slot_value(scope, from, slot) {
-            set_response_slot_value(scope, to, slot, value);
-        }
-    }
-    let headers = response_slot_object(scope, from, RESPONSE_HEADERS_SLOT);
-    let cloned_headers =
-        headers.map(|headers| super::headers::clone_headers_object(scope, headers));
-    if let Some(cloned_headers) = cloned_headers {
-        set_response_slot_value(scope, to, RESPONSE_HEADERS_SLOT, cloned_headers.into());
-    }
-    if let Some(internal_headers) =
-        response_slot_object(scope, from, RESPONSE_INTERNAL_HEADERS_SLOT)
-    {
-        let cloned_internal = if Some(internal_headers) == headers {
-            cloned_headers.expect("public response headers were cloned")
-        } else {
-            super::headers::clone_headers_object(scope, internal_headers)
-        };
-        set_response_slot_value(
-            scope,
-            to,
-            RESPONSE_INTERNAL_HEADERS_SLOT,
-            cloned_internal.into(),
-        );
-    }
 }
 
 fn clone_response_readable_stream_body<'s>(

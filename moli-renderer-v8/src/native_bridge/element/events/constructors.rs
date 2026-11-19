@@ -1,10 +1,10 @@
-#[cfg(any(test, feature = "devtools"))]
-use moli_webapi::events::dispatch_init::KeyboardEventInitDeclaration;
 use moli_webapi::events::dispatch_init::{
     CommandEventInitDeclaration, FocusEventInitDeclaration, FormDataEventInitDeclaration,
-    InputEventInitDeclaration, InterestEventInitDeclaration, MouseEventInitDeclaration,
-    SimpleEventInitDeclaration, SubmitEventInitDeclaration, ToggleEventInitDeclaration,
+    InputEventInitDeclaration, InterestEventInitDeclaration, SimpleEventInitDeclaration,
+    SubmitEventInitDeclaration, ToggleEventInitDeclaration,
 };
+#[cfg(any(test, feature = "devtools"))]
+use moli_webapi::events::subclasses::construct_native_keyboard_event;
 #[cfg(feature = "devtools")]
 mod devtools;
 #[cfg(feature = "devtools")]
@@ -16,8 +16,13 @@ pub(crate) use devtools::{
     construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
 };
 
-use crate::util::{v8_string, v8str};
+use crate::util::v8_string;
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
+use moli_webapi::events::init::EventInit;
+pub(crate) use moli_webapi::events::subclasses::InputEventCoordinates;
+#[cfg(any(test, feature = "devtools"))]
+use moli_webapi::events::subclasses::construct_native_mouse_event;
+use moli_webapi::events::subclasses::{MouseEventInit, construct_native_pointer_click};
 
 use super::construct_event;
 
@@ -264,54 +269,6 @@ fn keyboard_event_key_code_for_printable_key(key: &str) -> Option<u32> {
     })
 }
 
-#[derive(Clone, Copy)]
-struct ModifierKeyState {
-    alt: bool,
-    ctrl: bool,
-    meta: bool,
-    shift: bool,
-}
-
-fn modifier_key_state(modifiers: u8) -> ModifierKeyState {
-    ModifierKeyState {
-        alt: modifiers & 1 == 1,
-        ctrl: modifiers & 2 == 2,
-        meta: modifiers & 4 == 4,
-        shift: modifiers & 8 == 8,
-    }
-}
-
-/// Root/screen and target-frame client coordinates for a dispatched input event.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct InputEventCoordinates {
-    pub screen_x: f64,
-    pub screen_y: f64,
-    pub client_x: f64,
-    pub client_y: f64,
-}
-
-impl InputEventCoordinates {
-    pub(crate) fn from_root(x: f64, y: f64) -> Self {
-        // Moli's top-level window is at the screen origin. Frame transforms
-        // change client coordinates without changing this screen position.
-        Self {
-            screen_x: x,
-            screen_y: y,
-            client_x: x,
-            client_y: y,
-        }
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn with_client(self, x: f64, y: f64) -> Self {
-        Self {
-            client_x: x,
-            client_y: y,
-            ..self
-        }
-    }
-}
-
 fn mouse_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -322,8 +279,7 @@ fn mouse_event_init<'s>(
     modifiers: u8,
     related_target: Option<v8::Local<'s, v8::Value>>,
     view: Option<v8::Local<'s, v8::Object>>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let modifier_keys = modifier_key_state(modifiers);
+) -> Option<MouseEventInit<'s>> {
     let is_boundary = matches!(event_type, "mouseenter" | "mouseleave");
     let button = if matches!(
         event_type,
@@ -333,29 +289,21 @@ fn mouse_event_init<'s>(
     } else {
         button
     };
-    let init = MouseEventInitDeclaration::new(
-        !is_boundary,
-        !is_boundary,
-        !is_boundary,
-        coordinates.screen_x,
-        coordinates.screen_y,
-        coordinates.client_x,
-        coordinates.client_y,
+    MouseEventInit::from_native(
+        scope,
+        EventInit {
+            bubbles: !is_boundary,
+            cancelable: !is_boundary,
+            composed: !is_boundary,
+        },
+        coordinates,
         detail,
         button,
         buttons,
-        modifier_keys.alt,
-        modifier_keys.ctrl,
-        modifier_keys.meta,
-        modifier_keys.shift,
+        modifiers,
         related_target,
         view,
     )
-    .bind(scope)
-    .ok()?;
-    init.set_prototype(scope, v8::null(scope).into())?
-        .then_some(())?;
-    Some(init)
 }
 
 #[cfg(any(feature = "devtools", test))]
@@ -425,31 +373,10 @@ pub(crate) fn construct_keyboard_event<'s>(
     location: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let (char_code, key_code, which) = keyboard_event_legacy_codes(event_type, key, code);
-    let key = v8_string(scope, key)
-        .map(Into::into)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let code = v8_string(scope, code)
-        .map(Into::into)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let init = KeyboardEventInitDeclaration::new(
-        true,
-        true,
-        true,
-        key,
-        code,
-        location,
-        char_code as f64,
-        key_code as f64,
-        which as f64,
-        alt,
-        ctrl,
-        meta,
-        shift,
-        repeat,
+    construct_native_keyboard_event(
+        scope, event_type, key, code, alt, ctrl, meta, shift, repeat, location, char_code,
+        key_code, which,
     )
-    .bind(scope)
-    .ok()?;
-    construct_event(scope, "KeyboardEvent", event_type, init)
 }
 
 pub(crate) fn construct_focus_event<'s>(
@@ -643,30 +570,16 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
         None,
         view,
     )?;
-    let interface = match source {
+    match source {
         #[cfg(any(test, feature = "devtools"))]
-        ClickEventSource::Pointer => "MouseEvent",
+        ClickEventSource::Pointer => construct_native_mouse_event(scope, "click", init),
         #[cfg(feature = "devtools")]
         ClickEventSource::Touch { pointer_id } => {
-            let key = v8str(scope, "pointerId");
-            let id = v8::Integer::new(scope, pointer_id);
-            init.create_data_property(scope, key.into(), id.into())?
-                .then_some(())?;
-            let key = v8str(scope, "pointerType");
-            let kind = v8str(scope, "touch");
-            init.create_data_property(scope, key.into(), kind.into())?
-                .then_some(())?;
-            "PointerEvent"
+            construct_native_pointer_click(scope, init, pointer_id, "touch")
         }
         ClickEventSource::UserAgent | ClickEventSource::Script => {
-            // Blink reserves -1 for clicks with no pointing device. PointerEvent's
-            // other defaults describe a synthetic click, unlike physical input.
-            let key = v8str(scope, "pointerId");
-            let pointer_id = v8::Integer::new(scope, -1);
-            init.create_data_property(scope, key.into(), pointer_id.into())?
-                .then_some(())?;
-            "PointerEvent"
+            // Blink reserves -1 for clicks with no pointing device.
+            construct_native_pointer_click(scope, init, -1, "")
         }
-    };
-    construct_event(scope, interface, "click", init)
+    }
 }

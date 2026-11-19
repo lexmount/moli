@@ -9,7 +9,17 @@ use moli_v8_util::{
 };
 use moli_webapi_declare::WebApiObject;
 
+mod descriptors;
 mod limits;
+
+use descriptors::{
+    WebAssemblyGlobalDescriptorDeclaration, WebAssemblyMemoryNativeDescriptorDeclaration,
+    WebAssemblyMemoryTypeDeclaration, WebAssemblyTableNativeDescriptorDeclaration,
+    WebAssemblyTableTypeDeclaration, WebAssemblyTagTypeDeclaration, array_from_value_or_empty,
+    clone_global_type_object, clone_memory_type_object, clone_table_type_object,
+    clone_tag_type_object, descriptor_value_is_anyfunc, has_defined_property, is_dictionary_like,
+    object_from_dictionary_like, object_property, string_value, value_type_for_native_constructor,
+};
 
 const WASM_RUNTIME_INSTALLED_SLOT: &str = "__moliWebAssemblyRuntimeExtensions";
 
@@ -71,107 +81,6 @@ struct WebAssemblyInstantiateStreamingResultDeclaration<'scope> {
     module: v8::Local<'scope, v8::Object>,
     #[webapi(data_property, enumerable)]
     instance: v8::Local<'scope, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyMemoryNativeDescriptorDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    initial: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    maximum: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    shared: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyMemoryTypeDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    minimum: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    maximum: Option<v8::Local<'scope, v8::Value>>,
-    #[webapi(data_property, enumerable)]
-    shared: Option<v8::Local<'scope, v8::Value>>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyTableNativeDescriptorDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    element: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    initial: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    maximum: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyTableTypeDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    minimum: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    maximum: Option<v8::Local<'scope, v8::Value>>,
-    #[webapi(data_property, enumerable)]
-    element: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyGlobalNativeDescriptorDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    mutable: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    value: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyGlobalTypeDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    mutable: bool,
-    #[webapi(data_property, enumerable)]
-    value: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyGlobalTypeCloneDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    r#mutable: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    value: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyTagTypeDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    parameters: v8::Local<'scope, v8::Array>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyMemoryFallbackTypeDeclaration {
-    #[webapi(data_property, enumerable)]
-    minimum: f64,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyTableFallbackTypeDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    minimum: f64,
-    #[webapi(data_property, enumerable)]
-    element: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WebAssemblyTagTypeCloneDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    parameters: Option<v8::Local<'scope, v8::Array>>,
 }
 
 /// Streaming compilation consumes a Response through its existing body owner.
@@ -509,41 +418,6 @@ fn constructor_prototype<'s>(
     constructor
         .get(scope, v8str(scope, "prototype").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-fn is_dictionary_like(value: v8::Local<'_, v8::Value>) -> bool {
-    !value.is_null_or_undefined() && (value.is_object() || value.is_function())
-}
-
-fn object_from_dictionary_like<'s>(
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if !is_dictionary_like(value) {
-        return None;
-    }
-    v8::Local::<v8::Object>::try_from(value).ok()
-}
-
-fn object_property<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> v8::Local<'s, v8::Value> {
-    object
-        .get(scope, v8str(scope, name).into())
-        .unwrap_or_else(|| v8::undefined(scope).into())
-}
-
-fn has_defined_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &'static str,
-) -> bool {
-    let key = v8str(scope, name);
-    object.has(scope, key.into()).unwrap_or(false)
-        && object
-            .get(scope, key.into())
-            .is_some_and(|value| !value.is_undefined())
 }
 
 fn type_error_value<'s>(
@@ -1347,13 +1221,9 @@ fn memory_constructor_callback<'s>(
     }
     let maximum = object_property(scope, descriptor_object, "maximum");
     let shared = object_property(scope, descriptor_object, "shared");
-    let normalized = WebAssemblyMemoryNativeDescriptorDeclaration {
-        initial: minimum,
-        maximum,
-        shared,
-    }
-    .bind(scope)
-    .expect("WebAssembly Memory native descriptor declaration should bind");
+    let normalized = WebAssemblyMemoryNativeDescriptorDeclaration::new(minimum, maximum, shared)
+        .bind(scope)
+        .expect("WebAssembly Memory native descriptor declaration should bind");
 
     let Some(memory) = construct_native(
         scope,
@@ -1364,11 +1234,11 @@ fn memory_constructor_callback<'s>(
     ) else {
         return;
     };
-    let type_object = WebAssemblyMemoryTypeDeclaration {
+    let type_object = WebAssemblyMemoryTypeDeclaration::new(
         minimum,
-        maximum: (!maximum.is_undefined()).then_some(maximum),
-        shared: (!shared.is_undefined()).then_some(shared),
-    }
+        (!maximum.is_undefined()).then_some(maximum),
+        (!shared.is_undefined()).then_some(shared),
+    )
     .bind(scope)
     .expect("WebAssembly Memory type declaration should bind");
     set_private_value(scope, memory, MEMORY_TYPE_SLOT, type_object.into());
@@ -1422,13 +1292,10 @@ fn table_constructor_callback<'s>(
         return;
     };
     let maximum = object_property(scope, descriptor_object, "maximum");
-    let native_descriptor = WebAssemblyTableNativeDescriptorDeclaration {
-        element: native_element,
-        initial: minimum,
-        maximum,
-    }
-    .bind(scope)
-    .expect("WebAssembly Table native descriptor declaration should bind");
+    let native_descriptor =
+        WebAssemblyTableNativeDescriptorDeclaration::new(native_element, minimum, maximum)
+            .bind(scope)
+            .expect("WebAssembly Table native descriptor declaration should bind");
 
     let Some(table) = construct_native(
         scope,
@@ -1439,11 +1306,11 @@ fn table_constructor_callback<'s>(
     ) else {
         return;
     };
-    let type_object = WebAssemblyTableTypeDeclaration {
+    let type_object = WebAssemblyTableTypeDeclaration::new(
         minimum,
-        maximum: (!maximum.is_undefined()).then_some(maximum),
-        element: public_element,
-    }
+        (!maximum.is_undefined()).then_some(maximum),
+        public_element,
+    )
     .bind(scope)
     .expect("WebAssembly Table type declaration should bind");
     set_private_value(scope, table, TABLE_TYPE_SLOT, type_object.into());
@@ -1468,18 +1335,15 @@ fn global_constructor_callback<'s>(
         let Some(normalized_value) = value_type_for_native_constructor(scope, value_type) else {
             return;
         };
-        let object = WebAssemblyGlobalNativeDescriptorDeclaration {
-            mutable,
-            value: normalized_value,
-        }
-        .bind(scope)
-        .expect("WebAssembly Global native descriptor declaration should bind");
+        let object = WebAssemblyGlobalDescriptorDeclaration::new(mutable, normalized_value)
+            .bind(scope)
+            .expect("WebAssembly Global native descriptor declaration should bind");
         native_descriptor = object.into();
 
-        let type_object = WebAssemblyGlobalTypeDeclaration {
-            mutable: mutable.boolean_value(scope),
-            value: value_type,
-        }
+        let type_object = WebAssemblyGlobalDescriptorDeclaration::new(
+            v8::Boolean::new(scope, mutable.boolean_value(scope)).into(),
+            value_type,
+        )
         .bind(scope)
         .expect("WebAssembly Global type declaration should bind");
         public_type = Some(type_object);
@@ -1528,129 +1392,13 @@ fn tag_constructor_callback<'s>(
     if let Some(descriptor_object) = object_from_dictionary_like(descriptor) {
         let parameters = object_property(scope, descriptor_object, "parameters");
         if let Some(parameters) = array_from_value_or_empty(scope, parameters) {
-            let type_object = WebAssemblyTagTypeDeclaration { parameters }
+            let type_object = WebAssemblyTagTypeDeclaration::new(Some(parameters))
                 .bind(scope)
                 .expect("WebAssembly Tag type declaration should bind");
             set_private_value(scope, tag, TAG_TYPE_SLOT, type_object.into());
         }
     }
     rv.set(tag.into());
-}
-
-fn string_value<'s>(scope: &mut v8::PinScope<'s, '_>, value: &str) -> v8::Local<'s, v8::Value> {
-    v8_string(scope, value)
-        .map(Into::into)
-        .unwrap_or_else(|| v8::undefined(scope).into())
-}
-
-fn value_type_for_native_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    public_value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let value_string = public_value.to_string(scope)?;
-    if value_string.to_rust_string_lossy(scope) == "funcref" {
-        Some(string_value(scope, "anyfunc"))
-    } else {
-        Some(value_string.into())
-    }
-}
-
-fn string_value_equals(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-    expected: &str,
-) -> bool {
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope) == expected)
-        .unwrap_or(false)
-}
-
-fn descriptor_value_is_anyfunc<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    descriptor: v8::Local<'s, v8::Value>,
-) -> bool {
-    v8::Local::<v8::Object>::try_from(descriptor)
-        .ok()
-        .map(|descriptor| object_property(scope, descriptor, "value"))
-        .is_some_and(|value| string_value_equals(scope, value, "anyfunc"))
-}
-
-fn array_from_value_or_empty<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Array>> {
-    if value.is_null_or_undefined() {
-        return Some(v8::Array::new(scope, 0));
-    }
-    // V8's WebAssembly.Tag constructor consumes `parameters` as an
-    // array-like object (length plus indexed values), not a WebIDL sequence.
-    // Mirror that native interpretation without consulting public Array.from.
-    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    let length = object
-        .get(scope, v8str(scope, "length").into())?
-        .uint32_value(scope)?;
-    let mut values = Vec::with_capacity(length as usize);
-    for index in 0..length {
-        values.push(object.get_index(scope, index)?);
-    }
-    Some(v8::Array::new_with_elements(scope, &values))
-}
-
-fn clone_memory_type_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    stored: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let minimum = stored.get(scope, v8str(scope, "minimum").into())?;
-    if minimum.is_undefined() {
-        return None;
-    }
-    let maximum = stored
-        .get(scope, v8str(scope, "maximum").into())
-        .filter(|value| !value.is_undefined());
-    let shared = stored
-        .get(scope, v8str(scope, "shared").into())
-        .filter(|value| !value.is_undefined());
-    WebAssemblyMemoryTypeDeclaration::new(minimum, maximum, shared)
-        .bind(scope)
-        .ok()
-}
-
-fn clone_table_type_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    stored: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let minimum = stored.get(scope, v8str(scope, "minimum").into())?;
-    if minimum.is_undefined() {
-        return None;
-    }
-    let element = stored.get(scope, v8str(scope, "element").into())?;
-    if element.is_undefined() {
-        return None;
-    }
-    let maximum = stored
-        .get(scope, v8str(scope, "maximum").into())
-        .filter(|value| !value.is_undefined());
-    WebAssemblyTableTypeDeclaration::new(minimum, maximum, element)
-        .bind(scope)
-        .ok()
-}
-
-fn clone_global_type_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    stored: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let r#mutable = stored.get(scope, v8str(scope, "mutable").into())?;
-    if r#mutable.is_undefined() {
-        return None;
-    }
-    let value = stored.get(scope, v8str(scope, "value").into())?;
-    if value.is_undefined() {
-        return None;
-    }
-    WebAssemblyGlobalTypeCloneDeclaration::new(r#mutable, value)
-        .bind(scope)
-        .ok()
 }
 
 fn memory_type_callback<'s>(
@@ -1685,9 +1433,11 @@ fn memory_type_callback<'s>(
             .and_then(|value| value.number_value(scope))
         && byte_length.is_finite()
     {
-        let object = WebAssemblyMemoryFallbackTypeDeclaration {
-            minimum: byte_length / 65536.0,
-        }
+        let object = WebAssemblyMemoryTypeDeclaration::new(
+            v8::Number::new(scope, byte_length / 65536.0).into(),
+            None,
+            None,
+        )
         .bind(scope)
         .expect("WebAssembly Memory fallback type declaration should bind");
         rv.set(object.into());
@@ -1728,10 +1478,11 @@ fn table_type_callback<'s>(
         && let Some(length) = length.number_value(scope)
     {
         let element = string_value(scope, "anyfunc");
-        let object = WebAssemblyTableFallbackTypeDeclaration {
-            minimum: length,
+        let object = WebAssemblyTableTypeDeclaration::new(
+            v8::Number::new(scope, length).into(),
+            None,
             element,
-        }
+        )
         .bind(scope)
         .expect("WebAssembly Table fallback type declaration should bind");
         rv.set(object.into());
@@ -1777,34 +1528,13 @@ fn tag_type_callback<'s>(
     if let Some(stored) = get_private_value(scope, this, TAG_TYPE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
-        let parameters = stored
-            .get(scope, v8str(scope, "parameters").into())
-            .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-            .map(|parameters| clone_array(scope, parameters));
-        let object = WebAssemblyTagTypeCloneDeclaration { parameters }
-            .bind(scope)
-            .expect("WebAssembly Tag type clone declaration should bind");
-        rv.set(object.into());
+        rv.set(clone_tag_type_object(scope, stored).into());
         return;
     }
     throw_type_error(
         scope,
         "WebAssembly.Tag.prototype.type called on incompatible receiver",
     );
-}
-
-fn clone_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Array>,
-) -> v8::Local<'s, v8::Array> {
-    let len = source.length();
-    let clone = v8::Array::new(scope, len as i32);
-    for index in 0..len {
-        if let Some(value) = source.get_index(scope, index) {
-            let _ = clone.set_index(scope, index, value);
-        }
-    }
-    clone
 }
 
 fn install_global_value_setter_compatibility(

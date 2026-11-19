@@ -6,6 +6,13 @@ use crate::interfaces as web_api_interfaces;
 use moli_v8_util::throw_type_error;
 use moli_webidl as webidl;
 
+mod native;
+pub use native::{
+    InputEventCoordinates, PointerEventProperties, construct_native_drag_event,
+    construct_native_mouse_event, construct_native_pointer_click, construct_native_pointer_event,
+    construct_native_wheel_event,
+};
+
 const POINTER_EVENT_COALESCED_EVENTS_SLOT: &str = "__moliPointerEventCoalescedEvents";
 const POINTER_EVENT_PREDICTED_EVENTS_SLOT: &str = "__moliPointerEventPredictedEvents";
 
@@ -20,9 +27,9 @@ struct PointerEventSequences<'s> {
 
 /// MouseEventInit includes the CSSOM View and Pointer Lock double members.
 /// Each derived dictionary delegates to this base before reading its own members.
-#[derive(webidl::WebIdlDictionary)]
+#[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "MouseEventInit")]
-pub(super) struct MouseEventInit<'s> {
+pub struct MouseEventInit<'s> {
     #[webidl(inherit)]
     modifiers: EventModifierInit<'s>,
     #[webidl(default = 0)]

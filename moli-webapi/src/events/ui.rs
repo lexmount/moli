@@ -27,6 +27,19 @@ pub struct UiEventInit<'s> {
 }
 
 impl<'s> UiEventInit<'s> {
+    pub(super) fn from_native(
+        base: super::init::EventInit,
+        detail: i32,
+        view: Option<v8::Local<'s, v8::Object>>,
+    ) -> Self {
+        Self {
+            base,
+            detail,
+            view,
+            source_capabilities: None,
+        }
+    }
+
     pub fn event_flags(&self) -> (bool, bool, bool) {
         (self.base.bubbles, self.base.cancelable, self.base.composed)
     }
