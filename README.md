@@ -485,7 +485,7 @@ Generated hourly from the stargazer timeline by [lexmount/moli-metrics](https://
   <img alt="Star history of lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## Awesome Moli
+## Moli's Friends
 
 Find projects, integrations, and deployment options in
 [Awesome Moli](https://github.com/lexmount/awesome-moli).
