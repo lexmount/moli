@@ -286,6 +286,8 @@ use self::assets::{
 pub(crate) use self::broadcast_channel::{
     dispatch_authorized_page_broadcast_channel_event, dispatch_broadcast_channel_events_for_channel,
 };
+#[cfg(test)]
+pub(crate) use self::canvas::try_append_canvas_path_rect_for_test;
 pub(crate) use self::canvas::{
     CanvasContextKind, attach_canvas_like_context_object, build_canvas_rendering_context_2d_object,
     build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
