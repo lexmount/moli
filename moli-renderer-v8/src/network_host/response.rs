@@ -10,6 +10,7 @@ use super::headers::{HeadersGuard, build_headers_object_with_state, filter_heade
 use super::*;
 
 pub(crate) use self::bindings::response_constructor_callback;
+pub(super) use self::bindings::{new_error_response, new_response_with_init};
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers,

@@ -1,5 +1,7 @@
-use super::headers::{headers_entries, headers_list, mark_headers_immutable};
-use super::response::{ParsedResponseInit, install_response_body_methods};
+use super::headers::{headers_entries, headers_list};
+use super::response::{
+    ParsedResponseInit, install_response_body_methods, new_error_response, new_response_with_init,
+};
 use super::*;
 use crate::context_bootstrap::readable_stream_disturbed;
 use crate::network_host::request_scope::callback_child_handle;
@@ -32,16 +34,13 @@ pub(in crate::network_host) const REQUEST_IS_RELOAD_NAVIGATION_SLOT: &str =
     "__lmRequestIsReloadNavigation";
 pub(in crate::network_host) const REQUEST_BODY_SLOT: &str = "__lmRequestBody";
 pub(in crate::network_host) const REQUEST_BODY_USED_SLOT: &str = "__lmRequestBodyUsed";
-use moli_webapi::fetch_response::{
-    FetchResponseHeadDeclaration, build_response_init_object, clone_response_surface,
-    empty_response_init_object, response_value_attribute,
-};
 pub(crate) use moli_webapi::fetch_response::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT,
     RESPONSE_INTERNAL_HEADERS_SLOT, RESPONSE_INTERNAL_STATUS_SLOT,
     RESPONSE_INTERNAL_STATUS_TEXT_SLOT, RESPONSE_OK_SLOT, RESPONSE_REDIRECTED_SLOT,
     RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT, RESPONSE_URL_SLOT,
 };
+use moli_webapi::fetch_response::{clone_response_surface, response_value_attribute};
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Request)]
@@ -513,26 +512,10 @@ fn response_static_error_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let init = empty_response_init_object(scope);
-    let Some(response) = new_response_instance(scope, v8::null(scope).into(), init.into()) else {
+    let Some(response) = new_error_response(scope) else {
         rv.set_undefined();
         return;
     };
-    FetchResponseHeadDeclaration::new(0.0, false)
-        .initialize(scope, response)
-        .expect("Response error state declaration should initialize");
-    super::response::set_response_metadata(
-        scope,
-        response,
-        &moli_fetch_types::FetchResponseMetadata {
-            response_type: moli_fetch_types::FetchResponseType::Error,
-            timing_allow_passed: false,
-            ..Default::default()
-        },
-    );
-    if let Some(headers) = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT) {
-        mark_headers_immutable(scope, headers);
-    }
     rv.set(response.into());
 }
 
@@ -566,16 +549,12 @@ pub(crate) fn response_static_redirect_callback<'s>(
         );
         return;
     }
-    let init = build_response_init_object(
-        scope,
-        ParsedResponseInit {
-            status: parsed.status,
-            status_text: String::new(),
-            headers: Vec::new(),
-        },
-        &[("Location", location.as_str())],
-    );
-    let Some(response) = new_response_instance(scope, v8::null(scope).into(), init.into()) else {
+    let init = ParsedResponseInit {
+        status: parsed.status,
+        headers: vec![("location".to_owned(), location.as_str().to_owned())],
+        ..ParsedResponseInit::default()
+    };
+    let Some(response) = new_response_with_init(scope, v8::null(scope).into(), init) else {
         rv.set_undefined();
         return;
     };
@@ -607,9 +586,9 @@ fn response_static_json_callback<'s>(
         Some(body) => body,
         None => return,
     };
-    let init =
-        build_response_init_object(scope, parsed.init, &[("Content-Type", "application/json")]);
-    let Some(response) = new_response_instance(scope, body, init.into()) else {
+    let mut init = parsed.init;
+    init.append_default_header("content-type", "application/json");
+    let Some(response) = new_response_with_init(scope, body, init) else {
         rv.set_undefined();
         return;
     };
@@ -662,18 +641,6 @@ fn response_json_body<'s>(
             None
         }
     }
-}
-
-fn new_response_instance<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    body: v8::Local<'s, v8::Value>,
-    init: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global
-        .get(scope, v8str(scope, "Response").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    ctor.new_instance(scope, &[body, init])
 }
 
 fn request_clone_callback<'s>(
