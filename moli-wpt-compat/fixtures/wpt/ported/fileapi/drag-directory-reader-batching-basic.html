@@ -39,6 +39,8 @@ dropzone.addEventListener("drop", function (event) {
 
 promise_test(async function () {
   await dropPromise;
+  // A microtask still runs inside drop dispatch; the next task observes its cleanup.
+  await new Promise(resolve => step_timeout(resolve, 0));
 
   assert_equals(dropped.items.length, 0, "retained data store is disabled after drop");
   assert_array_equals(Array.from(dropped.types), [], "disabled data store exposes no types");
