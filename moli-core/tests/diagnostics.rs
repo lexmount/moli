@@ -202,37 +202,50 @@ const CSP_BLOCKED_MODULE_URL: &str = "http://127.0.0.1:1/blocked-dependency.js";
 #[tokio::test]
 async fn module_csp_diagnostics_report_blocked_dependency_even_when_cached() -> Result<()> {
     let server = DiagnosticFixtureServer::spawn().await?;
-    let browser = Browser::new(BrowserConfig::default())?;
-    let mut diagnostics = browser
-        .subscribe_diagnostics()
-        .context("first subscription")?;
-    let mut page = browser.fetch(&server.url("/module-csp")).await?;
-    let result = page
-        .evaluate_runtime_expression_async("moduleError")
-        .await?;
-    assert_eq!(result["value"], "blocked");
-    assert_page_load_failure(
-        &diagnostics
-            .try_recv()
-            .context("CSP-blocked module diagnostic")?,
-        page.page_id(),
-        &server.url("/csp-root.js"),
-        CSP_BLOCKED_MODULE_URL,
-        "Content Security Policy",
-    );
-    assert_empty(&mut diagnostics);
+    for subscribe_before_fetch in [true, false] {
+        let browser = Browser::new(BrowserConfig::default())?;
+        let diagnostics = subscribe_before_fetch
+            .then(|| {
+                browser
+                    .subscribe_diagnostics()
+                    .context("early subscription")
+            })
+            .transpose()?;
+        let mut page = browser.fetch(&server.url("/module-csp")).await?;
+        let result = page
+            .evaluate_runtime_expression_async("moduleError")
+            .await?;
+        assert_eq!(result["value"], "blocked");
 
-    append_missing_script(&mut page, "/csp-second-root.js", "module").await?;
-    assert_page_load_failure(
-        &diagnostics
-            .try_recv()
-            .context("cached CSP failure diagnostic")?,
-        page.page_id(),
-        &server.url("/csp-second-root.js"),
-        CSP_BLOCKED_MODULE_URL,
-        "Content Security Policy",
-    );
-    assert_empty(&mut diagnostics);
+        let mut diagnostics = if let Some(mut diagnostics) = diagnostics {
+            assert_page_load_failure(
+                &diagnostics
+                    .try_recv()
+                    .context("CSP-blocked module diagnostic")?,
+                page.page_id(),
+                &server.url("/csp-root.js"),
+                CSP_BLOCKED_MODULE_URL,
+                "Content Security Policy",
+            );
+            assert_empty(&mut diagnostics);
+            diagnostics
+        } else {
+            browser
+                .subscribe_diagnostics()
+                .context("late subscription")?
+        };
+        append_missing_script(&mut page, "/csp-second-root.js", "module").await?;
+        assert_page_load_failure(
+            &diagnostics
+                .try_recv()
+                .context("cached CSP failure diagnostic")?,
+            page.page_id(),
+            &server.url("/csp-second-root.js"),
+            CSP_BLOCKED_MODULE_URL,
+            "Content Security Policy",
+        );
+        assert_empty(&mut diagnostics);
+    }
     Ok(())
 }
 
