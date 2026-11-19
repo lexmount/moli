@@ -48,7 +48,7 @@ impl IntoPageTaskCompletion for PageDedicatedWorkerClientEventTurnAction {
 }
 
 /// Proof that the Page arbiter matched a selected event against the exact
-/// Worker wrapper and its current root Document/Window realm.
+/// Worker wrapper or its surviving owner Window.
 pub(crate) struct AuthorizedCurrentPageDedicatedWorkerClientEvent(
     RendererPageDedicatedWorkerClientEventTask,
 );
@@ -86,7 +86,13 @@ impl PageVm {
         let event_kind = task.event_kind();
         let current_owner =
             self.current_page_dedicated_worker_client_event_owner(owner.worker_id());
-        let target_effect = if current_owner == Some(owner) {
+        let can_report_to_window = current_owner.is_none()
+            && task.propagates_to_window()
+            && self.document_lifecycle.identity().document == owner.root_document()
+            && self
+                .vm()
+                .dedicated_worker_owner_window_is_current(owner.execution_context());
+        let target_effect = if current_owner == Some(owner) || can_report_to_window {
             self.vm_mut()
                 .apply_current_dedicated_worker_client_event_body(
                     AuthorizedCurrentPageDedicatedWorkerClientEvent::new(task),

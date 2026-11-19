@@ -224,7 +224,7 @@ pub(crate) use context_bootstrap::{
     snapshot_form_data_value,
 };
 pub use diagnostics::{
-    DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription, ExceptionOrigin,
+    DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription, ErrorReportOutcome, ExceptionOrigin,
 };
 pub use document_cookie_owner::{
     DocumentCookieBackendConnectionState, DocumentCookieBrowserContextSnapshot,

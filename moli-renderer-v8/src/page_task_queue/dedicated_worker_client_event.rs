@@ -38,7 +38,6 @@ impl RendererPageDedicatedWorkerClientEventOwner {
         }
     }
 
-    #[cfg(test)]
     pub(crate) const fn root_document(self) -> RendererDocumentToken {
         self.root_document
     }
@@ -67,6 +66,7 @@ pub(crate) enum RendererDedicatedWorkerMessageEvent {
         colno: u32,
         event_kind: WorkerParentErrorEventKind,
         phase: WorkerErrorPhase,
+        pending_report: Option<Box<crate::diagnostics::PendingExceptionReport>>,
     },
 }
 
@@ -152,6 +152,18 @@ impl RendererPageDedicatedWorkerClientEventTask {
 
     pub(crate) const fn event_kind(&self) -> RendererDedicatedWorkerClientEventKind {
         self.event.kind()
+    }
+
+    pub(crate) fn propagates_to_window(&self) -> bool {
+        matches!(
+            &self.event,
+            RendererDedicatedWorkerClientEvent::Message(
+                RendererDedicatedWorkerMessageEvent::Error {
+                    phase: WorkerErrorPhase::Runtime,
+                    ..
+                }
+            )
+        )
     }
 
     pub(crate) fn into_event(self) -> RendererDedicatedWorkerClientEvent {

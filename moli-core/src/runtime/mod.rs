@@ -266,6 +266,8 @@ impl Browser {
     /// Returns `None` while this Browser already has an open subscription.
     /// Close or drop the receiver before subscribing again. Consume events
     /// regularly to limit the memory used by the unbounded queue.
+    /// Runtime exceptions arrive after reporting finishes. A momentarily
+    /// empty queue can still have reports in flight.
     pub fn subscribe_diagnostics(&self) -> Option<crate::DiagnosticsSubscription> {
         self.js_runtime
             .browser_context_runtime()

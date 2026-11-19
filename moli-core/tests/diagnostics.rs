@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use moli_core::{
-    DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription, ExceptionOrigin,
+    DiagnosticEvent, DiagnosticSource, DiagnosticsSubscription, ErrorReportOutcome,
+    ExceptionOrigin,
     page::Page,
     runtime::{Browser, BrowserConfig},
 };
@@ -68,7 +69,7 @@ async fn browser_diagnostics_are_isolated_and_do_not_read_author_stack_propertie
                     source: DiagnosticSource::Page { page_id },
                     origin: ExceptionOrigin::UncaughtException,
                     message,
-                    default_prevented: false,
+                    outcome: ErrorReportOutcome::Uncanceled,
                     ..
                 } if *page_id == page.page_id() && message.contains(marker)
             ),
@@ -261,9 +262,15 @@ async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellati
     .await??;
     assert_eq!(result["value"], "prevented", "{result}");
 
-    for (expected_origin, prevented) in [
-        (ExceptionOrigin::UncaughtException, false),
-        (ExceptionOrigin::UnhandledRejection, true),
+    for (expected_origin, expected_outcome) in [
+        (
+            ExceptionOrigin::UncaughtException,
+            ErrorReportOutcome::Uncanceled,
+        ),
+        (
+            ExceptionOrigin::UnhandledRejection,
+            ErrorReportOutcome::Canceled,
+        ),
     ] {
         let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv())
             .await?
@@ -275,10 +282,10 @@ async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellati
                     source: DiagnosticSource::Page { page_id },
                     origin,
                     message,
-                    default_prevented,
+                    outcome,
                     ..
                 } if *page_id == page.page_id() && *origin == expected_origin
-                    && *default_prevented == prevented && message.contains("same message")
+                    && *outcome == expected_outcome && message.contains("same message")
             ),
             "{event:?}",
         );
@@ -324,7 +331,10 @@ async fn iframe_callback_exceptions_report_after_dom_error_dispatch() -> Result<
     .await??;
     assert_eq!(result["value"], "listener,synthetic error,timer");
 
-    for (marker, prevented) in [("frame listener", true), ("frame timer", false)] {
+    for (marker, expected_outcome) in [
+        ("frame listener", ErrorReportOutcome::Canceled),
+        ("frame timer", ErrorReportOutcome::Uncanceled),
+    ] {
         let event = diagnostics
             .try_recv()
             .with_context(|| format!("{marker} diagnostic"))?;
@@ -335,9 +345,9 @@ async fn iframe_callback_exceptions_report_after_dom_error_dispatch() -> Result<
                     source: DiagnosticSource::Page { page_id },
                     origin: ExceptionOrigin::UncaughtException,
                     message,
-                    default_prevented,
+                    outcome,
                     ..
-                } if *page_id == page.page_id() && *default_prevented == prevented
+                } if *page_id == page.page_id() && *outcome == expected_outcome
                     && message.contains(marker)
             ),
             "{event:?}"
@@ -348,7 +358,87 @@ async fn iframe_callback_exceptions_report_after_dom_error_dispatch() -> Result<
 }
 
 #[tokio::test]
-async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic() -> Result<()> {
+async fn dedicated_worker_diagnostics_reflect_cancellation_across_owners() -> Result<()> {
+    let server = DiagnosticFixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
+    let mut page = browser.fetch(&server.url("/page")).await?;
+    for (mode, expected_outcome, expected_trace) in [
+        ("source", ErrorReportOutcome::Canceled, "continued"),
+        ("wrapper", ErrorReportOutcome::Canceled, "worker,continued"),
+        (
+            "window",
+            ErrorReportOutcome::Canceled,
+            "worker,window,continued",
+        ),
+        (
+            "uncanceled",
+            ErrorReportOutcome::Uncanceled,
+            "worker,window,continued",
+        ),
+    ] {
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            page.evaluate_runtime_expression_with_await_async(
+                &format!(
+                    r#"new Promise(resolve => {{
+                        const mode = {mode:?};
+                        const events = [];
+                        const worker = new Worker("/dedicated.js");
+                        function finish() {{
+                            worker.terminate();
+                            setTimeout(() => {{
+                                window.onerror = null;
+                                events.push("continued");
+                                resolve(events.join(","));
+                            }}, 0);
+                        }}
+                        worker.onerror = event => {{
+                            events.push("worker");
+                            if (mode === "wrapper") {{
+                                event.preventDefault();
+                                finish();
+                            }}
+                        }};
+                        window.onerror = () => {{
+                            events.push("window");
+                            finish();
+                            return mode === "window";
+                        }};
+                        worker.onmessage = finish;
+                        worker.postMessage(mode);
+                    }})"#
+                ),
+                true,
+            ),
+        )
+        .await??;
+        assert_eq!(result["value"], expected_trace, "{mode}: {result}");
+
+        let diagnostic = diagnostics.try_recv()?;
+        assert!(
+            matches!(
+                &diagnostic,
+                DiagnosticEvent::RuntimeException {
+                    source: DiagnosticSource::DedicatedWorker { .. },
+                    origin: ExceptionOrigin::UncaughtException,
+                    message,
+                    outcome,
+                    ..
+                } if message.contains("dedicated worker failure") && *outcome == expected_outcome
+            ),
+            "{mode}: {diagnostic:?}"
+        );
+        assert_empty(&mut diagnostics);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_worker_report_reaches_window_after_its_intermediate_owner_terminates() -> Result<()>
+{
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
     let mut diagnostics = browser
@@ -359,35 +449,40 @@ async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic
         Duration::from_secs(15),
         page.evaluate_runtime_expression_with_await_async(
             r#"new Promise(resolve => {
-                const events = [];
-                const worker = new Worker("/dedicated.js");
-                worker.onerror = () => { events.push("worker"); };
-                addEventListener("error", event => {
-                    events.push("window");
-                    event.preventDefault();
-                }, {once: true});
-                worker.onmessage = () => {
-                    events.push("continued");
+                const channel = new BroadcastChannel("nested-report");
+                const worker = new Worker("/nested-report-owner.js", {type: "module"});
+                channel.onmessage = () => {
                     worker.terminate();
-                    resolve(events.join(","));
+                    channel.close();
+                };
+                window.onerror = (message, filename) => {
+                    setTimeout(() => resolve([message, filename].join("|")), 0);
+                    return true;
                 };
             })"#,
             true,
         ),
     )
     .await??;
-    assert_eq!(result["value"], "worker,window,continued", "{result}");
+    let filename = server.url("/nested-report-child.js");
+    assert!(
+        result["value"]
+            .as_str()
+            .is_some_and(|value| value.contains("nested report") && value.ends_with(&filename)),
+        "{result}"
+    );
 
     let diagnostic = diagnostics.try_recv()?;
     assert!(
         matches!(
             &diagnostic,
             DiagnosticEvent::RuntimeException {
-                source: DiagnosticSource::DedicatedWorker { .. },
+                source: DiagnosticSource::DedicatedWorker { instance_id: 2 },
                 message,
-                default_prevented: false,
+                filename: source_url,
+                outcome: ErrorReportOutcome::Canceled,
                 ..
-            } if message.contains("dedicated worker failure")
+            } if message.contains("nested report") && source_url == &filename
         ),
         "{diagnostic:?}"
     );
@@ -522,18 +617,18 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
         assert_eq!(result["value"], "ready", "{result}");
     }
 
-    for (page, marker, expected_origin, prevented) in [
+    for (page, marker, expected_origin, expected_outcome) in [
         (
             &mut first,
             "first",
             ExceptionOrigin::UncaughtException,
-            false,
+            ErrorReportOutcome::Uncanceled,
         ),
         (
             &mut second,
             "second",
             ExceptionOrigin::UnhandledRejection,
-            true,
+            ErrorReportOutcome::Canceled,
         ),
     ] {
         page.evaluate_runtime_expression_async(&format!("worker.port.postMessage({marker:?})"))
@@ -546,7 +641,7 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
             origin,
             message,
             filename,
-            default_prevented,
+            outcome,
             ..
         } = &event
         else {
@@ -555,7 +650,7 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
         assert!(message.contains(marker), "{message}");
         assert_eq!(filename, &server.url("/shared.js"));
         assert_eq!(*origin, expected_origin);
-        assert_eq!(*default_prevented, prevented);
+        assert_eq!(*outcome, expected_outcome);
         assert_eq!(*instance.get_or_insert(*instance_id), *instance_id);
     }
     let result = tokio::time::timeout(
@@ -738,8 +833,27 @@ fn fixture_response(path: Option<&str>) -> (&'static str, &'static str, &'static
         Some("/dedicated.js") => (
             "200 OK",
             "text/javascript",
-            r#"setTimeout(() => { throw new Error("dedicated worker failure"); }, 0);
-               setTimeout(() => postMessage("continued"), 20);"#,
+            r#"onmessage = ({data}) => {
+                if (data === "source") {
+                    onerror = () => {
+                        setTimeout(() => postMessage("continued"), 0);
+                        return true;
+                    };
+                }
+                throw new Error("dedicated worker failure");
+            };"#,
+        ),
+        Some("/nested-report-owner.js") => (
+            "200 OK",
+            "text/javascript",
+            "new Worker('/nested-report-child.js'); await new Promise(() => {});",
+        ),
+        Some("/nested-report-child.js") => (
+            "200 OK",
+            "text/javascript",
+            r#"const channel = new BroadcastChannel("nested-report");
+               setTimeout(() => { throw new Error("nested report"); }, 0);
+               setTimeout(() => channel.postMessage("reported"), 0);"#,
         ),
         Some("/shared.js") => (
             "200 OK",

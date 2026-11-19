@@ -1753,8 +1753,8 @@ fn native_worker_errors_share_dispatch_state_and_handler_cancellation() {
             .unwrap();
         let worker = v8::Local::<v8::Object>::try_from(worker).unwrap();
         let error = v8::null(scope).into();
-        assert!(
-            !crate::context_bootstrap::worker_host::dispatch::dispatch_worker_error_event_with_kind(
+        assert_eq!(
+            crate::context_bootstrap::worker_host::dispatch::dispatch_worker_error_event_with_kind(
                 scope,
                 worker,
                 "probe",
@@ -1763,7 +1763,8 @@ fn native_worker_errors_share_dispatch_state_and_handler_cancellation() {
                 1,
                 error,
                 crate::worker::WorkerParentErrorEventKind::ErrorEvent,
-            )
+            ),
+            Some(false)
         );
     }
     assert_eq!(
@@ -1805,7 +1806,7 @@ fn native_worker_errors_share_dispatch_state_and_handler_cancellation() {
                 error,
                 crate::worker::WorkerParentErrorEventKind::ErrorEvent,
             ),
-            uncanceled,
+            Some(uncanceled),
             "onerror returned {returned}"
         );
     }

@@ -37,6 +37,7 @@ pub(crate) fn dispatch_worker_event<'s>(
                 error,
                 *event_kind,
             )
+            .unwrap_or(false)
         }
         #[cfg(test)]
         WorkerToParentMessage::PendingSubresourceFetch(_)
@@ -168,7 +169,7 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
     colno: u32,
     error: v8::Local<'s, v8::Value>,
     event_kind: WorkerParentErrorEventKind,
-) -> bool {
+) -> Option<bool> {
     let event = match event_kind {
         // Fetch/parse failures fire a plain Event with the default flags.
         WorkerParentErrorEventKind::Event => construct_original_event(scope, "error"),
@@ -176,16 +177,18 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
             scope, message, filename, lineno, colno, error,
         )),
     };
-    let Some(event) = event else { return false };
+    let event = event?;
     crate::context_bootstrap::mark_event_trusted(scope, event);
-    crate::context_bootstrap::dispatch_simple_event_target_event_with_checkpoint(
-        scope,
-        worker,
-        "error",
-        event,
-        worker_error_microtask_checkpoint,
+    Some(
+        crate::context_bootstrap::dispatch_simple_event_target_event_with_checkpoint(
+            scope,
+            worker,
+            "error",
+            event,
+            worker_error_microtask_checkpoint,
+        )
+        .uncanceled,
     )
-    .uncanceled
 }
 
 fn worker_error_microtask_checkpoint(scope: &mut v8::PinScope<'_, '_>) {

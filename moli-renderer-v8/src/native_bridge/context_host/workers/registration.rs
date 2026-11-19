@@ -102,6 +102,7 @@ impl PageScriptHost {
                 colno,
                 event_kind,
                 phase,
+                pending_report,
                 ..
             } => Ok(RendererDedicatedWorkerMessageEvent::Error {
                 message,
@@ -110,6 +111,7 @@ impl PageScriptHost {
                 colno,
                 event_kind,
                 phase,
+                pending_report,
             }),
             message => Err(Box::new(message)),
         }
@@ -994,29 +996,35 @@ impl PageScriptHost {
             .map(|state| state.client_event_producer.clone())
     }
 
-    /// Resolve the already-authorized V8 target without performing another
-    /// current/stale arbitration in the executor.
+    /// Resolve the authorized Worker wrapper or the surviving owner Window
+    /// for an exception that can propagate after its wrapper is gone.
     pub(crate) fn authorized_dedicated_worker_dispatch_target<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         worker_id: DedicatedWorkerId,
         execution_context: super::super::WindowExecutionContextIdentity,
+        propagates_to_window: bool,
     ) -> Option<(
         super::super::OwnerDispatchScope,
         v8::Local<'s, v8::Context>,
-        v8::Local<'s, v8::Object>,
+        Option<v8::Local<'s, v8::Object>>,
     )> {
-        let state = self.workers.get(&worker_id)?;
-        assert_eq!(
-            state.client_event_producer.owner().execution_context(),
-            execution_context,
-            "authorized DedicatedWorker event target changed inside one owner turn"
-        );
-        Some((
-            state.owner.dispatch_scope(),
-            state.owner.context(scope),
-            v8::Local::new(scope, &state.wrapper),
-        ))
+        if let Some(state) = self.workers.get(&worker_id)
+            && state.client_event_producer.owner().execution_context() == execution_context
+        {
+            return Some((
+                state.owner.dispatch_scope(),
+                state.owner.context(scope),
+                Some(v8::Local::new(scope, &state.wrapper)),
+            ));
+        }
+        if !propagates_to_window {
+            return None;
+        }
+        let dispatch_scope = execution_context.dispatch_scope();
+        let (realm, context) =
+            self.window_execution_context(scope, execution_context.owner(), dispatch_scope)?;
+        (realm == execution_context.realm_token()).then_some((dispatch_scope, context, None))
     }
 
     pub(crate) fn worker_dispatch_target<'s>(

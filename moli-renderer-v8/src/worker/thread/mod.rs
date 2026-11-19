@@ -2774,19 +2774,33 @@ async fn worker_main(
                     // Propagation to the owner's global uses omitError: the
                     // child exception cannot cross the worker agent boundary.
                     let omitted_error = v8::null(scope).into();
-                    if !dispatch_worker_error_event(
+                    let handled = dispatch_worker_error_event(
                         scope,
                         global,
                         &report,
                         Some(omitted_error),
                         &script_url,
-                    ) {
+                    );
+                    let pending_report = error.pending_report.and_then(|report| {
+                        if !handled
+                            && matches!(
+                                state.borrow().global_kind,
+                                WorkerGlobalKind::Dedicated { .. }
+                            )
+                        {
+                            return Some(report);
+                        }
+                        report.complete(crate::ErrorReportOutcome::from_default_prevented(handled));
+                        None
+                    });
+                    if !handled {
                         report_exception_to_parent(
                             &report,
                             &script_url,
                             error.event_kind,
                             WorkerErrorPhase::Runtime,
                             WorkerErrorSource::Runtime,
+                            pending_report,
                             &parent_tx,
                         );
                     }
@@ -3213,6 +3227,21 @@ async fn worker_main(
     }
 
     // ── Cleanup ────────────────────────────────────────────────────────────
+    // Forward nested exceptions already queued when an intermediate Worker
+    // stops. Its relays forward any later reports directly to the same owner.
+    rx.close();
+    if matches!(
+        state.borrow().global_kind,
+        WorkerGlobalKind::Dedicated { .. }
+    ) {
+        for message in pending_bootstrap_messages.drain(..) {
+            crate::worker::forward_nested_worker_error_after_owner_close(message, &parent_tx);
+        }
+        while let Some(message) = rx.recv().await {
+            crate::worker::forward_nested_worker_error_after_owner_close(message, &parent_tx);
+        }
+    }
+    drop(rx);
     // Stop admitting inside-settings work before any V8-owned completion
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
