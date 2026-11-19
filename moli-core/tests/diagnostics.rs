@@ -121,6 +121,7 @@ async fn parser_script_failures_emit_one_diagnostic_and_one_dom_event_each() -> 
         page.page_id(),
         &server.url("/dynamic.js"),
         &server.url("/dynamic.js"),
+        "404",
     );
     assert_empty(&mut diagnostics);
     Ok(())
@@ -146,6 +147,7 @@ async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_
         page.page_id(),
         &server.url("/root.js"),
         &server.url("/missing-dependency.js"),
+        "404",
     );
     assert_empty(&mut diagnostics);
 
@@ -157,6 +159,7 @@ async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_
         page.page_id(),
         &server.url("/second-root.js"),
         &server.url("/missing-dependency.js"),
+        "404",
     );
 
     let result = tokio::time::timeout(
@@ -188,6 +191,45 @@ async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_
                 if message.contains("module exception")
         ),
         "{event:?}"
+    );
+    assert_empty(&mut diagnostics);
+    Ok(())
+}
+
+const CSP_BLOCKED_MODULE_URL: &str = "http://127.0.0.1:1/blocked-dependency.js";
+
+#[tokio::test]
+async fn module_csp_diagnostics_report_blocked_dependency_even_when_cached() -> Result<()> {
+    let server = DiagnosticFixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
+    let mut page = browser.fetch(&server.url("/module-csp")).await?;
+    let result = page
+        .evaluate_runtime_expression_async("moduleError")
+        .await?;
+    assert_eq!(result["value"], "blocked");
+    assert_page_load_failure(
+        &diagnostics
+            .try_recv()
+            .context("CSP-blocked module diagnostic")?,
+        page.page_id(),
+        &server.url("/csp-root.js"),
+        CSP_BLOCKED_MODULE_URL,
+        "Content Security Policy",
+    );
+    assert_empty(&mut diagnostics);
+
+    append_missing_script(&mut page, "/csp-second-root.js", "module").await?;
+    assert_page_load_failure(
+        &diagnostics
+            .try_recv()
+            .context("cached CSP failure diagnostic")?,
+        page.page_id(),
+        &server.url("/csp-second-root.js"),
+        CSP_BLOCKED_MODULE_URL,
+        "Content Security Policy",
     );
     assert_empty(&mut diagnostics);
     Ok(())
@@ -246,6 +288,66 @@ async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellati
 }
 
 #[tokio::test]
+async fn iframe_callback_exceptions_report_after_dom_error_dispatch() -> Result<()> {
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
+    let mut page = browser.fetch("about:blank").await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"new Promise(resolve => {
+                const frame = document.body.appendChild(document.createElement("iframe")).contentWindow;
+                const errors = [];
+                frame.addEventListener("error", event => {
+                    if (event.message.includes("frame listener")) {
+                        event.preventDefault();
+                        errors.push("listener");
+                    } else if (event.message.includes("frame timer")) {
+                        errors.push("timer");
+                        resolve(errors.join(","));
+                    } else {
+                        errors.push(event.message);
+                    }
+                });
+                frame.eval(`
+                    addEventListener("probe", () => { throw new Error("frame listener"); });
+                    dispatchEvent(new Event("probe"));
+                    dispatchEvent(new ErrorEvent("error", {message: "synthetic error"}));
+                    setTimeout(() => { throw new Error("frame timer"); }, 0);
+                `);
+            })"#,
+            true,
+        ),
+    )
+    .await??;
+    assert_eq!(result["value"], "listener,synthetic error,timer");
+
+    for (marker, prevented) in [("frame listener", true), ("frame timer", false)] {
+        let event = diagnostics
+            .try_recv()
+            .with_context(|| format!("{marker} diagnostic"))?;
+        assert!(
+            matches!(
+                &event,
+                DiagnosticEvent::RuntimeException {
+                    source: DiagnosticSource::Page { page_id },
+                    origin: ExceptionOrigin::UncaughtException,
+                    message,
+                    default_prevented,
+                    ..
+                } if *page_id == page.page_id() && *default_prevented == prevented
+                    && message.contains(marker)
+            ),
+            "{event:?}"
+        );
+    }
+    assert_empty(&mut diagnostics);
+    Ok(())
+}
+
+#[tokio::test]
 async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic() -> Result<()> {
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
@@ -288,6 +390,106 @@ async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic
             } if message.contains("dedicated worker failure")
         ),
         "{diagnostic:?}"
+    );
+    assert_empty(&mut diagnostics);
+    Ok(())
+}
+
+#[tokio::test]
+async fn module_worker_diagnostics_distinguish_fetch_failure_from_exception() -> Result<()> {
+    let server = DiagnosticFixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
+    let mut page = browser.fetch(&server.url("/page")).await?;
+    for path in ["/worker-module.js", "/throws.js"] {
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            page.evaluate_runtime_expression_with_await_async(
+                &format!(
+                    r#"new Promise(resolve => {{
+                        const worker = new Worker({path:?}, {{type: "module"}});
+                        worker.onerror = event => {{
+                            event.preventDefault();
+                            worker.terminate();
+                            resolve(event.type);
+                        }};
+                    }})"#
+                ),
+                true,
+            ),
+        )
+        .await??;
+        assert_eq!(result["value"], "error");
+
+        let event = diagnostics.try_recv().context("module worker diagnostic")?;
+        match &event {
+            DiagnosticEvent::ScriptLoadFailure {
+                source: DiagnosticSource::DedicatedWorker { .. },
+                entry_url,
+                resource_url,
+                message,
+            } if path == "/worker-module.js" => {
+                assert_eq!(entry_url, &server.url(path));
+                assert_eq!(resource_url, &server.url("/missing-dependency.js"));
+                assert!(message.contains("404"), "{message}");
+            }
+            DiagnosticEvent::RuntimeException {
+                source: DiagnosticSource::DedicatedWorker { .. },
+                origin: ExceptionOrigin::UncaughtException,
+                message,
+                ..
+            } if path == "/throws.js" => assert!(message.contains("module exception"), "{message}"),
+            _ => panic!("unexpected diagnostic for {path}: {event:?}"),
+        }
+        assert_empty(&mut diagnostics);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_worker_entry_load_failure_reaches_diagnostics() -> Result<()> {
+    let server = DiagnosticFixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
+    let mut page = browser.fetch(&server.url("/page")).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"navigator.serviceWorker.register("/missing-sw.js").then(
+                () => "registered",
+                error => error.message
+            )"#,
+            true,
+        ),
+    )
+    .await??;
+    assert!(
+        result["value"]
+            .as_str()
+            .is_some_and(|message| message.contains("404")),
+        "{result}"
+    );
+
+    let expected_url = server.url("/missing-sw.js");
+    let event = diagnostics
+        .try_recv()
+        .context("service worker load diagnostic")?;
+    assert!(
+        matches!(
+            &event,
+            DiagnosticEvent::ScriptLoadFailure {
+                source: DiagnosticSource::ServiceWorker { version_id },
+                entry_url,
+                resource_url,
+                message,
+            } if *version_id != 0 && entry_url == &expected_url
+                && resource_url == &expected_url && message.contains("404")
+        ),
+        "{event:?}"
     );
     assert_empty(&mut diagnostics);
     Ok(())
@@ -413,6 +615,7 @@ fn assert_page_load_failure(
     expected_page: u64,
     expected_entry: &str,
     expected_resource: &str,
+    expected_message: &str,
 ) {
     assert!(
         matches!(
@@ -423,7 +626,7 @@ fn assert_page_load_failure(
                 resource_url,
                 message,
             } if *page_id == expected_page && entry_url == expected_entry
-                && resource_url == expected_resource && message.contains("404")
+                && resource_url == expected_resource && message.contains(expected_message)
         ),
         "{event:?}",
     );
@@ -509,12 +712,29 @@ fn fixture_response(path: Option<&str>) -> (&'static str, &'static str, &'static
             "text/javascript",
             "import './missing-dependency.js';",
         ),
+        Some("/module-csp") => (
+            "200 OK",
+            "text/html",
+            r#"<!doctype html>
+            <meta http-equiv="Content-Security-Policy" content="script-src 'self'; script-src-attr 'unsafe-inline'">
+            <script type="module" src="/csp-root.js" onerror="globalThis.moduleError = 'blocked'"></script>"#,
+        ),
+        Some("/csp-root.js" | "/csp-second-root.js") => (
+            "200 OK",
+            "text/javascript",
+            concat!("import '", "http://127.0.0.1:1/blocked-dependency.js", "';"),
+        ),
         Some("/throws.js") => (
             "200 OK",
             "text/javascript",
             "throw new Error('module exception');",
         ),
         Some("/page") => ("200 OK", "text/html", "<!doctype html>"),
+        Some("/worker-module.js") => (
+            "200 OK",
+            "text/javascript",
+            "import './missing-dependency.js';",
+        ),
         Some("/dedicated.js") => (
             "200 OK",
             "text/javascript",

@@ -12,7 +12,7 @@ use crate::dom::native::NativeNodeId;
 
 use super::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
-    context_bootstrap::dispatch_window_error_event_with_details,
+    context_bootstrap::dispatch_window_callback_exception,
     document_runtime::DomHandle,
     exception_reporting::{V8ExceptionReport, build_event_handler_exception_report},
     native_bridge::CALLBACK_ERROR_WINDOW_HANDLE_SLOT,

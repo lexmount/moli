@@ -995,8 +995,9 @@ impl NativeModuleGraphJob {
                     let admission = context.check_initial_request(key.url());
                     owner.queue_module_fetch_csp_violations(&context);
                     if let Err(error) = admission {
-                        let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string());
-                        owner.mark_module_failed(key.clone(), error.clone());
+                        let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string())
+                            .with_failed_resource(key.clone());
+                        owner.mark_module_failed(key, error.clone());
                         return Err(error);
                     }
                     let request = request.with_csp_context(Some(context));
@@ -2367,9 +2368,10 @@ fn module_script_inline_tree_job_for_owner(
         let admission = context.check_initial_request(key.url());
         vm.queue_module_fetch_csp_violations(&context);
         if let Err(error) = admission {
-            let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string());
+            let error = ModuleLoadError::new(ModuleLoadStage::Fetch, error.to_string())
+                .with_failed_resource(key.clone());
             vm.document_runtime
-                .mark_native_module_failed(key.clone(), error.clone());
+                .mark_native_module_failed(key, error.clone());
             return Err(error);
         }
     }

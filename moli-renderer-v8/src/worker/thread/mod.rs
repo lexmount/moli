@@ -57,8 +57,7 @@ use dispatch::{
     dispatch_service_worker_notification_event, dispatch_service_worker_periodic_sync_event,
     dispatch_service_worker_push_event, dispatch_service_worker_sync_event,
     dispatch_shared_worker_connect_event, dispatch_worker_error_event,
-    dispatch_worker_exception_with_phase, dispatch_worker_exception_with_phase_and_source,
-    enqueue_service_worker_navigation_preload_stream_chunk,
+    dispatch_worker_reported_error, enqueue_service_worker_navigation_preload_stream_chunk,
     fail_service_worker_navigation_preload_response,
     finish_service_worker_navigation_preload_stream, fire_timer_callback,
     install_worker_promise_rejection_dispatch,
@@ -1924,30 +1923,20 @@ async fn worker_main(
                 pending_module_bootstrap = Some(bootstrap);
             }
             WorkerBootstrapStart::Failed { error, phase } => {
-                let (report, exception, parent_event_kind) = *error;
-                let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
+                let parent_event_kind = error.event_kind;
                 let error_source = if script_kind == WorkerScriptKind::Classic {
                     WorkerErrorSource::InitialScriptEvaluation
                 } else {
                     WorkerErrorSource::Runtime
                 };
-                bootstrap_completion.mark_failure(
-                    &report,
-                    &script_url,
-                    parent_event_kind,
-                    phase,
-                    error_source,
-                );
-                let handled = dispatch_worker_exception_with_phase_and_source(
+                let handled = bootstrap_completion.report_failure(
                     scope,
                     global,
-                    report,
-                    exception,
-                    parent_event_kind,
+                    *error,
+                    &script_url,
                     phase,
                     error_source,
                     &parent_tx,
-                    &script_url,
                 );
                 bootstrap_failed = phase == WorkerErrorPhase::Bootstrap
                     && !handled
@@ -3059,26 +3048,14 @@ async fn worker_main(
                             }
                             WorkerModuleBootstrapResume::WaitingEvaluation => {}
                             WorkerModuleBootstrapResume::Failed(error) => {
-                                let (report, exception, parent_event_kind) = *error;
-                                let exception =
-                                    exception.as_ref().map(|value| v8::Local::new(scope, value));
-                                let global = ctx.global(scope);
-                                bootstrap_completion.mark_failure(
-                                    &report,
-                                    &script_url,
-                                    parent_event_kind,
-                                    WorkerErrorPhase::Bootstrap,
-                                    WorkerErrorSource::Runtime,
-                                );
-                                dispatch_worker_exception_with_phase(
+                                bootstrap_completion.report_failure(
                                     scope,
                                     global,
-                                    report,
-                                    exception,
-                                    parent_event_kind,
-                                    WorkerErrorPhase::Bootstrap,
-                                    &parent_tx,
+                                    *error,
                                     &script_url,
+                                    WorkerErrorPhase::Bootstrap,
+                                    WorkerErrorSource::Runtime,
+                                    &parent_tx,
                                 );
                                 forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                                 break;
@@ -3138,26 +3115,14 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::WaitingEvaluation => {}
                         WorkerModuleBootstrapResume::Failed(error) => {
-                            let (report, exception, parent_event_kind) = *error;
-                            let exception =
-                                exception.as_ref().map(|value| v8::Local::new(scope, value));
-                            let global = ctx.global(scope);
-                            bootstrap_completion.mark_failure(
-                                &report,
-                                &script_url,
-                                parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                WorkerErrorSource::Runtime,
-                            );
-                            dispatch_worker_exception_with_phase(
+                            bootstrap_completion.report_failure(
                                 scope,
                                 global,
-                                report,
-                                exception,
-                                parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                &parent_tx,
+                                *error,
                                 &script_url,
+                                WorkerErrorPhase::Bootstrap,
+                                WorkerErrorSource::Runtime,
+                                &parent_tx,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                             break;
@@ -3422,19 +3387,40 @@ impl WorkerBootstrapCompletionReporter {
         self.send(WorkerBootstrapCompletion::success(success));
     }
 
-    fn mark_failure(
+    fn report_failure<'s>(
         &mut self,
-        report: &V8ExceptionReport,
+        scope: &mut v8::PinScope<'s, '_>,
+        global: v8::Local<'s, v8::Object>,
+        error: WorkerBootstrapError,
         script_url: &str,
-        event_kind: WorkerParentErrorEventKind,
         phase: WorkerErrorPhase,
         source: WorkerErrorSource,
-    ) {
+        parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    ) -> bool {
+        let WorkerBootstrapError {
+            report,
+            exception,
+            event_kind,
+            failed_resource,
+        } = error;
+        let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
         self.send(WorkerBootstrapCompletion::failure(
             WorkerBootstrapFailure::from_exception_report(
-                report, script_url, event_kind, phase, source,
+                &report, script_url, event_kind, phase, source,
             ),
         ));
+        dispatch_worker_reported_error(
+            scope,
+            global,
+            report,
+            exception,
+            event_kind,
+            phase,
+            source,
+            parent_tx,
+            script_url,
+            failed_resource.as_ref(),
+        )
     }
 
     fn mark_install_global_failure(&mut self, script_url: &str, message: String) {
@@ -3474,14 +3460,7 @@ fn evaluate_classic_worker_bootstrap_script(
     scope: &mut v8::PinScope<'_, '_>,
     script_source: &str,
     script_url: &str,
-) -> Option<(
-    (
-        V8ExceptionReport,
-        Option<v8::Global<v8::Value>>,
-        WorkerParentErrorEventKind,
-    ),
-    WorkerErrorPhase,
-)> {
+) -> Option<(WorkerBootstrapError, WorkerErrorPhase)> {
     let try_catch = pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     let source_str = v8::String::new(&scope, script_source).expect("v8 string allocation");
@@ -3501,7 +3480,7 @@ fn evaluate_classic_worker_bootstrap_script(
                     stack_trace,
                 );
                 Some((
-                    (
+                    WorkerBootstrapError::new(
                         report,
                         exception.map(|value| v8::Global::new(&scope, value)),
                         WorkerParentErrorEventKind::ErrorEvent,
@@ -3519,7 +3498,7 @@ fn evaluate_classic_worker_bootstrap_script(
             let report =
                 build_event_handler_exception_report(&mut scope, exception, message, stack_trace);
             Some((
-                (
+                WorkerBootstrapError::new(
                     report,
                     exception.map(|value| v8::Global::new(&scope, value)),
                     WorkerParentErrorEventKind::Event,

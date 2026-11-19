@@ -3447,15 +3447,17 @@ pub(super) fn dispatch_worker_exception<'s>(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
-    dispatch_worker_exception_with_phase(
+    dispatch_worker_reported_error(
         scope,
         global,
         report,
         exception,
         parent_event_kind,
         WorkerErrorPhase::Runtime,
+        WorkerErrorSource::Runtime,
         parent_tx,
         script_url,
+        None,
     )
 }
 
@@ -3482,30 +3484,7 @@ pub(crate) fn dispatch_current_worker_callback_exception(
     )
 }
 
-pub(super) fn dispatch_worker_exception_with_phase<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    report: V8ExceptionReport,
-    exception: Option<v8::Local<'s, v8::Value>>,
-    parent_event_kind: WorkerParentErrorEventKind,
-    parent_phase: WorkerErrorPhase,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-    script_url: &str,
-) -> bool {
-    dispatch_worker_exception_with_phase_and_source(
-        scope,
-        global,
-        report,
-        exception,
-        parent_event_kind,
-        parent_phase,
-        WorkerErrorSource::Runtime,
-        parent_tx,
-        script_url,
-    )
-}
-
-pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
+pub(super) fn dispatch_worker_reported_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     mut report: V8ExceptionReport,
@@ -3515,10 +3494,19 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
     source: WorkerErrorSource,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
+    failed_resource: Option<&url::Url>,
 ) -> bool {
     apply_worker_exception_location_overrides(scope, &mut report, exception);
     let handled = dispatch_worker_error_event(scope, global, &report, exception, script_url);
     with_worker_diagnostic(scope, |scope, source| {
+        if let Some(resource) = failed_resource {
+            return crate::DiagnosticEvent::script_load_failure(
+                source,
+                script_url,
+                resource.as_str(),
+                &report.summary,
+            );
+        }
         let stack = if handled {
             None
         } else {

@@ -246,7 +246,7 @@ pub(super) fn creation_error(
     Some(
         module_tree::ModuleLoadError::new(
             module_tree::ModuleLoadStage::Compile,
-            error.0.summary.clone(),
+            error.report.summary.clone(),
         )
         .with_key(tree_key(&script.key))
         .with_module_entry(entry_id(entry)),

@@ -659,6 +659,21 @@ impl RendererServiceWorkerHost {
                     "failed to load service worker script"
                 );
                 self.mark_failed();
+                params
+                    .worker_context_runtime
+                    .with_diagnostic_source(crate::DiagnosticSource::ServiceWorker {
+                        version_id: params.run_owner.version_id().as_u64(),
+                    })
+                    .emit_diagnostic(|source| {
+                        let mut request_url = params.script_url.clone();
+                        request_url.set_fragment(None);
+                        crate::DiagnosticEvent::script_load_failure(
+                            source,
+                            params.script_url.as_str(),
+                            request_url.as_str(),
+                            &error,
+                        )
+                    });
                 service.enqueue_worker_start_failed(
                     params.run_owner.clone(),
                     ServiceWorkerVersionStartFailure::ScriptLoad { message: error },
