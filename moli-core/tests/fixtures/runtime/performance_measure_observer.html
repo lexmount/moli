@@ -5,13 +5,16 @@
     let callbackEntries = null;
     let callbackMeasureEntries = null;
     let callbackNamedEntries = null;
-    const observer = new PerformanceObserver((list) => {
-      callbackEntries = list.getEntries();
-      callbackMeasureEntries = list.getEntriesByType("measure");
-      callbackNamedEntries = list.getEntriesByName("duration");
-      observer.disconnect();
+    const observed = new Promise(resolve => {
+      const observer = new PerformanceObserver((list) => {
+        callbackEntries = list.getEntries();
+        callbackMeasureEntries = list.getEntriesByType("measure");
+        callbackNamedEntries = list.getEntriesByName("duration");
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe({ type: "measure" });
     });
-    observer.observe({ type: "measure" });
 
     performance.clearMarks();
     performance.clearMeasures();
@@ -38,7 +41,7 @@
     const bufferedMarkRecords = bufferedMarkObserver.takeRecords();
     bufferedMarkObserver.disconnect();
 
-    Promise.resolve().then(() => {
+    observed.then(() => {
       window.performanceMarkInstance = mark instanceof PerformanceMark;
       window.performanceMeasureInstance = measure instanceof PerformanceMeasure;
       window.performanceGetEntriesCount = allEntries.length;
