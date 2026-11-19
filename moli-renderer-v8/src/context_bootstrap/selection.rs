@@ -2,6 +2,7 @@ use super::*;
 
 mod composed;
 mod dispatch;
+mod editing;
 mod editing_caret;
 mod focus;
 mod text;
@@ -9,6 +10,7 @@ mod values;
 
 pub(super) use composed::selection_composed_boundary_order;
 pub(super) use dispatch::{boundary_order, selection_dispatch_change};
+pub(crate) use editing::replace_editable_selection_text;
 pub(crate) use focus::focus_element_selection;
 pub(super) use text::{first_text_descendant, last_text_descendant, text_length};
 pub(super) use values::{

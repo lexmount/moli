@@ -3,14 +3,14 @@ use super::super::node::{
     node_runtime_and_handle_from_args_or_detached, node_runtime_and_handle_from_object_or_detached,
     remove_child_in_reaction_scope,
 };
+use super::insert_text::{exec_command_insert_text, insert_text_command_target};
 use super::{PageScriptHost, document_has_browsing_context, is_html_document, throw_dom_exception};
 use crate::native_bridge::element::{
-    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
-    document_copy_command_supported, form_control_is_effectively_disabled, is_text_control,
-    queue_text_control_document_selection_change_event, replace_contenteditable_selection,
-    replace_text_control_selection, replace_text_control_selection_for_insert_html,
-    restore_focused_text_control_selection, run_document_copy_command,
-    text_control_value_dom_string,
+    contenteditable_editing_host, dispatch_text_control_event, document_copy_command_supported,
+    form_control_is_effectively_disabled, is_text_control,
+    queue_text_control_document_selection_change_event,
+    replace_text_control_selection_for_insert_html, restore_focused_text_control_selection,
+    run_document_copy_command, text_control_value_dom_string,
 };
 use crate::{
     custom_elements,
@@ -769,7 +769,7 @@ fn execute_document_editing_command<'s>(
             let Some(value) = editing_command_value(scope, args) else {
                 return;
             };
-            let inserted = exec_command_insert_text(scope, runtime_ptr, &value);
+            let inserted = exec_command_insert_text(scope, runtime_ptr, document_handle, &value);
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
@@ -786,35 +786,6 @@ fn execute_document_editing_command<'s>(
     let command_name: &'static str = command.into();
     let removed = exec_command_delete_selection(scope, runtime_ptr, args.this(), command_name);
     rv.set(v8::Boolean::new(scope, removed).into());
-}
-
-fn exec_command_insert_text(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    replacement: &str,
-) -> bool {
-    let Some(active) = unsafe { &*runtime_ptr }.active_element_handle() else {
-        return false;
-    };
-    if is_text_control(unsafe { &*runtime_ptr }, active) {
-        return replace_text_control_selection(
-            scope,
-            runtime_ptr,
-            active,
-            replacement,
-            TextEditInputType::InsertText,
-        );
-    }
-    let Some(editing_host) = contenteditable_editing_host(unsafe { &*runtime_ptr }, active) else {
-        return false;
-    };
-    replace_contenteditable_selection(
-        scope,
-        runtime_ptr,
-        editing_host,
-        replacement,
-        TextEditInputType::InsertText,
-    )
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'s>(
@@ -857,7 +828,10 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
     };
     let runtime = unsafe { &*runtime_ptr };
     let enabled = match command.parse::<EditingCommand>() {
-        Ok(EditingCommand::Delete | EditingCommand::ForwardDelete | EditingCommand::InsertText) => {
+        Ok(EditingCommand::InsertText) => {
+            insert_text_command_target(runtime, document_handle).is_some()
+        }
+        Ok(EditingCommand::Delete | EditingCommand::ForwardDelete) => {
             runtime.document_design_mode_enabled(document_handle)
                 || runtime.active_element_handle().is_some_and(|active| {
                     is_text_control(runtime, active)
