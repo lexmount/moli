@@ -423,7 +423,7 @@ impl DocumentRuntime {
             );
             return;
         };
-        let (report_only_violation, enforced_violation) = self
+        let (report_only_violations, enforced_violations) = self
             .inline_source_csp_check(
                 ContentSecurityPolicyNonUrlKind::DocumentInlineStyleAttribute,
                 source,
@@ -431,15 +431,15 @@ impl DocumentRuntime {
             .into_violations();
         unsafe { &mut *host_ptr }.set_element_inline_style_csp_state(
             target,
-            if enforced_violation.is_some() {
+            if !enforced_violations.is_empty() {
                 crate::style_engine::InlineStyleCspState::BlockedAttribute
             } else {
                 crate::style_engine::InlineStyleCspState::AllowedAttribute
             },
         );
-        for violation in [report_only_violation, enforced_violation]
+        for violation in report_only_violations
             .into_iter()
-            .flatten()
+            .chain(enforced_violations)
         {
             self.queue_content_security_policy_violation_event_for_element_best_effort(
                 scope, host_ptr, target, &violation,
@@ -478,7 +478,8 @@ impl DocumentRuntime {
         ) else {
             return;
         };
-        let (style_report_only_violation, style_enforced_violation) = style_check.into_violations();
+        let (style_report_only_violations, style_enforced_violations) =
+            style_check.into_violations();
         let (script_report_only_violations, script_enforced_violations) =
             if is_declarative_css_module {
                 // A declarative CSS module is not a script element and carries no
@@ -501,12 +502,12 @@ impl DocumentRuntime {
             host_ptr,
             owner,
             super::StylesheetOwnerCspDisposition::from_blocked(
-                style_enforced_violation.is_some() || !script_enforced_violations.is_empty(),
+                !style_enforced_violations.is_empty() || !script_enforced_violations.is_empty(),
             ),
         );
-        for violation in style_report_only_violation
+        for violation in style_report_only_violations
             .into_iter()
-            .chain(style_enforced_violation)
+            .chain(style_enforced_violations)
             .chain(script_report_only_violations)
             .chain(script_enforced_violations)
         {
@@ -1069,7 +1070,7 @@ impl DocumentRuntime {
         &self,
         kind: ContentSecurityPolicyNonUrlKind,
         source: &str,
-    ) -> DocumentContentSecurityPolicyCheck {
+    ) -> DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>> {
         self.inline_source_csp_check_for_document(
             Some(self.document_handle()),
             self.document_url(),
@@ -1090,11 +1091,11 @@ impl DocumentRuntime {
         policy_container: &DocumentPolicyContainer,
         source: &str,
         request: ContentSecurityPolicyStyleElementRequest<'_>,
-    ) -> DocumentContentSecurityPolicyCheck {
+    ) -> DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>> {
         if self.bypass_content_security_policy() {
             return DocumentContentSecurityPolicyCheck {
-                report_only_violation: None,
-                enforced_violation: None,
+                report_only_violation: Vec::new(),
+                enforced_violation: Vec::new(),
             };
         }
         let enforced_policies = self.document_content_security_policies_for_optional_document(
@@ -1103,7 +1104,7 @@ impl DocumentRuntime {
             &policy_container.content_security_reporting_endpoints,
         );
         let enforced_violation =
-            document_inline_style_element_policy_violation_from_document_policies(
+            document_inline_style_element_policy_violations_from_document_policies(
                 enforced_policies,
                 document_url,
                 source,
@@ -1115,7 +1116,7 @@ impl DocumentRuntime {
             &policy_container.content_security_reporting_endpoints,
         );
         let report_only_violation =
-            document_inline_style_element_policy_violation_from_document_policies(
+            document_inline_style_element_policy_violations_from_document_policies(
                 report_only_policies,
                 document_url,
                 source,
@@ -1258,13 +1259,13 @@ impl DocumentRuntime {
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         kind: ContentSecurityPolicyNonUrlKind,
         source: &str,
-    ) -> DocumentContentSecurityPolicyCheck {
+    ) -> DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>> {
         let enforced_policies = self.document_content_security_policies_for_optional_document(
             document_handle,
             response_policies,
             response_reporting_endpoints,
         );
-        let enforced_violation = document_inline_source_policy_violation_from_document_policies(
+        let enforced_violation = document_inline_source_policy_violations_from_document_policies(
             enforced_policies,
             document_url,
             kind,
@@ -1275,7 +1276,7 @@ impl DocumentRuntime {
             response_report_only_policies,
             response_reporting_endpoints,
         );
-        let report_only_violation = document_inline_source_policy_violation_from_document_policies(
+        let report_only_violation = document_inline_source_policy_violations_from_document_policies(
             report_only_policies,
             document_url,
             kind,
@@ -2332,14 +2333,14 @@ fn document_non_url_policy_violation_from_document_policies(
     })
 }
 
-fn document_inline_source_policy_violation_from_document_policies(
+fn document_inline_source_policy_violations_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicy>,
     document_url: &Url,
     kind: ContentSecurityPolicyNonUrlKind,
     source: &str,
     disposition: ContentSecurityPolicyDisposition,
-) -> Option<DocumentContentSecurityPolicyViolation> {
-    policies.into_iter().find_map(|policy| {
+) -> Vec<DocumentContentSecurityPolicyViolation> {
+    policies.into_iter().filter_map(|policy| {
         let mut violation = content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
             &policy.policy,
             document_url,
@@ -2350,7 +2351,7 @@ fn document_inline_source_policy_violation_from_document_policies(
         )?;
         apply_document_policy_reporting_flags(&mut violation, &policy);
         Some(violation)
-    })
+    }).collect()
 }
 
 fn document_inline_script_element_policy_violations_from_document_policies(
@@ -2374,14 +2375,14 @@ fn document_inline_script_element_policy_violations_from_document_policies(
     }).collect()
 }
 
-fn document_inline_style_element_policy_violation_from_document_policies(
+fn document_inline_style_element_policy_violations_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicy>,
     document_url: &Url,
     source: &str,
     request: ContentSecurityPolicyStyleElementRequest<'_>,
     disposition: ContentSecurityPolicyDisposition,
-) -> Option<DocumentContentSecurityPolicyViolation> {
-    policies.into_iter().find_map(|policy| {
+) -> Vec<DocumentContentSecurityPolicyViolation> {
+    policies.into_iter().filter_map(|policy| {
         let mut violation = content_security_policy_inline_style_element_violation_with_disposition_and_reporting_endpoints(
             &policy.policy,
             document_url,
@@ -2392,7 +2393,7 @@ fn document_inline_style_element_policy_violation_from_document_policies(
         )?;
         apply_document_policy_reporting_flags(&mut violation, &policy);
         Some(violation)
-    })
+    }).collect()
 }
 
 #[cfg(test)]
