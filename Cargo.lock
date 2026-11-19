@@ -3100,6 +3100,7 @@ dependencies = [
  "moli-sqlite",
  "rusqlite",
  "serde",
+ "strum",
  "unicode-id-start",
 ]
 

@@ -6,6 +6,7 @@ use crate::context_bootstrap::indexed_db::{
 use crate::webidl;
 use moli_indexeddb::sqlite::service::Command;
 use moli_indexeddb::{IndexOptionsValidationError, validate_index_options};
+use moli_webapi::indexed_db_values::options::IdbIndexParameters;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBObjectStore.createIndex")]
@@ -16,15 +17,6 @@ struct IdbObjectStoreCreateIndexArgs {
     key_path: KeyPath,
     #[webidl(index = 2, dictionary)]
     options: IdbIndexParameters,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "IDBIndexParameters")]
-struct IdbIndexParameters {
-    #[webidl(default = false)]
-    unique: bool,
-    #[webidl(default = false)]
-    multi_entry: bool,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_callback<'s>(
