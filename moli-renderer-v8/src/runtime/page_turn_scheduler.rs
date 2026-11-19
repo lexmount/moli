@@ -614,13 +614,15 @@ mod tests {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageMiscPlatformApiOwner::new(
                 RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
-                WindowDocumentTaskTarget::new(
-                    WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
-                        FrameSchedulerLaneId(order),
-                        LocalWindowId(order + 1),
-                        DocumentId(order + 2),
-                    )),
-                    OwnerDispatchScope::Top,
+                crate::page_task_queue::RendererPageMiscPlatformApiTarget::Document(
+                    WindowDocumentTaskTarget::new(
+                        WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                            FrameSchedulerLaneId(order),
+                            LocalWindowId(order + 1),
+                            DocumentId(order + 2),
+                        )),
+                        OwnerDispatchScope::Top,
+                    ),
                 ),
             ),
         }

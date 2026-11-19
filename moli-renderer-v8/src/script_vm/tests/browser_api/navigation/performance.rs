@@ -1326,7 +1326,8 @@ fn lazily_materialized_legacy_performance_timing_uses_integer_milliseconds() {
 
 #[test]
 fn performance_navigation_observer_receives_entry_at_load_event_end() {
-    let mut vm = new_storage_test_vm("https://performance-navigation-observer.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://performance-navigation-observer.test/");
 
     let setup = vm
         .eval(
@@ -1364,10 +1365,10 @@ fn performance_navigation_observer_receives_entry_at_load_event_end() {
     vm.dispatch_document_lifecycle_event("DOMContentLoaded")
         .expect("DOMContentLoaded should update navigation timing");
     vm.dispatch_window_load_event()
-        .expect("load should notify navigation observer");
+        .expect("load should queue navigation observer notification");
 
     let records = vm
-        .eval(
+        .eval_after_selected_page_tasks(
             r#"
             (() => {
               const records = globalThis.__navigationObserverRecords;

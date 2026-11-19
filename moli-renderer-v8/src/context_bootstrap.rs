@@ -172,6 +172,7 @@ pub(crate) use self::opfs::{
     settle_opfs_task_result,
 };
 mod performance_observer_runtime;
+pub(crate) use performance_observer_runtime::notify_performance_observers;
 mod reporting_observer;
 pub(crate) use reporting_observer::notify_report as notify_reporting_observers;
 mod worker_embedder_policy;

@@ -2853,8 +2853,7 @@ async fn html_image_load_records_resource_performance_entry() {
     .expect("image resource timing setup should evaluate");
 
     run_one_canvas_image_load_event_task(&mut vm, &loader).await;
-    vm.run_next_timeout_for_test()
-        .expect("performance observer delivery should run");
+    assert_eq!(run_performance_observer_tasks_for_test(&mut vm).await, 1);
 
     let result = vm
         .eval("globalThis.__lmImageResourceTiming")

@@ -1407,9 +1407,11 @@ impl MiscPlatformApiLane {
     fn enqueue_with(sender: &RendererPageMiscPlatformApiSender, sequence: u64) -> bool {
         sender
             .send(
-                WindowDocumentTaskTarget::new(
-                    WindowDocumentOwner::Frame(task_owner(sequence + 1_730)),
-                    OwnerDispatchScope::Top,
+                crate::page_task_queue::RendererPageMiscPlatformApiTarget::Document(
+                    WindowDocumentTaskTarget::new(
+                        WindowDocumentOwner::Frame(task_owner(sequence + 1_730)),
+                        OwnerDispatchScope::Top,
+                    ),
                 ),
                 RendererPageMiscPlatformApiTaskId::from_raw(sequence),
                 match sequence % 3 {

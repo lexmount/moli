@@ -438,9 +438,9 @@ fn resource_timing_added_during_full_event_stays_in_secondary_buffer() {
     );
 }
 
-#[test]
-fn resource_timing_dropped_count_survives_recovery_resize_and_clear() {
-    let mut vm = new_storage_test_vm("https://resource-drop-count.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn resource_timing_dropped_count_survives_recovery_resize_and_clear() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://resource-drop-count.test/");
     install_test_resource_recorder(&mut vm);
     vm.eval(
         r#"
@@ -460,8 +460,13 @@ fn resource_timing_dropped_count_survives_recovery_resize_and_clear() {
         "#,
     )
     .unwrap();
+    assert_eq!(run_performance_observer_tasks_for_test(&mut vm).await, 1);
     assert_eq!(vm.eval("JSON.stringify(__dropReports)").unwrap(), "[1]");
-    vm.run_next_timeout_for_test().unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(run_performance_observer_tasks_for_test(&mut vm).await, 1);
     assert_eq!(
         vm.eval("JSON.stringify([__dropReports,performance.getEntriesByType('resource').length])")
             .unwrap(),
@@ -474,6 +479,7 @@ fn resource_timing_dropped_count_survives_recovery_resize_and_clear() {
         "__dropObserver.observe({entryTypes:['mark']});performance.mark('marks-only');",
     ] {
         vm.eval(script).unwrap();
+        assert_eq!(run_performance_observer_tasks_for_test(&mut vm).await, 1);
     }
     assert_eq!(
         vm.eval("JSON.stringify(__dropReports)").unwrap(),

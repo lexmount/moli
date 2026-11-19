@@ -5,7 +5,7 @@ use crate::types::SubresourceInterceptionClasses;
 fn fetch_resource_timing_records_abort_once_and_ignores_late_completion() {
     let document = Url::parse("https://fetch-abort-timing.test/page").unwrap();
     for streaming in [false, true] {
-        let mut vm = new_storage_test_vm(document.as_str());
+        let mut vm = new_storage_page_task_executor_test_vm(document.as_str());
         vm.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
             crate::types::SubresourceResourceType::Fetch,
         ));
@@ -62,8 +62,10 @@ fn fetch_resource_timing_records_abort_once_and_ignores_late_completion() {
             "streaming={streaming}"
         );
         assert_eq!(
-            vm.eval("String(observed.filter(e=>e.initiatorType==='fetch').length)")
-                .unwrap(),
+            vm.eval_after_selected_page_tasks(
+                "String(observed.filter(e=>e.initiatorType==='fetch').length)"
+            )
+            .unwrap(),
             "1"
         );
         vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
@@ -87,7 +89,11 @@ fn fetch_resource_timing_records_abort_once_and_ignores_late_completion() {
                 .unwrap(),
             "1"
         );
-        assert_eq!(vm.eval("String(observed.length)").unwrap(), "1");
+        assert_eq!(
+            vm.eval_after_selected_page_tasks("String(observed.length)")
+                .unwrap(),
+            "1"
+        );
     }
 }
 

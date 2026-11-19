@@ -1356,7 +1356,11 @@ async fn performance_measure_entries_are_observable_and_clearable() -> Result<()
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(&server.url("/compat/performance-measure-observer"))
+        .fetch_with_wait_until(
+            &server.url("/compat/performance-measure-observer"),
+            RenderedDomWaitUntil::NetworkIdle,
+            std::time::Duration::from_secs(5),
+        )
         .await?;
 
     assert_eq!(

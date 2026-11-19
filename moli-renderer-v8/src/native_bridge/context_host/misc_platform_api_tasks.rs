@@ -12,24 +12,29 @@ use crate::{
         create_content_security_policy_violation_event,
     },
     page_task_queue::{
-        PageMiscPlatformApiTargetEffect, RendererPageMiscPlatformApiTaskId,
-        RendererPageMiscPlatformApiTaskKind,
+        PageMiscPlatformApiTargetEffect, RendererPageMiscPlatformApiTarget,
+        RendererPageMiscPlatformApiTaskId, RendererPageMiscPlatformApiTaskKind,
     },
 };
 
-use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget};
+use super::window_document_tasks::{PendingWindowTask, WindowTaskLedger};
+use super::{
+    OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget,
+    WindowExecutionContextBinding,
+};
 
-pub(super) type MiscPlatformApiTaskState = ExactWindowDocumentTaskLedger<
+pub(super) type MiscPlatformApiTaskState = WindowTaskLedger<
     RendererPageMiscPlatformApiTaskId,
     RendererPageMiscPlatformApiTaskKind,
     MiscPlatformApiTask,
+    RendererPageMiscPlatformApiTarget,
 >;
 
 pub(crate) enum MiscPlatformApiTask {
     LegacyStorageQuota(LegacyStorageQuotaCallbackTask),
     MediaTrackConstraints(Box<MediaTrackConstraintsTask>),
     EncryptedMediaRequest(EncryptedMediaRequestTask),
+    PerformanceObserver(WindowExecutionContextBinding),
     ContentSecurityPolicyViolation {
         report: bool,
         element: Option<DomHandle>,
@@ -137,7 +142,7 @@ impl PageScriptHost {
             .misc_platform_api_tasks
             .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
         self.queue_misc_platform_api_task(
-            target,
+            RendererPageMiscPlatformApiTarget::Document(target),
             task_id,
             RendererPageMiscPlatformApiTaskKind::ContentSecurityPolicyViolation,
             MiscPlatformApiTask::ContentSecurityPolicyViolation {
@@ -166,7 +171,12 @@ impl PageScriptHost {
         let task = MiscPlatformApiTask::LegacyStorageQuota(LegacyStorageQuotaCallbackTask::new(
             scope, self, callback, outcome,
         ));
-        self.queue_misc_platform_api_task(target, task_id, kind, task)
+        self.queue_misc_platform_api_task(
+            RendererPageMiscPlatformApiTarget::Document(target),
+            task_id,
+            kind,
+            task,
+        )
     }
 
     pub(crate) fn queue_media_track_constraints_task<'s>(
@@ -197,6 +207,36 @@ impl PageScriptHost {
         )
     }
 
+    pub(crate) fn queue_performance_observer_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        context: v8::Local<'s, v8::Context>,
+    ) {
+        let Some(identity) = self.window_execution_context_identity_for_v8_context(scope, context)
+        else {
+            return;
+        };
+        let target = RendererPageMiscPlatformApiTarget::Window(identity);
+        if self.misc_platform_api_tasks.contains_target(target) {
+            return;
+        }
+        let binding = WindowExecutionContextBinding::new(
+            identity.owner(),
+            identity.dispatch_scope(),
+            identity.realm_token(),
+            v8::Global::new(scope, context),
+        );
+        let task_id = self
+            .misc_platform_api_tasks
+            .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
+        self.queue_misc_platform_api_task(
+            target,
+            task_id,
+            RendererPageMiscPlatformApiTaskKind::PerformanceObserver,
+            MiscPlatformApiTask::PerformanceObserver(binding),
+        );
+    }
+
     fn queue_receiver_misc_platform_api_task<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -216,20 +256,23 @@ impl PageScriptHost {
         let task_id = self
             .misc_platform_api_tasks
             .allocate_task_id(RendererPageMiscPlatformApiTaskId::from_raw);
-        self.queue_misc_platform_api_task(target, task_id, kind, task)
+        self.queue_misc_platform_api_task(
+            RendererPageMiscPlatformApiTarget::Document(target),
+            task_id,
+            kind,
+            task,
+        )
     }
 
     fn queue_misc_platform_api_task(
         &mut self,
-        target: WindowDocumentTaskTarget,
+        target: RendererPageMiscPlatformApiTarget,
         task_id: RendererPageMiscPlatformApiTaskId,
         kind: RendererPageMiscPlatformApiTaskKind,
         task: MiscPlatformApiTask,
     ) -> bool {
         self.misc_platform_api_tasks
-            .push(PendingExactWindowDocumentTask::new(
-                task_id, target, kind, task,
-            ));
+            .push(PendingWindowTask::new(task_id, target, kind, task));
 
         if self
             .page_misc_platform_api_sender()
@@ -255,25 +298,34 @@ impl PageScriptHost {
         &self,
         task_id: RendererPageMiscPlatformApiTaskId,
     ) -> Option<(
-        WindowDocumentTaskTarget,
+        RendererPageMiscPlatformApiTarget,
         RendererPageMiscPlatformApiTaskKind,
     )> {
         let pending = self.misc_platform_api_tasks.pending(task_id)?;
-        let current_target = self.current_window_document_task_target_for_dispatch_scope(
-            pending.target().dispatch_scope(),
-        )?;
+        let current_target = match pending.target() {
+            RendererPageMiscPlatformApiTarget::Document(target) => {
+                RendererPageMiscPlatformApiTarget::Document(
+                    self.current_window_document_task_target_for_dispatch_scope(
+                        target.dispatch_scope(),
+                    )?,
+                )
+            }
+            RendererPageMiscPlatformApiTarget::Window(identity) => self
+                .window_execution_context_identity_is_current(identity)
+                .then_some(pending.target())?,
+        };
         Some((current_target, pending.kind()))
     }
 
     pub(crate) fn take_pending_misc_platform_api_task_for_exact_target(
         &mut self,
         task_id: RendererPageMiscPlatformApiTaskId,
-        target: WindowDocumentTaskTarget,
+        target: RendererPageMiscPlatformApiTarget,
         kind: RendererPageMiscPlatformApiTaskKind,
     ) -> Option<MiscPlatformApiTask> {
         self.misc_platform_api_tasks
             .remove_exact(task_id, target, kind)
-            .map(PendingExactWindowDocumentTask::into_payload)
+            .map(PendingWindowTask::into_payload)
     }
 
     pub(crate) fn discard_pending_misc_platform_api_task(
@@ -287,9 +339,23 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
-        target: WindowDocumentTaskTarget,
+        target: RendererPageMiscPlatformApiTarget,
         task: MiscPlatformApiTask,
     ) -> PageMiscPlatformApiTargetEffect {
+        let target = match target {
+            RendererPageMiscPlatformApiTarget::Window(_) => {
+                let invoked = match task {
+                    MiscPlatformApiTask::PerformanceObserver(binding) => binding
+                        .with_current_scope(scope, host_ptr, |scope, _| {
+                            crate::context_bootstrap::notify_performance_observers(scope)
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                return misc_platform_api_callback_effect(invoked);
+            }
+            RendererPageMiscPlatformApiTarget::Document(target) => target,
+        };
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
             return PageMiscPlatformApiTargetEffect::CurrentOwnerCallbackRetired;
@@ -304,6 +370,7 @@ impl PageScriptHost {
             }
             MiscPlatformApiTask::MediaTrackConstraints(task) => task.invoke(scope),
             MiscPlatformApiTask::EncryptedMediaRequest(task) => task.invoke(scope),
+            MiscPlatformApiTask::PerformanceObserver(_) => false,
             MiscPlatformApiTask::ContentSecurityPolicyViolation {
                 report,
                 element,
@@ -370,12 +437,15 @@ impl PageScriptHost {
                     })
             }
         };
-        let effect = if invoked {
-            PageMiscPlatformApiTargetEffect::CallbackInvokedForCurrentOwner
-        } else {
-            PageMiscPlatformApiTargetEffect::CurrentOwnerCallbackRetired
-        };
         dispatch_scope.restore(scope, previous_scope);
-        effect
+        misc_platform_api_callback_effect(invoked)
+    }
+}
+
+fn misc_platform_api_callback_effect(invoked: bool) -> PageMiscPlatformApiTargetEffect {
+    if invoked {
+        PageMiscPlatformApiTargetEffect::CallbackInvokedForCurrentOwner
+    } else {
+        PageMiscPlatformApiTargetEffect::CurrentOwnerCallbackRetired
     }
 }
