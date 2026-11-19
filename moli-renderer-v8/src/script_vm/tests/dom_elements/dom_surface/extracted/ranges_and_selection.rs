@@ -649,6 +649,53 @@ fn exec_command_insert_text_rejects_selections_outside_the_editing_host() {
 }
 
 #[test]
+fn exec_command_insert_text_preserves_inline_formatting_at_text_boundaries() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-text.test/",
+        "<!doctype html><div contenteditable></div>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const editor = document.querySelector("div");
+  editor.focus();
+  function replace(html, select) {
+    editor.innerHTML = html;
+    const range = document.createRange();
+    select(range);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const inserted = document.execCommand("insertText", false, "X");
+    return [inserted, editor.innerHTML].join(":");
+  }
+
+  return [
+    replace("abc<b><i>def</i></b>ghi", range => {
+      range.selectNode(editor.querySelector("b"));
+    }),
+    replace("abc<s></s><b><i>def</i></b>ghi", range => {
+      range.setStart(editor.firstChild, 3);
+      range.setEnd(editor.querySelector("i").firstChild, 2);
+    }),
+    replace("abc<b><i><img>def</i></b>ghi", range => {
+      range.selectNode(editor.querySelector("b"));
+    }),
+  ].join("|");
+})()
+"#,
+        )
+        .expect("insertText inline formatting probe should evaluate");
+
+    assert_eq!(
+        result,
+        "true:abc<b><i>X</i></b>ghi|true:abc<s></s><b><i>Xf</i></b>ghi|true:abcXghi"
+    );
+}
+
+#[test]
 fn selection_to_string_uses_rendered_native_range_projection() {
     let mut vm = new_storage_test_vm("https://selection-rendered-string.test/");
 
