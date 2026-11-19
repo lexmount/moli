@@ -1,4 +1,5 @@
 html/browsers/browsing-the-web/unloading-documents/prompt/004.html
+html/browsers/history/the-location-interface/location_replace_session_history.html
 payment-method-basic-card/apply_the_modifiers.html
 payment-method-basic-card/steps_for_selecting_the_payment_handler.html
 svg/linking/scripted/a.rel-noreferrer-policy.html
