@@ -90,9 +90,6 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/rele
 
 ## 예시
 
-관련 프로젝트, 통합 도구, 배포 옵션은
-[Awesome Moli](https://github.com/lexmount/awesome-moli)에서 확인할 수 있습니다.
-
 <p align="center">
   <a href="../assets/moli-game.jpg">
     <img
@@ -466,10 +463,7 @@ Moli는 문서에서 정의한 에이전트 브라우저 시나리오 안에서 
   <img alt="lexmount/moli의 스타 기록" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## 라이선스
+## Awesome Moli
 
-파일 또는 디렉터리에 별도의 명시가 없다면, 이 프로젝트는 [Apache License 2.0](../LICENSE-APACHE)
-또는 [MIT License](../LICENSE-MIT) 중 하나를 선택해 사용할 수 있습니다. 별도 라이선스가
-적용되는 서드파티 구성 요소와 픽스처에는 각 라이선스와 고지가 적용됩니다.
-[`license-metadata.json`](../license-metadata.json)에는 기계가 읽을 수 있는 기본 메타데이터가
-기록되어 있으며, 추가 배포 고지는 [`licenses/`](../licenses/)에 모여 있습니다.
+관련 프로젝트, 통합 도구, 배포 옵션은
+[Awesome Moli](https://github.com/lexmount/awesome-moli)에서 확인할 수 있습니다.

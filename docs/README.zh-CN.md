@@ -87,8 +87,6 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/rele
 
 ## 效果展示
 
-相关项目、集成和部署方案见 [Awesome Moli](https://github.com/lexmount/awesome-moli)。
-
 <p align="center">
   <a href="../assets/moli-game.jpg">
     <img
@@ -385,6 +383,6 @@ Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源�
   <img alt="lexmount/moli 的 Star 增长曲线" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## 许可证
+## Awesome Moli
 
-除非文件或目录中另有说明，你可以自行选择依据 [Apache License 2.0](../LICENSE-APACHE) 或 [MIT License](../LICENSE-MIT) 来使用 Moli。采用独立许可证的第三方组件和测试夹具，仍然遵循各自的许可证和声明。
+相关项目、集成和部署方案见 [Awesome Moli](https://github.com/lexmount/awesome-moli)。

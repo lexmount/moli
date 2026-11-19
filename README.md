@@ -91,9 +91,6 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/rele
 
 ## Showcase
 
-Find projects, integrations, and deployment options in
-[Awesome Moli](https://github.com/lexmount/awesome-moli).
-
 <p align="center">
   <a href="assets/moli-game.jpg">
     <img
@@ -488,11 +485,7 @@ Generated hourly from the stargazer timeline by [lexmount/moli-metrics](https://
   <img alt="Star history of lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## License
+## Awesome Moli
 
-Unless a file or directory states otherwise, you may use Moli under either the
-[Apache License 2.0](LICENSE-APACHE) or the [MIT License](LICENSE-MIT), at your
-option. Separately licensed third-party components and fixtures remain subject
-to their own licenses and notices. [`license-metadata.json`](license-metadata.json)
-records the machine-readable default, and additional distributable notices are
-collected under [`licenses/`](licenses/).
+Find projects, integrations, and deployment options in
+[Awesome Moli](https://github.com/lexmount/awesome-moli).
