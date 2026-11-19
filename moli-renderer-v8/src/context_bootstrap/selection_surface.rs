@@ -1,6 +1,8 @@
 use super::range_algorithms::range_selection_string_contents;
+#[cfg(feature = "devtools")]
+use super::selection::boundary_order;
 use super::selection::{
-    boundary_order, new_selection_runtime_object, selection_anchor_node, selection_anchor_offset,
+    new_selection_runtime_object, selection_anchor_node, selection_anchor_offset,
     selection_bind_owner_document, selection_dispatch_change, selection_focus_node,
     selection_focus_offset, selection_owner_document, selection_range, selection_store,
 };
@@ -323,6 +325,7 @@ pub(crate) fn native_editing_history_owner<'s>(
     let selected = selection_value_for_window(scope, window)?;
     selection_owner_document(scope, selected)
 }
+#[cfg(feature = "devtools")]
 pub(crate) fn native_editing_selected_text(scope: &mut v8::PinScope<'_, '_>) -> String {
     let window = scope.get_current_context().global(scope);
     selection_value_for_window(scope, window)
@@ -330,6 +333,7 @@ pub(crate) fn native_editing_selected_text(scope: &mut v8::PinScope<'_, '_>) -> 
         .and_then(|range| range_selection_string_contents(scope, range))
         .unwrap_or_default()
 }
+#[cfg(feature = "devtools")]
 pub(crate) fn restore_native_editing_selection(
     scope: &mut v8::PinScope<'_, '_>,
     anchor: crate::document_runtime::DomHandle,

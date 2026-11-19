@@ -32,6 +32,8 @@ use crate::{
 };
 
 use super::super::super::PageScriptHost;
+#[cfg(feature = "devtools")]
+use super::super::construct_input_event;
 use super::super::forms::{
     FormAssociatedResetCallbackTiming, dispatch_form_reset_event, reset_form_default_action,
 };
@@ -39,8 +41,8 @@ use super::super::url_attributes::parsed_hyperlink_url;
 use super::super::{
     ClickEventSource, InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     closed_details_ancestors_to_reveal, construct_click_event, construct_command_event,
-    construct_input_event, construct_simple_event, contenteditable_editing_host,
-    dispatch_beforeinput, dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
+    construct_simple_event, contenteditable_editing_host, dispatch_beforeinput,
+    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
     element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
     is_valid_submit_button, label_activation_control_handle,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
@@ -479,13 +481,17 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<
     let selection = window_selection(scope);
     let mut text_range =
         selection.and_then(|selection| selected_text_node_range(scope, target, selection));
+    let deletion_backward = match input_type {
+        #[cfg(feature = "devtools")]
+        TextEditInputType::DeleteContentBackward => Some(true),
+        #[cfg(feature = "devtools")]
+        TextEditInputType::DeleteContentForward => Some(false),
+        _ => None,
+    };
     let mut boundary_deletion = None;
     if let Some((node, mut start, mut end)) = text_range
         && start == end
-        && matches!(
-            input_type,
-            TextEditInputType::DeleteContentBackward | TextEditInputType::DeleteContentForward
-        )
+        && let Some(backward) = deletion_backward
     {
         let Some(node_handle) = crate::native_bridge::callback_value_dom_handle(scope, node.into())
         else {
@@ -497,7 +503,6 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<
             .text_content(node_handle)
             .unwrap_or_default();
         let units = utf16_units(&value);
-        let backward = input_type == TextEditInputType::DeleteContentBackward;
         if backward {
             start = crate::util::utf16_previous_scalar_boundary(&units, start);
         } else {
@@ -562,7 +567,7 @@ pub(super) fn replace_contenteditable_selection_after_beforeinput_with_transfer<
                 selection,
                 (node, offset as u32),
                 operation,
-                input_type == TextEditInputType::DeleteContentBackward,
+                deletion_backward == Some(true),
             )
         } else if multiline_paste {
             replace_selected_dom_range_with_plain_lines(scope, target, selection, replacement_text)

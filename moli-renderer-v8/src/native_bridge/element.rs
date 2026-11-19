@@ -304,8 +304,9 @@ use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     construct_command_event, construct_form_data_event, construct_input_event,
-    construct_interest_event, construct_input_event_with_transfer, construct_simple_event, construct_simple_event_for_target,
-    construct_submit_event, construct_toggle_event, dispatch_beforeinput, dispatch_public_event,
+    construct_input_event_with_transfer, construct_interest_event, construct_simple_event,
+    construct_simple_event_for_target, construct_submit_event, construct_toggle_event,
+    dispatch_beforeinput, dispatch_public_event,
 };
 #[cfg(any(feature = "devtools", test))]
 pub(crate) use events::{TouchEventPoint, construct_touch_event_with_points};

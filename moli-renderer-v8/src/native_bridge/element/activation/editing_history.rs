@@ -1,13 +1,17 @@
 //! Undo records keep changed native nodes, not serialized markup. V8 owns the
 //! per-Document stacks and node references, so retiring a realm retires history.
+#[cfg(feature = "devtools")]
 use super::super::contenteditable_editing_host;
+#[cfg(feature = "devtools")]
 use crate::native_bridge::element::forms::{
     is_text_control_user_editable, text_control_set_selection_range_with_direction_internal,
 };
+use crate::native_bridge::element::{TextEditInputType, is_text_control, text_control_value};
+#[cfg(feature = "devtools")]
 use crate::native_bridge::element::{
-    TextEditInputType, construct_input_event, dispatch_beforeinput, dispatch_public_event,
-    is_text_control, text_control_value,
+    construct_input_event, dispatch_beforeinput, dispatch_public_event,
 };
+#[cfg(feature = "devtools")]
 use crate::native_bridge::node::{
     insert_before_in_reaction_scope, remove_child_in_reaction_scope,
     set_text_content_in_reaction_scope,
@@ -117,6 +121,7 @@ fn selection(scope: &mut v8::PinScope<'_, '_>, host: &PageScriptHost, target: us
             Selection::Dom(a.index(), ao, f.index(), fo)
         })
 }
+#[cfg(feature = "devtools")]
 fn restore_selection(
     scope: &mut v8::PinScope<'_, '_>,
     ptr: *mut PageScriptHost,
@@ -356,6 +361,7 @@ pub(crate) fn commit_edit(
 }
 // A removed subtree may still be retained by history. It must stay detached;
 // moving it elsewhere must not let undo pull it out of an author's new tree.
+#[cfg(feature = "devtools")]
 fn belongs_to_edit(
     host: &PageScriptHost,
     target: DomHandle,
@@ -387,6 +393,7 @@ fn belongs_to_edit(
     }
 }
 
+#[cfg(feature = "devtools")]
 fn matches_entry(host: &PageScriptHost, entry: &Entry, redo: bool) -> bool {
     let target = DomHandle::new(entry.target);
     let editable = if is_text_control(host, target) {
@@ -430,6 +437,7 @@ fn matches_entry(host: &PageScriptHost, entry: &Entry, redo: bool) -> bool {
     })
 }
 
+#[cfg(feature = "devtools")]
 fn restore_children(
     scope: &mut v8::PinScope<'_, '_>,
     ptr: *mut PageScriptHost,
@@ -462,6 +470,7 @@ fn restore_children(
     true
 }
 
+#[cfg(feature = "devtools")]
 fn current_history_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     ptr: *mut PageScriptHost,
@@ -488,6 +497,7 @@ fn current_history_entry<'s>(
     }
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn undo_redo(
     scope: &mut v8::PinScope<'_, '_>,
     ptr: *mut PageScriptHost,

@@ -55,11 +55,16 @@ pub(crate) enum TextEditInputType {
     InsertParagraph,
     #[cfg(feature = "devtools")]
     InsertFromDrop,
+    #[cfg(feature = "devtools")]
     DeleteContentBackward,
+    #[cfg(feature = "devtools")]
     DeleteContentForward,
+    #[cfg(feature = "devtools")]
     HistoryUndo,
+    #[cfg(feature = "devtools")]
     HistoryRedo,
     InsertFromPaste,
+    #[cfg(feature = "devtools")]
     DeleteByCut,
 }
 
@@ -74,11 +79,16 @@ impl TextEditInputType {
             Self::InsertParagraph => "insertParagraph",
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => "insertFromDrop",
+            #[cfg(feature = "devtools")]
             Self::DeleteContentBackward => "deleteContentBackward",
+            #[cfg(feature = "devtools")]
             Self::DeleteContentForward => "deleteContentForward",
+            #[cfg(feature = "devtools")]
             Self::HistoryUndo => "historyUndo",
+            #[cfg(feature = "devtools")]
             Self::HistoryRedo => "historyRedo",
             Self::InsertFromPaste => "insertFromPaste",
+            #[cfg(feature = "devtools")]
             Self::DeleteByCut => "deleteByCut",
         }
     }
@@ -88,14 +98,15 @@ impl TextEditInputType {
             Self::InsertText | Self::InsertFromPaste => Some(text),
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => Some(text),
-            Self::None
+            Self::None => None,
+            #[cfg(feature = "devtools")]
+            Self::InsertLineBreak
+            | Self::InsertParagraph
             | Self::DeleteContentBackward
             | Self::DeleteContentForward
             | Self::HistoryUndo
             | Self::HistoryRedo
             | Self::DeleteByCut => None,
-            #[cfg(feature = "devtools")]
-            Self::InsertLineBreak | Self::InsertParagraph => None,
         }
     }
 }
