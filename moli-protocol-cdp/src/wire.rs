@@ -438,14 +438,18 @@ impl ParsedCdpCommand {
     /// distinct from renderer thread access: Page.enable also needs installed
     /// agents, while dialog handling, close, and cancellation remain available.
     pub fn requires_initial_document_adoption(&self) -> bool {
-        match self.method().split_once('.') {
-            Some(("Runtime", action)) => !matches!(action, "terminateExecution" | "disable"),
-            Some(("Page", action)) => matches!(
-                action,
-                "enable" | "navigate" | "getFrameTree" | "getResourceTree" | "createIsolatedWorld"
-            ),
-            _ => false,
+        // Before the first Page, disabling Runtime only retires Browser state.
+        if matches!(
+            self.method(),
+            "Runtime.disable" | "HeapProfiler.moliDiagnostics" | "Page.crash"
+        ) {
+            return false;
         }
+        self.renderer_access() != CdpRendererCommandAccess::OwnerIndependent
+            || matches!(
+                self.method(),
+                "Page.enable" | "Page.getFrameTree" | "Page.getResourceTree" | "Page.navigate"
+            )
     }
 
     pub fn renderer_access(&self) -> CdpRendererCommandAccess {
@@ -750,11 +754,18 @@ mod tests {
             "Runtime.evaluate",
             "Runtime.awaitPromise",
             "Runtime.getIsolateId",
+            "Runtime.terminateExecution",
+            "Debugger.enable",
+            "Debugger.resume",
+            "Debugger.disable",
+            "DOM.getDocument",
+            "CSS.getMatchedStylesForNode",
+            "Performance.getMetrics",
             "Page.enable",
-            "Page.navigate",
             "Page.getFrameTree",
             "Page.getResourceTree",
             "Page.createIsolatedWorld",
+            "Page.navigate",
         ] {
             let command =
                 ParsedCdpCommand::parse_value(serde_json::json!({"id": 1, "method": method}))
@@ -771,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_close_and_execution_controls_do_not_wait_for_initial_document_adoption() {
+    fn browser_prompt_close_and_cancellation_do_not_wait_for_initial_document_adoption() {
         for method in [
             "Page.handleJavaScriptDialog",
             "Page.close",
@@ -779,10 +790,8 @@ mod tests {
             "Target.disposeBrowserContext",
             "Browser.close",
             "Page.stopLoading",
-            "Runtime.terminateExecution",
+            "Page.crash",
             "Runtime.disable",
-            "Debugger.resume",
-            "Debugger.disable",
             "Fetch.continueRequest",
             "Fetch.continueResponse",
             "IO.close",

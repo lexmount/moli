@@ -1123,13 +1123,6 @@ impl PageVm {
         stored_runtime_bindings: &[crate::protocol_types::RuntimeBindingRegistration],
         session_runtime_bindings: &[crate::protocol_types::RuntimeBindingRegistration],
     ) {
-        // Target attachment applies binding state before exposing the session
-        // to frontend commands. Even an empty state must establish the
-        // concrete renderer DevTools session/output capability: otherwise an
-        // attached session whose first command is a non-V8 IO agent has no
-        // session host through which to publish its terminal response.
-        self.vm_mut()
-            .ensure_runtime_inspector_session(inspector_session_id);
         self.set_stored_runtime_bindings(stored_runtime_bindings);
         self.set_inspector_session_runtime_bindings(inspector_session_id, session_runtime_bindings);
     }

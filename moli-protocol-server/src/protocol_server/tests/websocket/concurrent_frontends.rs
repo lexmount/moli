@@ -73,7 +73,11 @@ async fn concurrent_browser_frontends_preserve_protocol_publication_order() {
                         json!({}),
                     )
                     .await;
-                    assert_eq!(response_by_id(&messages, id + offset)["result"], json!({}));
+                    assert_eq!(
+                        response_by_id(&messages, id + offset)["result"],
+                        json!({}),
+                        "{method}: {messages:?}"
+                    );
                 }
                 let navigated = send_cdp_command(
                     &mut socket,

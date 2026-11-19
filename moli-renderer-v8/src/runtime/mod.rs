@@ -42,6 +42,9 @@ use super::{
 pub(crate) enum RendererPageStateCapturePolicy {
     FullReport,
     ProtocolTurn,
+    /// Target-owned session initialization has no result observer. Its facts
+    /// still publish in turn order, without a snapshot or completion lease.
+    BackgroundInitialization,
 }
 
 mod access;
@@ -327,7 +330,8 @@ pub use self::owner_local::{
 };
 #[cfg(feature = "devtools")]
 pub use self::owner_local::{
-    RendererPageProtocolCommandTarget, RendererRuntimeInspectorSessionDetachGuard,
+    RendererPageInspectorEndpoint, RendererPageProtocolCommandTarget,
+    RendererRuntimeInspectorSessionDetachGuard, RendererRuntimeInspectorSessionRetirement,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{

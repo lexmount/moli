@@ -97,6 +97,7 @@ pub(crate) struct PendingNavigationRequest {
     background_task: Option<crate::conn::OwnedProtocolWaitTask>,
     renderer_commit: Option<PendingRendererDocumentCommit>,
     committed: bool,
+    page_adoption: crate::conn::CommandWaitLifetimeOwner,
 }
 
 impl PendingNavigationRequest {
@@ -109,6 +110,7 @@ impl PendingNavigationRequest {
             background_task: None,
             renderer_commit: None,
             committed: false,
+            page_adoption: Default::default(),
         }
     }
 
@@ -131,6 +133,7 @@ impl PendingNavigationRequest {
     }
 
     fn cancel(&mut self) {
+        self.page_adoption.revoke();
         for cancellation in self.cancellation_handles.drain(..) {
             cancellation.cancel();
         }
@@ -139,6 +142,7 @@ impl PendingNavigationRequest {
 
 #[derive(Debug)]
 struct PendingRendererDocumentCommit {
+    inspector_endpoint: Option<moli_core::page::RendererPageInspectorEndpoint>,
     attachment: moli_core::page::RendererAgentAttachmentId,
     fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
     native_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
@@ -446,6 +450,18 @@ impl TargetPageSlot {
         self.loaded_page.is_some()
     }
 
+    pub(crate) fn navigation_page_adoption_waiter(
+        &self,
+    ) -> Option<crate::conn::CommandWaitLifetime> {
+        self.pending_navigation_request
+            .as_ref()
+            .filter(|navigation| {
+                (self.loaded_page.is_none() || navigation.renderer_commit.is_some())
+                    && navigation.page_adoption.lifetime().is_active()
+            })
+            .map(|navigation| navigation.page_adoption.lifetime())
+    }
+
     pub(crate) fn loaded_page_absence_reason(&self) -> Option<TargetPageAbsenceReason> {
         self.loaded_page
             .is_none()
@@ -590,6 +606,9 @@ impl TargetPageSlot {
             }
         });
         if page.is_some() {
+            if let Some(navigation) = self.pending_navigation_request.as_ref() {
+                navigation.page_adoption.revoke();
+            }
             self.complete_initial_document_page_build();
             self.loaded_page_absence_reason = TargetPageAbsenceReason::NoTarget;
         } else {
@@ -848,6 +867,7 @@ impl TargetPageSlot {
         token: &DocumentNavigationToken,
         attachment: moli_core::page::RendererAgentAttachmentId,
         fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+        inspector_endpoint: Option<moli_core::page::RendererPageInspectorEndpoint>,
     ) -> bool {
         if fact.frame_id != token.target_id || fact.loader_id != token.loader_id {
             return false;
@@ -860,6 +880,7 @@ impl TargetPageSlot {
             return false;
         };
         request.renderer_commit = Some(PendingRendererDocumentCommit {
+            inspector_endpoint,
             attachment,
             fact,
             native_document: None,
@@ -1032,6 +1053,17 @@ impl TargetPageSlot {
         (page_attachment_id == request.page_attachment_id).then_some(renderer_page)
     }
 
+    /// Native agent admission is available before its first Document output.
+    pub(crate) fn prepared_document_inspector_endpoint(
+        &self,
+    ) -> Option<moli_core::page::RendererPageInspectorEndpoint> {
+        self.prepared_document_navigation_handoff()?
+            .renderer_commit
+            .as_ref()?
+            .inspector_endpoint
+            .clone()
+    }
+
     pub(crate) fn prepared_document_output_binding(
         &self,
     ) -> Option<(
@@ -1145,6 +1177,9 @@ impl TargetPageSlot {
 
     pub(crate) fn finish_existing_page_document_commit(&mut self) {
         self.replace_pending_renderer_page(None);
+        if let Some(navigation) = self.pending_navigation_request.as_ref() {
+            navigation.page_adoption.revoke();
+        }
     }
 
     pub(crate) fn routes_renderer_page_owner(
@@ -1978,7 +2013,7 @@ mod pending_renderer_page_tests {
         let attachment = moli_core::page::RendererAgentAttachmentId::allocate();
         let fact = commit_fact(&token);
         let source = document(page, 1);
-        assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+        assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone(), None));
         assert_eq!(
             slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, source),
             Some(true)
@@ -2002,7 +2037,7 @@ mod pending_renderer_page_tests {
         let attachment = moli_core::page::RendererAgentAttachmentId::allocate();
         let fact = commit_fact(&token);
         let source = document(page, 1);
-        assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+        assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone(), None));
         assert_eq!(
             slot.observe_prepared_renderer_document_commit(
                 Some(moli_core::page::RendererAgentAttachmentId::allocate()),

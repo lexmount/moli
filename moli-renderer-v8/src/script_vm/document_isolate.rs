@@ -222,6 +222,20 @@ pub(crate) struct RendererDocumentIsolateBootstrap {
 }
 
 impl RendererDocumentIsolateBootstrap {
+    #[cfg(feature = "devtools")]
+    pub(crate) fn inspector_endpoint(
+        &self,
+        runtime: crate::render_runtime::RenderRuntimeHandle,
+        token: crate::runtime::RendererPageToken,
+    ) -> crate::runtime::RendererPageInspectorEndpoint {
+        crate::runtime::RendererPageInspectorEndpoint::new(
+            runtime,
+            token,
+            self.page_inspector.agent_token(),
+            self.page_inspector.devtools_target(),
+        )
+    }
+
     pub(crate) fn renderer_devtools_agent_token(
         &self,
     ) -> crate::runtime::RendererDevToolsAgentToken {

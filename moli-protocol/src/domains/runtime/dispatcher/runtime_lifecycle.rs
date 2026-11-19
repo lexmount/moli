@@ -75,6 +75,13 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
         .runtime_session_owner_slot(cmd.session_id)
         .is_some_and(|slot| slot.has_loaded_page())
     {
+        // Resume is a Browser startup decision even before a Renderer is
+        // available. Keep it when the initial Page / replacement binds later.
+        if conn.release_waiting_for_debugger_session(cmd.session_id) {
+            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
+                conn, cmd.session_id, response_flush,
+            );
+        }
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
 

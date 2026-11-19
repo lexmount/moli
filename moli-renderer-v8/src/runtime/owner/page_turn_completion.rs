@@ -177,6 +177,23 @@ impl RendererOwnerHandle {
     ) -> RenderRuntimeDispatchOutcome {
         let (runtime_command_output, runtime_session_response) =
             entry.page_vm_mut().take_runtime_command_settlement();
+        if capture_policy == super::RendererPageStateCapturePolicy::BackgroundInitialization {
+            debug_assert!(runtime_command_output.is_empty());
+            debug_assert!(runtime_session_response.is_none());
+            let concrete_output = entry.page_vm_mut().settle_renderer_output_publication();
+            self.restore_live_page_entry(token, entry);
+            if let Some(output) = concrete_output {
+                self.publish_renderer_output(output);
+            }
+            // Any owner turn can observe deferred lifecycle/navigation work.
+            // Initialization has no frontend response to flush, so release its
+            // existing continuation after restoring residence and publishing
+            // the turn's facts.
+            if let Some(continuation) = post_response_continuation {
+                continuation.release();
+            }
+            return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
+        }
         let expected_command_output_cursor = command_output_cursor;
         #[cfg(test)]
         if self

@@ -40,6 +40,12 @@ pub struct PendingPageCommand {
 }
 
 impl PendingPageCommand {
+    #[cfg(feature = "devtools")]
+    pub fn retain_session_cleanup_authority(mut self) -> Self {
+        self.pending = self.pending.retain_session_cleanup_authority();
+        self
+    }
+
     pub(crate) fn from_renderer(pending: RendererPageCommandPending) -> Self {
         Self {
             pending,
@@ -355,35 +361,5 @@ impl PendingPageCommand {
             output,
             renderer_agent_attachment_id: self.renderer_agent_attachment_id,
         })
-    }
-
-    /// Settles the page command, or hands the still-queued dispatch back as
-    /// soon as a JavaScript dialog opens (see
-    /// [`RendererPageCommandPending::wait_until_settled_or_dialog_open`]).
-    /// Dropping the handed-back pending cancels the queued command, so the
-    /// caller must keep it alive and settle it once the renderer frees up.
-    pub async fn wait_until_settled_or_dialog_open(
-        self,
-    ) -> Result<Result<CompletedPageCommand>, Self> {
-        let Self {
-            pending,
-            renderer_agent_attachment_id,
-        } = self;
-        match pending.wait_until_settled_or_dialog_open().await {
-            Ok(result) => Ok(result.map(|output| {
-                let mut output = output;
-                if let Some(attachment_id) = renderer_agent_attachment_id {
-                    output.bind_renderer_agent_attachment(attachment_id);
-                }
-                CompletedPageCommand {
-                    output,
-                    renderer_agent_attachment_id,
-                }
-            })),
-            Err(pending) => Err(Self {
-                pending,
-                renderer_agent_attachment_id,
-            }),
-        }
     }
 }

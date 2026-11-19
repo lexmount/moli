@@ -305,6 +305,11 @@ impl PreparedDocumentPage {
         self.prepared.token().page_id()
     }
 
+    #[cfg(feature = "devtools")]
+    pub fn inspector_endpoint(&self) -> crate::page::RendererPageInspectorEndpoint {
+        self.prepared.inspector_endpoint()
+    }
+
     pub fn renderer_devtools_agent_token(&self) -> crate::page::RendererDevToolsAgentToken {
         self.prepared.renderer_devtools_agent_token()
     }

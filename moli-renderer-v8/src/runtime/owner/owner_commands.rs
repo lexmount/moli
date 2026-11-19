@@ -210,7 +210,7 @@ impl RendererOwnerHandle {
         Ok(super::RendererPageCommandPending::from_owner_reply(reply))
     }
 
-    fn page_command_token(
+    pub(super) fn page_command_token(
         &self,
         owner_local_host_id: RendererOwnerLocalHostId,
         page_id: PageId,
@@ -777,9 +777,10 @@ impl RendererOwnerHandle {
                         .into();
                     }
                 };
-                let detached = entry
-                    .page_vm_mut()
-                    .detach_runtime_inspector_session(inspector_session_id.as_deref());
+                let detached = pause_guard.belongs_to_agent(entry.page_vm().devtools_agent_token())
+                    && entry
+                        .page_vm_mut()
+                        .detach_runtime_inspector_session(inspector_session_id.as_deref());
                 restore_entry_after_command_on_bound_owner_local_store(token, entry);
                 pause_guard.complete();
                 Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(

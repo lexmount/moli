@@ -583,21 +583,6 @@ impl TargetOwnerState {
             .retain(|(_, script)| script.devtools_session.as_ref() != Some(devtools_session));
     }
 
-    pub(crate) fn remove_document_start_script_registry_key_for_session(
-        &mut self,
-        devtools_session: &DevToolsSessionKey,
-        registry_key: &str,
-    ) -> bool {
-        let Some(index) = self.document_start_scripts.iter().position(|(_, script)| {
-            script.devtools_session.as_ref() == Some(devtools_session)
-                && script.registry_key.as_deref() == Some(registry_key)
-        }) else {
-            return false;
-        };
-        self.document_start_scripts.remove(index);
-        true
-    }
-
     pub(crate) fn begin_initial_empty_document(
         &mut self,
         target_id: String,

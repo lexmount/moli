@@ -2474,6 +2474,8 @@ onconnect = event => {
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     assert_eq!(take_response_by_id(&mut ctx, 90_412)["result"], json!({}));
     let failed_await = take_response_by_id(&mut ctx, 90_411);
     assert_eq!(failed_await["sessionId"], shared_worker_session_id);
@@ -3332,6 +3334,8 @@ onconnect = event => {
         "params": { "sessionId": shared_worker_session_id }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     assert_eq!(take_response_by_id(&mut ctx, 91_103)["result"], json!({}));
     let failed_await = take_response_by_id(&mut ctx, 91_102);
     assert_eq!(failed_await["error"]["message"], json!("Target detached"));

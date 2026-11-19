@@ -66,6 +66,8 @@ pub(crate) struct RendererInspectorMainCommand {
     claim_tx: Option<tokio::sync::oneshot::Sender<RendererInspectorMainCommandClaim>>,
     owner_reply_tx: Option<tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>>,
     claimed_by: Option<RendererInspectorMainCommandConsumer>,
+    cleanup_authority: bool,
+    connection: super::session::RendererInspectorSessionAdmission,
 }
 
 impl RendererInspectorMainCommand {
@@ -139,6 +141,28 @@ impl RendererDevToolsIngressCommand for RendererInspectorMainCommand {
     fn ingress_command_id(&self) -> u64 {
         self.command_id
     }
+    fn has_cleanup_authority(&self) -> bool {
+        self.cleanup_authority
+    }
+    fn retain_cleanup_authority(&mut self) {
+        self.cleanup_authority = true;
+    }
+}
+
+pub(crate) struct RendererInspectorMainCleanupControl {
+    ingress: RendererInspectorMainIngress,
+    command_id: u64,
+}
+
+impl RendererInspectorMainCleanupControl {
+    pub(crate) fn retain(self) {
+        self.ingress
+            .shared
+            .state
+            .lock()
+            .lanes
+            .retain_cleanup_authority(self.command_id);
+    }
 }
 
 pub struct RendererRuntimeInspectorMainCommandRoute {
@@ -149,9 +173,17 @@ pub struct RendererRuntimeInspectorMainCommandRoute {
     session_response_settlement_rx:
         Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>>,
     ingress: RendererInspectorMainIngress,
+    cancel_on_drop: bool,
 }
 
 impl RendererRuntimeInspectorMainCommandRoute {
+    pub(crate) fn cleanup_control(&self) -> RendererInspectorMainCleanupControl {
+        RendererInspectorMainCleanupControl {
+            ingress: self.ingress.clone(),
+            command_id: self.command_id,
+        }
+    }
+
     pub fn ticket(&self) -> &RendererInspectorIngressTicket {
         &self.ticket
     }
@@ -289,10 +321,12 @@ impl RendererRuntimeInspectorMainCommandRoute {
 
 impl Drop for RendererRuntimeInspectorMainCommandRoute {
     fn drop(&mut self) {
-        self.ingress.cancel_queued_command(
-            self.command_id,
-            "Runtime inspector Main route was canceled before dispatch",
-        );
+        if self.cancel_on_drop {
+            self.ingress.cancel_queued_command(
+                self.command_id,
+                "Runtime inspector Main route was canceled before dispatch",
+            );
+        }
     }
 }
 
@@ -320,8 +354,19 @@ impl RendererInspectorMainOwnerWake {
 }
 
 struct RendererInspectorMainState {
+    connections: super::session::RendererInspectorSessionConnections,
     lanes: RendererDevToolsSessionLanes<RendererInspectorMainCommand>,
     owner_runtime: Option<RenderRuntimeHandle>,
+}
+
+impl RendererInspectorMainState {
+    fn has_ready(&self) -> bool {
+        self.lanes.has_eligible(|command| {
+            command.cleanup_authority
+                || command.envelope.is_session_connection()
+                || command.connection.ready()
+        })
+    }
 }
 
 pub(crate) struct RendererInspectorMainFirstDispatchGuard {
@@ -335,7 +380,7 @@ pub(crate) struct RendererInspectorMainOwnerDispatch {
     capture_policy: RendererPageStateCapturePolicy,
     envelope: RendererDevToolsMainCommandEnvelope,
     first_dispatch: RendererInspectorMainFirstDispatchGuard,
-    reply_tx: tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
+    reply_tx: Option<tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>>,
 }
 
 impl RendererInspectorMainOwnerDispatch {
@@ -346,7 +391,7 @@ impl RendererInspectorMainOwnerDispatch {
         RendererPageStateCapturePolicy,
         RendererDevToolsMainCommandEnvelope,
         RendererInspectorMainFirstDispatchGuard,
-        tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
+        Option<tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>>,
     ) {
         (
             self.page_token,
@@ -413,6 +458,7 @@ impl RendererInspectorMainIngress {
         Self {
             shared: Arc::new(RendererInspectorMainShared {
                 state: Mutex::new(RendererInspectorMainState {
+                    connections: Default::default(),
                     lanes: RendererDevToolsSessionLanes::default(),
                     owner_runtime: None,
                 }),
@@ -427,11 +473,18 @@ impl RendererInspectorMainIngress {
         let has_ready = {
             let mut state = self.shared.state.lock();
             state.owner_runtime = Some(owner_runtime);
-            state.lanes.has_ready()
+            state.has_ready()
         };
         if has_ready {
             self.notify_execution_opportunities();
         }
+    }
+
+    pub(crate) fn bind_session_connections(
+        &self,
+        connections: super::session::RendererInspectorSessionConnections,
+    ) {
+        self.shared.state.lock().connections = connections;
     }
 
     pub(crate) fn enqueue_command(
@@ -447,6 +500,7 @@ impl RendererInspectorMainIngress {
                 RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)),
             ),
             RendererPageStateCapturePolicy::ProtocolTurn,
+            false,
         )
     }
 
@@ -464,6 +518,7 @@ impl RendererInspectorMainIngress {
                 RendererPageCommand::DevTools(RendererDevToolsPageCommand::Inspector(envelope)),
             ),
             capture_policy,
+            false,
         )
     }
 
@@ -483,7 +538,29 @@ impl RendererInspectorMainIngress {
                 inspector_session_id,
             ),
             capture_policy,
+            false,
         )
+    }
+
+    pub(crate) fn enqueue_session_initialization(
+        &self,
+        page_token: RendererPageToken,
+        agent_token: RendererDevToolsAgentToken,
+        command: RendererPageCommand,
+        inspector_session_id: Option<String>,
+    ) {
+        // Only the target's initialization path admits an unobserved command.
+        // The existing owner scheduler retains unobserved work through parking.
+        drop(self.enqueue_with_policy(
+            page_token,
+            agent_token,
+            RendererDevToolsMainCommandEnvelope::from_protocol_command_in_session(
+                command,
+                inspector_session_id,
+            ),
+            RendererPageStateCapturePolicy::BackgroundInitialization,
+            true,
+        ));
     }
 
     fn enqueue_with_policy(
@@ -492,6 +569,7 @@ impl RendererInspectorMainIngress {
         agent_token: RendererDevToolsAgentToken,
         envelope: RendererDevToolsMainCommandEnvelope,
         capture_policy: RendererPageStateCapturePolicy,
+        detached: bool,
     ) -> RendererRuntimeInspectorMainCommandRoute {
         assert_eq!(
             envelope.ticket().route(),
@@ -515,12 +593,21 @@ impl RendererInspectorMainIngress {
             capture_policy,
             envelope,
             claim_tx: Some(claim_tx),
-            owner_reply_tx: Some(owner_reply_tx),
+            // A target-owned initialization has no Browser observer. The
+            // existing owner scheduler's absent reply slot survives parking.
+            owner_reply_tx: (!detached).then_some(owner_reply_tx),
             claimed_by: None,
+            cleanup_authority: false,
+            connection: state.connections.admission(&lane_key),
         };
-        if let Err(command) = state.lanes.enqueue(lane_key, command) {
+        let admitted = if command.connection.accepts() {
+            state.lanes.enqueue(lane_key, command)
+        } else {
+            Err(command)
+        };
+        if let Err(command) = admitted {
             drop(state);
-            fail_main_command(command, "Inspector Main target is closed");
+            fail_main_command(command, "Inspector Main session or target is closed");
         } else {
             drop(state);
             self.notify_execution_opportunities();
@@ -529,16 +616,17 @@ impl RendererInspectorMainIngress {
             command_id,
             ticket,
             claim_rx: Some(claim_rx),
-            owner_reply_rx: Some(owner_reply_rx),
+            owner_reply_rx: (!detached).then_some(owner_reply_rx),
             session_response_settlement_rx,
             ingress: self.clone(),
+            cancel_on_drop: !detached,
         }
     }
 
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorMainCommand> {
         self.shared.owner_wake_armed.store(false, Ordering::Release);
         let command = self.claim_next(RendererInspectorMainCommandConsumer::Owner);
-        if command.is_none() && self.shared.state.lock().lanes.has_ready() {
+        if command.is_none() && self.shared.state.lock().has_ready() {
             self.notify_execution_opportunities();
         }
         command
@@ -554,8 +642,11 @@ impl RendererInspectorMainIngress {
     ) -> Option<RendererInspectorMainCommand> {
         let mut state = self.shared.state.lock();
         let (_, mut command) = state.lanes.claim_next(|command| {
-            consumer != RendererInspectorMainCommandConsumer::Pause
-                || command.nested_dispatch() != RendererDevToolsMainNestedDispatch::OwnerOnly
+            (command.cleanup_authority
+                || command.envelope.is_session_connection()
+                || command.connection.ready())
+                && (consumer != RendererInspectorMainCommandConsumer::Pause
+                    || command.nested_dispatch() != RendererDevToolsMainNestedDispatch::OwnerOnly)
         })?;
         command.claimed_by = Some(consumer);
         let claim = match consumer {
@@ -631,8 +722,7 @@ impl RendererInspectorMainIngress {
             capture_policy,
             envelope,
             first_dispatch,
-            reply_tx: owner_reply_tx
-                .expect("an owner-claimed Main command must retain its owner reply sender"),
+            reply_tx: owner_reply_tx,
         }
     }
 
@@ -670,6 +760,7 @@ impl RendererInspectorMainIngress {
         for command in commands {
             fail_main_command(command, "Inspector Main session was detached");
         }
+        self.notify_execution_opportunities();
     }
 
     pub(crate) fn finish_session_detach(
@@ -704,8 +795,25 @@ impl RendererInspectorMainIngress {
         }
     }
 
-    fn notify_execution_opportunities(&self) {
-        let owner_runtime = self.shared.state.lock().owner_runtime.clone();
+    pub(crate) fn reject_failed_connections(&self) {
+        let commands =
+            self.shared.state.lock().lanes.drain_queued_if(|command| {
+                !command.cleanup_authority && !command.connection.accepts()
+            });
+        for command in commands {
+            fail_main_command(command, "Inspector Main session connection failed");
+        }
+        self.notify_execution_opportunities();
+    }
+
+    pub(crate) fn notify_execution_opportunities(&self) {
+        let owner_runtime = {
+            let state = self.shared.state.lock();
+            if !state.has_ready() {
+                return;
+            }
+            state.owner_runtime.clone()
+        };
         if let Some(owner_runtime) = owner_runtime
             && self
                 .shared

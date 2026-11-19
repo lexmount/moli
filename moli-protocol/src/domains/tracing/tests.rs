@@ -381,34 +381,23 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
             .to_string(),
         )
     });
-    let pending_detach = match detach {
-        CdpCommandTaskStep::Pending(pending) => pending,
-        CdpCommandTaskStep::Complete(plan) => {
-            panic!("CPU trace owner detach should wait for isolate cleanup: {plan:?}")
-        }
-    };
-    let (completed_detach, stop_tasks) = tokio::time::timeout(
+    assert!(
+        matches!(&detach, CdpCommandTaskStep::Complete(_)),
+        "Browser detach must not wait for CPU trace cleanup"
+    );
+    let (messages, work) = ctx.complete_command_task_step_for_test(detach).await;
+    ctx.route_direct_command_output_for_test(Vec::new(), work)
+        .await;
+    let (_, stop_tasks) = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         drive_owner_tasks_until(
             &mut owner_task_rx,
-            ctx.drive_owned_wait(pending_detach.wait()),
+            ctx.wait_for_direct_command_work_completion_for_test("CPU trace owner cleanup"),
         ),
     )
     .await
-    .expect("owner detach should wait for CPU trace cancellation");
+    .expect("native cleanup must settle the original CPU trace");
     assert!(stop_tasks > 0);
-    let detach_step = ctx
-        .state
-        .with_state(|state| {
-            state.complete_command_dispatch_with_context(
-                completed_detach,
-                &mut crate::conn::CommandDispatchContext::default(),
-            )
-        })
-        .unwrap();
-    let (messages, scheduler) = ctx.complete_command_task_step_for_test(detach_step).await;
-    ctx.route_direct_command_output_for_test(Vec::new(), scheduler)
-        .await;
     assert!(
         messages
             .iter()

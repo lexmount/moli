@@ -1,15 +1,9 @@
-use anyhow::Result;
-
 use super::ProtocolWorkflowState;
-use crate::conn::{
-    AutoAttachPolicyIdentity, CommandDispatchContext, CommandOwnerScope,
-    FailedInitialDocumentPageBuild, PendingInitialDocumentPageBuild,
-    PendingRuntimeBindingPageCommandDispatch, TargetAttachSessionCommit,
-};
+use crate::conn::{AutoAttachPolicyIdentity, CommandDispatchContext};
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::target::{
     AutoAttachSweepRollback, PreparedAutoAttachSweep, TargetDetachmentFailureCleanup,
-    TargetDetachmentOutput, TargetDetachmentRecovery,
+    TargetDetachmentRecovery,
 };
 
 impl ProtocolWorkflowState<'_> {
@@ -22,66 +16,32 @@ impl ProtocolWorkflowState<'_> {
         PreparedAutoAttachSweep::prepare(self.connection, policy, owner, rollback)
     }
 
-    pub(crate) fn start_auto_attach_initial_document(
+    pub(crate) fn defer_auto_attach_activation(
         self,
-        policy: AutoAttachPolicyIdentity,
-        session: TargetAttachSessionCommit,
-    ) -> Result<Option<PendingInitialDocumentPageBuild>> {
-        let owner = CommandOwnerScope::for_route(session.route().clone());
-        if !policy.is_current(self.connection)
-            || self.connection.target_is_closing_for_owner(&owner)
-        {
-            return Ok(None);
-        }
-        let pending = session
-            .route()
-            .browser_context_id()
-            .and_then(|id| self.connection.browser_context_by_id(id))
-            .is_some_and(|context| {
-                session
-                    .route()
-                    .target_id()
-                    .is_some_and(|id| context.target_has_pending_initial_document_page_build(id))
-            });
-        if !pending {
-            return Ok(None);
-        }
-        self.connection
-            .start_initial_document_page_ensure_for_owner(&owner)
-    }
-
-    pub(crate) fn fail_auto_attach_initial_document(self, failed: FailedInitialDocumentPageBuild) {
-        let error = self
-            .connection
-            .reset_failed_initial_document_page_build_for_owner(failed);
-        tracing::warn!(%error, "auto-attach initial Document build failed");
-    }
-
-    pub(crate) fn start_auto_attach_bindings(
-        self,
-        policy: AutoAttachPolicyIdentity,
-        session: TargetAttachSessionCommit,
-    ) -> Result<Option<PendingRuntimeBindingPageCommandDispatch>> {
-        let owner = CommandOwnerScope::for_route(session.route().clone());
-        if !policy.is_current(self.connection)
-            || self.connection.target_is_closing_for_owner(&owner)
-        {
-            return Ok(None);
-        }
-        self.connection
-            .start_apply_stored_runtime_bindings_for_owner(&owner)
-            .map(Some)
-    }
-
-    pub(crate) fn finish_auto_attach_bindings(
-        self,
-        completed: crate::conn::CompletedRuntimeBindingPageCommandDispatch,
-    ) -> Result<()> {
-        // This Browser policy sweep has no frontend command in these Page
-        // streams. Native observations keep their original per-Page FIFO;
-        // their unrelated tails cannot become one Browser-response fence.
-        self.connection
-            .complete_runtime_binding_page_command(completed)
+        activation: crate::domains::target::activation::PreparedTargetActivation,
+    ) {
+        let access = self.connection.protocol_state_access();
+        let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+            match activation
+                .run(&mut crate::conn::ProtocolWorkflowDriver::new(access))
+                .await
+            {
+                Ok(output) => context.defer_owner_turn_completion(move |state, _| {
+                    let mut plan = CommandOutputPlan::default();
+                    plan.extend_background_events(state.finish_auto_attach_activation(output));
+                    plan
+                }),
+                Err(error) => {
+                    tracing::warn!(%error, "auto-attach foreground synchronization retired")
+                }
+            }
+            context.complete(CommandOutputPlan::default())
+        });
+        crate::conn::PendingProtocolSchedulerWork::publish_workflow(
+            self.connection,
+            workflow,
+            None,
+        );
     }
 
     pub(crate) fn finish_auto_attach_activation(
@@ -98,12 +58,11 @@ impl ProtocolWorkflowState<'_> {
         sweep.finish(self.connection)
     }
 
-    pub(crate) fn finish_auto_attach_detachment(
+    pub(crate) fn commit_auto_attach_detachment(
         self,
-        completed: TargetDetachmentOutput,
-        context: &mut CommandDispatchContext,
+        detachment: crate::domains::target::TargetDetachment,
     ) -> CommandOutputPlan {
-        completed.finish(self.connection, context)
+        detachment.commit_in_browser(self.connection)
     }
 
     pub(crate) fn prepare_auto_attach_detachment_recovery(

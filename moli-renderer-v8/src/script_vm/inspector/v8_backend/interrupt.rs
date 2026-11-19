@@ -182,9 +182,30 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
     #[cfg(feature = "devtools")]
     let scope = &mut scope.init();
     #[cfg(feature = "devtools")]
-    with_scoped_inspector_microtasks(scope, || {
-        session_executor.dispatch_next_io_command_from_owner();
+    let completes_termination = with_scoped_inspector_microtasks(scope, || {
+        session_executor.dispatch_next_io_command_from_owner()
     });
+    #[cfg(feature = "devtools")]
+    if completes_termination {
+        // V8 acknowledges terminateExecution when an API call unwinds. An
+        // idle receiver has no author call, and an empty session may not even
+        // have a default realm. A private no-op call supplies that boundary;
+        // it never runs page code or drains a page's microtask queue.
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let scope = pin!(v8::TryCatch::new(scope));
+        let scope = &mut scope.init();
+        fn complete_idle_call(
+            _: &mut v8::PinScope,
+            _: v8::FunctionCallbackArguments,
+            _: v8::ReturnValue,
+        ) {
+        }
+        if let Some(callback) = v8::Function::new(scope, complete_idle_call) {
+            let receiver = v8::undefined(scope).into();
+            let _ = crate::script_execution::call_function(scope, callback, receiver, &[]);
+        }
+    }
     #[cfg(not(feature = "devtools"))]
     session_executor
         .target

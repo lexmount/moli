@@ -3262,12 +3262,7 @@ async fn adapter_closes_provisional_load_window_and_delivers_in_the_same_turn() 
 }
 
 #[tokio::test]
-async fn deferred_attachment_churn_reclaims_successful_and_cancelled_supervised_tasks() {
-    use moli_core::page::{
-        RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
-        RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
-    };
-
+async fn attachment_churn_needs_no_browser_readiness_waiter_and_reclaims_native_cleanup() {
     async fn command(
         scheduler: &mut CdpScheduler,
         value: serde_json::Value,
@@ -3343,31 +3338,24 @@ async fn deferred_attachment_churn_reclaims_successful_and_cancelled_supervised_
             }
             assert!(scheduler.protocol_tasks.take_tasks().is_empty());
 
+            let root = command(
+                &mut scheduler,
+                json!({"id":99,"method":"Target.attachToTarget","params":{
+                    "targetId":moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID,"flatten":true
+                }}),
+            )
+            .await;
+            let root_session =
+                root.iter().find(|value| value["id"] == 99).unwrap()["result"]["sessionId"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+            command(
+                &mut scheduler,
+                json!({"id":100,"sessionId":root_session,"method":"Page.enable"}),
+            )
+            .await;
             for cycle in 0..64_u64 {
-                let page_id = PageId::new_for_testing(77);
-                let dialog = RendererJavaScriptDialogCompletion::pending();
-                scheduler
-                    .state
-                    .with_state(|state| {
-                        state.push_page_javascript_dialog_for_test(
-                            &context,
-                            RendererPendingJavaScriptDialog::new(
-                                RendererJavaScriptDialogId::new(cycle + 1),
-                                RendererDocumentLifecycleIdentity {
-                                    frame: RendererFrameToken { page_id },
-                                    document: RendererDocumentToken::new_for_testing(page_id, 1),
-                                    epoch: RendererLifecycleEpoch(1),
-                                },
-                                RendererJavaScriptDialogSource::RootFrame,
-                                "about:blank".to_owned(),
-                                "confirm".to_owned(),
-                                "attachment churn".to_owned(),
-                                String::new(),
-                                Some(dialog.clone()),
-                            ),
-                        )
-                    })
-                    .unwrap();
                 let attach = command(
                     &mut scheduler,
                     json!({"id":1,"method":"Target.attachToTarget","params":{
@@ -3381,36 +3369,28 @@ async fn deferred_attachment_churn_reclaims_successful_and_cancelled_supervised_
                     .and_then(|value| value["result"]["sessionId"].as_str())
                     .expect("attach acknowledged")
                     .to_owned();
-                if cycle % 3 == 1 {
-                    let tasks = scheduler.protocol_tasks.take_tasks();
-                    assert_eq!(tasks.len(), 1, "one admitted attachment wait");
-                    for task in tasks {
-                        task.cancel_and_join().await;
-                    }
-                }
-                let retired_before_finish = cycle % 3 == 2;
-                if retired_before_finish {
-                    // Completing this apply will fail its original owner check.
-                    // That failure must still retire the supervised task.
-                    assert!(dialog.finish(false, String::new()));
-                    detach(&mut scheduler, &session).await;
-                }
+                assert_eq!(
+                    scheduler.protocol_tasks.task_count(),
+                    0,
+                    "Browser attach owns no readiness observer"
+                );
+                // Only native cleanup is supervised. Real modal blocking is
+                // covered by the WebSocket lifecycle regression.
+                detach(&mut scheduler, &session).await;
+                assert_eq!(scheduler.protocol_tasks.task_count(), 1);
                 let completion = tokio::time::timeout(
                     std::time::Duration::from_secs(10),
                     receivers.protocol_work_completion_rx.recv(),
                 )
                 .await
-                .expect("attachment completion")
+                .expect("native cleanup completion")
                 .expect("live supervisor");
                 scheduler.complete_protocol_work(completion).unwrap();
-                assert!(
-                    scheduler.protocol_tasks.take_tasks().is_empty(),
+                assert_eq!(
+                    scheduler.protocol_tasks.task_count(),
+                    0,
                     "no task survives cycle {cycle}"
                 );
-                if !retired_before_finish {
-                    assert!(dialog.finish(false, String::new()));
-                    detach(&mut scheduler, &session).await;
-                }
             }
         })
         .await;

@@ -537,6 +537,13 @@ impl ResponseCommitReady {
         )
     }
 
+    pub(crate) fn inspector_endpoint(&self) -> moli_core::page::RendererPageInspectorEndpoint {
+        self.prepared_page
+            .as_ref()
+            .expect("response commit-ready value retains its prepared Page")
+            .inspector_endpoint()
+    }
+
     pub(crate) fn issue_commit_permit(&self) -> PreparedDocumentPageCommitPermit {
         self.prepared_page
             .as_ref()

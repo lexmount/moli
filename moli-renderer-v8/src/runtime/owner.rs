@@ -311,6 +311,8 @@ pub enum RendererOwnerReply {
     LivePageReplacementReserved(RendererPageReservationToken),
     PreparedRendererDocumentStored {
         renderer_devtools_agent_token: RendererDevToolsAgentToken,
+        #[cfg(feature = "devtools")]
+        inspector_endpoint: RendererPageInspectorEndpoint,
     },
     PreparedRendererDocumentCommitConfigurationUpdated,
     PreparedRendererDocumentCanceled,
@@ -335,7 +337,7 @@ enum RenderRuntimeDispatchOutcome {
     Reply(Box<Result<RendererOwnerReply>>),
     #[cfg(feature = "devtools")]
     InspectorMainCommandClaimed {
-        reply_tx: oneshot::Sender<Result<RendererOwnerReply>>,
+        reply_tx: Option<oneshot::Sender<Result<RendererOwnerReply>>>,
         turn: Box<RenderRuntimeTurn>,
         command_admission_output_predecessor: Option<RendererOutputFence>,
     },

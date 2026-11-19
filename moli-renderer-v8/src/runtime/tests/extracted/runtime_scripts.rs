@@ -1048,6 +1048,64 @@ async fn runtime_enable_events_include_renderer_root_frame_id_for_default_contex
 }
 #[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
+async fn captured_document_session_retirement_survives_document_open() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/captured-session-retirement").unwrap(),
+        "<!doctype html><title>before</title>",
+    )
+    .await;
+    let session = "SID-prepared-document";
+    runtime_enable_events_for_inspector_session_for_test(&page, Some(session))
+        .await
+        .unwrap();
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::PageDiagnosticsSnapshot)
+        .await
+        .unwrap();
+    let RendererPageReply::PageDiagnosticsSnapshot(snapshot) = reply else {
+        panic!("document snapshot");
+    };
+    let source = snapshot.document_lifecycle_identity().unwrap();
+    let retirement = page
+        .inspector_endpoint()
+        .prepare_runtime_inspector_session_retirement(Some(session.to_owned()));
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "document.open(); document.write('<title>after</title>'); document.close();"
+            .into(),
+        await_promise: false,
+    })
+    .await
+    .unwrap();
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::PageDiagnosticsSnapshot)
+        .await
+        .unwrap();
+    let RendererPageReply::PageDiagnosticsSnapshot(snapshot) = reply else {
+        panic!("document snapshot")
+    };
+    let replaced = snapshot.document_lifecycle_identity().unwrap();
+    assert_eq!(source.document, replaced.document);
+    assert_ne!(source.epoch, replaced.epoch);
+    let heap = runtime_heap_usage_for_test(&page).await;
+    assert_eq!(
+        heap["moli"]["runtime"]["inspectorSessionCount"],
+        serde_json::json!(2)
+    );
+    retirement.finish().unwrap();
+    let heap = runtime_heap_usage_for_test(&page).await;
+    assert_eq!(
+        heap["moli"]["runtime"]["inspectorSessionCount"],
+        serde_json::json!(1)
+    );
+    page.close_async().await.unwrap();
+}
+
+#[cfg(feature = "devtools")]
+#[tokio::test(flavor = "multi_thread")]
 async fn set_runtime_binding_state_updates_renderer_inspector_session_store() {
     let runtime = JsRuntime::initialize();
     let loader =

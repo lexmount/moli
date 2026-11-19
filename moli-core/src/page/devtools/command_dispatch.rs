@@ -180,6 +180,32 @@ impl Page {
     }
 }
 impl PendingRuntimeInspectorCommandDispatch {
+    /// Admit an Inspector IO request without borrowing an adopted Page.
+    pub fn start_io(
+        endpoint: &crate::page::RendererPageInspectorEndpoint,
+        attachment: RendererAgentAttachmentId,
+        session_id: Option<String>,
+        raw_json: String,
+        response: Option<crate::RendererRuntimeInspectorResponseSender>,
+    ) -> Self {
+        let route = endpoint.enqueue_runtime_inspector_io_command(
+            crate::renderer::RendererInspectorCommandEnvelope::new_io(
+                crate::renderer::RendererInspectorIngressTicket::new(
+                    Some(attachment),
+                    session_id,
+                    crate::renderer::RendererInspectorCommandRoute::Io,
+                ),
+                raw_json,
+                response,
+            ),
+        );
+        Self {
+            kind: PendingRuntimeInspectorCommandDispatchKind::Io(
+                PendingDevToolsIoCommandDispatch { route },
+            ),
+        }
+    }
+
     pub async fn wait(self) -> Result<CompletedRuntimeInspectorCommandDispatch> {
         match self.kind {
             PendingRuntimeInspectorCommandDispatchKind::MainIngress(route) => {

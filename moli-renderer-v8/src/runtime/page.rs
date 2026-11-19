@@ -622,9 +622,13 @@ impl JsRuntime {
         match reply {
             RendererOwnerReply::PreparedRendererDocumentStored {
                 renderer_devtools_agent_token,
+                #[cfg(feature = "devtools")]
+                inspector_endpoint,
             } => Ok(PreparedRendererDocument {
                 preparation,
                 renderer_devtools_agent_token,
+                #[cfg(feature = "devtools")]
+                inspector_endpoint,
             }),
             _ => Err(anyhow!(
                 "renderer owner returned non-prepare reply for prepared document request"
@@ -673,6 +677,8 @@ impl Drop for JsRuntimeOwner {
 pub struct PreparedRendererDocument {
     preparation: RendererDocumentPreparation,
     renderer_devtools_agent_token: super::RendererDevToolsAgentToken,
+    #[cfg(feature = "devtools")]
+    inspector_endpoint: super::RendererPageInspectorEndpoint,
 }
 
 /// One synchronously enqueued commit and its exact renderer reply. Dropping
@@ -715,6 +721,11 @@ struct RendererDocumentPreparation {
 }
 
 impl PreparedRendererDocument {
+    #[cfg(feature = "devtools")]
+    pub fn inspector_endpoint(&self) -> super::RendererPageInspectorEndpoint {
+        self.inspector_endpoint.clone()
+    }
+
     pub fn token(&self) -> RendererPageReservationToken {
         self.preparation.token
     }

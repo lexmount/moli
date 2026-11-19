@@ -202,6 +202,12 @@ impl TargetRuntimeSlot {
         self.page_slot.reserve_initial_document_navigation()
     }
 
+    pub(crate) fn navigation_page_adoption_waiter(
+        &self,
+    ) -> Option<crate::conn::CommandWaitLifetime> {
+        self.page_slot.navigation_page_adoption_waiter()
+    }
+
     pub(crate) fn start_initial_document_page_build(&mut self) {
         self.page_slot.start_initial_document_page_build();
     }
@@ -732,9 +738,14 @@ impl TargetRuntimeSlot {
         token: &DocumentNavigationToken,
         attachment: RendererAgentAttachmentId,
         fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+        inspector_endpoint: Option<moli_core::page::RendererPageInspectorEndpoint>,
     ) -> bool {
-        self.page_slot
-            .register_renderer_document_commit(token, attachment, fact)
+        self.page_slot.register_renderer_document_commit(
+            token,
+            attachment,
+            fact,
+            inspector_endpoint,
+        )
     }
 
     pub(crate) fn observe_prepared_renderer_document_commit(

@@ -27,18 +27,49 @@ use moli_page_types::{
     RendererDomDebuggerXhrBreakpoint,
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DevToolsSessionRegistration {
+    #[default]
+    Preparing,
+    Committed,
+    Closing,
+}
+
 /// One closing state shared by a committed binding and its domain handlers.
 /// Prepared handlers retain this state before their binding is committed.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DevToolsSessionLifecycle(Rc<Cell<bool>>);
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DevToolsSessionLifecycle {
+    registration: Rc<Cell<DevToolsSessionRegistration>>,
+    pub(crate) main_admission: crate::conn::session_command_admission::SessionCommandAdmissionQueue,
+    pub(crate) io_admission: crate::conn::session_command_admission::SessionCommandAdmissionQueue,
+}
+
+// Admission queues are execution ownership, not configuration snapshots.
+impl PartialEq for DevToolsSessionLifecycle {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_closing() == other.is_closing()
+    }
+}
+impl Eq for DevToolsSessionLifecycle {}
 
 impl DevToolsSessionLifecycle {
+    pub(crate) fn mark_registered(&self) {
+        if !self.is_closing() {
+            self.registration
+                .set(DevToolsSessionRegistration::Committed);
+        }
+    }
+
+    fn is_registered(&self) -> bool {
+        self.registration.get() == DevToolsSessionRegistration::Committed
+    }
+
     pub(crate) fn is_closing(&self) -> bool {
-        self.0.get()
+        self.registration.get() == DevToolsSessionRegistration::Closing
     }
 
     pub(crate) fn mark_closing(&self) {
-        self.0.set(true);
+        self.registration.set(DevToolsSessionRegistration::Closing);
     }
 }
 
@@ -569,20 +600,26 @@ impl DevToolsSessionRegistry {
     pub(crate) fn runtime_inspector_restore_snapshots(
         &self,
     ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
+        self.runtime_inspector_session_snapshots(false)
+    }
+
+    pub(crate) fn runtime_inspector_connection_snapshots(
+        &self,
+    ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
+        self.runtime_inspector_session_snapshots(true)
+    }
+
+    fn runtime_inspector_session_snapshots(
+        &self,
+        include_empty_connections: bool,
+    ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
         self.states
             .iter()
             .filter_map(|(key, state)| {
                 if state.is_closing() {
                     return None;
                 }
-                let requires_restore = state.runtime_session_state.runtime_frontend_enabled
-                    || state.web_mcp_enabled
-                    || state.console_output_session_state.console_enabled
-                    || !state.runtime_bindings.is_empty()
-                    || !state.dom_debugger_event_listener_breakpoints.is_empty()
-                    || !state.dom_debugger_xhr_breakpoints.is_empty()
-                    || state.inspector_session_state.v8_state.is_some();
-                requires_restore.then(|| RendererInspectorSessionRestoreSnapshot {
+                let restore = RendererInspectorSessionRestoreSnapshot {
                     inspector_session_id: key.wire_session_id().map(str::to_owned),
                     v8_attach: V8InspectorSessionAttach::from_optional_state(
                         state.inspector_session_state.v8_state.clone(),
@@ -601,7 +638,14 @@ impl DevToolsSessionRegistry {
                             .clone(),
                         dom_debugger_xhr_breakpoints: state.dom_debugger_xhr_breakpoints.clone(),
                     },
-                })
+                };
+                // Configured internal/implicit sessions keep their existing
+                // restore contract. Empty endpoints belong only to committed
+                // Browser sessions, never to attachment preparation drafts.
+                ((include_empty_connections && state.lifecycle.is_registered())
+                    || restore.protocol_configuration.requires_restore()
+                    || state.inspector_session_state.v8_state.is_some())
+                .then_some(restore)
             })
             .collect()
     }
@@ -1464,6 +1508,36 @@ mod tests {
         drop(snapshot);
         assert_eq!(replacement.locale().as_deref(), Some("de_DE"));
         assert_eq!(replacement.timezone().as_deref(), Some("Asia/Shanghai"));
+    }
+
+    #[test]
+    fn empty_renderer_endpoints_follow_committed_browser_lifetimes() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions.ensure_attached("SID-preparing");
+        sessions.ensure_attached("SID-committed");
+        assert!(sessions.runtime_inspector_connection_snapshots().is_empty());
+
+        let committed = sessions.ensure_attached("SID-committed").lifecycle.clone();
+        committed.mark_registered();
+        let snapshots = sessions.runtime_inspector_connection_snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].inspector_session_id.as_deref(),
+            Some("SID-committed")
+        );
+        assert!(sessions.runtime_inspector_restore_snapshots().is_empty());
+
+        committed.mark_closing();
+        committed.mark_registered();
+        assert!(sessions.runtime_inspector_connection_snapshots().is_empty());
+
+        sessions
+            .primary_mut()
+            .runtime_bindings
+            .push(binding("internal"));
+        let snapshots = sessions.runtime_inspector_restore_snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].inspector_session_id, None);
     }
 
     #[test]

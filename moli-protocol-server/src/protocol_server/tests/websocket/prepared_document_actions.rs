@@ -1841,6 +1841,40 @@ async fn websocket_cdp_page_enable_preserves_prepared_document_before_adoption()
             .await,
         );
         let request = observed.last().unwrap()["params"]["requestId"].clone();
+        send_cdp_command_without_wait(
+            &mut socket,
+            26,
+            "DOM.getDocument",
+            Some(&session.session_id),
+            json!({}),
+        )
+        .await;
+        // The native Inspector connection is already restored while the
+        // parser and the protocol Page adoption remain blocked by the fixture.
+        let controlled = tokio::time::timeout(
+            Duration::from_secs(10),
+            send_cdp_command(
+                &mut socket,
+                25,
+                "Runtime.terminateExecution",
+                Some(&session.session_id),
+                json!({}),
+            ),
+        )
+        .await
+        .expect("Inspector IO must not wait for Document adoption");
+        assert_eq!(
+            controlled
+                .iter()
+                .find(|message| message["id"] == 25)
+                .unwrap()["result"],
+            json!({}),
+            "{crashed}: {controlled:?}"
+        );
+        assert!(
+            !controlled.iter().any(|message| message["id"] == 26),
+            "Main waits for Document adoption while IO progresses: {controlled:?}"
+        );
         let enabled = tokio::time::timeout(
             Duration::from_secs(10),
             send_cdp_command(
@@ -1877,10 +1911,18 @@ async fn websocket_cdp_page_enable_preserves_prepared_document_before_adoption()
             "{crashed}: {fulfilled:?}"
         );
         fixture.release.notify_one();
-        recv_until_match(&mut socket, |message| {
+        let mut loaded = recv_until_match(&mut socket, |message| {
             message["method"] == "Page.loadEventFired" && message["sessionId"] == session.session_id
         })
         .await;
+        if !loaded.iter().any(|message| message["id"] == 26) {
+            loaded.extend(recv_until_id(&mut socket, 26).await);
+        }
+        assert_eq!(
+            loaded.iter().find(|message| message["id"] == 26).unwrap()["result"]["root"]["nodeName"],
+            "#document",
+            "Main resumes on the adopted Document: {loaded:?}"
+        );
         let native = send_cdp_command(
             &mut socket,
             24,

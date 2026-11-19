@@ -107,40 +107,36 @@ async fn websocket_auto_attach_wait_allows_peer_and_policy_disable_before_render
             None
         };
         drop(release);
-        let peer = peer.expect("metadata completes before the original auto-attach's Native wait");
-        assert!(response_by_id(&peer, 11)["result"].is_object(), "{peer:?}");
+        let enabled = peer.expect("Browser auto-attach completes while Renderer Main is held");
         assert!(
-            !peer.iter().any(|message| message["id"] == 10),
-            "the sweep still owns its held binding update: {peer:?}"
+            response_by_id(&enabled, 11)["result"].is_object(),
+            "{enabled:?}"
+        );
+        assert_eq!(response_by_id(&enabled, 10)["result"], json!({}));
+        let attached = enabled
+            .iter()
+            .position(|message| {
+                message["method"] == "Target.attachedToTarget"
+                    && message["params"]["targetInfo"]["targetId"] == target_id
+            })
+            .unwrap();
+        assert!(
+            attached
+                < enabled
+                    .iter()
+                    .position(|message| message["id"] == 10)
+                    .unwrap()
         );
         if let Some(disabled) = disabled {
-            let disabled =
-                disabled.expect("policy disable does not wait for a retired provisional attach");
+            let disabled = disabled.expect("Browser withdrawal does not wait for Renderer Main");
             assert_eq!(response_by_id(&disabled, 12)["result"], json!({}));
+            let session = &enabled[attached]["params"]["sessionId"];
             assert!(
-                !disabled.iter().any(|message| message["id"] == 10),
+                disabled
+                    .iter()
+                    .any(|message| message["method"] == "Target.detachedFromTarget"
+                        && message["params"]["sessionId"] == *session),
                 "{disabled:?}"
-            );
-        }
-        let enabled = recv_until_id(&mut browser, 10).await;
-        assert_eq!(response_by_id(&enabled, 10)["result"], json!({}));
-        let attached = enabled.iter().position(|message| {
-            message["method"] == "Target.attachedToTarget"
-                && message["params"]["targetInfo"]["targetId"] == target_id
-        });
-        if disable_while_held {
-            assert!(
-                attached.is_none(),
-                "a retired sweep cannot attach after disable: {enabled:?}"
-            );
-        } else {
-            assert!(
-                attached.unwrap()
-                    < enabled
-                        .iter()
-                        .position(|message| message["id"] == 10)
-                        .unwrap(),
-                "{enabled:?}"
             );
         }
         let evaluated = recv_until_id(&mut page, 3).await;
@@ -228,13 +224,13 @@ async fn websocket_attachment_wait_allows_peer_metadata_before_renderer_release(
     // This explicit release follows the peer observation, including its error
     // path. The HTTP fixture has no timeout that could make progress by itself.
     drop(release);
-    let peer = peer.expect("metadata must complete while attachment still waits for the renderer");
-    assert!(response_by_id(&peer, 11)["result"].is_object(), "{peer:?}");
+    let attached =
+        peer.expect("Browser attachment and metadata complete while Renderer Main is held");
     assert!(
-        !peer.iter().any(|message| message["id"] == 10),
-        "attachment must still wait for its original renderer: {peer:?}"
+        response_by_id(&attached, 11)["result"].is_object(),
+        "{attached:?}"
     );
-    let attached = recv_until_id(&mut browser, 10).await;
+    assert!(response_by_id(&attached, 10)["result"]["sessionId"].is_string());
     let response = attached
         .iter()
         .position(|message| message["id"] == 10)

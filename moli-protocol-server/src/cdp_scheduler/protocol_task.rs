@@ -90,6 +90,11 @@ impl ProtocolTaskSupervisor {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn task_count(&self) -> usize {
+        self.tasks.len()
+    }
+
     pub(super) fn take_tasks(&mut self) -> Vec<CommandWaitTask> {
         self.tasks.drain().map(|(_, task)| task.task).collect()
     }

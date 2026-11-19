@@ -88,6 +88,13 @@ impl ProtocolPageHostScope {
                 .is_some_and(|host| self.host.matches(host))
     }
 
+    pub(crate) async fn wait_for_binding_retirement(&self) {
+        match self.binding.clone() {
+            Some(binding) => binding.wait().await,
+            None => std::future::pending::<()>().await,
+        }
+    }
+
     pub(crate) fn can_start_operation(&self, conn: &CdpConnection) -> bool {
         if !self.is_current(conn) || conn.target_is_closing_for_owner(&self.owner) {
             return false;

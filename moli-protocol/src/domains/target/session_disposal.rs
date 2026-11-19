@@ -73,6 +73,13 @@ impl PreparedSessionDisposal {
         }
     }
 
+    pub(crate) fn take_browser_events(&mut self) -> Vec<BackgroundProtocolEvent> {
+        match self {
+            Self::Own(disposal) => disposal.handlers.take_browser_events(),
+            Self::Join { .. } => Vec::new(),
+        }
+    }
+
     pub(crate) fn owns_cleanup(&self) -> bool {
         matches!(self, Self::Own(_))
     }
@@ -101,11 +108,13 @@ impl PreparedSessionDisposal {
 /// remain attached while a successor Document replaces that renderer.
 pub(crate) struct LiveSessionDisposal {
     handlers: crate::domains::session::PreparedSessionHandlers,
+    native_retirements: Vec<moli_core::page::RendererRuntimeInspectorSessionRetirement>,
 }
 
 #[derive(Clone)]
 pub(crate) struct SessionDisposalIdentity {
     plan: SessionDisposalPlan,
+    cleanup_owner: CommandOwnerScope,
     binding: Option<crate::conn::SessionDisposalWait>,
     page: Option<SessionDisposalPage>,
 }
@@ -140,8 +149,20 @@ impl LiveSessionDisposal {
     fn prepare_for_identity(conn: &mut CdpConnection, identity: SessionDisposalIdentity) -> Self {
         let handlers =
             crate::domains::session::PreparedSessionHandlers::prepare_for_identity(conn, identity);
+        let owner = CommandOwnerScope::for_session(handlers.identity().plan().session_id());
+        let native_retirements = if matches!(
+            handlers.identity().plan().target(),
+            SessionDisposalTarget::PageTarget { .. }
+        ) {
+            conn.prepare_page_inspector_session_retirements(&owner)
+        } else {
+            Vec::new()
+        };
         conn.mark_session_closing(handlers.identity().plan());
-        Self { handlers }
+        Self {
+            handlers,
+            native_retirements,
+        }
     }
 
     pub(crate) async fn run(
@@ -161,10 +182,15 @@ impl LiveSessionDisposal {
                 .recover_failure(driver, background_events, error)
                 .await?;
         }
-        let completion = identity.clone();
-        if let Err(error) =
+        let detached = if self.native_retirements.is_empty() {
+            let completion = identity.clone();
             driver.with_state(move |state| state.detach_disposed_session_inspector(&completion))?
-        {
+        } else {
+            self.native_retirements
+                .into_iter()
+                .try_for_each(|retirement| retirement.finish())
+        };
+        if let Err(error) = detached {
             identity
                 .recover_failure(driver, background_events, error)
                 .await?;
@@ -185,8 +211,13 @@ impl SessionDisposalIdentity {
                 document: conn.target_root_document_lifecycle_identity_for_owner(&owner),
             });
         let binding = conn.session_binding_lifetime(plan.session_id());
+        let cleanup_owner = owner
+            .resolve_route(conn)
+            .map(CommandOwnerScope::for_route)
+            .unwrap_or(owner);
         Self {
             plan,
+            cleanup_owner,
             binding,
             page,
         }
@@ -194,6 +225,15 @@ impl SessionDisposalIdentity {
 
     pub(crate) fn plan(&self) -> &SessionDisposalPlan {
         &self.plan
+    }
+
+    pub(crate) fn cleanup_owner(&self) -> &CommandOwnerScope {
+        &self.cleanup_owner
+    }
+
+    pub(crate) fn cleanup_binding_was_not_replaced(&self, conn: &CdpConnection) -> bool {
+        let current = conn.session_binding_lifetime(self.plan.session_id());
+        current.is_none() || current.as_ref() == self.binding.as_ref()
     }
 
     /// Closing retains cleanup authority; only this original binding may
@@ -244,13 +284,13 @@ impl SessionDisposalIdentity {
     }
 
     fn owns_current_page(&self, conn: &CdpConnection) -> bool {
-        let owner = CommandOwnerScope::for_session(self.plan.session_id());
-        self.binding_is_current(conn)
+        let owner = self.cleanup_owner();
+        self.cleanup_binding_was_not_replaced(conn)
             && self.page.as_ref().is_some_and(|expected| {
-                conn.renderer_page_residence_identity_for_owner(&owner) == Some(expected.residence)
-                    && conn.current_renderer_agent_attachment_id_for_owner(&owner)
+                conn.renderer_page_residence_identity_for_owner(owner) == Some(expected.residence)
+                    && conn.current_renderer_agent_attachment_id_for_owner(owner)
                         == expected.attachment
-                    && conn.target_root_document_lifecycle_identity_for_owner(&owner)
+                    && conn.target_root_document_lifecycle_identity_for_owner(owner)
                         == expected.document
             })
     }
@@ -271,7 +311,7 @@ impl SessionDisposalIdentity {
         &self,
         conn: &mut CdpConnection,
     ) -> FailedSessionPageRetirement {
-        let owner = CommandOwnerScope::for_session(self.plan.session_id());
+        let owner = self.cleanup_owner().clone();
         if !self.owns_current_page(conn) {
             return FailedSessionPageRetirement {
                 page: None,
@@ -309,18 +349,17 @@ impl SessionDisposalIdentity {
         conn: &mut CdpConnection,
         retired: FailedSessionPageRetirement,
     ) -> Vec<BackgroundProtocolEvent> {
-        if !self.binding_is_current(conn) {
+        if !self.cleanup_binding_was_not_replaced(conn) {
             return Vec::new();
         }
         if let SessionDisposalTarget::PageTarget { session_key, .. } = self.plan.target() {
             // Retire only this session's metadata. Native removal belongs to
             // the original Page, never to a replacement installed during close.
-            let _ = conn
-                .with_target_owner_state_for_session_mut(Some(self.plan.session_id()), |state| {
-                    state.remove_document_start_scripts_for_session(session_key)
-                });
+            let _ = conn.with_target_owner_state_for_owner_mut(self.cleanup_owner(), |state| {
+                state.remove_document_start_scripts_for_session(session_key)
+            });
         }
-        let owner = CommandOwnerScope::for_session(self.plan.session_id());
+        let owner = self.cleanup_owner().clone();
         if conn
             .renderer_page_residence_identity_for_owner(&owner)
             .is_none()
@@ -413,15 +452,13 @@ pub(super) fn dispose_removed_dedicated_worker_session_after_failed_retirement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{
-        BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
-    };
+    use crate::conn::BrowserContext;
     use crate::testing::{TestContext, wait_until_renderer_document_load};
     use base64::Engine as _;
     use serde_json::json;
 
     #[tokio::test]
-    async fn cancelled_old_session_cleanup_cannot_retire_or_reconfigure_its_successor() {
+    async fn late_old_session_cleanup_cannot_retire_or_reconfigure_its_successor() {
         for retire_before_successor in [false, true] {
             let mut context = TestContext::new();
             let mut browser = BrowserContext::new("BID-retired-cleanup".into());
@@ -452,14 +489,17 @@ mod tests {
                 context.process_async(json!({"id": id, "sessionId": "SID-old", "method": method, "params": params})).await;
                 assert!(context.take_response_by_id(id).get("result").is_some());
             }
-            let command = ParsedCdpCommand::parse_str(json!({"id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-old"}}).to_string()).unwrap();
-            let mut dispatch_context = CommandDispatchContext::default();
-            let CdpCommandTaskStep::Pending(pending) = context.with_fixture(|conn| {
-                conn.start_parsed_command_dispatch_with_context(&command, &mut dispatch_context)
-            }) else {
-                panic!("cleanup must retain its native work");
-            };
-            let mut pending = Some(pending);
+            let work = context.process_command_only_async(json!({
+                "id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-old"}
+            })).await;
+            assert!(
+                context
+                    .sent
+                    .iter()
+                    .any(|message| message["id"] == 10 && message["result"] == json!({}))
+            );
+            assert!(context.with_fixture(|conn| !conn.has_attached_devtools_session("SID-old")));
+            let mut cleanup = Some(work);
             context.with_fixture(|conn| {
                 assert!(
                     !conn
@@ -470,19 +510,16 @@ mod tests {
                     "Closing must revoke the old session's script policy"
                 )
             });
-            let mut recovery = if retire_before_successor {
-                drop(pending.take());
-                Some(context.with_fixture(|conn| {
-                    conn.complete_failed_command_wait_with_context(
-                        Some(10),
-                        None,
-                        "controlled cancellation",
-                        &mut dispatch_context,
+            if retire_before_successor {
+                context
+                    .route_direct_command_output_for_test(Vec::new(), cleanup.take().unwrap())
+                    .await;
+                context
+                    .wait_for_direct_command_work_completion_for_test(
+                        "original cleanup before successor",
                     )
-                }))
-            } else {
-                None
-            };
+                    .await;
+            }
             let successor_url = format!("data:text/html;base64,{}", base64::engine::general_purpose::STANDARD.encode(
                 "<script>globalThis.successor=[true,typeof oldSessionPreload]</script><p>successor</p>"));
             context
@@ -523,41 +560,21 @@ mod tests {
                 json!([true, "undefined"]),
                 "before recovery retirement={retire_before_successor}: {before_recovery:?}"
             );
-            // Exercise both sides of the retirement boundary: either A was
-            // already taken before B's installation, or cancellation occurs
-            // after B replaced A and may no longer retire the current Page.
-            drop(pending.take());
-            let recovery = recovery.take().unwrap_or_else(|| {
-                context.with_fixture(|conn| {
-                    conn.complete_failed_command_wait_with_context(
-                        Some(10),
-                        None,
-                        "controlled cancellation",
-                        &mut dispatch_context,
-                    )
-                })
-            });
-            let CdpCommandTaskStep::Pending(recovery) = recovery else {
-                panic!("cancellation retains the original cleanup scope");
-            };
-            let completed = recovery.wait().await;
-            let CdpCommandTaskStep::Complete(outcome) = ({
+            // Browser withdrawal is complete; native cleanup may settle before
+            // or after a successor replaces the original renderer.
+            if let Some(work) = cleanup.take() {
                 context
-                    .state
-                    .with_state(|state| {
-                        state.complete_command_dispatch_with_context(
-                            completed,
-                            &mut dispatch_context,
-                        )
-                    })
-                    .expect("live test owner")
-            }) else {
-                panic!("recovery has no further wait");
-            };
+                    .route_direct_command_output_for_test(Vec::new(), work)
+                    .await;
+                context
+                    .wait_for_direct_command_work_completion_for_test(
+                        "original cleanup after successor",
+                    )
+                    .await;
+            }
             assert!(
-                !outcome
-                    .into_parts()
-                    .0
+                !context
+                    .sent
                     .iter()
                     .any(|event| event["method"] == "Inspector.targetCrashed"
                         || event["method"] == "Target.targetCrashed")

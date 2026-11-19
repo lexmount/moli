@@ -2689,7 +2689,7 @@ mod tests {
                     .expect("live protocol actor state");
                 assert!(matches!(
                     step,
-                    moli_protocol::CdpCommandTaskStep::Pending(_)
+                    moli_protocol::CdpCommandTaskStep::Complete(_)
                 ));
             }
             let router = CdpFrontendRouter::new();
@@ -2900,13 +2900,24 @@ mod tests {
                 moli_protocol::CdpInitialStoragePartition::memory(),
                 moli_core::runtime::NavigationRuntimeConfig::default(),
             );
-            let (attached, _, predecessor) = scheduler.state.handle().process_message_for_test(&json!({
+            let (attached, initial_work, predecessor) = scheduler.state.handle().process_message_for_test(&json!({
                 "id": 1, "method": "Target.attachToTarget",
                 "params": {"targetId": moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID, "flatten": true},
             }).to_string()).await.unwrap().into_protocol_event_parts();
             assert!(predecessor.is_empty());
             let attached: Vec<_> = attached.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
             let session_id = attached.iter().find(|message| message["id"] == 1).unwrap()["result"]["sessionId"].as_str().unwrap().to_owned();
+            for work in initial_work {
+                let moli_protocol::CdpSchedulerEvent::ProtocolTaskPrepared { pending } = work else {
+                    scheduler.apply_scheduler_events(vec![work]);
+                    continue;
+                };
+                let completed = pending.wait().await;
+                let outcome = scheduler.state.with_state(|state| {
+                    state.complete_owned_protocol_scheduler_work(completed)
+                }).unwrap();
+                scheduler.apply_scheduler_events(outcome.into_protocol_event_parts().1);
+            }
             let enable = json!({"id": 2, "sessionId": session_id, "method": "Fetch.enable", "params": {
                 "patterns": [{"urlPattern": "*held", "requestStage": "Request"}],
             }});

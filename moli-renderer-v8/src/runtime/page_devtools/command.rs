@@ -101,6 +101,15 @@ pub enum RendererDevToolsPageCommand {
         run_immediately: bool,
     },
     RemoveDocumentStartScriptByRegistryKey(String),
+    ConnectRuntimeInspectorSession {
+        inspector_session_id: Option<String>,
+        connection: crate::devtools::ingress::session::RendererInspectorSessionConnect,
+    },
+    SetSessionRuntimeBindingState {
+        agent: crate::runtime::RendererDevToolsAgentToken,
+        inspector_session_id: Option<String>,
+        session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
+    },
     SetRuntimeBindingState {
         inspector_session_id: Option<String>,
         stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
@@ -409,6 +418,8 @@ impl RendererDevToolsPageCommand {
             Self::RemoveDocumentStartScriptByRegistryKey(_) => {
                 Some("RemoveDocumentStartScriptByRegistryKey")
             }
+            Self::ConnectRuntimeInspectorSession { .. } => Some("ConnectRuntimeInspectorSession"),
+            Self::SetSessionRuntimeBindingState { .. } => Some("SetSessionRuntimeBindingState"),
             Self::SetRuntimeBindingState { .. } => Some("SetRuntimeBindingState"),
             Self::ChildFrameOwnerNodeReference { .. } => Some("ChildFrameOwnerNodeReference"),
             Self::ChildFrameDocumentRootNodeReference { .. } => {

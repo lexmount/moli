@@ -1071,6 +1071,8 @@ async fn production_default_target_auto_attach_exposes_initial_about_blank_page(
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
 
     ctx.expect_result(1700, json!({}), None);
     let events = ctx.take_all();
@@ -1568,14 +1570,14 @@ async fn set_auto_attach_prefers_existing_background_target_with_background_load
         );
     });
 
-    ctx.process_async(json!({
+    tokio::time::timeout(std::time::Duration::from_secs(30), ctx.process_async(json!({
             "id": 17024,
             "method": "Runtime.evaluate",
             "sessionId": background_session_id,
             "params": {
                 "expression": "JSON.stringify({ title: document.title, text: document.getElementById('ok').textContent })"
             }
-        })).await;
+        }))).await.expect("background evaluation should receive its completion");
     let evaluation = take_response_by_id(&mut ctx, 17024);
     let payload = evaluation["result"]["result"]["value"]
         .as_str()

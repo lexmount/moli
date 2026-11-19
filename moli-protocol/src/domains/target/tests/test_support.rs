@@ -733,3 +733,29 @@ pub(super) async fn current_permission_state_async(
         .expect("permission state should be a string")
         .to_owned()
 }
+
+/// Finish only the Browser command, retaining its separately supervised
+/// backend work so readiness assertions cannot race native Page construction.
+pub(super) async fn browser_registration_without_backend_progress(
+    ctx: &mut TestContext,
+    value: serde_json::Value,
+) -> (Vec<serde_json::Value>, Vec<crate::conn::CdpSchedulerEvent>) {
+    let command = crate::conn::ParsedCdpCommand::parse_str(value.to_string()).unwrap();
+    let mut context = crate::conn::CommandDispatchContext::default();
+    let mut step = ctx.with_fixture(|conn| {
+        conn.start_parsed_command_dispatch_with_context(&command, &mut context)
+    });
+    loop {
+        match step {
+            crate::conn::CdpCommandTaskStep::Pending(pending) => {
+                let completed = pending.wait().await;
+                step = ctx.with_fixture(|conn| {
+                    conn.complete_command_dispatch_with_context(completed, &mut context)
+                });
+            }
+            crate::conn::CdpCommandTaskStep::Complete(outcome) => {
+                return ctx.route_completed_command_outcome_for_test(outcome).await;
+            }
+        }
+    }
+}

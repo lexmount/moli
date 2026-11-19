@@ -313,6 +313,15 @@ impl RendererDevToolsMainCommandEnvelope {
         &self.ticket
     }
 
+    pub(crate) fn is_session_connection(&self) -> bool {
+        matches!(
+            self.payload.as_ref(),
+            RendererPageCommand::DevTools(
+                RendererDevToolsPageCommand::ConnectRuntimeInspectorSession { .. }
+            )
+        )
+    }
+
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
         self.payload.nested_dispatch()
     }
@@ -367,6 +376,7 @@ enum RendererInspectorCommandPayload {
     Io {
         raw_json: String,
         response: Option<RendererRuntimeInspectorResponseSender>,
+        completes_idle_termination: bool,
     },
 }
 
@@ -443,7 +453,14 @@ impl RendererInspectorCommandEnvelope {
             ticket,
             pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
             main_dispatch_boundary: RendererInspectorMainDispatchBoundary::InspectorSession,
-            payload: RendererInspectorCommandPayload::Io { raw_json, response },
+            payload: RendererInspectorCommandPayload::Io {
+                raw_json,
+                response,
+                completes_idle_termination: message
+                    .as_ref()
+                    .and_then(|message| message["method"].as_str())
+                    == Some("Runtime.terminateExecution"),
+            },
         }
     }
 
@@ -577,6 +594,16 @@ impl RendererInspectorCommandEnvelope {
             ) => (self.ticket, raw_json, deferred_response),
             _ => panic!("only a deferred Main protocol command can enter the nested receiver"),
         }
+    }
+
+    pub(crate) fn completes_idle_termination(&self) -> bool {
+        matches!(
+            self.payload,
+            RendererInspectorCommandPayload::Io {
+                completes_idle_termination: true,
+                ..
+            }
+        )
     }
 
     pub(crate) fn io_raw_json(&self) -> &str {

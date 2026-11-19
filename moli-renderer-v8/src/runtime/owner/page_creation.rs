@@ -1093,9 +1093,26 @@ impl RendererOwnerHandle {
             Ok(residence) => {
                 let renderer_devtools_agent_token =
                     residence.isolate_bootstrap.renderer_devtools_agent_token();
+                #[cfg(feature = "devtools")]
+                let page_token =
+                    match self.page_command_token(token.local_host_id(), token.page_id()) {
+                        Ok(token) => token,
+                        Err(error) => return Err(error).into(),
+                    };
+                #[cfg(feature = "devtools")]
+                let runtime = match self.owner_local_context() {
+                    Ok(owner) => owner.render_runtime,
+                    Err(error) => return Err(error).into(),
+                };
+                #[cfg(feature = "devtools")]
+                let inspector_endpoint = residence
+                    .isolate_bootstrap
+                    .inspector_endpoint(runtime, page_token);
                 match owner_local_store.store_prepared_document(token, residence) {
                     Ok(()) => Ok(RendererOwnerReply::PreparedRendererDocumentStored {
                         renderer_devtools_agent_token,
+                        #[cfg(feature = "devtools")]
+                        inspector_endpoint,
                     })
                     .into(),
                     Err(error) => Err(error).into(),

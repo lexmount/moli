@@ -63,6 +63,7 @@ mod command_owner_scope;
 mod command_view;
 mod command_wait_lifetime;
 mod command_workflow;
+mod session_command_admission;
 pub(crate) use command_workflow::{
     CommandWorkflowContext, CommandWorkflowContextReturn, CommandWorkflowFailureCleanup,
     CompletedCommandWorkflow, PreparedCommandWorkflow,
@@ -714,10 +715,10 @@ pub(crate) use runtime_eval::runtime_realm_inventory_using;
 pub(crate) use runtime_eval::{
     BidiChannelDispatchIdentity, BidiChannelDispatchOutput, BidiChannelObjectGroupLease,
     BidiChannelOutput, ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner,
-    CompletedSessionWorkerCleanup, PreparedBidiChannelAction, PreparedRendererNavigationFinish,
-    PreparedRuntimeDomQuery, PreparedRuntimeHelper, PreparedRuntimePageQuery,
-    PreparedRuntimeRealmInventory, RuntimeBindingCallEvent, RuntimeEnableEventsReplay,
-    RuntimeEnableReplayEvent, RuntimeHelperIdentity, RuntimeInspectorError, SessionWorkerCleanup,
+    PreparedBidiChannelAction, PreparedRendererNavigationFinish, PreparedRuntimeDomQuery,
+    PreparedRuntimeHelper, PreparedRuntimePageQuery, PreparedRuntimeRealmInventory,
+    RuntimeBindingCallEvent, RuntimeEnableEventsReplay, RuntimeEnableReplayEvent,
+    RuntimeHelperIdentity, RuntimeInspectorError, SessionWorkerCleanup,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,

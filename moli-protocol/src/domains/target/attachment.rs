@@ -153,6 +153,12 @@ fn do_attach(
         ));
     }
     conn.ensure_default_target_live(target_id);
+    if conn.page_target_is_closing(target_id) {
+        return target_command_error_without_session(
+            -32000,
+            super::session_disposal::SessionDisposalError::Closing,
+        );
+    }
     let attach_from_browser_session = conn.is_browser_session_id(cmd.session_id);
     if conn
         .primary_page_target_id_for_tab_target_id(target_id)
@@ -259,20 +265,6 @@ fn do_attach(
         false,
     )
     .with_flattened_protocol(flattened_protocol);
-    let owner = crate::conn::CommandOwnerScope::for_route(prepared_session.route().clone());
-
-    let initial_document = match conn.start_initial_document_page_ensure_for_owner(&owner) {
-        Ok(pending) => pending.map(Box::new),
-        Err(message) => {
-            if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
-                restore_previously_active_browser_context(
-                    conn,
-                    restore_browser_context_id.as_deref(),
-                );
-            }
-            return target_command_error_without_session(-32000, message);
-        }
-    };
     let bc = conn.browser_context.as_ref().unwrap();
     let target_info = bc
         .devtools_target_info(target_id)
@@ -280,15 +272,9 @@ fn do_attach(
     if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
         restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
     }
-    TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::AttachToTarget {
-            prepared_session,
-            target_info,
-            initial_document,
-        }),
-    })
+    TargetCommandTaskStep::Complete(
+        commit_target_attachment(conn, prepared_session, target_info).unwrap_or_else(|error| error),
+    )
 }
 
 fn do_attach_tab_target(
@@ -367,9 +353,6 @@ pub(crate) fn commit_target_attachment(
             -32000,
             SessionDisposalError::UnknownTarget,
         ));
-    }
-    if let Some(error) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
-        return Err(CommandOutputPlan::error_without_session(-32000, error));
     }
     let session_id = prepared.session_id().to_owned();
     let events = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
@@ -471,8 +454,7 @@ struct DetachParams {
 }
 
 mod detachment;
-pub(super) use detachment::TargetDetachment;
-pub(crate) use detachment::TargetDetachmentOutput;
+pub(crate) use detachment::TargetDetachment;
 pub(crate) use detachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
 
 pub(super) fn start_detach_from_target_command(
@@ -491,14 +473,7 @@ pub(super) fn start_detach_from_target_command(
     let prepared = TargetDetachment::prepare(conn, cmd.session_id, params);
     restore_previously_active_browser_context(conn, previous_context.as_deref());
     match prepared {
-        Ok(detachment) => TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-            command_id: cmd.id,
-            session_id: cmd.session_id.map(str::to_owned),
-            kind: Box::new(PendingTargetCommandKind::DetachFromTarget {
-                detachment,
-                access: conn.protocol_state_access(),
-            }),
-        }),
+        Ok(detachment) => TargetCommandTaskStep::Complete(detachment.commit_in_browser(conn)),
         Err(error) => super::target_command_error(-31998, format!("{error:#}")),
     }
 }

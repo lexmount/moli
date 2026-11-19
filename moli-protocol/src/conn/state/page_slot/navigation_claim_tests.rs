@@ -32,7 +32,7 @@ fn native_commit_visibility_requires_the_admitted_fact_and_current_attachment() 
         session_history_position: None,
         browsing_context_group: None,
     });
-    assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+    assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone(), None));
     assert_eq!(slot.frame_tree_document_loader_id(), None);
     assert_eq!(
         slot.observe_prepared_renderer_document_commit(
@@ -96,7 +96,7 @@ fn native_commit_visibility_requires_the_admitted_fact_and_current_attachment() 
     );
 
     let replacement = slot.start_document_navigation("target".into(), "loader".into());
-    assert!(!slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+    assert!(!slot.register_renderer_document_commit(&token, attachment, fact.clone(), None));
     assert_eq!(
         slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, native_document),
         None

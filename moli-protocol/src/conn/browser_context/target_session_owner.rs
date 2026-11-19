@@ -3931,7 +3931,8 @@ mod tests {
         assert!(slot.register_renderer_document_commit(
             &token,
             transaction.current().id(),
-            fact.clone()
+            fact.clone(),
+            None,
         ));
         let pending = conn
             .pending_target_page_residence_identity_for_owner(&owner)

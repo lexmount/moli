@@ -2160,9 +2160,75 @@ async fn websocket_cdp_attach_to_dialog_blocked_target_responds_and_settles_bind
         "the attach must not park behind the modal: {attach_elapsed:?}"
     );
 
+    // A second not-yet-connected endpoint can retire while the modal stays
+    // open. It must settle its queued IO without unlocking or retiring B.
+    let transient = send_cdp_command(
+        &mut second,
+        20,
+        "Target.attachToTarget",
+        None,
+        json!({"targetId":target_id,"flatten":true}),
+    )
+    .await;
+    let session_c = transient
+        .iter()
+        .find(|message| message["id"] == 20)
+        .unwrap()["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    send_cdp_command_without_wait(
+        &mut second,
+        21,
+        "Runtime.terminateExecution",
+        Some(&session_c),
+        json!({}),
+    )
+    .await;
+    let detached = send_cdp_command(
+        &mut second,
+        22,
+        "Target.detachFromTarget",
+        None,
+        json!({"sessionId":session_c}),
+    )
+    .await;
+    assert!(
+        detached
+            .iter()
+            .any(|message| message["id"] == 22 && message["result"] == json!({})),
+        "detach cannot wait for the modal: {detached:#?}"
+    );
+    let canceled_io = if let Some(message) = detached.iter().find(|message| message["id"] == 21) {
+        message.clone()
+    } else {
+        recv_until_match(&mut second, |message| message["id"] == 21)
+            .await
+            .into_iter()
+            .find(|message| message["id"] == 21)
+            .unwrap()
+    };
+    assert!(
+        canceled_io.get("error").is_some(),
+        "the withdrawn endpoint must terminate its queued IO: {canceled_io}"
+    );
+    let retired = send_cdp_command(
+        &mut second,
+        23,
+        "Runtime.evaluate",
+        Some(&session_c),
+        json!({"expression":"1+1"}),
+    )
+    .await;
+    assert!(
+        retired
+            .iter()
+            .any(|message| message["id"] == 23 && message.get("error").is_some())
+    );
+
     // This is B's first command: no Runtime.enable or Main command can
     // initialize its Inspector session on the side. IO must wait behind the
-    // exact deferred initialization while A still owns the dialog.
+    // exact native connection while A still owns the dialog.
     send_cdp_command_without_wait(
         &mut second,
         2,
@@ -2188,7 +2254,7 @@ async fn websocket_cdp_attach_to_dialog_blocked_target_responds_and_settles_bind
         "the first session must still handle the dialog: {resolved:#?}"
     );
 
-    // The deferred binding apply settled with the freed renderer: the new
+    // Ordered Main binding replay follows native connection: the new
     // session gets the stored binding state. Stored bindings keep their
     // owning session's delivery route, so a call made on the new session is
     // captured and delivered to the session that added the binding.
@@ -2235,4 +2301,80 @@ async fn websocket_cdp_attach_to_dialog_blocked_target_responds_and_settles_bind
     second.close(None).await.expect("close second websocket");
     first.close(None).await.expect("close first websocket");
     abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_empty_attached_session_survives_crash_rebinding_and_first_io() {
+    let (address, server) = spawn_test_protocol_server().await;
+    let endpoint = discover_browser_websocket_url(address).await.unwrap();
+    let (mut socket, _) = connect_async(endpoint).await.unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let first = cdp_create_attached_target(&mut socket, 2, &context).await;
+    let attached = send_cdp_command(
+        &mut socket,
+        4,
+        "Target.attachToTarget",
+        None,
+        json!({"targetId":first.target_id,"flatten":true}),
+    )
+    .await;
+    let empty_session =
+        attached.iter().find(|message| message["id"] == 4).unwrap()["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    // No domain enable, V8 command or binding on this session before replacing
+    // its Renderer. Endpoint membership cannot be derived from configuration.
+    let crashed = send_cdp_command(
+        &mut socket,
+        5,
+        "Page.crash",
+        Some(&first.session_id),
+        json!({}),
+    )
+    .await;
+    assert!(
+        crashed
+            .iter()
+            .any(|message| message["id"] == 5 && message.get("result").is_some()),
+        "crash response: {crashed:#?}"
+    );
+    cdp_navigate_and_wait_for_load(
+        &mut socket,
+        6,
+        &first.session_id,
+        "data:text/html,<title>new renderer</title>",
+    )
+    .await;
+    let interrupt = send_cdp_command(
+        &mut socket,
+        7,
+        "Runtime.terminateExecution",
+        Some(&empty_session),
+        json!({}),
+    )
+    .await;
+    assert!(
+        interrupt
+            .iter()
+            .any(|message| message["id"] == 7 && message["result"] == json!({})),
+        "first IO requires the replacement endpoint: {interrupt:#?}"
+    );
+    let evaluate = send_cdp_command(
+        &mut socket,
+        8,
+        "Runtime.evaluate",
+        Some(&empty_session),
+        json!({"expression":"document.title","returnByValue":true}),
+    )
+    .await;
+    assert!(
+        evaluate
+            .iter()
+            .any(|message| message["id"] == 8
+                && message["result"]["result"]["value"] == "new renderer"),
+        "new endpoint must address the replacement Document: {evaluate:#?}"
+    );
+    socket.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
 }

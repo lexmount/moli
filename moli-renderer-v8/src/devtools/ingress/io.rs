@@ -77,6 +77,7 @@ pub(crate) struct RendererInspectorIoCommand {
     envelope: RendererDevToolsIoCommandEnvelope,
     first_dispatch_tx: Option<RendererInspectorIoFirstDispatchSender>,
     claimed_by: Option<RendererInspectorIoCommandConsumer>,
+    connection: super::session::RendererInspectorSessionAdmission,
 }
 
 #[cfg(feature = "devtools")]
@@ -92,6 +93,12 @@ impl RendererInspectorIoCommand {
 
     pub(crate) fn kind(&self) -> RendererDevToolsIoCommandKind {
         self.envelope.kind()
+    }
+
+    pub(crate) fn completes_idle_termination(&self) -> bool {
+        self.envelope
+            .inspector_envelope()
+            .is_some_and(RendererInspectorCommandEnvelope::completes_idle_termination)
     }
 
     pub(crate) fn raw_json(&self) -> &str {
@@ -264,6 +271,8 @@ impl RendererInspectorIoOwnerWake {
 
 struct RendererInspectorIoState {
     #[cfg(feature = "devtools")]
+    connections: super::session::RendererInspectorSessionConnections,
+    #[cfg(feature = "devtools")]
     commands: VecDeque<RendererInspectorIoCommand>,
     // Isolate-owned notifications, not session commands. They remain eligible
     // during session detach and an active command's nested debugger pause.
@@ -291,12 +300,13 @@ impl RendererInspectorIoState {
         !self.closed
             && self.active_command_id.is_none()
             && self.commands.iter().any(|command| {
-                !self
-                    .session_holds
-                    .contains_key(&RendererDevToolsSessionLaneKey::new(
-                        command.agent_token,
-                        command.ticket().session().clone(),
-                    ))
+                command.connection.ready()
+                    && !self
+                        .session_holds
+                        .contains_key(&RendererDevToolsSessionLaneKey::new(
+                            command.agent_token,
+                            command.ticket().session().clone(),
+                        ))
             })
     }
 
@@ -320,14 +330,14 @@ impl RendererInspectorIoState {
 }
 
 /// Blocks one session's IO until its initialization or cleanup settles.
-#[cfg(feature = "devtools")]
+#[cfg(all(test, feature = "devtools"))]
 pub(crate) struct RendererInspectorIoSessionHold {
     ingress: RendererInspectorIoIngress,
     agent: RendererDevToolsAgentToken,
     session: DevToolsSessionKey,
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(all(test, feature = "devtools"))]
 impl Drop for RendererInspectorIoSessionHold {
     fn drop(&mut self) {
         self.ingress.release_session_hold(self.agent, &self.session);
@@ -433,6 +443,8 @@ impl RendererInspectorIoIngress {
                 state: Mutex::new(RendererInspectorIoState {
                     #[cfg(feature = "devtools")]
                     commands: VecDeque::new(),
+                    #[cfg(feature = "devtools")]
+                    connections: Default::default(),
                     environment_notifications: ProcessEnvironmentNotifications::default(),
                     #[cfg(feature = "devtools")]
                     active_command_id: None,
@@ -535,6 +547,26 @@ impl RendererInspectorIoIngress {
     }
 
     #[cfg(feature = "devtools")]
+    pub(crate) fn session_connections(
+        &self,
+    ) -> super::session::RendererInspectorSessionConnections {
+        self.shared.state.lock().connections.clone()
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn session_is_detaching(
+        &self,
+        agent: RendererDevToolsAgentToken,
+        session: &DevToolsSessionKey,
+    ) -> bool {
+        self.shared
+            .state
+            .lock()
+            .session_holds
+            .contains_key(&RendererDevToolsSessionLaneKey::new(agent, session.clone()))
+    }
+
+    #[cfg(feature = "devtools")]
     pub(crate) fn enqueue_command(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -558,8 +590,14 @@ impl RendererInspectorIoIngress {
             envelope,
             first_dispatch_tx: Some(first_dispatch_tx),
             claimed_by: None,
+            connection: state
+                .connections
+                .admission(&RendererDevToolsSessionLaneKey::new(
+                    agent_token,
+                    ticket.session().clone(),
+                )),
         };
-        let rejected = if state.closed {
+        let rejected = if state.closed || !command.connection.accepts() {
             Some((command, "Inspector IO target is closed"))
         } else {
             state.commands.push_back(command);
@@ -632,12 +670,13 @@ impl RendererInspectorIoIngress {
             .commands
             .iter()
             .position(|command| {
-                !state
-                    .session_holds
-                    .contains_key(&RendererDevToolsSessionLaneKey::new(
-                        command.agent_token,
-                        command.ticket().session().clone(),
-                    ))
+                command.connection.ready()
+                    && !state
+                        .session_holds
+                        .contains_key(&RendererDevToolsSessionLaneKey::new(
+                            command.agent_token,
+                            command.ticket().session().clone(),
+                        ))
             })
             .expect("a ready Inspector task runner must have an eligible command");
         let mut command = state
@@ -700,6 +739,7 @@ impl RendererInspectorIoIngress {
     /// Keep a newly attached session's IO work behind its Main initialization.
     /// Other sessions and environment notifications remain eligible.
     #[cfg(feature = "devtools")]
+    #[cfg(test)]
     pub(crate) fn hold_session(
         &self,
         agent: RendererDevToolsAgentToken,
@@ -746,6 +786,19 @@ impl RendererInspectorIoIngress {
         for command in commands {
             fail_io_command(command, "Inspector IO session was detached");
         }
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn reject_failed_connections(&self) {
+        let commands = self
+            .shared
+            .state
+            .lock()
+            .drain_commands(|command| !command.connection.accepts());
+        for command in commands {
+            fail_io_command(command, "Inspector IO session connection failed");
+        }
+        self.notify_execution_opportunities();
     }
 
     #[cfg(feature = "devtools")]
@@ -831,7 +884,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
-    fn notify_execution_opportunities(&self) {
+    pub(crate) fn notify_execution_opportunities(&self) {
         let owner_wake = {
             let state = self.shared.state.lock();
             state
