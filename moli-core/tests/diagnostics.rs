@@ -19,8 +19,12 @@ async fn browser_diagnostics_are_isolated_and_do_not_read_author_stack_propertie
     let mut page = browser.fetch("about:blank").await?;
     page.evaluate_runtime_expression_async("reportError(new Error('before subscribing'))")
         .await?;
-    let mut diagnostics = browser.subscribe_diagnostics();
-    let mut other_diagnostics = other.subscribe_diagnostics();
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
+    let mut other_diagnostics = other
+        .subscribe_diagnostics()
+        .context("first subscription")?;
     assert_empty(&mut diagnostics);
 
     let result = page
@@ -59,7 +63,7 @@ async fn browser_diagnostics_are_isolated_and_do_not_read_author_stack_propertie
         let event = diagnostics.try_recv()?;
         assert!(
             matches!(
-                event.as_ref(),
+                &event,
                 DiagnosticEvent::RuntimeException {
                     source: DiagnosticSource::Page { page_id },
                     origin: ExceptionOrigin::UncaughtException,
@@ -80,7 +84,9 @@ async fn browser_diagnostics_are_isolated_and_do_not_read_author_stack_propertie
 async fn parser_script_failures_emit_one_diagnostic_and_one_dom_event_each() -> Result<()> {
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
-    let mut diagnostics = browser.subscribe_diagnostics();
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
     let mut page = browser.fetch(&server.url("/parser")).await?;
     let result = page
         .evaluate_runtime_expression_async("scriptEvents.slice().sort().join(',')")
@@ -95,7 +101,7 @@ async fn parser_script_failures_emit_one_diagnostic_and_one_dom_event_each() -> 
             entry_url,
             resource_url,
             message,
-        } = event.as_ref()
+        } = &event
         else {
             panic!("expected a Page script load failure, got {event:?}");
         };
@@ -111,7 +117,7 @@ async fn parser_script_failures_emit_one_diagnostic_and_one_dom_event_each() -> 
     );
     append_missing_script(&mut page, "/dynamic.js", "text/javascript").await?;
     assert_page_load_failure(
-        diagnostics.try_recv()?.as_ref(),
+        &diagnostics.try_recv()?,
         page.page_id(),
         &server.url("/dynamic.js"),
         &server.url("/dynamic.js"),
@@ -125,17 +131,18 @@ async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_
 {
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
-    let mut diagnostics = browser.subscribe_diagnostics();
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
     let mut page = browser.fetch(&server.url("/module")).await?;
     let result = page
         .evaluate_runtime_expression_async("moduleError")
         .await?;
     assert_eq!(result["value"], "root");
     assert_page_load_failure(
-        diagnostics
+        &diagnostics
             .try_recv()
-            .context("parser-owned module failure diagnostic")?
-            .as_ref(),
+            .context("parser-owned module failure diagnostic")?,
         page.page_id(),
         &server.url("/root.js"),
         &server.url("/missing-dependency.js"),
@@ -144,10 +151,9 @@ async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_
 
     append_missing_script(&mut page, "/second-root.js", "module").await?;
     assert_page_load_failure(
-        diagnostics
+        &diagnostics
             .try_recv()
-            .context("cached module failure diagnostic")?
-            .as_ref(),
+            .context("cached module failure diagnostic")?,
         page.page_id(),
         &server.url("/second-root.js"),
         &server.url("/missing-dependency.js"),
@@ -172,10 +178,12 @@ async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_
             .as_str()
             .is_some_and(|message| message.contains("module exception"))
     );
-    let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv()).await??;
+    let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv())
+        .await?
+        .context("diagnostics subscription closed")?;
     assert!(
         matches!(
-            event.as_ref(),
+            &event,
             DiagnosticEvent::RuntimeException { origin: ExceptionOrigin::UncaughtException, message, .. }
                 if message.contains("module exception")
         ),
@@ -188,7 +196,9 @@ async fn module_script_diagnostics_keep_the_failed_dependency_across_module_map_
 #[tokio::test]
 async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellation() -> Result<()> {
     let browser = Browser::new(BrowserConfig::default())?;
-    let mut diagnostics = browser.subscribe_diagnostics();
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
     let mut page = browser.fetch("about:blank").await?;
     let result = tokio::time::timeout(
         Duration::from_secs(15),
@@ -213,10 +223,12 @@ async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellati
         (ExceptionOrigin::UncaughtException, false),
         (ExceptionOrigin::UnhandledRejection, true),
     ] {
-        let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv()).await??;
+        let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv())
+            .await?
+            .context("diagnostics subscription closed")?;
         assert!(
             matches!(
-                event.as_ref(),
+                &event,
                 DiagnosticEvent::RuntimeException {
                     source: DiagnosticSource::Page { page_id },
                     origin,
@@ -237,8 +249,9 @@ async fn page_exception_diagnostics_distinguish_rejection_and_default_cancellati
 async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic() -> Result<()> {
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
-    let mut diagnostics = browser.subscribe_diagnostics();
-    let mut failures = browser.subscribe_runtime_failures();
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
     let mut page = browser.fetch(&server.url("/page")).await?;
     let result = tokio::time::timeout(
         Duration::from_secs(15),
@@ -266,7 +279,7 @@ async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic
     let diagnostic = diagnostics.try_recv()?;
     assert!(
         matches!(
-            diagnostic.as_ref(),
+            &diagnostic,
             DiagnosticEvent::RuntimeException {
                 source: DiagnosticSource::DedicatedWorker { .. },
                 message,
@@ -277,7 +290,6 @@ async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic
         "{diagnostic:?}"
     );
     assert_empty(&mut diagnostics);
-    assert_empty(&mut failures);
     Ok(())
 }
 
@@ -285,7 +297,9 @@ async fn dedicated_worker_cancellation_in_the_owning_window_keeps_the_diagnostic
 async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Result<()> {
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
-    let mut diagnostics = browser.subscribe_diagnostics();
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription")?;
     let mut instance = None;
 
     let mut first = browser.fetch(&server.url("/page")).await?;
@@ -322,7 +336,9 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
     ] {
         page.evaluate_runtime_expression_async(&format!("worker.port.postMessage({marker:?})"))
             .await?;
-        let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv()).await??;
+        let event = tokio::time::timeout(Duration::from_secs(15), diagnostics.recv())
+            .await?
+            .context("diagnostics subscription closed")?;
         let DiagnosticEvent::RuntimeException {
             source: DiagnosticSource::SharedWorker { instance_id },
             origin,
@@ -330,7 +346,7 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
             filename,
             default_prevented,
             ..
-        } = event.as_ref()
+        } = &event
         else {
             panic!("expected a SharedWorker exception, got {event:?}");
         };
@@ -355,7 +371,7 @@ async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Res
     let failure = diagnostics.try_recv()?;
     assert!(
         matches!(
-            failure.as_ref(),
+            &failure,
             DiagnosticEvent::ScriptLoadFailure {
                 source: DiagnosticSource::SharedWorker { instance_id },
                 entry_url,
@@ -416,7 +432,7 @@ fn assert_page_load_failure(
 fn assert_empty(diagnostics: &mut DiagnosticsSubscription) {
     assert_eq!(
         diagnostics.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty),
     );
 }
 

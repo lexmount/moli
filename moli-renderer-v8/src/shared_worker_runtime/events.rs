@@ -29,7 +29,6 @@ impl RendererSharedWorkerHost {
                 event_kind,
                 phase,
                 source,
-                ..
             } => {
                 if phase == WorkerErrorPhase::Bootstrap {
                     if event_kind == WorkerParentErrorEventKind::ErrorEvent {

@@ -1,7 +1,6 @@
 //! Nested worker ownership, creation snapshots and parent event delivery.
 
 use crate::content_security_policy::ContentSecurityPolicy;
-use crate::diagnostics::PendingWorkerException;
 use crate::worker::handle::{WorkerErrorPhase, WorkerParentErrorEventKind, WorkerToParentMessage};
 
 use super::*;
@@ -82,7 +81,6 @@ pub(in crate::worker) struct NestedWorkerUnhandledError {
     pub(in crate::worker) lineno: u32,
     pub(in crate::worker) colno: u32,
     pub(in crate::worker) event_kind: WorkerParentErrorEventKind,
-    pub(in crate::worker) diagnostic: Option<Box<PendingWorkerException>>,
 }
 
 pub(in crate::worker) struct NestedWorkerDispatchResult {
@@ -124,13 +122,6 @@ pub(in crate::worker) fn dispatch_nested_worker_event(
         .get(&worker_id)
         .map(|worker| v8::Local::new(scope, worker))
     else {
-        if let WorkerToParentMessage::Error {
-            diagnostic: Some(diagnostic),
-            ..
-        } = message
-        {
-            diagnostic.finish(false);
-        }
         return NestedWorkerDispatchResult {
             dispatched: false,
             unhandled_error: None,
@@ -154,7 +145,6 @@ pub(in crate::worker) fn dispatch_nested_worker_event(
             colno,
             event_kind,
             phase,
-            diagnostic,
             ..
         } => {
             let omitted_error = v8::null(scope).into();
@@ -170,21 +160,15 @@ pub(in crate::worker) fn dispatch_nested_worker_event(
             );
             // Bootstrap failures only fire an Event at the child Worker. Only
             // uncanceled runtime errors propagate to its owner's global scope.
-            let unhandled_error = if unhandled && phase == WorkerErrorPhase::Runtime {
-                Some(NestedWorkerUnhandledError {
+            let unhandled_error = (unhandled && phase == WorkerErrorPhase::Runtime).then_some(
+                NestedWorkerUnhandledError {
                     message,
                     filename,
                     lineno,
                     colno,
                     event_kind,
-                    diagnostic,
-                })
-            } else {
-                if let Some(diagnostic) = diagnostic {
-                    diagnostic.finish(!unhandled);
-                }
-                None
-            };
+                },
+            );
             NestedWorkerDispatchResult {
                 dispatched: true,
                 unhandled_error,

@@ -2785,33 +2785,19 @@ async fn worker_main(
                     // Propagation to the owner's global uses omitError: the
                     // child exception cannot cross the worker agent boundary.
                     let omitted_error = v8::null(scope).into();
-                    let handled = dispatch_worker_error_event(
+                    if !dispatch_worker_error_event(
                         scope,
                         global,
                         &report,
                         Some(omitted_error),
                         &script_url,
-                    );
-                    let diagnostic = if !handled
-                        && matches!(
-                            state.borrow().global_kind,
-                            WorkerGlobalKind::Dedicated { .. }
-                        ) {
-                        error.diagnostic
-                    } else {
-                        if let Some(diagnostic) = error.diagnostic {
-                            diagnostic.finish(handled);
-                        }
-                        None
-                    };
-                    if !handled {
+                    ) {
                         report_exception_to_parent(
                             &report,
                             &script_url,
                             error.event_kind,
                             WorkerErrorPhase::Runtime,
                             WorkerErrorSource::Runtime,
-                            diagnostic,
                             &parent_tx,
                         );
                     }
