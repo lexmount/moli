@@ -4,6 +4,7 @@ mod native_xhr;
 mod navigation_disable;
 mod web_security;
 mod worker_delivery_abort;
+mod worker_redirect_extra_info;
 mod worker_redirect_modes;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsAddNetworkInterceptCommand,

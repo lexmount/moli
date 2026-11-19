@@ -455,13 +455,25 @@ pub(crate) fn emit_redirect_response_received_extra_info(
     if !redirect.redirect_has_extra_info {
         return;
     }
+    let (headers, status, cookie_set_reports) = match &redirect.response_extra_info {
+        Some(response) => (
+            response.headers.as_slice(),
+            response.status,
+            response.cookie_set_reports.as_slice(),
+        ),
+        None => (
+            redirect.headers.as_slice(),
+            redirect.status,
+            redirect.cookie_set_reports.as_slice(),
+        ),
+    };
     emit_response_received_extra_info(
         out,
         session_id,
         request_id,
-        &redirect.headers,
-        redirect.status,
-        &redirect.cookie_set_reports,
+        headers,
+        status,
+        cookie_set_reports,
     );
 }
 

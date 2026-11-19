@@ -1,7 +1,10 @@
 //! Response-header rules shared by manual Fetch and intercepted XHR.
 //! Transport pauses, body consumption and owner delivery remain with callers.
 
-use moli_fetch::{RedirectSource, Request, RequestRedirectMode, ResponseHead};
+use moli_fetch::{
+    NetworkObservationJournal, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RedirectSource,
+    Request, RequestRedirectMode, ResponseHead,
+};
 
 use super::next_redirect_url;
 
@@ -12,10 +15,29 @@ pub(super) enum SubresourceResponseTransition {
     FollowedRedirect,
 }
 
+/// Keep the wire response separate from headers changed by interception or
+/// cache validation. Synthetic responses and local cache hits have no exchange.
+pub(super) fn network_response_extra_info(
+    head: &ResponseHead,
+    observations: &NetworkObservationJournal,
+) -> Option<NetworkResponseExtraInfo> {
+    let request = observations.final_request_observation()?;
+    let response = observations.final_response_observation()?;
+    Some(NetworkResponseExtraInfo {
+        request_extra_info: NetworkRequestExtraInfo {
+            headers: request.headers().to_vec(),
+            cookie_report: request.cookie_report().cloned().unwrap_or_default(),
+        },
+        status: response.status(),
+        headers: response.headers().to_vec(),
+        cookie_set_reports: head.cookie_set_reports.clone(),
+    })
+}
+
 pub(super) fn advance_subresource_response(
     request: &mut Request,
     head: ResponseHead,
-    network_extra_info_available: bool,
+    network_response_extra_info: Option<NetworkResponseExtraInfo>,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
     // Preserve transport-refined snapshots, including cached/internal hops.
@@ -26,7 +48,7 @@ pub(super) fn advance_subresource_response(
     advance_validated_subresource_response(
         request,
         head,
-        network_extra_info_available,
+        network_response_extra_info,
         web_security_disabled,
     )
 }
@@ -34,7 +56,7 @@ pub(super) fn advance_subresource_response(
 pub(super) fn advance_validated_subresource_response(
     request: &mut Request,
     head: ResponseHead,
-    network_extra_info_available: bool,
+    network_response_extra_info: Option<NetworkResponseExtraInfo>,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
     // Error mode rejects redirect statuses without consulting Location.
@@ -65,15 +87,14 @@ pub(super) fn advance_validated_subresource_response(
     else {
         return Ok(SubresourceResponseTransition::FinalResponse);
     };
+    let mut redirect = head.into_redirect(
+        next_url,
+        RedirectSource::Network,
+        network_response_extra_info.is_some(),
+    );
+    redirect.response_extra_info = network_response_extra_info;
     request
-        .follow_redirect_with_web_security(
-            head.into_redirect(
-                next_url,
-                RedirectSource::Network,
-                network_extra_info_available,
-            ),
-            web_security_disabled,
-        )
+        .follow_redirect_with_web_security(redirect, web_security_disabled)
         .map_err(|error| error.to_string())?;
     Ok(SubresourceResponseTransition::FollowedRedirect)
 }

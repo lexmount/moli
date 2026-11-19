@@ -1,11 +1,12 @@
 use super::response_hop::{
-    SubresourceResponseTransition, advance_subresource_response, redirect_mode_error_message,
+    SubresourceResponseTransition, advance_subresource_response, network_response_extra_info,
+    redirect_mode_error_message,
 };
 use super::*;
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, RedirectInfo,
-    RequestCredentialsMode, RequestMode, RequestRedirectMode, ResponseHead, StreamingRawResponse,
-    is_cors_safelisted_method,
+    BrowserRequestMetadata, FetchCancelHandle, NetworkFetchResult, NetworkResponseExtraInfo,
+    RedirectInfo, RequestCredentialsMode, RequestMode, RequestRedirectMode, ResponseHead,
+    StreamingRawResponse, is_cors_safelisted_method,
 };
 
 const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
@@ -257,13 +258,13 @@ impl ManualCorsRedirectState {
     fn advance(
         &mut self,
         head: ResponseHead,
-        network_extra_info_available: bool,
+        network_response_extra_info: Option<NetworkResponseExtraInfo>,
         web_security_disabled: bool,
     ) -> Result<SubresourceResponseTransition, String> {
         let transition = advance_subresource_response(
             &mut self.request,
             head,
-            network_extra_info_available,
+            network_response_extra_info,
             web_security_disabled,
         )?;
         if transition == SubresourceResponseTransition::FollowedRedirect {
@@ -332,12 +333,9 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
             Some(response_cancel.clone()),
         )
         .await?;
-        let network_extra_info_available = observed.request_observation().is_some();
-        match redirects.advance(
-            observed.response().head(),
-            network_extra_info_available,
-            loader.web_security_disabled(),
-        )? {
+        let head = observed.response().head();
+        let extra_info = network_response_extra_info(&head, observed.observation_journal());
+        match redirects.advance(head, extra_info, loader.web_security_disabled())? {
             SubresourceResponseTransition::FinalResponse => {
                 cancel_handle.adopt_response_progress(&response_cancel);
                 let redirect_chain = redirects.into_redirect_chain();
@@ -379,13 +377,9 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
             )
             .await
             .map_err(format_network_error)?;
-        let network_extra_info_available = observed.request_observation().is_some();
         let head = observed.response().head();
-        match redirects.advance(
-            head,
-            network_extra_info_available,
-            loader.web_security_disabled(),
-        )? {
+        let extra_info = network_response_extra_info(&head, observed.observation_journal());
+        match redirects.advance(head, extra_info, loader.web_security_disabled())? {
             SubresourceResponseTransition::FinalResponse => {
                 cancel_handle.adopt_response_progress(&observed.response().cancellation_handle());
                 let redirect_chain = redirects.into_redirect_chain();
@@ -1057,7 +1051,15 @@ mod tests {
                     cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
-                true,
+                Some(NetworkResponseExtraInfo {
+                    request_extra_info: moli_fetch::NetworkRequestExtraInfo {
+                        headers: Vec::new(),
+                        cookie_report: Default::default(),
+                    },
+                    status: 303,
+                    headers: vec![("Location".to_owned(), b"https://target.test/final".to_vec())],
+                    cookie_set_reports: Vec::new(),
+                }),
                 false,
             )
             .map_err(anyhow::Error::msg)?;
@@ -1103,7 +1105,7 @@ mod tests {
                     cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
-                false,
+                None,
                 false,
             )
             .unwrap_err();
@@ -1159,7 +1161,7 @@ mod tests {
                     cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
-                false,
+                None,
                 false,
             );
             match mode {
