@@ -3,8 +3,8 @@ use std::{cell::RefCell, ops::ControlFlow, rc::Rc};
 use crate::{
     document_runtime::DomHandle,
     style_engine::{
-        FullStyleWorldSnapshot, OwnedStyleSourceDocumentContext, PreparedStyleWorldUpdate,
-        StyleObservationSnapshot, StyleViewport, StyleWorldUpdatePlan, StyloComputedStyleSnapshot,
+        FullStyleWorldSnapshot, PreparedStyleWorldUpdate, StyleObservationSnapshot,
+        StyleResolutionPass, StyleViewport, StyleWorldUpdatePlan, StyloComputedStyleSnapshot,
         StyloStyleEnvironment,
     },
 };
@@ -70,8 +70,6 @@ impl StyleComputationContext {
 /// query needs it, then shared by every read in this observation.
 pub(crate) struct StyleObservation<'a> {
     runtime: &'a PageScriptHost,
-    #[cfg(test)]
-    read_count: usize,
     /// `None` resolves one stable context per touched Document. Layout and
     /// detached CSSOM snapshots use `Some` to pin an exact caller-owned
     /// viewport instead.
@@ -303,8 +301,6 @@ impl<'a> StyleObservation<'a> {
     ) -> Self {
         Self {
             runtime,
-            #[cfg(test)]
-            read_count: 0,
             fixed_context,
             environment_override: None,
             tracks_persistent_world,
@@ -321,6 +317,41 @@ impl<'a> StyleObservation<'a> {
         self.runtime
     }
 
+    /// Prepare the retained document world before borrowing its Stylo state.
+    /// The callback runs synchronously with fixed DOM and style inputs.
+    pub(crate) fn with_resolution_pass<R>(
+        &mut self,
+        document: DomHandle,
+        resolve: impl FnOnce(&mut StyleResolutionPass<'_, '_>) -> R,
+    ) -> R {
+        self.drain_invalidations(document);
+        let inputs = self.observation_inputs(Some(document), document);
+        let tree_scope_versions = inputs.tree_scope_versions();
+        #[cfg(debug_assertions)]
+        let input_epochs = self.tracks_persistent_world.then(|| {
+            self.runtime
+                .computed_style_observation_input_epochs(document, tree_scope_versions)
+        });
+        let update = self
+            .runtime
+            .style_world_update_plan_for_observation(
+                document,
+                inputs.context().viewport,
+                inputs.environment(),
+                tree_scope_versions,
+            )
+            .map(|plan| inputs.prepared_update(&plan));
+        let result = self
+            .runtime
+            .with_style_resolution_pass(document, update.as_deref(), resolve);
+        #[cfg(debug_assertions)]
+        if let Some(input_epochs) = input_epochs {
+            self.runtime
+                .complete_computed_style_observation(document, &input_epochs);
+        }
+        result
+    }
+
     pub(in crate::native_bridge::element::styles) fn prepare_targets(
         &mut self,
         handles: impl IntoIterator<Item = DomHandle>,
@@ -332,23 +363,7 @@ impl<'a> StyleObservation<'a> {
             }
         }
         for (document, handles) in documents {
-            // Materialize the style world from its shallow root, not an
-            // arbitrarily deep first target. The batch prepares the remaining
-            // requested paths in one borrowed Stylo context.
-            let root = self
-                .runtime
-                .dom_host()
-                .child_handles(document)
-                .find(|&node| {
-                    self.runtime
-                        .dom_host()
-                        .node(node)
-                        .is_some_and(crate::dom::native::Node::is_element)
-                })
-                .unwrap_or(handles[0]);
-            self.read(root);
-            self.runtime
-                .prepare_style_observation_targets(document, &handles);
+            self.with_resolution_pass(document, |pass| pass.prepare_targets(&handles));
         }
     }
 
@@ -361,35 +376,13 @@ impl<'a> StyleObservation<'a> {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) const fn read_count_for_test(&self) -> usize {
-        self.read_count
-    }
-
     pub(crate) fn read(&mut self, handle: DomHandle) -> ComputedStyleRead<'a> {
-        #[cfg(test)]
-        {
-            self.read_count += 1;
-        }
         let read_document = self
             .fixed_context
             .unwrap_or_default()
             .resolved_read_document(self.runtime, handle);
         let source_document = stylesheet_source_document_for_handle(self.runtime, handle);
-        if self.drained_document != Some(read_document)
-            && !self.additional_drained_documents.contains(&read_document)
-        {
-            if self.drained_document.is_none() {
-                self.drained_document = Some(read_document);
-            } else {
-                self.additional_drained_documents.push(read_document);
-            }
-            self.runtime
-                .drain_pending_style_invalidations_for_computed_style_read_for_document(
-                    read_document,
-                );
-        }
-
+        self.drain_invalidations(read_document);
         let observation_inputs = self.observation_inputs(source_document, read_document);
         let context = observation_inputs.context();
         #[cfg(debug_assertions)]
@@ -437,6 +430,21 @@ impl<'a> StyleObservation<'a> {
             observation_inputs,
             stylo_style,
         }
+    }
+
+    fn drain_invalidations(&mut self, document: DomHandle) {
+        if self.drained_document == Some(document)
+            || self.additional_drained_documents.contains(&document)
+        {
+            return;
+        }
+        if self.drained_document.is_none() {
+            self.drained_document = Some(document);
+        } else {
+            self.additional_drained_documents.push(document);
+        }
+        self.runtime
+            .drain_pending_style_invalidations_for_computed_style_read_for_document(document);
     }
 
     fn observation_inputs(
@@ -503,45 +511,6 @@ pub(crate) struct ComputedStyleRead<'a> {
     pub(super) context: StyleComputationContext,
     pub(super) observation_inputs: Rc<StyleObservationInputs<'a>>,
     pub(super) stylo_style: Option<StyloComputedStyleSnapshot>,
-}
-
-/// A document world already updated by the pass's initial style read. Layout
-/// remains synchronous; subsequent anonymous boxes only inherit and cascade.
-pub(crate) struct PreparedAnonymousStyleContext<'a> {
-    runtime: &'a PageScriptHost,
-    document: DomHandle,
-    document_context: OwnedStyleSourceDocumentContext,
-}
-
-impl<'a> PreparedAnonymousStyleContext<'a> {
-    pub(super) fn new(runtime: &'a PageScriptHost, document: DomHandle) -> Self {
-        Self {
-            runtime,
-            document,
-            document_context: runtime.style_source_document_context_for_read_document(document),
-        }
-    }
-
-    pub(crate) const fn document(&self) -> DomHandle {
-        self.document
-    }
-
-    pub(crate) fn computed_values(
-        &self,
-        owner: DomHandle,
-        parent_style: &style::properties::ComputedValues,
-        anonymous_kind: crate::style_engine::StyloAnonymousBoxKind,
-    ) -> Option<style::servo_arc::Arc<style::properties::ComputedValues>> {
-        self.runtime
-            .computed_anonymous_style_snapshot_from_current_observation(
-                owner,
-                parent_style,
-                anonymous_kind,
-                &self.document_context,
-                self.document,
-            )
-            .map(|snapshot| snapshot.computed_values())
-    }
 }
 
 #[cfg(test)]

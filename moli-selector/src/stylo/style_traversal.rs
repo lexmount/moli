@@ -168,6 +168,10 @@ impl StyloDomStyleAdapter {
         host: &DomHost,
         f: impl for<'scope> FnOnce(&'scope StyleDomHostBinding<'scope>) -> R,
     ) -> R {
+        assert!(
+            self.state.host.get().is_null(),
+            "nested style bindings would invalidate live Stylo node wrappers"
+        );
         self.bind_host(host);
         let binding = StyleDomHostBinding { state: &self.state };
         f(&binding)
@@ -350,6 +354,10 @@ fn collect_dirty_style_roots<'a>(roots: impl IntoIterator<Item = StyleElement<'a
 impl<'binding> StyleDomHostBinding<'binding> {
     pub fn shared_lock(&self) -> &SharedRwLock {
         &self.state.shared_lock
+    }
+
+    pub fn bound_node_count(&self) -> usize {
+        self.state.node_data.borrow().len()
     }
 
     pub fn document<'scope>(&'scope self, host: &DomHost) -> StyleDocument<'scope> {

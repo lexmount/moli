@@ -1,14 +1,11 @@
-use std::collections::{HashMap, HashSet};
+mod resolution_pass;
+
+use std::collections::HashSet;
 
 use dom::ElementState as StyloElementState;
 use style::{
-    Atom,
-    animation::DocumentAnimationSet,
     computed_value_flags::ComputedValueFlags,
-    context::{
-        QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
-        SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
-    },
+    context::{QuirksMode, StyleContext},
     data::ElementStyles,
     dom::{TElement, TNode},
     properties::{
@@ -20,15 +17,11 @@ use style::{
         },
         parse_style_attribute,
     },
-    selector_parser::{PseudoElement, SnapshotMap},
+    selector_parser::PseudoElement,
     servo_arc::Arc as ServoArc,
-    shared_lock::StylesheetGuards,
-    style_resolver::{PseudoElementResolution, StyleResolverForElement},
     stylesheets::{CssRuleType, UrlExtraData},
     stylist::RuleInclusion,
-    thread_state::{self, ThreadState},
     traversal::resolve_style,
-    traversal_flags::TraversalFlags,
     values::{
         AtomIdent, resolved,
         specified::{
@@ -37,6 +30,10 @@ use style::{
         },
     },
 };
+
+pub(crate) use resolution_pass::StyleResolutionPass;
+use resolution_pass::with_resolution_context;
+pub(super) use resolution_pass::with_style_resolution_pass;
 
 use crate::{
     document_runtime::DomHandle,
@@ -141,15 +138,6 @@ impl StyloAnonymousBoxKind {
             Self::Table => PseudoElement::ServoAnonymousTable,
             Self::TableRow => PseudoElement::ServoAnonymousTableRow,
             Self::TableCell => PseudoElement::ServoAnonymousTableCell,
-        }
-    }
-
-    const fn trace_name(self) -> &'static str {
-        match self {
-            Self::Generic => "-servo-anonymous-box",
-            Self::Table => "-servo-anonymous-table",
-            Self::TableRow => "-servo-anonymous-table-row",
-            Self::TableCell => "-servo-anonymous-table-cell",
         }
     }
 }
@@ -495,28 +483,17 @@ pub(super) fn computed_style_snapshot_from_current_observation(
         None,
         document_context,
     );
-    let quirks_mode = host
-        .node(owner_document)
-        .and_then(Node::as_document)
-        .map(|document| document.quirks_mode())
-        .unwrap_or(QuirksMode::NoQuirks);
+    let quirks_mode = document_quirks_mode(host, owner_document);
     let world = engine.world_for_document(owner_document);
-    if !world
-        .document_state
-        .retained_style_system_is_current_for_observation(
-            viewport,
-            environment,
-            quirks_mode,
-            tree_scope_versions,
-        )
-    {
-        return StyleObservationSnapshot::NeedsStyleWorldUpdate(retained_style_world_update_plan(
-            host,
-            &world.document_state,
-            owner_document,
-            quirks_mode,
-            tree_scope_versions,
-        ));
+    if let Some(plan) = style_world_update_plan_for_observation(
+        host,
+        &world,
+        viewport,
+        environment,
+        quirks_mode,
+        tree_scope_versions,
+    ) {
+        return StyleObservationSnapshot::NeedsStyleWorldUpdate(plan);
     }
     StyleObservationSnapshot::Current(with_resolved_style_in_current_world(
         engine,
@@ -530,6 +507,39 @@ pub(super) fn computed_style_snapshot_from_current_observation(
     ))
 }
 
+pub(super) fn document_quirks_mode(host: &DomHost, document: DomHandle) -> QuirksMode {
+    host.node(document)
+        .and_then(Node::as_document)
+        .map_or(QuirksMode::NoQuirks, |document| document.quirks_mode())
+}
+
+pub(super) fn style_world_update_plan_for_observation(
+    host: &DomHost,
+    world: &DocumentStyleWorld,
+    viewport: StyleViewport,
+    environment: super::StyloStyleEnvironment,
+    quirks_mode: QuirksMode,
+    tree_scope_versions: super::StyleTreeScopeVersions,
+) -> Option<StyleWorldUpdatePlan> {
+    (!world
+        .document_state
+        .retained_style_system_is_current_for_observation(
+            viewport,
+            environment,
+            quirks_mode,
+            tree_scope_versions,
+        ))
+    .then(|| {
+        retained_style_world_update_plan(
+            host,
+            &world.document_state,
+            world.document,
+            quirks_mode,
+            tree_scope_versions,
+        )
+    })
+}
+
 pub(super) fn computed_style_snapshot_after_world_update(
     engine: &MoliStyleEngine,
     host: &DomHost,
@@ -539,6 +549,41 @@ pub(super) fn computed_style_snapshot_after_world_update(
     document_context: StyleSourceDocumentContext<'_>,
     read_document: DomHandle,
 ) -> Option<StyloComputedStyleSnapshot> {
+    let owner_document = owner_document_for_computed_style_read(host, handle)?;
+    let trace = match update.update() {
+        StyleWorldUpdate::Full(_) => "<computed-style-snapshot>",
+        StyleWorldUpdate::Incremental(_) => "<incremental-computed-style-snapshot>",
+    };
+    trace_computed_style_read(
+        document_url,
+        handle,
+        owner_document,
+        read_document,
+        trace,
+        None,
+        document_context,
+    );
+    let world = engine.world_for_document(owner_document);
+    apply_style_world_update(engine, host, &world, update, document_context);
+    with_resolved_style_in_current_world(
+        engine,
+        host,
+        document_url,
+        handle,
+        &world,
+        update.environment().quirks_mode,
+        None,
+        |_style, styles| styles.map(StyloComputedStyleSnapshot::from_element_styles),
+    )
+}
+
+pub(super) fn apply_style_world_update(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    world: &DocumentStyleWorld,
+    update: &PreparedStyleWorldUpdate,
+    document_context: StyleSourceDocumentContext<'_>,
+) {
     match update.update() {
         StyleWorldUpdate::Full(inputs) => {
             let environment = update.environment();
@@ -547,29 +592,17 @@ pub(super) fn computed_style_snapshot_after_world_update(
                 environment.viewport,
                 environment.tree_scope_versions,
             );
-            computed_style_snapshot_after_style_update_with_key(
+            ensure_retained_style_system_for_computed_read(
                 engine,
                 host,
-                document_url,
-                handle,
+                world,
+                world.document,
                 &style_system_key,
                 inputs,
                 document_context,
-                read_document,
-            )
+            );
         }
         StyleWorldUpdate::Incremental(incremental) => {
-            let owner_document = owner_document_for_computed_style_read(host, handle)?;
-            trace_computed_style_read(
-                document_url,
-                handle,
-                owner_document,
-                read_document,
-                "<incremental-computed-style-snapshot>",
-                None,
-                document_context,
-            );
-            let world = engine.world_for_document(owner_document);
             let source_stores = world.borrow_source_stores();
             ensure_retained_style_system_incrementally(
                 host,
@@ -577,21 +610,11 @@ pub(super) fn computed_style_snapshot_after_world_update(
                 &world.document_state,
                 &source_stores,
                 document_context,
-                owner_document,
-                engine.invalidation_cleanup_for_world(&world),
+                world.document,
+                engine.invalidation_cleanup_for_world(world),
                 update.environment(),
                 incremental,
             );
-            with_resolved_style_in_current_world(
-                engine,
-                host,
-                document_url,
-                handle,
-                &world,
-                update.environment().quirks_mode,
-                None,
-                |_style, styles| styles.map(StyloComputedStyleSnapshot::from_element_styles),
-            )
         }
     }
 }
@@ -648,61 +671,6 @@ pub(super) fn computed_pseudo_style_snapshot_from_current_observation(
         Some(&pseudo_element),
         |style, _styles| Some(StyloComputedStyleSnapshot::from_primary(style.clone())),
     )
-}
-
-pub(super) fn computed_anonymous_style_snapshot_from_current_observation(
-    engine: &MoliStyleEngine,
-    host: &DomHost,
-    document_url: &url::Url,
-    owner: DomHandle,
-    parent_style: &ComputedValues,
-    anonymous_kind: StyloAnonymousBoxKind,
-    document_context: StyleSourceDocumentContext<'_>,
-    read_document: DomHandle,
-) -> Option<StyloComputedStyleSnapshot> {
-    let owner_document = owner_document_for_computed_style_read(host, owner)?;
-    if owner_document != read_document {
-        return None;
-    }
-    trace_computed_style_read(
-        document_url,
-        owner,
-        owner_document,
-        read_document,
-        "<current-computed-anonymous-style-snapshot>",
-        Some(anonymous_kind.trace_name()),
-        document_context,
-    );
-    let world = engine.world_for_document(read_document);
-    computed_anonymous_style_snapshot_in_current_world(
-        engine,
-        host,
-        &world,
-        parent_style,
-        anonymous_kind,
-    )
-}
-
-fn computed_anonymous_style_snapshot_in_current_world(
-    engine: &MoliStyleEngine,
-    host: &DomHost,
-    world: &DocumentStyleWorld,
-    parent_style: &ComputedValues,
-    anonymous_kind: StyloAnonymousBoxKind,
-) -> Option<StyloComputedStyleSnapshot> {
-    engine.dom_adapter.with_bound_host(host, |dom_adapter| {
-        let shared_lock = dom_adapter.shared_lock().clone();
-        let guard = shared_lock.read();
-        let guards = StylesheetGuards::same(&guard);
-        let pseudo = anonymous_kind.pseudo();
-        let style = world.document_state.with_retained_style_system(|retained| {
-            let _layout_thread_state = StyloLayoutThreadStateGuard::enter();
-            retained
-                .stylist
-                .style_for_anonymous::<StyloElement<'_>>(&guards, &pseudo, parent_style)
-        });
-        Some(StyloComputedStyleSnapshot::from_primary(style))
-    })
 }
 
 fn computed_style_snapshot_after_style_update_with_key(
@@ -859,7 +827,6 @@ fn with_resolved_style_in_current_world<R>(
                 handle,
                 quirks_mode,
             );
-            install_shadow_cascade_data_for_resolution(world, dom_adapter);
             if validation_path.is_none() {
                 // Initial resolution already walks the ancestor chain. Build
                 // its zero-generation stamps only on this slow path so clean
@@ -890,7 +857,6 @@ fn with_resolved_style_in_current_world<R>(
                 .get(pseudo_element)
                 .cloned()
                 .or_else(|| {
-                    install_shadow_cascade_data_for_resolution(world, dom_adapter);
                     resolve_element_styles(
                         world,
                         dom_adapter,
@@ -924,67 +890,6 @@ fn with_resolved_style_in_current_world<R>(
         };
         callback(&style, Some(&canonical_styles))
     })
-}
-
-fn install_shadow_cascade_data_for_resolution(
-    world: &DocumentStyleWorld,
-    dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
-) {
-    world
-        .document_state
-        .with_shadow_cascade_data(|shadow_cascade_data| {
-            for (root, cascade_data) in shadow_cascade_data {
-                dom_adapter.set_shadow_cascade_data(*root, cascade_data.clone());
-            }
-        });
-}
-
-fn with_style_resolution_context<'dom, R>(
-    world: &DocumentStyleWorld,
-    dom_adapter: &'dom moli_selector::StyloDomHostBinding<'dom>,
-    resolve: impl FnOnce(&mut StyleContext<'_, StyloElement<'dom>>) -> R,
-) -> R {
-    #[cfg(test)]
-    STYLE_RESOLUTION_CONTEXTS.with(|count| count.set(count.get() + 1));
-    let shared_lock = dom_adapter.shared_lock().clone();
-    let guard = shared_lock.read();
-    let guards = StylesheetGuards::same(&guard);
-    let snapshot_map = SnapshotMap::new();
-    let empty_painters = EmptyRegisteredSpeculativePainters;
-    let mut retained_selector_caches = world.document_state.take_selector_caches();
-    let result = world.document_state.with_retained_style_system(|retained| {
-        let shared = SharedStyleContext {
-            stylist: &retained.stylist,
-            visited_styles_enabled: false,
-            options: StyleSystemOptions::default(),
-            guards,
-            current_time_for_animations: 0.0,
-            traversal_flags: TraversalFlags::empty(),
-            snapshot_map: &snapshot_map,
-            animations: DocumentAnimationSet::default(),
-            registered_speculative_painters: &empty_painters,
-        };
-        let _layout_thread_state = StyloLayoutThreadStateGuard::enter();
-        let mut thread_local = ThreadLocalStyleContext::new();
-        std::mem::swap(
-            &mut thread_local.selector_caches,
-            &mut retained_selector_caches,
-        );
-        let mut context = StyleContext {
-            shared: &shared,
-            thread_local: &mut thread_local,
-        };
-        let result = resolve(&mut context);
-        std::mem::swap(
-            &mut context.thread_local.selector_caches,
-            &mut retained_selector_caches,
-        );
-        result
-    });
-    world
-        .document_state
-        .replace_selector_caches(retained_selector_caches);
-    result
 }
 
 /// Both resolver entry points replace the same canonical ElementData. Keep
@@ -1042,120 +947,29 @@ fn resolve_element_styles<'dom>(
     pseudo_element: Option<&PseudoElement>,
     validation_path: Option<&[StyleValidationPathEntry]>,
 ) -> ElementStyles {
-    with_style_resolution_context(world, dom_adapter, |context| {
-        let ancestor_resolution_count =
-            materialize_ancestor_styles_for_resolution(context, element, world, validation_path);
-        let target = DomHandle::new(element.as_node().debug_id());
-        clear_element_styles_for_resolution(world, element);
-        let styles = resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
-        let required_generation = world
-            .document_state
-            .lazy_invalidation_roots
-            .required_generation_for_checked_element(target)
-            .unwrap_or_default();
-        publish_resolved_element_styles(world, element, styles.clone(), required_generation);
-        world
-            .document_state
-            .note_element_style_resolutions(ancestor_resolution_count.saturating_add(1));
-        styles
+    with_resolution_context(world, dom_adapter, |mut scope| {
+        scope.with_stylo(|context| {
+            let ancestor_resolution_count = materialize_ancestor_styles_for_resolution(
+                context,
+                element,
+                world,
+                validation_path,
+            );
+            let target = DomHandle::new(element.as_node().debug_id());
+            clear_element_styles_for_resolution(world, element);
+            let styles = resolve_style(context, element, RuleInclusion::All, pseudo_element, None);
+            let required_generation = world
+                .document_state
+                .lazy_invalidation_roots
+                .required_generation_for_checked_element(target)
+                .unwrap_or_default();
+            publish_resolved_element_styles(world, element, styles.clone(), required_generation);
+            world
+                .document_state
+                .note_element_style_resolutions(ancestor_resolution_count.saturating_add(1));
+            styles
+        })
     })
-}
-
-/// Resolve an explicit observation's targets and their necessary ancestors in
-/// one bound DOM/style context. The caller has already updated this Document's
-/// style world. Only node identities and traversal depth are indexed here.
-pub(super) fn prepare_style_observation_targets(
-    engine: &MoliStyleEngine,
-    host: &DomHost,
-    document_url: &url::Url,
-    document: DomHandle,
-    handles: &[DomHandle],
-) {
-    let world = engine.world_for_document(document);
-    let quirks_mode = host
-        .node(document)
-        .and_then(Node::as_document)
-        .map(|document| document.quirks_mode())
-        .unwrap_or(QuirksMode::NoQuirks);
-    engine.dom_adapter.with_bound_host(host, |dom_adapter| {
-        install_shadow_cascade_data_for_resolution(&world, dom_adapter);
-        with_style_resolution_context(&world, dom_adapter, |context| {
-            let mut prepared: HashMap<DomHandle, (usize, bool)> = HashMap::new();
-            let mut pending = Vec::new();
-            let mut resolutions = 0_u64;
-            for &handle in handles {
-                if host.owner_document_handle(handle) != Some(document) {
-                    continue;
-                }
-                let Some(element) = dom_adapter.element(host, handle) else {
-                    continue;
-                };
-                let mut current = Some(element);
-                while let Some(element) = current {
-                    let handle = DomHandle::new(element.as_node().debug_id());
-                    if prepared.contains_key(&handle) {
-                        break;
-                    }
-                    pending.push(element);
-                    current = element.traversal_parent();
-                }
-                let (mut depth, mut inherited_change) = current
-                    .and_then(|parent| prepared.get(&DomHandle::new(parent.as_node().debug_id())))
-                    .map_or((0, false), |&(depth, changed)| (depth + 1, changed));
-                for element in pending.drain(..).rev() {
-                    let handle = DomHandle::new(element.as_node().debug_id());
-                    let path = world
-                        .document_state
-                        .lazy_invalidation_roots
-                        .validation_path(host, document, handle);
-                    let needs_resolution = inherited_change
-                        || style_validation_path_needs_resolution(&world, dom_adapter, host, &path);
-                    context
-                        .thread_local
-                        .bloom_filter
-                        .insert_parents_recovering(element, depth);
-                    context.thread_local.current_dom_depth = depth;
-                    if needs_resolution {
-                        populate_inline_style_attribute_for_resolution(
-                            engine,
-                            host,
-                            document_url,
-                            handle,
-                            quirks_mode,
-                        );
-                        clear_element_styles_for_resolution(&world, element);
-                        // Unlike the one-off `resolve_style` API, this entry
-                        // keeps the observation's recovered ancestor filter.
-                        let styles = StyleResolverForElement::new(
-                            element,
-                            context,
-                            RuleInclusion::All,
-                            PseudoElementResolution::IfApplicable,
-                        )
-                        .resolve_style_with_default_parents()
-                        .into();
-                        let generation = world
-                            .document_state
-                            .lazy_invalidation_roots
-                            .required_generation_for_checked_element(handle)
-                            .unwrap_or_default();
-                        publish_resolved_element_styles(&world, element, styles, generation);
-                        inherited_change = true;
-                        resolutions += 1;
-                    }
-                    context.thread_local.bloom_filter.push(element);
-                    prepared.insert(handle, (depth, inherited_change));
-                    depth += 1;
-                }
-            }
-            world
-                .document_state
-                .note_ancestor_style_validation_visits(prepared.len() as u64);
-            world
-                .document_state
-                .note_element_style_resolutions(resolutions);
-        });
-    });
 }
 
 fn materialize_ancestor_styles_for_resolution<E>(
@@ -1313,48 +1127,34 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
         |style, _styles| Some(style.clone()),
     )?;
 
-    let computed_key = ComputedElementStyleCacheKey {
+    let style = with_cached_lazy_pseudo_style(world, handle, pseudo_element, || {
+        engine.dom_adapter.with_bound_host(host, |dom_adapter| {
+            let element = dom_adapter.element(host, handle)?;
+            with_resolution_context(world, dom_adapter, |mut context| {
+                context.lazy_pseudo_style(element, pseudo_element, &primary_style)
+            })
+        })
+    })?;
+    callback(&style)
+}
+
+fn with_cached_lazy_pseudo_style(
+    world: &DocumentStyleWorld,
+    handle: DomHandle,
+    pseudo: &PseudoElement,
+    compute: impl FnOnce() -> Option<ServoArc<ComputedValues>>,
+) -> Option<ServoArc<ComputedValues>> {
+    let key = ComputedElementStyleCacheKey {
         computed_cache_generation: world.document_state.computed_cache_generation(),
         handle,
-        pseudo_element: Some(pseudo_element.clone()),
+        pseudo_element: Some(pseudo.clone()),
     };
-    if let Some(style) = world.pseudo_style_cache.get_pseudo(&computed_key) {
-        return callback(&style);
+    if let Some(style) = world.pseudo_style_cache.get_pseudo(&key) {
+        return Some(style);
     }
-
-    engine.dom_adapter.with_bound_host(host, |dom_adapter| {
-        let element = dom_adapter.element(host, handle)?;
-
-        world
-            .document_state
-            .with_shadow_cascade_data(|shadow_cascade_data| {
-                for (root, cascade_data) in shadow_cascade_data {
-                    dom_adapter.set_shadow_cascade_data(*root, cascade_data.clone());
-                }
-            });
-
-        let shared_lock = dom_adapter.shared_lock().clone();
-        let guard = shared_lock.read();
-        let guards = StylesheetGuards::same(&guard);
-        let style = world
-            .document_state
-            .with_retained_style_system(|retained| {
-                let _layout_thread_state = StyloLayoutThreadStateGuard::enter();
-                retained.stylist.lazily_compute_pseudo_element_style(
-                    &guards,
-                    element,
-                    pseudo_element,
-                    RuleInclusion::All,
-                    &primary_style,
-                    false,
-                    None,
-                )
-            })?;
-        world
-            .pseudo_style_cache
-            .insert_pseudo(computed_key, style.clone());
-        callback(&style)
-    })
+    let style = compute()?;
+    world.pseudo_style_cache.insert_pseudo(key, style.clone());
+    Some(style)
 }
 
 fn ensure_retained_style_system_for_computed_read(
@@ -1685,34 +1485,4 @@ fn inherited_style_parent(host: &DomHost, handle: DomHandle) -> Option<DomHandle
         return host.shadow_root_host(parent);
     }
     Some(parent)
-}
-
-struct EmptyRegisteredSpeculativePainters;
-
-impl RegisteredSpeculativePainters for EmptyRegisteredSpeculativePainters {
-    fn get(&self, _name: &Atom) -> Option<&dyn RegisteredSpeculativePainter> {
-        None
-    }
-}
-
-struct StyloLayoutThreadStateGuard {
-    entered: bool,
-}
-
-impl StyloLayoutThreadStateGuard {
-    fn enter() -> Self {
-        let entered = !thread_state::get().contains(ThreadState::LAYOUT);
-        if entered {
-            thread_state::enter(ThreadState::LAYOUT);
-        }
-        Self { entered }
-    }
-}
-
-impl Drop for StyloLayoutThreadStateGuard {
-    fn drop(&mut self) {
-        if self.entered {
-            thread_state::exit(ThreadState::LAYOUT);
-        }
-    }
 }
