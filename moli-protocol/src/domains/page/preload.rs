@@ -60,34 +60,18 @@ struct CreateIsolatedWorldParams {
 
 pub(super) struct PendingCreateIsolatedWorldCommand {
     task: CreateIsolatedWorldCommandTask,
-    pending: PendingCreateIsolatedWorldPhase,
+    pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedCreateIsolatedWorldCommand {
     task: CreateIsolatedWorldCommandTask,
-    completed: CompletedCreateIsolatedWorldPhase,
+    completed: Box<Result<CompletedPageCommand>>,
 }
 
 struct RecordedDocumentStartScript {
     identifier: String,
     script: DocumentStartScript,
     inserted: bool,
-}
-
-enum PendingCreateIsolatedWorldPhase {
-    InitialDocumentNavigation(Box<super::navigation::PendingNavigateLoadCommand>),
-    InitialDocumentNavigationContinue(
-        Box<super::navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
-    ),
-    RendererPageCommand(PendingPageCommand),
-}
-
-enum CompletedCreateIsolatedWorldPhase {
-    InitialDocumentNavigation(Box<super::navigation::CompletedNavigateLoadCommand>),
-    InitialDocumentNavigationContinue(
-        Box<super::navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
-    ),
-    RendererPageCommand(Box<Result<CompletedPageCommand>>),
 }
 
 pub(crate) struct CreateIsolatedWorldCommandTask {
@@ -100,23 +84,7 @@ pub(crate) struct CreateIsolatedWorldCommandTask {
 
 impl PendingCreateIsolatedWorldCommand {
     pub(super) async fn wait(self) -> CompletedCreateIsolatedWorldCommand {
-        let completed = match self.pending {
-            PendingCreateIsolatedWorldPhase::InitialDocumentNavigation(pending) => {
-                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(Box::new(
-                    pending.wait().await,
-                ))
-            }
-            PendingCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(pending) => {
-                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(Box::new(
-                    pending.wait().await,
-                ))
-            }
-            PendingCreateIsolatedWorldPhase::RendererPageCommand(pending) => {
-                CompletedCreateIsolatedWorldPhase::RendererPageCommand(Box::new(
-                    pending.wait().await,
-                ))
-            }
-        };
+        let completed = Box::new(self.pending.wait().await);
         CompletedCreateIsolatedWorldCommand {
             task: self.task,
             completed,
@@ -743,7 +711,7 @@ pub(super) fn try_start_create_isolated_world_command(
     }
 
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    start_create_isolated_world_initial_navigation_or_renderer_phase(conn, cmd.id, owner, task)
+    start_isolated_world_runtime(conn, cmd.id, owner, task)
 }
 
 fn prepare_create_isolated_world_task(
@@ -775,7 +743,7 @@ fn pending_create_isolated_world_command_for_session(
     command_id: Option<u64>,
     owner_scope: crate::conn::CommandOwnerScope,
     task: CreateIsolatedWorldCommandTask,
-    pending: PendingCreateIsolatedWorldPhase,
+    pending: PendingPageCommand,
 ) -> PageCommandTaskStep {
     PageCommandTaskStep::Pending(PendingPageCommandDispatch {
         command_id,
@@ -786,71 +754,7 @@ fn pending_create_isolated_world_command_for_session(
     })
 }
 
-fn start_create_isolated_world_initial_navigation_or_renderer_phase(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: CommandOwnerScope,
-    mut task: CreateIsolatedWorldCommandTask,
-) -> PageCommandTaskStep {
-    let should_start_target_url_navigation =
-        conn.runtime_session_owner_can_start_initial_document_navigation_for_owner(&owner);
-    if !should_start_target_url_navigation {
-        return start_isolated_world_runtime(conn, command_id, owner, task);
-    }
-
-    let start = match super::navigation::start_initial_document_navigation_for_session_owner(
-        conn,
-        None,
-        &owner,
-        json!({}),
-    ) {
-        Ok(start) => start,
-        Err(plan) => return PageCommandTaskStep::Complete(plan),
-    };
-    match start {
-        super::navigation::NavigateCommandStart::CompleteImmediate(plan) => {
-            if plan.command_status().is_some_and(|status| status.is_err()) {
-                return PageCommandTaskStep::Complete(plan);
-            }
-            task.prefix_output
-                .extend(plan.into_composite_command_prefix());
-            start_isolated_world_runtime(conn, command_id, owner, task)
-        }
-        super::navigation::NavigateCommandStart::CompletePlan(plan) => {
-            PageCommandTaskStep::Complete(plan)
-        }
-        super::navigation::NavigateCommandStart::PendingLoad(pending) => {
-            pending_create_isolated_world_command_for_session(
-                command_id,
-                owner.clone(),
-                task,
-                PendingCreateIsolatedWorldPhase::InitialDocumentNavigation(pending),
-            )
-        }
-        super::navigation::NavigateCommandStart::PendingChildFrame(_) => {
-            PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "UnexpectedChildFrameNavigation",
-            ))
-        }
-        super::navigation::NavigateCommandStart::PendingSameDocument(_) => {
-            PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "UnexpectedSameDocumentNavigation",
-            ))
-        }
-        super::navigation::NavigateCommandStart::PendingContinueWithoutRequestPause(pending) => {
-            pending_create_isolated_world_command_for_session(
-                command_id,
-                owner,
-                task,
-                PendingCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(pending),
-            )
-        }
-    }
-}
-
-pub(crate) fn start_isolated_world_runtime(
+fn start_isolated_world_runtime(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: CommandOwnerScope,
@@ -872,12 +776,9 @@ pub(crate) fn start_isolated_world_runtime(
         &world_name,
         grant_universal_access,
     ) {
-        Ok(pending) => pending_create_isolated_world_command_for_session(
-            command_id,
-            owner,
-            task,
-            PendingCreateIsolatedWorldPhase::RendererPageCommand(pending),
-        ),
+        Ok(pending) => {
+            pending_create_isolated_world_command_for_session(command_id, owner, task, pending)
+        }
         Err(error) => {
             PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
         }
@@ -1043,53 +944,19 @@ pub(super) async fn complete_create_isolated_world_using(
 ) -> Result<CommandOutputPlan> {
     loop {
         let task = completed.task;
-        let step = match completed.completed {
-            CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(completed) => {
-                let prepared =
-                    driver.with_state(move |state| state.prepare_page_navigation(*completed))?;
-                prepared
-                    .run(driver, context, super::NavigationCommandOutput::Composite)
-                    .await?;
-                if context.has_retained_terminal() {
-                    return Ok(CommandOutputPlan::default());
-                }
-                context.materialize_projection_output();
-                let owner = owner.clone();
-                driver.with_state(move |state| {
-                    state.start_page_isolated_world(command_id, owner, task)
-                })?
-            }
-            CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(completed) => {
-                let prepared = driver
-                    .with_state(move |state| state.prepare_page_navigation_request(*completed))?;
-                prepared
-                    .run(driver, context, super::NavigationCommandOutput::Composite)
-                    .await?;
-                if context.has_retained_terminal() {
-                    return Ok(CommandOutputPlan::default());
-                }
-                context.materialize_projection_output();
-                let owner = owner.clone();
-                driver.with_state(move |state| {
-                    state.start_page_isolated_world(command_id, owner, task)
-                })?
-            }
-            CompletedCreateIsolatedWorldPhase::RendererPageCommand(renderer_completed) => {
-                let owner = owner.clone();
-                let prepared = context.with_state(driver, move |state, context| {
-                    state.finish_page_isolated_world(
-                        command_id,
-                        owner,
-                        task,
-                        *renderer_completed,
-                        context.context_mut(),
-                    )
-                })?;
-                match prepared {
-                    Ok(prepared) => return Ok(prepared.run(driver).await),
-                    Err(step) => step,
-                }
-            }
+        let current_owner = owner.clone();
+        let prepared = context.with_state(driver, move |state, context| {
+            state.finish_page_isolated_world(
+                command_id,
+                current_owner,
+                task,
+                *completed.completed,
+                context.context_mut(),
+            )
+        })?;
+        let step = match prepared {
+            Ok(prepared) => return Ok(prepared.run(driver).await),
+            Err(step) => step,
         };
         match step {
             PageCommandTaskStep::Complete(plan) => return Ok(plan),

@@ -11,13 +11,14 @@ use crate::conn::{
 
 use super::{TargetCommandTaskStep, TargetCreationCommit, browser_context, closing, creation};
 
-/// Creation owns the original host and initial document work before its first
-/// poll. Listener setup uses the same finite Runtime capabilities as navigation.
+/// The command owns listener setup and its wait for the Target's initial Page.
+/// Releasing that setup gate lets the public workflow continue initial navigation.
 pub(crate) struct PreparedAutomationTargetCreation {
     result: DevToolsCreateTargetResult,
     commit: TargetCreationCommit,
     host: ProtocolPageHostScope,
     initial_document: Result<Option<PendingInitialDocumentPageBuild>>,
+    listeners_ready: tokio::sync::oneshot::Sender<()>,
 }
 
 impl PreparedAutomationTargetCreation {
@@ -33,12 +34,18 @@ impl PreparedAutomationTargetCreation {
             .map_err(target_creation_error)?;
         let host = ProtocolPageHostScope::capture_for_operation(conn, &owner)
             .map_err(target_creation_error)?;
-        let initial_document = conn.start_initial_document_page_ensure_for_owner(host.owner());
+        conn.stage_target_initial_document(host.owner());
+        let (listeners_ready, release) = tokio::sync::oneshot::channel();
+        let initial_document = conn.start_target_initial_document(
+            host.owner(),
+            crate::conn::InitialDocumentContinuation::Deferred(release),
+        );
         Ok(Self {
             result: execution.result,
             commit: execution.commit,
             host,
             initial_document,
+            listeners_ready,
         })
     }
 
@@ -66,6 +73,9 @@ impl PreparedAutomationTargetCreation {
                         return Ok(());
                     }
                 };
+                context.context_mut().extend_renderer_output_dependencies(
+                    diagnostics.initialization_output_dependencies,
+                );
                 if let Some(predecessor) = diagnostics.renderer_output_predecessor {
                     context
                         .context_mut()
@@ -138,6 +148,7 @@ impl PreparedAutomationTargetCreation {
                 )
             })
             .map_err(target_creation_error)??;
+        let _ = self.listeners_ready.send(());
         Ok(AutomationResult::CreateTarget(self.result))
     }
 }

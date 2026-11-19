@@ -138,6 +138,9 @@ impl ProtocolWorkflowState<'_> {
                         };
                         match diagnostics {
                             Ok(diagnostics) => {
+                                context.context_mut().extend_renderer_output_dependencies(
+                                    diagnostics.initialization_output_dependencies,
+                                );
                                 if let Some(predecessor) = diagnostics.renderer_output_predecessor {
                                     context
                                         .context_mut()

@@ -84,7 +84,7 @@ impl PreparedPopupTarget {
         let target_id = prepared.target_id.clone();
         let route = conn.target_session_route_for_target_id(&target_id)?;
         let owner = crate::conn::CommandOwnerScope::for_route(route);
-        let host = conn.page_target_host_identity_for_owner(&owner)?;
+        conn.page_target_host_identity_for_owner(&owner)?;
         conn.browser_context_by_id_mut(&prepared.browser_context_id)?
             .page_target_mut(&target_id)?
             .creation_output_predecessor = predecessor;
@@ -101,46 +101,14 @@ impl PreparedPopupTarget {
         {
             crate::conn::PendingProtocolSchedulerWork::publish_popup_activation(conn, activation);
         }
-        let pending = conn.start_initial_document_page_ensure_for_owner(&owner);
-        let page_owner = conn
-            .pending_target_page_residence_identity_for_owner(&owner)
-            .or_else(|| conn.target_page_residence_identity_for_owner(&owner));
         out.extend(created);
         out.extend(attached);
-        let access = conn.protocol_state_access();
-        let workflow_access = access.clone();
-        let initialization = async move {
-            let mut driver = crate::conn::ProtocolWorkflowDriver::new(workflow_access);
-            let initialized = match pending {
-                Ok(Some(pending)) => match pending.wait().await {
-                    Ok(completed) => match completed.install_using(&mut driver).await {
-                        Ok(_) => true,
-                        Err(error) => {
-                            tracing::debug!(%error, "popup initialization failed during install");
-                            false
-                        }
-                    },
-                    Err(failed) => {
-                        let _ = driver
-                            .with_state(move |state| state.fail_popup_initial_document(failed));
-                        false
-                    }
-                },
-                Ok(None) => true,
-                Err(error) => {
-                    tracing::debug!(%error, "popup initialization failed to start");
-                    false
-                }
-            };
-            let _ = driver.with_state(move |state| {
-                state.finish_popup_initialization(owner, host, page_owner, initialized, predecessor)
-            });
-        };
-        let pending = crate::conn::PendingProtocolSchedulerWork::for_popup_initialization(
-            Box::pin(initialization),
-            access,
-        );
-        conn.push_scheduler_event(crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending });
+        if let Err(error) = conn.start_target_initial_document(
+            &owner,
+            crate::conn::InitialDocumentContinuation::Popup(predecessor),
+        ) {
+            tracing::debug!(%error, "popup initialization could not be scheduled");
+        }
         Some(target_id)
     }
 }
@@ -401,6 +369,9 @@ pub(crate) fn prepare_popup_target(
         });
     }
 
+    if let Some(route) = conn.target_session_route_for_target_id(&target_id) {
+        conn.stage_target_initial_document(&CommandOwnerScope::for_route(route));
+    }
     let tab_target_id = conn.register_top_level_page_target(&target_id);
     let auto_attached_tab_sessions = auto_attached_tab_sessions
         .into_iter()
@@ -520,6 +491,9 @@ pub(crate) fn prepare_initial_target_url_navigation(
         return None;
     }
     let route = conn.target_session_route_for_target_id(target_id)?;
+    if !conn.target_can_start_initial_navigation(&CommandOwnerScope::for_route(route.clone())) {
+        return None;
+    }
     let browser_context_id = route.browser_context_id()?.to_owned();
     let browser_context = conn.browser_context_by_id(&browser_context_id)?;
     if !browser_context.target_needs_initial_document_navigation(target_id) {
@@ -562,6 +536,9 @@ pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_bar
     let Some(route) = conn.target_session_route_for_target_id(target_id) else {
         return false;
     };
+    if !conn.target_can_start_initial_navigation(&CommandOwnerScope::for_route(route.clone())) {
+        return false;
+    }
     if !matches!(&route, crate::conn::CdpSessionRoute::PageTarget { .. }) {
         return false;
     }

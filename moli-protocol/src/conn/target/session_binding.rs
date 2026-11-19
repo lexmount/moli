@@ -424,61 +424,9 @@ impl CdpConnection {
             );
             return;
         }
-        if self
-            .runtime_session_owner_slot_for_owner(&owner)
-            .is_some_and(|slot| slot.has_initial_document_page_build_in_progress())
-        {
-            return; // Its target-owned installer initializes every live session.
+        if let Err(error) = self.start_initial_document_page_ensure_for_owner(&owner) {
+            tracing::warn!(%error, "initial target Page could not be scheduled");
         }
-        // Popup creation already owns initialization of its accepted auxiliary
-        // Page. Starting a generic build here would race that ownership and its
-        // navigation response; attach only registers the session.
-        let popup_initialization_owned = self
-            .target_owner_identity_for_owner(&owner)
-            .and_then(|(context, target)| {
-                self.browser_context_by_id(&context)?.page_target(&target?)
-            })
-            .is_some_and(|target| target.owner_state.pending_popup_navigation.is_some());
-        if popup_initialization_owned {
-            return;
-        }
-        let pending = match self.start_initial_document_page_ensure_for_owner(&owner) {
-            Ok(Some(pending)) => pending,
-            Ok(None) => return, // The existing navigation owns installation.
-            Err(error) => {
-                tracing::warn!(%error, "initial target Page could not be scheduled");
-                return;
-            }
-        };
-        let target_id = self
-            .target_owner_identity_for_owner(&owner)
-            .and_then(|(_, target)| target);
-        let host = self.page_target_host_identity_for_owner(&owner);
-        let access = self.protocol_state_access();
-        let workflow = super::super::PreparedCommandWorkflow::new(move |mut context| async move {
-            let mut driver = super::super::ProtocolWorkflowDriver::new(access);
-            match pending.wait().await {
-                Ok(completed) => match completed.install_using(&mut driver).await {
-                    Err(error) => tracing::warn!(%error, "initial target Page installation failed"),
-                    Ok(_) => {
-                        let navigation = driver.with_state(move |state| {
-                            state.prepare_attached_target_initial_navigation(owner, host)
-                        });
-                        if let Ok(Some(navigation)) = navigation
-                            && let Err(error) = navigation.run(&mut driver, &mut context).await
-                        {
-                            tracing::warn!(%error, "initial attached target navigation failed");
-                        }
-                    }
-                },
-                Err(failed) => {
-                    let _ =
-                        driver.with_state(move |state| state.reset_failed_initial_document(failed));
-                }
-            }
-            context.complete(crate::domains::command_output::CommandOutputPlan::default())
-        });
-        super::super::PendingProtocolSchedulerWork::publish_workflow(self, workflow, target_id);
     }
 
     pub(crate) fn commit_prepared_attach_event_plan(

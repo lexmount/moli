@@ -26,7 +26,7 @@ pub struct PendingProtocolSchedulerWork {
 enum PendingProtocolWork {
     Workflow(super::workflow::PendingProtocolWorkflow),
     RendererOutputProjection(super::renderer::PendingRendererOutputProjection),
-    PopupInitialization(Shared<LocalBoxFuture<'static, ()>>),
+    TargetInitialization(Shared<LocalBoxFuture<'static, ()>>),
     Termination(TargetTermination),
     PopupActivation(PendingPopupActivation),
     BidiChannel(PendingBidiChannel),
@@ -113,7 +113,7 @@ enum CompletedProtocolWork {
         super::renderer::PendingRendererOutputProjection,
         super::renderer::SharedRendererProjectionResult,
     ),
-    PopupInitialization,
+    TargetInitialization,
     Termination(Box<CompletedTargetTermination>),
     PopupActivation(PendingPopupActivation, Option<TargetActivationOutput>),
     BidiChannel(PendingBidiChannel, crate::conn::BidiChannelOutput),
@@ -128,7 +128,7 @@ impl std::fmt::Debug for PendingProtocolSchedulerWork {
         let kind = match &self.work {
             PendingProtocolWork::Workflow(_) => "Workflow",
             PendingProtocolWork::RendererOutputProjection(_) => "RendererOutputProjection",
-            PendingProtocolWork::PopupInitialization(_) => "PopupInitialization",
+            PendingProtocolWork::TargetInitialization(_) => "TargetInitialization",
             PendingProtocolWork::Termination(_) => "Termination",
             PendingProtocolWork::PopupActivation(_) => "PopupActivation",
             PendingProtocolWork::BidiChannel(_) => "BidiChannel",
@@ -229,12 +229,12 @@ impl PendingProtocolSchedulerWork {
         }
     }
 
-    pub(crate) fn for_popup_initialization(
+    pub(crate) fn for_target_initialization(
         pending: LocalBoxFuture<'static, ()>,
         access: ProtocolStateHandle,
     ) -> Self {
         Self {
-            work: PendingProtocolWork::PopupInitialization(pending.shared()),
+            work: PendingProtocolWork::TargetInitialization(pending.shared()),
             access,
         }
     }
@@ -309,10 +309,10 @@ impl PendingProtocolSchedulerWork {
                     work: CompletedProtocolWork::Workflow(pending, completed),
                 }
             }
-            PendingProtocolWork::PopupInitialization(pending) => {
+            PendingProtocolWork::TargetInitialization(pending) => {
                 pending.await;
                 CompletedProtocolSchedulerWork {
-                    work: CompletedProtocolWork::PopupInitialization,
+                    work: CompletedProtocolWork::TargetInitialization,
                 }
             }
             PendingProtocolWork::RendererOutputProjection(projection) => {
@@ -469,7 +469,7 @@ impl CdpConnection {
     ) -> CdpTurnOutcome {
         match completed.work {
             CompletedProtocolWork::Workflow(pending, completed) => pending.finish(self, completed),
-            CompletedProtocolWork::PopupInitialization => {
+            CompletedProtocolWork::TargetInitialization => {
                 CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
             }
             CompletedProtocolWork::RendererOutputProjection(projection, result) => {

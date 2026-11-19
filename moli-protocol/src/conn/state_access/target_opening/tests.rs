@@ -3,7 +3,6 @@ use crate::conn::{
     ParsedCdpCommand,
 };
 use crate::testing::TestContext;
-use futures_util::FutureExt as _;
 use serde_json::json;
 
 struct ReleaseOnDrop(Option<std::sync::mpsc::Sender<()>>);
@@ -17,7 +16,7 @@ impl Drop for ReleaseOnDrop {
 }
 
 #[tokio::test]
-async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_loss() {
+async fn creation_reply_preserves_target_output_after_waiter_or_ready_loss() {
     for phase in 0..3 {
         let mut fixture = TestContext::new();
         let mut browser = BrowserContext::new("BID-opening".into());
@@ -43,33 +42,7 @@ async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_l
         }) else {
             panic!("creation prepares its initial Document before installation");
         };
-        let completed = pending.wait().await;
-        let (entered, waiting) = tokio::sync::oneshot::channel();
-        let (release, held) = std::sync::mpsc::channel();
-        let (gate, guard) = fixture.with_fixture(|conn| {
-            conn.loaded_page_mut_for_protocol_access(Some("SID-opening"))
-                .unwrap()
-                .start_cdp_call(
-                    1899,
-                    None,
-                    moli_core::RendererNativeOperation::then(
-                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                        move |_| {
-                            let _ = entered.send(());
-                            let _ = held.recv();
-                            moli_core::RendererNativeOperationStep::Complete(
-                                moli_core::RendererNativeProtocolResponse::success(json!({})),
-                            )
-                        },
-                    ),
-                )
-                .unwrap()
-        });
-        let release = ReleaseOnDrop(Some(release));
-        tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-            .await
-            .unwrap()
-            .unwrap();
+        let completed = fixture.drive_owned_wait(pending.wait()).await;
         let owner = fixture.state;
         let handle = owner.handle();
         let CdpCommandTaskStep::Pending(workflow) = handle
@@ -82,7 +55,6 @@ async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_l
         };
         assert_eq!(workflow.kind_name(), "Workflow");
         let mut waiting = Box::pin(workflow.wait());
-        assert!(waiting.as_mut().now_or_never().is_none());
         let peer =
             ParsedCdpCommand::parse_str(r#"{"id":1811,"method":"Browser.getVersion"}"#).unwrap();
         assert!(matches!(
@@ -110,9 +82,6 @@ async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_l
             };
             waiting = Box::pin(recovery.wait());
         }
-        drop(release);
-        gate.wait().await.unwrap();
-        drop(guard);
         let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
             .await
             .unwrap();

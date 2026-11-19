@@ -70,7 +70,7 @@ mod completion;
 pub(crate) use preload::{
     CreateIsolatedWorldCommandTask, PreloadCommandError, PreloadMutationKind,
     PreparedAutomationPreload, PreparedCreatedIsolatedWorld, PreparedPreloadRegistryOperation,
-    PreparedPreloadRuntimeMutation, finish_isolated_world_runtime, start_isolated_world_runtime,
+    PreparedPreloadRuntimeMutation, finish_isolated_world_runtime,
 };
 mod lifecycle;
 mod main_document_commit;
@@ -175,10 +175,6 @@ pub(crate) struct PendingPageCommandDispatch {
 }
 
 enum PendingPageCommandKind {
-    Enable {
-        waiter: crate::conn::InitialDocumentPageBuildWaiter,
-        host: crate::conn::ProtocolPageHostScope,
-    },
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -244,10 +240,6 @@ pub(crate) struct CompletedPageCommandDispatch {
 }
 
 enum CompletedPageCommandKind {
-    Enable {
-        result: Result<()>,
-        host: crate::conn::ProtocolPageHostScope,
-    },
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -333,8 +325,7 @@ impl CompletedPageCommandKind {
             Self::SameDocumentNavigate(completed) => completed.renderer_output_predecessor(),
             Self::TraverseSameDocumentHistory(completed) => completed.renderer_output_predecessor(),
             Self::ChildFrameNavigate(completed) => completed.renderer_output_predecessor(),
-            Self::Enable { .. }
-            | Self::BringToFront { .. }
+            Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
@@ -367,13 +358,6 @@ impl PendingPageCommandDispatch {
     }
     pub async fn wait(self) -> CompletedPageCommandDispatch {
         let kind = match *self.kind {
-            PendingPageCommandKind::Enable { waiter, host } => {
-                let result = tokio::select! {
-                    result = waiter.wait() => result.map_err(anyhow::Error::msg),
-                    _ = host.wait_for_binding_retirement() => Err(crate::conn::NoDocumentLoaded.into()),
-                };
-                CompletedPageCommandKind::Enable { result, host }
-            }
             PendingPageCommandKind::BringToFront { route } => {
                 CompletedPageCommandKind::BringToFront { route }
             }
@@ -1521,92 +1505,7 @@ fn try_start_page_enable_command(
     if let Err(plan) = apply_page_enable_subscription(conn, cmd) {
         return Some(PageCommandTaskStep::Complete(plan));
     }
-    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    if let Some(waiter) = conn
-        .runtime_session_owner_slot_for_owner(&owner)
-        .and_then(|slot| slot.initial_document_page_build_waiter())
-    {
-        let host = match crate::conn::ProtocolPageHostScope::capture(conn, &owner) {
-            Ok(host) => host,
-            Err(error) => {
-                return Some(PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000, error,
-                )));
-            }
-        };
-        return Some(PageCommandTaskStep::Pending(PendingPageCommandDispatch {
-            command_id: cmd.id,
-            owner_scope: owner,
-            kind: Box::new(PendingPageCommandKind::Enable { waiter, host }),
-        }));
-    }
-    Some(start_page_enable_document_work(conn, cmd.id, &owner))
-}
-
-fn start_page_enable_document_work(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-) -> PageCommandTaskStep {
-    match conn.runtime_session_owner_slot(owner.session_id()) {
-        // The native Document can already be running while Page adoption waits
-        // for its resources. Enabling notifications must not replace it with
-        // another initial navigation.
-        Some(slot) if slot.has_prepared_document_output() => {
-            PageCommandTaskStep::Complete(CommandOutputPlan::success())
-        }
-        Some(slot)
-            if slot.has_loaded_page()
-                && conn.runtime_session_owner_can_start_initial_document_navigation(
-                    owner.session_id(),
-                ) =>
-        {
-            let start = match navigation::start_initial_document_navigation_for_session_owner(
-                conn,
-                command_id,
-                owner,
-                json!({}),
-            ) {
-                Ok(start) => start,
-                Err(plan) => return PageCommandTaskStep::Complete(plan),
-            };
-            navigation::finish_started_navigation_command_for_parts(
-                conn,
-                command_id,
-                owner.clone(),
-                start,
-                &[],
-            )
-        }
-        Some(slot) if slot.has_loaded_page() => {
-            PageCommandTaskStep::Complete(CommandOutputPlan::success())
-        }
-        Some(_)
-            if !conn.runtime_session_owner_target_is_initial_about_blank(owner.session_id()) =>
-        {
-            let start = match navigation::start_initial_document_navigation_for_session_owner(
-                conn,
-                command_id,
-                owner,
-                json!({}),
-            ) {
-                Ok(start) => start,
-                Err(plan) => return PageCommandTaskStep::Complete(plan),
-            };
-            navigation::finish_started_navigation_command_for_parts(
-                conn,
-                command_id,
-                owner.clone(),
-                start,
-                &[],
-            )
-        }
-        Some(_) => PageCommandTaskStep::Complete(CommandOutputPlan::success()),
-        None if owner.session_id().is_some() => {
-            PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "TargetNotLoaded"))
-        }
-        None => PageCommandTaskStep::Complete(CommandOutputPlan::success()),
-    }
+    Some(PageCommandTaskStep::Complete(CommandOutputPlan::success()))
 }
 
 fn try_start_page_set_document_content_command(

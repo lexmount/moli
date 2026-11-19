@@ -2175,6 +2175,16 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         "<main>popup opener</main>",
     )
     .await;
+    ctx.process_async(json!({
+        "id": 150, "method": "Target.attachToTarget",
+        "params": {"targetId": "TID-popup-info-opener", "flatten": true}
+    }))
+    .await;
+    let opener = take_response_by_id(&mut ctx, 150)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2191,6 +2201,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
 
     ctx.process_async(json!({
         "id": 152,
+        "sessionId": opener,
         "method": "Runtime.evaluate",
         "params": {
             "expression": "window.open('https://example.com/first-popup', 'reportWindow') !== null"
@@ -2223,6 +2234,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
 
     ctx.process_async(json!({
         "id": 153,
+        "sessionId": opener,
         "method": "Runtime.evaluate",
         "params": {
             "expression": "window.open('https://example.com/second-popup', 'reportWindow') !== null"
@@ -2432,9 +2444,12 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                 })
                 .to_owned();
             // Created/attached no longer imply Page adoption. The Page command
-            // joins initialization while retaining the debugger navigation gate.
+            // updates subscriptions while Target initialization retains the debugger gate.
             ctx.process_async(json!({"id":16_152,"method":"Page.enable","sessionId":popup_session_id})).await;
             ctx.expect_result(16_152, json!({}), Some(&popup_session_id));
+            ctx.wait_until_scheduler_state("popup initial Document while debugger is waiting", |conn| {
+                conn.runtime_session_owner_slot(Some(&popup_session_id)).is_some_and(|slot|slot.has_loaded_page())
+            }).await;
             ctx.with_fixture(|conn| { let browser_context = conn
                 .browser_context_by_id("BID-anchor-debugger-wait")
                 .expect("anchor browser context should remain available");

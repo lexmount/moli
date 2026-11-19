@@ -3,6 +3,35 @@ use crate::conn::{InitialDocumentPageInstallResult, InitialDocumentPageOwner};
 use anyhow::Result;
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn initial_document_target_is_current(
+        self,
+        owner: &crate::conn::CommandOwnerScope,
+        host: Option<&crate::conn::PageTargetHostIdentity>,
+    ) -> bool {
+        !self.connection.target_is_closing_for_owner(owner)
+            && self
+                .connection
+                .page_target_host_identity_for_owner(owner)
+                .is_some_and(|current| host.is_some_and(|host| host.matches(&current)))
+    }
+
+    pub(crate) fn finish_target_initialization_publication(
+        self,
+        output: crate::conn::target_initialization::TargetInitializationOutput,
+    ) {
+        self.connection
+            .publish_target_initialization_output(output, None);
+    }
+
+    pub(crate) fn finish_target_initialization_into_command(
+        self,
+        output: crate::conn::target_initialization::TargetInitializationOutput,
+        into: &mut crate::conn::CommandDispatchContext,
+    ) {
+        self.connection
+            .publish_target_initialization_output(output, Some(into));
+    }
+
     pub(crate) fn initial_document_page_can_install(self, owner: InitialDocumentPageOwner) -> bool {
         self.connection
             .initial_document_page_owner_can_install_current_page(&owner)

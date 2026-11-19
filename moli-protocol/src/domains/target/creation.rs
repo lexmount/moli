@@ -29,11 +29,11 @@ impl TargetCreationCommit {
         emit_target_creation_protocol_events(conn, self, out)
     }
 
-    pub(super) fn page_target_id(&self) -> &str {
+    pub(crate) fn page_target_id(&self) -> &str {
         &self.page_target_id
     }
 
-    pub(super) fn activation(&self) -> Option<&TargetActivationTransition> {
+    pub(crate) fn activation(&self) -> Option<&TargetActivationTransition> {
         self.activation.as_ref()
     }
 }
@@ -253,11 +253,19 @@ fn start_devtools_create_target_command_with_result_host(
     };
     let initial_document_route =
         conn.target_session_route_for_target_id(created_target_id.as_str());
-    let pending_initial_document = if let Some(route) = initial_document_route {
+    let Some(route) = initial_document_route else {
+        return TargetCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32000,
+            "TargetNotLoaded",
+        ));
+    };
+    let pending_initial_document = {
         let owner = crate::conn::CommandOwnerScope::for_route(route);
-        conn.start_initial_document_page_ensure_for_owner(&owner)
-    } else {
-        Ok(None)
+        conn.stage_target_initial_document(&owner);
+        conn.start_target_initial_document(
+            &owner,
+            crate::conn::InitialDocumentContinuation::Creation(creation_commit),
+        )
     };
     match pending_initial_document {
         Ok(Some(initial_document)) => {
@@ -266,27 +274,11 @@ fn start_devtools_create_target_command_with_result_host(
                 session_id: command_session_id.map(str::to_owned),
                 kind: Box::new(PendingTargetCommandKind::CreateTarget {
                     response_plan: plan,
-                    creation_commit,
                     initial_document: Some(Box::new(initial_document)),
                 }),
             })
         }
-        Ok(None) => {
-            let mut output_plan = CommandOutputPlan::default();
-            let mut protocol_events = Vec::new();
-            if let Err(error) =
-                emit_target_creation_protocol_events(conn, creation_commit, &mut protocol_events)
-            {
-                return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
-                    error,
-                ));
-            }
-            for event in protocol_events {
-                output_plan.push_background_event(event);
-            }
-            output_plan.extend(plan);
-            TargetCommandTaskStep::Complete(output_plan)
-        }
+        Ok(None) => TargetCommandTaskStep::Complete(plan),
         Err(message) => TargetCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
     }
 }

@@ -31,10 +31,7 @@ pub(in crate::domains::page) fn try_start(
                 return None;
             };
             let task = prepare_create_isolated_world_task(conn, cmd.session_id, target_id, params)?;
-            if task.has_bidi_channel_argument
-                || conn
-                    .runtime_session_owner_can_start_initial_document_navigation_for_owner(&owner)
-            {
+            if task.has_bidi_channel_argument {
                 return None;
             }
             let child = task.params.frame_id != task.target_id;

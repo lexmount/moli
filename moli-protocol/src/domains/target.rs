@@ -245,7 +245,6 @@ enum PendingTargetCommandKind {
 
     CreateTarget {
         response_plan: CommandOutputPlan,
-        creation_commit: creation::TargetCreationCommit,
         initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
     },
     ClosePageTarget {
@@ -260,7 +259,6 @@ enum CompletedTargetCommandKind {
 
     CreateTarget {
         response_plan: CommandOutputPlan,
-        creation_commit: creation::TargetCreationCommit,
         initial_document: Option<
             Result<
                 Box<crate::conn::CompletedInitialDocumentPageBuild>,
@@ -311,11 +309,9 @@ impl PendingTargetCommandDispatch {
 
             PendingTargetCommandKind::CreateTarget {
                 response_plan,
-                creation_commit,
                 initial_document,
             } => CompletedTargetCommandKind::CreateTarget {
                 response_plan,
-                creation_commit,
                 initial_document: match initial_document {
                     Some(pending) => Some(pending.wait().await.map(Box::new)),
                     None => None,
@@ -352,14 +348,12 @@ impl CompletedTargetCommandDispatch {
         match *self.kind {
             CompletedTargetCommandKind::CreateTarget {
                 response_plan,
-                creation_commit,
                 initial_document,
             } => Ok(crate::conn::PreparedCommandWorkflow::new(
                 move |mut context| async move {
                     let result = Box::pin(opening::complete_creation(
                         &mut crate::conn::ProtocolWorkflowDriver::new(access),
                         response_plan,
-                        creation_commit,
                         initial_document,
                         &mut context,
                     ))

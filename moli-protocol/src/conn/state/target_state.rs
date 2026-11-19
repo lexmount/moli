@@ -502,6 +502,8 @@ pub(crate) struct PendingPopupNavigation {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TargetOwnerState {
+    pub(crate) initial_document_work:
+        Option<crate::conn::target_initialization::TargetInitialDocumentWork>,
     pub(crate) initial_empty_document: Option<TargetInitialEmptyDocumentState>,
     pub(crate) pending_popup_navigation: Option<PendingPopupNavigation>,
     pub(crate) committed_document_title: Option<String>,

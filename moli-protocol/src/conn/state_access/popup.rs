@@ -1,5 +1,5 @@
 use super::ProtocolWorkflowState;
-use crate::conn::{BackgroundProtocolEvent, CommandOwnerScope, FailedInitialDocumentPageBuild};
+use crate::conn::{BackgroundProtocolEvent, CommandOwnerScope};
 
 impl ProtocolWorkflowState<'_> {
     pub(crate) fn finish_popup_navigation(
@@ -45,12 +45,6 @@ impl ProtocolWorkflowState<'_> {
             self.connection
                 .publish_page_target_termination_after_command_output(action, output);
         }
-    }
-    pub(crate) fn fail_popup_initial_document(self, failed: FailedInitialDocumentPageBuild) {
-        let error = self
-            .connection
-            .reset_failed_initial_document_page_build_for_owner(failed);
-        tracing::debug!(%error, "failed to await popup initial document");
     }
 
     pub(crate) fn finish_popup_initialization(

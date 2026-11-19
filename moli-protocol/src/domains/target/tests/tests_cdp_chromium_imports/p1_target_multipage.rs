@@ -926,6 +926,14 @@ async fn run_waiting_popup_initial_document_after_resume(
     }))
     .await;
     take_response_by_id(ctx, 260_217);
+    ctx.wait_until_scheduler_state(
+        "waiting popup initial Document installed by Target",
+        |conn| {
+            conn.runtime_session_owner_slot(Some(popup_session_id))
+                .is_some_and(|slot| slot.has_loaded_page())
+        },
+    )
+    .await;
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context
@@ -1645,24 +1653,24 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
         "<main>opener</main>",
     )
     .await;
+    // Foreground selection may already point at the navigating popup.
+    let opener = attach_to_target(&mut ctx, 260_025, None, "TID-name-opener").await;
 
-    let first = open_popup_from_runtime(
-        &mut ctx,
-        260_026,
-        "window.open('https://example.com/one', 'named') !== null",
-    )
-    .await;
+    ctx.process_async(json!({
+        "id": 260_026, "sessionId": opener, "method": "Runtime.evaluate",
+        "params": {"expression": "window.open('https://example.com/one', 'named') !== null", "returnByValue": true}
+    })).await;
+    let first = ctx.take_all();
     let target_id = event(&first, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
         .as_str()
         .expect("named target id")
         .to_owned();
 
-    let second = open_popup_from_runtime(
-        &mut ctx,
-        260_027,
-        "window.open('https://example.com/two', 'named') !== null",
-    )
-    .await;
+    ctx.process_async(json!({
+        "id": 260_027, "sessionId": opener, "method": "Runtime.evaluate",
+        "params": {"expression": "window.open('https://example.com/two', 'named') !== null", "returnByValue": true}
+    })).await;
+    let second = ctx.take_all();
 
     assert!(
         !second
@@ -1670,7 +1678,13 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
             .any(|message| message["method"] == "Target.targetCreated"),
         "{second:?}"
     );
-    let changed = event(&second, "Target.targetInfoChanged");
+    let changed = second
+        .iter()
+        .find(|message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["url"] == "https://example.com/two"
+        })
+        .unwrap_or_else(|| panic!("missing named target reuse: {second:?}"));
     assert_eq!(changed["params"]["targetInfo"]["targetId"], target_id);
     assert_eq!(
         changed["params"]["targetInfo"]["url"],
@@ -1690,23 +1704,26 @@ async fn rust_cdp_chromium_target_info_changed_is_emitted_for_named_popup_reuse(
         "<main>opener</main>",
     )
     .await;
+    // Foreground selection may already point at the navigating popup.
+    let opener = attach_to_target(&mut ctx, 260_030, None, "TID-change-opener").await;
 
-    let _first = open_popup_from_runtime(
-        &mut ctx,
-        260_028,
-        "window.open('https://example.com/first', 'reuse') !== null",
-    )
-    .await;
-    let second = open_popup_from_runtime(
-        &mut ctx,
-        260_029,
-        "window.open('https://example.com/second', 'reuse') !== null",
-    )
-    .await;
+    ctx.process_async(json!({
+        "id": 260_028, "sessionId": opener, "method": "Runtime.evaluate",
+        "params": {"expression": "window.open('https://example.com/first', 'reuse') !== null", "returnByValue": true}
+    })).await;
+    let _first = ctx.take_all();
+    ctx.process_async(json!({
+        "id": 260_029, "sessionId": opener, "method": "Runtime.evaluate",
+        "params": {"expression": "window.open('https://example.com/second', 'reuse') !== null", "returnByValue": true}
+    })).await;
+    let second = ctx.take_all();
 
-    assert_eq!(
-        event(&second, "Target.targetInfoChanged")["params"]["targetInfo"]["url"],
-        "https://example.com/second"
+    assert!(
+        second.iter().any(|message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["url"] == "https://example.com/second"
+        }),
+        "missing named target reuse: {second:?}"
     );
 }
 

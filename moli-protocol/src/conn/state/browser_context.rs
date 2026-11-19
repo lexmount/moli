@@ -1767,6 +1767,15 @@ impl BrowserContext {
         self.active_target_id() == Some(default_target_id)
             && !self.has_active_session()
             && !self.has_loaded_page()
+            && self
+                .active_page_target()
+                .owner_state
+                .initial_document_work
+                .is_none()
+            && !self
+                .active_page_target()
+                .runtime_slot
+                .has_initial_document_page_build_in_progress()
             && self.background_target_count() == 0
             && self.shared_worker_targets.is_empty()
             && self.dedicated_worker_targets.is_empty()

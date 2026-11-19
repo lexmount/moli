@@ -259,14 +259,8 @@ impl CommandWorkflowContext {
         let plan = self
             .complete(CommandOutputPlan::default())
             .finish(connection, &mut local);
-        let (events, boundary, after_boundary) = local.take_renderer_fenced_protocol_events();
-        target.append_renderer_fenced_protocol_events(events, boundary, after_boundary);
-        super::dispatch::append_command_output_plan(&mut Vec::new(), target, plan, None, None);
-        target.extend_post_response_events(local.take_post_response_events());
-        for permit in local.take_runtime_output_projection_permits() {
-            target.retain_runtime_output_projection_permit(permit);
-        }
-        target.extend_renderer_output_dependencies(local.take_renderer_output_dependencies());
+        super::dispatch::append_command_output_plan(&mut Vec::new(), &mut local, plan, None, None);
+        target.append_projection_output(local);
     }
 
     /// Borrow the command context only for this synchronous state operation.
@@ -307,13 +301,6 @@ impl CommandWorkflowContext {
                 .retained_output
                 .extend(plan.into_composite_command_prefix());
         }
-    }
-
-    pub(crate) fn has_retained_terminal(&self) -> bool {
-        self.payload()
-            .terminal
-            .as_ref()
-            .is_some_and(|plan| plan.command_status().is_some())
     }
 
     /// Keep completed projection slots in their original event order before

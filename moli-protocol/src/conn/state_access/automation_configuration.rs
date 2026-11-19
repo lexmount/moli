@@ -1510,23 +1510,41 @@ mod tests {
             else {
                 panic!("the admitted creation finishes through its original owner");
             };
-            assert!(
-                handle
-                    .with_state(move |state| {
-                        let route = state
-                            .connection
-                            .target_session_route_for_target_id(created.target_id.as_str())
-                            .unwrap();
-                        let owner = CommandOwnerScope::for_route(route);
-                        state
-                            .connection
-                            .start_initial_document_page_ensure_for_owner(&owner)
-                            .unwrap()
-                            .is_none()
-                    })
-                    .unwrap(),
-                "cancellation must not leave an orphaned initial document reservation"
-            );
+            let initial = handle
+                .with_state(move |state| {
+                    let route = state
+                        .connection
+                        .target_session_route_for_target_id(created.target_id.as_str())
+                        .unwrap();
+                    let owner = CommandOwnerScope::for_route(route);
+                    let slot = state
+                        .connection
+                        .runtime_session_owner_slot_for_owner(&owner)
+                        .unwrap();
+                    assert!(slot.has_loaded_page());
+                    assert!(
+                        slot.initial_document_page_build_waiter().is_none(),
+                        "cancellation must not leave an orphaned initial document reservation"
+                    );
+                    state
+                        .connection
+                        .start_initial_document_page_ensure_for_owner(&owner)
+                        .unwrap()
+                })
+                .unwrap();
+            // Listener setup releases the Target-owned navigation; the
+            // automation result need not wait for that public continuation.
+            if let Some(initial) = initial {
+                initial
+                    .wait()
+                    .await
+                    .unwrap()
+                    .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(
+                        handle.clone(),
+                    ))
+                    .await
+                    .unwrap();
+            }
         }
     }
 

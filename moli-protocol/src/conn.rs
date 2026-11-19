@@ -110,8 +110,10 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+mod target_initialization;
 pub(crate) use state::InitialDocumentPageBuildWaiter;
 pub(crate) use state::LoadPublicationState;
+pub(crate) use target_initialization::InitialDocumentContinuation;
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub(crate) use state_access::PreparedProtocolCommand;
@@ -663,6 +665,16 @@ impl CommandDispatchContext {
     pub fn take_renderer_output_predecessor(&mut self) -> Option<moli_core::RendererOutputFence> {
         self.take_renderer_output_dependencies()
             .into_single_stream()
+    }
+
+    pub(crate) fn append_projection_output(&mut self, mut local: CommandDispatchContext) {
+        let (events, boundary, after) = local.take_renderer_fenced_protocol_events();
+        self.append_renderer_fenced_protocol_events(events, boundary, after);
+        self.extend_post_response_events(local.take_post_response_events());
+        for permit in local.take_runtime_output_projection_permits() {
+            self.retain_runtime_output_projection_permit(permit);
+        }
+        self.extend_renderer_output_dependencies(local.take_renderer_output_dependencies());
     }
 
     pub(crate) fn extend_renderer_output_dependencies(
