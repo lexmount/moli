@@ -641,20 +641,18 @@ impl PageScriptHost {
             // owner. Committed documents must always produce a check.
             return true;
         };
-        let (report_only_violation, enforced_violation) = check.into_violations();
+        let (report_only_violations, enforced_violations) = check.into_violations();
+        let allowed = enforced_violations.is_empty();
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
+        for violation in report_only_violations
+            .into_iter()
+            .chain(enforced_violations)
+        {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
                 scope, host_ptr, owner, &violation,
             );
         }
-        let Some(violation) = enforced_violation else {
-            return true;
-        };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
-        false
+        allowed
     }
 
     fn inline_source_csp_check_for_owner(
@@ -662,7 +660,8 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         kind: ContentSecurityPolicyNonUrlKind,
         source: &str,
-    ) -> Option<DocumentContentSecurityPolicyCheck> {
+    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
+    {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         Some(
@@ -713,7 +712,8 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         source: &str,
         request: ContentSecurityPolicyStyleElementRequest<'_>,
-    ) -> Option<DocumentContentSecurityPolicyCheck> {
+    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
+    {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         Some(
             unsafe { &*self.document_runtime }.inline_style_element_csp_check_for_document(

@@ -211,6 +211,74 @@ root.appendChild(allowed);
 }
 
 #[test]
+fn inline_handlers_and_javascript_urls_report_each_policy() {
+    let policies = [
+        "script-src 'unsafe-inline'".to_owned(),
+        "script-src 'nonce-allowed' 'report-sample'".to_owned(),
+        "script-src 'none'".to_owned(),
+    ];
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://multiple-inline-source-csp.test/page.html");
+        if enforce {
+            vm.set_response_content_security_policies(&policies);
+        }
+        vm.set_response_content_security_report_only_policies(&policies);
+        vm.eval(
+            r#"
+globalThis.inlineSourceViolations = [];
+document.addEventListener('securitypolicyviolation', event => {
+  inlineSourceViolations.push([
+    event.originalPolicy, event.disposition, event.effectiveDirective, event.blockedURI,
+  ]);
+});
+const root = document.body || document.documentElement ||
+    document.appendChild(document.createElement('html'));
+const button = document.createElement('button');
+button.setAttribute('onclick', 'globalThis.inlineHandlerRan = true');
+root.appendChild(button);
+button.click();
+location.assign('javascript:void 0');
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            vm.eval("globalThis.inlineHandlerRan === true").unwrap(),
+            (!enforce).to_string(),
+        );
+        assert_eq!(
+            vm.take_pending_location_navigation_with_seed().is_some(),
+            !enforce,
+            "only enforcing policies can prevent javascript URL navigation admission",
+        );
+
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        let events: Vec<serde_json::Value> =
+            serde_json::from_str(&vm.eval("JSON.stringify(inlineSourceViolations)").unwrap())
+                .unwrap();
+        let dispositions: &[&str] = if enforce {
+            &["report", "enforce"]
+        } else {
+            &["report"]
+        };
+        let mut expected = Vec::new();
+        for directive in ["script-src-attr", "script-src-elem"] {
+            for disposition in dispositions {
+                for policy in &policies[1..] {
+                    expected.push(serde_json::json!([
+                        policy,
+                        disposition,
+                        directive,
+                        "inline"
+                    ]));
+                }
+            }
+        }
+        assert_eq!(events, expected);
+    }
+}
+
+#[test]
 fn module_fetch_csp_uses_captured_parser_metadata_and_nonce() {
     let mut vm = new_storage_test_vm("https://module-csp-provenance.test/page.html");
     vm.set_response_content_security_policies(&[
@@ -404,9 +472,11 @@ fn hyperlink_javascript_url_csp_checks_the_source_document_before_target_selecti
 #[test]
 fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() {
     let mut vm = new_storage_test_vm("https://inline-style-csp.test/page.html");
-    vm.set_response_content_security_policies(&[
-        "style-src 'nonce-allowed' 'report-sample'".to_owned()
-    ]);
+    let policies = [
+        "style-src 'nonce-allowed' 'report-sample'".to_owned(),
+        "style-src 'nonce-allowed'".to_owned(),
+    ];
+    vm.set_response_content_security_policies(&policies);
 
     let result = vm
         .eval(
@@ -426,6 +496,7 @@ fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() 
       directive: event.effectiveDirective,
       sample: event.sample,
       disposition: event.disposition,
+      policy: event.originalPolicy,
     });
   });
   head.appendChild(blockedElement);
@@ -440,6 +511,7 @@ fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() 
       directive: event.effectiveDirective,
       sample: event.sample,
       disposition: event.disposition,
+      policy: event.originalPolicy,
     });
   });
   body.appendChild(blockedTarget);
@@ -476,12 +548,46 @@ fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() 
     assert_eq!(result, "queued");
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        2
+        4
     );
-    assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__inlineStyleCsp)")
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(globalThis.__inlineStyleCsp)")
             .expect("queued inline style CSP violations should be observable"),
-        r##"{"violations":[{"kind":"element","target":true,"directive":"style-src-elem","sample":"#blocked-target { margin-left: 11px; }","disposition":"enforce"},{"kind":"attribute","target":true,"directive":"style-src-attr","sample":"margin-right: 13px;","disposition":"enforce"}],"blockedSheet":true,"blockedText":"#blocked-target { margin-left: 11px; }","blockedAttribute":"margin-right: 13px;","blockedStyleLength":0,"blockedElementMargin":"0px","blockedAttributeMargin":"0px","nonceMargin":"17px","cssomMargin":"19px"}"##
+    )
+    .unwrap();
+    let mut violations = Vec::new();
+    for (kind, directive, source) in [
+        (
+            "element",
+            "style-src-elem",
+            "#blocked-target { margin-left: 11px; }",
+        ),
+        ("attribute", "style-src-attr", "margin-right: 13px;"),
+    ] {
+        for (index, policy) in policies.iter().enumerate() {
+            violations.push(serde_json::json!({
+                "kind": kind,
+                "target": true,
+                "directive": directive,
+                "sample": if index == 0 { source } else { "" },
+                "disposition": "enforce",
+                "policy": policy,
+            }));
+        }
+    }
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "violations": violations,
+            "blockedSheet": true,
+            "blockedText": "#blocked-target { margin-left: 11px; }",
+            "blockedAttribute": "margin-right: 13px;",
+            "blockedStyleLength": 0,
+            "blockedElementMargin": "0px",
+            "blockedAttributeMargin": "0px",
+            "nonceMargin": "17px",
+            "cssomMargin": "19px",
+        })
     );
 }
 
@@ -1084,9 +1190,11 @@ JSON.stringify(globalThis.__styleImportViolations)
 #[tokio::test]
 async fn report_only_inline_style_csp_reports_without_blocking_style_application() {
     let mut vm = new_storage_test_vm("https://inline-style-report-only.test/page.html");
-    vm.set_response_content_security_report_only_policies(&[
-        "style-src 'none' 'report-sample'".to_owned()
-    ]);
+    let policies = [
+        "style-src 'none' 'report-sample'".to_owned(),
+        "style-src 'none'".to_owned(),
+    ];
+    vm.set_response_content_security_report_only_policies(&policies);
 
     let result = vm
         .eval(
@@ -1097,7 +1205,7 @@ async fn report_only_inline_style_csp_reports_without_blocking_style_application
   const body = document.body || html.appendChild(document.createElement("body"));
   const violations = [];
   document.addEventListener("securitypolicyviolation", event => {
-    violations.push(`${event.disposition}:${event.effectiveDirective}:${event.sample}`);
+    violations.push([event.originalPolicy, event.disposition, event.effectiveDirective, event.sample]);
   });
   globalThis.__inlineStyleReportOnlyErrors = 0;
   const style = document.createElement("style");
@@ -1124,12 +1232,27 @@ async fn report_only_inline_style_csp_reports_without_blocking_style_application
     assert_eq!(result, "queued");
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
-        2
+        4
     );
-    assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__inlineStyleReportOnly)")
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(globalThis.__inlineStyleReportOnly)")
             .expect("queued report-only inline style CSP violations should be observable"),
-        r##"{"violations":["report:style-src-elem:#report-target { margin-left: 23px; }","report:style-src-attr:margin-right: 29px;"],"sheetPresent":true,"styleLength":1,"left":"23px","right":"29px"}"##
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "violations": [
+                [policies[0], "report", "style-src-elem", "#report-target { margin-left: 23px; }"],
+                [policies[1], "report", "style-src-elem", ""],
+                [policies[0], "report", "style-src-attr", "margin-right: 29px;"],
+                [policies[1], "report", "style-src-attr", ""],
+            ],
+            "sheetPresent": true,
+            "styleLength": 1,
+            "left": "23px",
+            "right": "29px",
+        })
     );
     assert!(vm.apply_connected_style_lifecycle_bodies_for_test());
     assert_eq!(
