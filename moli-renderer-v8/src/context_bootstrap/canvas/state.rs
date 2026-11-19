@@ -1,6 +1,6 @@
-//! Native path state belongs to the V8 context object, never to the process.
+//! Native path state belongs to a Canvas 2D context or a Path2D object.
 //!
-//! The isolate owns the table. Weak context handles remove entries on GC;
+//! The isolate owns the table. Weak object handles remove entries on GC;
 //! dropping the isolate also drops every remaining entry without needing GC.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -18,13 +18,13 @@ struct CanvasStates {
 }
 
 struct CanvasStateEntry {
-    _context: v8::Weak<v8::Object>,
+    _owner: v8::Weak<v8::Object>,
     state: Rc<RefCell<Canvas2dPathState>>,
 }
 
 pub(super) fn canvas_path_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
+    object: v8::Local<'s, v8::Object>,
 ) -> Rc<RefCell<Canvas2dPathState>> {
     let store = if let Some(store) = scope.get_slot::<StateStore>() {
         store.clone()
@@ -33,7 +33,7 @@ pub(super) fn canvas_path_state<'s>(
         scope.set_slot(store.clone());
         store
     };
-    if let Some(id) = get_private_value(scope, context, PATH_STATE_SLOT)
+    if let Some(id) = get_private_value(scope, object, PATH_STATE_SLOT)
         .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
         .map(|value| value.u64_value().0)
     {
@@ -41,7 +41,7 @@ pub(super) fn canvas_path_state<'s>(
             .borrow()
             .entries
             .get(&id)
-            .expect("a live context must retain its native path state")
+            .expect("a live object must retain its native path state")
             .state
             .clone();
     }
@@ -56,7 +56,7 @@ pub(super) fn canvas_path_state<'s>(
     let weak_store = Rc::downgrade(&store);
     let owner = v8::Weak::with_finalizer(
         scope,
-        context,
+        object,
         Box::new(move |_| {
             if let Some(store) = weak_store.upgrade() {
                 store.borrow_mut().entries.remove(&id);
@@ -67,12 +67,12 @@ pub(super) fn canvas_path_state<'s>(
     store.borrow_mut().entries.insert(
         id,
         CanvasStateEntry {
-            _context: owner,
+            _owner: owner,
             state: state.clone(),
         },
     );
     let id = v8::BigInt::new_from_u64(scope, id);
-    set_private_value(scope, context, PATH_STATE_SLOT, id.into());
+    set_private_value(scope, object, PATH_STATE_SLOT, id.into());
     state
 }
 

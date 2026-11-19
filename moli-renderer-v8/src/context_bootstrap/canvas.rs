@@ -90,6 +90,7 @@ mod image_bitmap;
 mod objects;
 mod offscreen;
 mod path;
+mod path2d;
 mod state;
 mod transform;
 use moli_webapi::webgl;
@@ -105,16 +106,13 @@ pub(crate) use constructors::{
     offscreen_canvas_rendering_context_2d_constructor_callback,
 };
 pub(crate) use context2d::{
-    canvas_context_arc_callback, canvas_context_arc_to_callback,
-    canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
-    canvas_context_close_path_callback, canvas_context_create_image_data_callback,
+    canvas_context_begin_path_callback, canvas_context_create_image_data_callback,
     canvas_context_create_linear_gradient_callback, canvas_context_draw_image_callback,
-    canvas_context_ellipse_callback, canvas_context_fill_callback,
-    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
-    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
-    canvas_context_font_setter_callback, canvas_context_get_image_data_callback,
-    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
-    canvas_context_global_alpha_setter_callback,
+    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
+    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
+    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
+    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
+    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
@@ -124,19 +122,20 @@ pub(crate) use context2d::{
     canvas_context_is_point_in_path_callback, canvas_context_line_cap_getter_callback,
     canvas_context_line_cap_setter_callback, canvas_context_line_dash_offset_getter_callback,
     canvas_context_line_dash_offset_setter_callback, canvas_context_line_join_getter_callback,
-    canvas_context_line_join_setter_callback, canvas_context_line_to_callback,
-    canvas_context_line_width_getter_callback, canvas_context_line_width_setter_callback,
-    canvas_context_measure_text_callback, canvas_context_miter_limit_getter_callback,
-    canvas_context_miter_limit_setter_callback, canvas_context_move_to_callback,
+    canvas_context_line_join_setter_callback, canvas_context_line_width_getter_callback,
+    canvas_context_line_width_setter_callback, canvas_context_measure_text_callback,
+    canvas_context_miter_limit_getter_callback, canvas_context_miter_limit_setter_callback,
     canvas_context_noop_callback, canvas_context_put_image_data_callback,
-    canvas_context_quadratic_curve_to_callback, canvas_context_rect_callback,
     canvas_context_reset_transform_callback, canvas_context_rotate_callback,
     canvas_context_scale_callback, canvas_context_set_line_dash_callback,
     canvas_context_set_transform_callback, canvas_context_stroke_callback,
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
-    canvas_context_transform_callback, canvas_context_translate_callback,
-    install_canvas_rect_bindings, is_canvas_context_receiver,
+    canvas_context_transform_callback, canvas_context_translate_callback, canvas_path_arc_callback,
+    canvas_path_arc_to_callback, canvas_path_bezier_curve_to_callback,
+    canvas_path_close_path_callback, canvas_path_ellipse_callback, canvas_path_line_to_callback,
+    canvas_path_move_to_callback, canvas_path_quadratic_curve_to_callback,
+    canvas_path_rect_callback, install_canvas_rect_bindings, is_canvas_context_receiver,
 };
 pub(crate) use image_bitmap::window_create_image_bitmap_callback;
 pub(crate) use objects::{build_canvas_rendering_context_2d_object, build_offscreen_canvas_object};
@@ -144,6 +143,7 @@ pub(crate) use offscreen::{
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
     offscreen_canvas_transfer_to_image_bitmap_callback,
 };
+pub(crate) use path2d::path_2d_constructor_callback;
 pub(crate) use webgl::{
     build_webgl_context_object, build_webgl2_context_object,
     webgl_debug_renderer_info_constructor_callback, webgl_lose_context_constructor_callback,
@@ -166,6 +166,9 @@ pub(super) fn install_canvas_template_bindings<'s>(
         }
         "OffscreenCanvas" => {
             offscreen::install_offscreen_canvas_template_bindings(scope, template);
+        }
+        "Path2D" => {
+            path2d::install_path_2d_template_bindings(scope, template);
         }
         "ImageBitmap" => {
             image_bitmap::install_image_bitmap_template_bindings(scope, template);

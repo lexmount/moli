@@ -5,7 +5,7 @@ use super::super::{
     broadcast_channel::broadcast_channel_constructor_callback,
     canvas::{
         canvas_rendering_context_2d_constructor_callback, offscreen_canvas_constructor_callback,
-        offscreen_canvas_rendering_context_2d_constructor_callback,
+        offscreen_canvas_rendering_context_2d_constructor_callback, path_2d_constructor_callback,
         webgl_debug_renderer_info_constructor_callback, webgl_lose_context_constructor_callback,
         webgl_rendering_context_constructor_callback,
     },
@@ -98,11 +98,6 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::Illegal => v8::FunctionTemplate::builder(illegal_constructor_callback)
             .length(0)
             .build(scope),
-        ConstructorKind::Unsupported => {
-            v8::FunctionTemplate::builder(unsupported_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
         ConstructorKind::Shell { length } => {
             v8::FunctionTemplate::builder(shell_constructor_callback)
                 .length(i32::from(length))
@@ -452,6 +447,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             let instance = template.instance_template(scope);
             let _ = instance.set_internal_field_count(1);
             template
+        }
+        ConstructorKind::Path2D => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::Path2D,
+                path_2d_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
         }
         ConstructorKind::OffscreenCanvas => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(

@@ -2851,7 +2851,7 @@ const DOM_MATRIX_ATTRIBUTES: &[DomMatrixAttribute] = &[
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMMatrix2DInit")]
-pub(crate) struct DomMatrix2DInit {
+pub struct DomMatrix2DInit {
     a: Option<f64>,
     b: Option<f64>,
     c: Option<f64>,

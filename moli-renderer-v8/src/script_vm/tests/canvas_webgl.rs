@@ -511,6 +511,50 @@ fn webgl_shader_pipeline_cleanup_and_uniform_methods_are_available() {
 }
 
 #[test]
+fn webgl_vector_uniforms_and_buffer_cleanup_share_webidl_bindings() {
+    let mut vm = new_storage_test_vm("https://webgl-vector-uniforms.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+                const throwsTypeError = action => {
+                    try { action(); } catch (error) { return error.name === 'TypeError'; }
+                    return false;
+                };
+                const checks = [];
+                for (const makeCanvas of [() => document.createElement('canvas'), () => new OffscreenCanvas(1, 1)]) {
+                    for (const kind of ['webgl', 'webgl2']) {
+                        const gl = makeCanvas().getContext(kind);
+                        const location = gl.getUniformLocation(gl.createProgram(), 'color');
+                        const prototype = Object.getPrototypeOf(gl);
+                        let conversions = 0;
+                        const component = { valueOf() { conversions++; return 0.5; } };
+                        checks.push(
+                            Object.hasOwn(prototype, 'uniform3f') && gl.uniform3f.length === 4,
+                            Object.hasOwn(prototype, 'uniform4f') && gl.uniform4f.length === 5,
+                            Object.hasOwn(prototype, 'deleteBuffer') && gl.deleteBuffer.length === 1,
+                            gl.uniform3f(location, NaN, Infinity, 1) === undefined,
+                            gl.uniform4f(location, component, 0, 0, 1) === undefined,
+                            gl.uniform4f(null, component, 0, 0, 1) === undefined,
+                            conversions === 2,
+                            gl.deleteBuffer(gl.createBuffer()) === undefined,
+                            gl.deleteBuffer(null) === undefined,
+                            throwsTypeError(() => gl.uniform4f(location, 0, 0, 1)),
+                            throwsTypeError(() => gl.uniform3f({}, 0, 0, 0)),
+                            throwsTypeError(() => gl.uniform4f(location, Symbol(), 0, 0, 1)),
+                            throwsTypeError(() => prototype.uniform4f.call({}, location, 0, 0, 0, 1)),
+                            throwsTypeError(() => gl.deleteBuffer(location)),
+                            gl.getError() === gl.NO_ERROR
+                        );
+                    }
+                }
+                return JSON.stringify(checks.flatMap((passed, index) => passed ? [] : [index]));
+            })()"#,
+        )
+        .expect("WebGL uniform and cleanup methods should be callable on both context types");
+    assert_eq!(result, "[]");
+}
+
+#[test]
 fn webgl_handle_placeholders_use_declared_private_state() {
     let mut vm = new_storage_test_vm("https://webgl-handle-placeholders.test/");
 

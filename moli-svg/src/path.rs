@@ -1,7 +1,8 @@
 use kurbo::BezPath;
 use svgtypes::{SimplePathSegment, SimplifyingPathParser};
 
-pub(crate) fn path_geometry(raw: &str) -> Option<BezPath> {
+/// Parse SVG path data, preserving the complete segments before any parse error.
+pub fn parse_path_data(raw: &str) -> BezPath {
     let mut path = BezPath::new();
     for segment in SimplifyingPathParser::from(raw) {
         let Ok(segment) = segment else {
@@ -24,5 +25,5 @@ pub(crate) fn path_geometry(raw: &str) -> Option<BezPath> {
             SimplePathSegment::ClosePath => path.close_path(),
         }
     }
-    Some(path)
+    path
 }

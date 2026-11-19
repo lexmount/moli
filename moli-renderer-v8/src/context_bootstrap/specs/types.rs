@@ -1,7 +1,6 @@
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::context_bootstrap) enum ConstructorKind {
     Illegal,
-    Unsupported,
     /// Interface exposure and inheritance without a constructor implementation.
     Shell {
         length: u8,
@@ -78,6 +77,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     DataTransfer,
     ImageData,
     EncodedVideoChunk,
+    Path2D,
     OffscreenCanvas,
     CanvasRenderingContext2D,
     OffscreenCanvasRenderingContext2D,
