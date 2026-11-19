@@ -305,6 +305,118 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn selected_nested_worker_error_reaches_window_after_termination() {
+    use crate::{DiagnosticEvent, DiagnosticSource, ErrorReportOutcome, ExceptionOrigin};
+    use tokio::sync::mpsc::error::TryRecvError;
+
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/selected-nested-worker-error").unwrap();
+        let (mut page_vm, _resource_source, mut owner_wakes) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let mut diagnostics = page_vm
+            .runtime_hooks
+            .browser_context_runtime
+            .subscribe_diagnostics()
+            .expect("first diagnostics subscription");
+
+        let (result, selected, resume) =
+            crate::worker::with_nested_error_selection_gate_for_test(|| {
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.nestedWorkerErrors = [];
+window.onerror = (message, filename) => {
+    nestedWorkerErrors.push({ message, filename });
+    return true;
+};
+globalThis.childScriptUrl = "data:text/javascript," +
+    encodeURIComponent('throw new Error("selected nested failure")');
+const parentScript = "new Worker(" + JSON.stringify(childScriptUrl) + ");";
+globalThis.middleWorker = new Worker("data:text/javascript," + encodeURIComponent(parentScript));
+"created"
+"#,
+                )
+            });
+        assert_eq!(result?, "created");
+        tokio::time::timeout(Duration::from_secs(5), selected)
+            .await
+            .expect("middle Worker should select its child's runtime error")
+            .expect("middle Worker should reach the gate");
+        assert_eq!(diagnostics.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("middleWorker.terminate(); 'terminated'")?,
+            "terminated"
+        );
+        resume.send(()).expect("middle Worker should resume");
+
+        // The relay emits its drain marker after all Worker errors have been
+        // routed to this Page source.
+        let error_tasks = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut error_tasks = 0;
+            loop {
+                if let Some(claimed) = page_vm.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
+                ) {
+                    let (_, kind) = claimed
+                        .dedicated_worker_owner_and_event_kind()
+                        .expect("exact Worker task identity");
+                    page_vm
+                        .run_claimed_selected_page_task_for_test(claimed, &loader)
+                        .await?;
+                    if kind == RendererDedicatedWorkerClientEventKind::ClientSourceDrained {
+                        return Ok::<_, anyhow::Error>(error_tasks);
+                    }
+                    if kind == RendererDedicatedWorkerClientEventKind::Error {
+                        error_tasks += 1;
+                    }
+                } else {
+                    owner_wakes
+                        .recv()
+                        .await
+                        .expect("Page wake route should stay open");
+                }
+            }
+        })
+        .await
+        .expect("middle Worker relay should drain")?;
+        let diagnostic = diagnostics.try_recv()?;
+        assert_eq!(
+            error_tasks, 1,
+            "selected child error must reach the Window: {diagnostic:?}"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "nestedWorkerErrors.length === 1 && \
+                 nestedWorkerErrors[0].message.includes('selected nested failure') && \
+                 nestedWorkerErrors[0].filename === childScriptUrl"
+            )?,
+            "true",
+        );
+        let child_script_url = page_vm.vm_mut().eval("childScriptUrl")?;
+        assert!(
+            matches!(
+                diagnostic,
+                DiagnosticEvent::RuntimeException {
+                    source: DiagnosticSource::DedicatedWorker { instance_id: 2 },
+                    origin: ExceptionOrigin::UncaughtException,
+                    ref filename,
+                    outcome: ErrorReportOutcome::Canceled,
+                    ..
+                } if filename == &child_script_url
+            ),
+            "{diagnostic:?}"
+        );
+        assert_eq!(diagnostics.try_recv(), Err(TryRecvError::Empty));
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("selected nested Worker error should settle on its owning Window");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn dedicated_worker_bootstrap_error_uses_intrinsic_event_without_author_hooks() {
     run_page_vm_async_test(async move {
         let loader =

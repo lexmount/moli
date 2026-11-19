@@ -81,6 +81,9 @@ pub(crate) use thread::{
 };
 
 #[cfg(test)]
+pub(crate) use thread::with_nested_error_selection_gate_for_test;
+
+#[cfg(test)]
 pub(crate) use handle::{
     WorkerPendingFetchContinue, WorkerPendingSubresourceFetch, WorkerPendingXhrContinue,
 };
