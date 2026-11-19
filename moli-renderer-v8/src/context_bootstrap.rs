@@ -154,6 +154,7 @@ mod resize_observer_runtime;
 pub(crate) use resize_observer_runtime::queue_resize_observer_checks;
 mod runtime_state;
 mod selection;
+pub(crate) use selection::replace_editable_selection_text;
 mod selection_callbacks;
 mod selection_modify;
 mod selection_surface;

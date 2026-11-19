@@ -326,24 +326,15 @@ impl SelectionRecordRegistry {
         dom_host: &crate::dom::native::DomHost,
         document: DomHandle,
     ) -> Option<DocumentSelectionSnapshot> {
-        let record = self
-            .records
+        self.document_record(document)?.composed_snapshot(dom_host)
+    }
+
+    fn document_record(&self, document: DomHandle) -> Option<&SelectionRecord> {
+        self.records
             .iter()
             .filter(|(_, record)| record.owner_document == Some(document) && record.has_range())
             .min_by_key(|(handle, _)| handle.raw())
-            .map(|(_, record)| record)?;
-        let mut start = record.composed_start?;
-        let mut end = record.composed_end?;
-        Some(DocumentSelectionSnapshot {
-            start: SelectionBoundarySnapshot {
-                container: start.container(),
-                offset: start.offset(dom_host)?,
-            },
-            end: SelectionBoundarySnapshot {
-                container: end.container(),
-                offset: end.offset(dom_host)?,
-            },
-        })
+            .map(|(_, record)| record)
     }
 
     fn record_mut(&mut self, handle: SelectionRecordHandle) -> &mut SelectionRecord {
@@ -368,6 +359,21 @@ impl SelectionRecord {
             composed_start: None,
             composed_end: None,
         }
+    }
+
+    fn composed_snapshot(&self, dom: &DomHost) -> Option<DocumentSelectionSnapshot> {
+        let mut start = self.composed_start?;
+        let mut end = self.composed_end?;
+        Some(DocumentSelectionSnapshot {
+            start: SelectionBoundarySnapshot {
+                container: start.container(),
+                offset: start.offset(dom)?,
+            },
+            end: SelectionBoundarySnapshot {
+                container: end.container(),
+                offset: end.offset(dom)?,
+            },
+        })
     }
 
     fn has_range(&self) -> bool {
@@ -506,6 +512,41 @@ impl PageScriptHost {
     ) -> Option<DocumentSelectionSnapshot> {
         self.selection_record_registry
             .document_snapshot(self.dom_host(), document)
+    }
+
+    pub(crate) fn document_editing_selection(
+        &self,
+        document: DomHandle,
+    ) -> Option<DocumentSelectionSnapshot> {
+        let dom = self.dom_host();
+        let record = self.selection_record_registry.document_record(document)?;
+        let DocumentSelectionSnapshot { start, end } = record.composed_snapshot(dom)?;
+        let root = dom.root_node_handle(start.container)?;
+        if dom.root_node_handle(end.container) != Some(root) {
+            return None;
+        }
+        let range = record.associated_range?;
+        let mut range_start = self.range_record_boundary_point(range, RangeBoundarySide::Start)?;
+        let mut range_end = self.range_record_boundary_point(range, RangeBoundarySide::End)?;
+        if dom.root_node_handle(range_start.container()) != Some(root)
+            || dom.root_node_handle(range_end.container()) != Some(root)
+        {
+            // Selection can project its associated Range out of a shadow tree.
+            return Some(DocumentSelectionSnapshot { start, end });
+        }
+
+        // A focused host's composed selection can point at the host's start
+        // while the editable caret in its associated Range is inside a child.
+        Some(DocumentSelectionSnapshot {
+            start: SelectionBoundarySnapshot {
+                container: range_start.container(),
+                offset: range_start.offset(dom)?,
+            },
+            end: SelectionBoundarySnapshot {
+                container: range_end.container(),
+                offset: range_end.offset(dom)?,
+            },
+        })
     }
 
     pub(crate) fn selection_record_spans_dom_roots(&self, handle: SelectionRecordHandle) -> bool {

@@ -206,6 +206,8 @@ pub(crate) use activation::activate_handle_via_click_with_detail_and_modifiers;
 use activation::navigate_form_target_browsing_context;
 #[cfg(feature = "devtools")]
 pub(crate) use activation::perform_text_input;
+#[cfg(any(feature = "devtools", test))]
+pub(crate) use activation::replace_contenteditable_selection;
 pub(crate) use activation::{
     SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
@@ -224,8 +226,8 @@ pub(crate) use activation::{
     activate_handle_via_synthetic_click, dispatched_click_activation_target,
     finish_legacy_activation_for_dispatched_click,
     perform_click_default_action_for_dispatched_event,
-    prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
-    scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
+    prepare_legacy_activation_for_dispatched_click, scroll_to_document_fragment_target,
+    scroll_to_url_fragment_or_top,
 };
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
 use activation::{
@@ -440,18 +442,19 @@ pub(super) use forms::{
 };
 pub(crate) use forms::{control_label_handles, v8_pattern_is_usable};
 pub(crate) use forms::{
-    dispatch_text_control_event, is_text_control,
-    queue_text_control_document_selection_change_event, replace_text_control_selection,
+    dispatch_text_control_event, is_text_control, is_text_control_user_editable,
+    queue_text_control_document_selection_change_event,
+    replace_text_control_selection_after_beforeinput,
     replace_text_control_selection_for_insert_html, text_control_value,
 };
 pub(crate) use forms::{form_control_is_effectively_disabled, input_files_for_object};
-pub(in crate::native_bridge) use forms::{
-    resize_select_options, select_add_insertion_point, select_options_resize_target,
-};
 #[cfg(feature = "devtools")]
 pub(crate) use forms::{
-    text_control_set_selection_range_internal,
+    replace_text_control_selection, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal,
+};
+pub(in crate::native_bridge) use forms::{
+    resize_select_options, select_add_insertion_point, select_options_resize_target,
 };
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 

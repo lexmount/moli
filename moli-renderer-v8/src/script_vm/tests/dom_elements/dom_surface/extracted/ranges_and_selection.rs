@@ -552,6 +552,161 @@ fn exec_command_insert_text_edits_focused_text_controls_and_contenteditable() {
         "input:true:a:input|textarea:true:a:input|div:true:a:input"
     );
 }
+
+#[test]
+fn exec_command_insert_text_uses_the_document_range_without_focus() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-text.test/",
+        "<!doctype html><div id='editor' contenteditable>foo<span>ba</span><span>r</span>baz</div>",
+    );
+
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const editor = document.querySelector("#editor");
+  const range = document.createRange();
+  range.setStart(editor.firstChild, 3);
+  range.setEnd(editor.lastChild, 0);
+  getSelection().addRange(range);
+
+  // The command must use native ranges regardless of author overrides.
+  Range.prototype.deleteContents = Range.prototype.insertNode = () => {
+    throw new Error("execCommand called an author method");
+  };
+
+  const events = [];
+  for (const type of ["beforeinput", "input"]) {
+    editor.addEventListener(type, event => events.push(event.type + ":" + event.data));
+  }
+  const enabled = document.queryCommandEnabled("insertText");
+  const inserted = document.execCommand("insertText", false, "a");
+  return [
+    enabled, inserted, editor.innerHTML, getSelection().anchorNode === editor.lastChild,
+    getSelection().anchorOffset, events.join(",")
+  ].join("|");
+})()
+"##,
+        )
+        .expect("unfocused insertText probe should evaluate");
+
+    assert_eq!(result, "true|true|fooabaz|true|1|beforeinput:a,input:a");
+}
+
+#[test]
+fn exec_command_insert_text_rejects_selections_outside_the_editing_host() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-text.test/",
+        "<!doctype html><div id='editor' contenteditable>one</div><div id='other' contenteditable>two</div>",
+    );
+
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const editor = document.querySelector("#editor");
+  const other = document.querySelector("#other");
+  editor.focus();
+  const selection = getSelection();
+  selection.setBaseAndExtent(editor.firstChild, 1, other.firstChild, 1);
+  let beforeInput = 0;
+  let input = 0;
+  editor.addEventListener("input", () => input++);
+  other.addEventListener("input", () => input++);
+  editor.addEventListener("beforeinput", () => {
+    beforeInput++;
+    selection.collapse(other.firstChild, 1);
+  });
+
+  const enabledOutside = document.queryCommandEnabled("insertText");
+  const insertedOutside = document.execCommand("insertText", false, "!");
+  selection.collapse(editor.firstChild, 1);
+  const enabledInside = document.queryCommandEnabled("insertText");
+  const insertedAfterMove = document.execCommand("insertText", false, "!");
+  return [
+    enabledOutside, insertedOutside, enabledInside, insertedAfterMove,
+    editor.textContent, other.textContent, beforeInput, input
+  ].join("|");
+})()
+"##,
+        )
+        .expect("insertText target validation probe should evaluate");
+
+    assert_eq!(result, "false|false|true|false|one|two|1|0");
+}
+
+#[test]
+fn exec_command_insert_text_preserves_inline_formatting_at_text_boundaries() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-text.test/",
+        "<!doctype html><div contenteditable></div>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const editor = document.querySelector("div");
+  editor.focus();
+  function replace(html, select) {
+    editor.innerHTML = html;
+    const range = document.createRange();
+    select(range);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const inserted = document.execCommand("insertText", false, "X");
+    return [inserted, editor.innerHTML].join(":");
+  }
+
+  return [
+    replace("abc<b><i>def</i></b>ghi", range => {
+      range.selectNode(editor.querySelector("b"));
+    }),
+    replace("abc<s></s><b><i>def</i></b>ghi", range => {
+      range.setStart(editor.firstChild, 3);
+      range.setEnd(editor.querySelector("i").firstChild, 2);
+    }),
+    replace("abc<b><i><img>def</i></b>ghi", range => {
+      range.selectNode(editor.querySelector("b"));
+    }),
+  ].join("|");
+})()
+"#,
+        )
+        .expect("insertText inline formatting probe should evaluate");
+
+    assert_eq!(
+        result,
+        "true:abc<b><i>X</i></b>ghi|true:abc<s></s><b><i>Xf</i></b>ghi|true:abcXghi"
+    );
+}
+
+#[test]
+fn inactive_documents_cannot_edit_the_focused_text_control() {
+    let mut vm = new_parsed_test_vm(
+        "https://exec-command-insert-text.test/",
+        "<!doctype html><input value='original'>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const input = document.querySelector("input");
+  input.focus();
+  input.setSelectionRange(0, input.value.length);
+  const detached = document.implementation.createHTMLDocument("");
+  const enabled = detached.queryCommandEnabled("insertText");
+  const inserted = detached.execCommand("insertText", false, "replacement");
+  return [enabled, inserted, input.value].join("|");
+})()
+"#,
+        )
+        .expect("inactive Document editing probe should evaluate");
+
+    assert_eq!(result, "false|false|original");
+}
+
 #[test]
 fn selection_to_string_uses_rendered_native_range_projection() {
     let mut vm = new_storage_test_vm("https://selection-rendered-string.test/");
