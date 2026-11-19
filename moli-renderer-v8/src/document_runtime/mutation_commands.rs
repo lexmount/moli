@@ -1818,7 +1818,8 @@ pub(super) fn finish_runtime_mutation_effects(
     }
 
     for popover in removed_open_popovers {
-        crate::native_bridge::element::dispatch_popover_removal_events(scope, host_ptr, popover);
+        // Native tree mutation already cleared the open state.
+        unsafe { &mut *host_ptr }.take_popover_focus_restore_target(popover);
     }
     unsafe { &mut *host_ptr }.queue_slotchange_events(scope, &changed_slots);
 

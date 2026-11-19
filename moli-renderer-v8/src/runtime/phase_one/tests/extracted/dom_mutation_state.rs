@@ -1833,7 +1833,7 @@ window.parserFragmentMoParserBeforeObserver.observe(
         }));
 }
 #[test]
-fn parser_remove_open_popover_dispatches_forced_close_events_like_js() {
+fn parser_remove_open_popover_hides_it_silently_like_js() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1909,13 +1909,10 @@ JSON.stringify([
             run_element_toggle_tasks_for_test(
                 &mut page_vm,
                 loader.request_client(),
-                1,
-                "JS popover removal toggle task should run",
+                0,
+                "JS popover removal should leave the toggle queue empty",
             )
             .await;
-            let js_after_task = page_vm
-                .evaluate_expression("JSON.stringify(window.parserPopoverRemoveEvents.splice(0))")
-                .expect("JS popover removal task events should evaluate");
 
             let (parser_parent, parser_popover) = {
                 let runtime = &page_vm.vm().document_runtime;
@@ -1947,44 +1944,27 @@ JSON.stringify([
             run_element_toggle_tasks_for_test(
                 &mut page_vm,
                 loader.request_client(),
-                1,
-                "parser popover removal toggle task should run",
+                0,
+                "parser popover removal should leave the toggle queue empty",
             )
             .await;
-            let parser_after_task = page_vm
-                .evaluate_expression("JSON.stringify(window.parserPopoverRemoveEvents.splice(0))")
-                .expect("parser popover removal task events should evaluate");
 
             assert_eq!(
                 js_sync.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"[["js:beforetoggle:open->closed:false:false"],false]"#),
-                "JS removal baseline should synchronously dispatch beforetoggle and clear open state"
+                Some("[[],false]"),
+                "JS removal baseline should hide the popover without dispatching beforetoggle"
             );
             assert_eq!(
                 parser_sync
                     .get("value")
                     .and_then(serde_json::Value::as_str),
-                Some(r#"[["parser:beforetoggle:open->closed:false:false"],false]"#),
-                "parser removal should synchronously dispatch beforetoggle and clear open state"
-            );
-            assert_eq!(
-                js_after_task
-                    .get("value")
-                    .and_then(serde_json::Value::as_str),
-                Some(r#"["js:toggle:open->closed:false:false"]"#),
-                "JS removal baseline should queue a close toggle event"
-            );
-            assert_eq!(
-                parser_after_task
-                    .get("value")
-                    .and_then(serde_json::Value::as_str),
-                Some(r#"["parser:toggle:open->closed:false:false"]"#),
-                "parser removal should queue the same close toggle event"
+                Some("[[],false]"),
+                "parser removal should hide the popover without dispatching beforetoggle"
             );
         }));
 }
 #[test]
-fn parser_reparent_open_popover_to_disconnected_parent_dispatches_forced_close_events_like_js() {
+fn parser_reparent_open_popover_to_disconnected_parent_hides_it_silently_like_js() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2063,13 +2043,10 @@ JSON.stringify([
             run_element_toggle_tasks_for_test(
                 &mut page_vm,
                 loader.request_client(),
-                1,
-                "JS popover reparent toggle task should run",
+                0,
+                "JS popover reparent should leave the toggle queue empty",
             )
             .await;
-            let js_after_task = page_vm
-                .evaluate_expression("JSON.stringify(window.parserPopoverReparentEvents.splice(0))")
-                .expect("JS popover reparent task events should evaluate");
 
             let parser_popover = {
                 let runtime = &page_vm.vm().document_runtime;
@@ -2120,44 +2097,27 @@ JSON.stringify([
             run_element_toggle_tasks_for_test(
                 &mut page_vm,
                 loader.request_client(),
-                1,
-                "parser popover reparent toggle task should run",
+                0,
+                "parser popover reparent should leave the toggle queue empty",
             )
             .await;
-            let parser_after_task = page_vm
-                .evaluate_expression("JSON.stringify(window.parserPopoverReparentEvents.splice(0))")
-                .expect("parser popover reparent task events should evaluate");
 
             assert_eq!(
                 js_sync.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"[["js:beforetoggle:open->closed:false:false"],false,true]"#),
-                "JS reparent to a disconnected parent should synchronously force-close the popover"
+                Some("[[],false,true]"),
+                "JS reparent to a disconnected parent should hide the popover without dispatching beforetoggle"
             );
             assert_eq!(
                 parser_sync
                     .get("value")
                     .and_then(serde_json::Value::as_str),
-                Some(r#"[["parser:beforetoggle:open->closed:false:false"],false]"#),
-                "parser reparent to a disconnected parent should synchronously force-close the popover"
-            );
-            assert_eq!(
-                js_after_task
-                    .get("value")
-                    .and_then(serde_json::Value::as_str),
-                Some(r#"["js:toggle:open->closed:false:false"]"#),
-                "JS reparent baseline should queue a close toggle event"
-            );
-            assert_eq!(
-                parser_after_task
-                    .get("value")
-                    .and_then(serde_json::Value::as_str),
-                Some(r#"["parser:toggle:open->closed:false:false"]"#),
-                "parser reparent should queue the same close toggle event"
+                Some("[[],false]"),
+                "parser reparent to a disconnected parent should hide the popover without dispatching beforetoggle"
             );
         }));
 }
 #[test]
-fn parser_insert_before_open_popover_reparent_forces_close_like_js() {
+fn parser_insert_before_open_popover_reparent_hides_it_silently_like_js() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2243,13 +2203,10 @@ JSON.stringify([
             run_element_toggle_tasks_for_test(
                 &mut page_vm,
                 loader.request_client(),
-                1,
-                "JS popover insertBefore toggle task should run",
+                0,
+                "JS popover insertBefore should leave the toggle queue empty",
             )
             .await;
-            let js_after_task = page_vm
-                .evaluate_expression("JSON.stringify(window.parserPopoverBeforeEvents.splice(0))")
-                .expect("JS popover insertBefore task events should evaluate");
 
             let parser_popover = {
                 let runtime = &page_vm.vm().document_runtime;
@@ -2302,39 +2259,22 @@ JSON.stringify([
             run_element_toggle_tasks_for_test(
                 &mut page_vm,
                 loader.request_client(),
-                1,
-                "parser popover insertBefore toggle task should run",
+                0,
+                "parser popover insertBefore should leave the toggle queue empty",
             )
             .await;
-            let parser_after_task = page_vm
-                .evaluate_expression("JSON.stringify(window.parserPopoverBeforeEvents.splice(0))")
-                .expect("parser popover insertBefore task events should evaluate");
 
             assert_eq!(
                 js_sync.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"[["js:beforetoggle:open->closed:false:false"],false,true,true]"#),
-                "JS insertBefore to a disconnected parent should synchronously force-close the popover"
+                Some("[[],false,true,true]"),
+                "JS insertBefore to a disconnected parent should hide the popover without dispatching beforetoggle"
             );
             assert_eq!(
                 parser_sync
                     .get("value")
                     .and_then(serde_json::Value::as_str),
-                Some(r#"[["parser:beforetoggle:open->closed:false:false"],false]"#),
-                "parser insertBefore to a disconnected parent should synchronously force-close the popover"
-            );
-            assert_eq!(
-                js_after_task
-                    .get("value")
-                    .and_then(serde_json::Value::as_str),
-                Some(r#"["js:toggle:open->closed:false:false"]"#),
-                "JS insertBefore baseline should queue a close toggle event"
-            );
-            assert_eq!(
-                parser_after_task
-                    .get("value")
-                    .and_then(serde_json::Value::as_str),
-                Some(r#"["parser:toggle:open->closed:false:false"]"#),
-                "parser insertBefore should queue the same close toggle event"
+                Some("[[],false]"),
+                "parser insertBefore to a disconnected parent should hide the popover without dispatching beforetoggle"
             );
         }));
 }

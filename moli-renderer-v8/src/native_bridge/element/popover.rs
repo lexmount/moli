@@ -93,27 +93,6 @@ fn construct_popover_toggle_event<'s>(
     )
 }
 
-pub(crate) fn dispatch_popover_removal_events(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    handle: DomHandle,
-) {
-    if let Some(event) =
-        construct_popover_toggle_event(scope, "beforetoggle", "open", "closed", false, None)
-    {
-        let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
-    }
-    queue_element_toggle_event(
-        scope,
-        runtime_ptr,
-        RendererPageElementToggleEventKind::Popover,
-        handle,
-        RendererPageElementToggleEventState::Open,
-        RendererPageElementToggleEventState::Closed,
-        None,
-    );
-}
-
 pub(crate) fn dispatch_popover_show_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
