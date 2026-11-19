@@ -434,9 +434,8 @@ impl ParsedCdpCommand {
         self.renderer_policy
     }
 
-    /// Whether dispatch joins an already pending initial Page build. This is
-    /// distinct from renderer thread access: Page.enable also needs installed
-    /// agents, while dialog handling, close, and cancellation remain available.
+    /// Whether Renderer work waits for Page adoption. Browser subscriptions,
+    /// dialog handling, close, and cancellation have their own admission rules.
     pub fn requires_initial_document_adoption(&self) -> bool {
         // Before the first Page, disabling Runtime only retires Browser state.
         if matches!(
@@ -446,9 +445,18 @@ impl ParsedCdpCommand {
             return false;
         }
         self.renderer_access() != CdpRendererCommandAccess::OwnerIndependent
-            || matches!(
-                self.method(),
-                "Page.getFrameTree" | "Page.getResourceTree" | "Page.navigate"
+            || matches!(self.method(), "Page.navigate")
+    }
+
+    pub fn requires_session_command_admission(&self) -> bool {
+        self.requires_initial_document_adoption() || self.method() == "Runtime.disable"
+    }
+
+    pub fn can_use_prepared_inspector_endpoint(&self) -> bool {
+        self.renderer_access() == CdpRendererCommandAccess::Io
+            && matches!(
+                self.method().split('.').next(),
+                Some("Runtime" | "Debugger")
             )
     }
 

@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use super::*;
 use crate::conn::{
-    CdpSessionRoute, CommandDispatchContext, ProtocolWorkflowDriver, SessionDisposalPlan,
-    SessionDisposalTarget, TargetSessionDetachCleanupPlan,
+    CdpSessionRoute, ProtocolWorkflowDriver, SessionDisposalPlan, SessionDisposalTarget,
+    TargetSessionDetachCleanupPlan,
 };
 use crate::domains::target::session_disposal::{
     PreparedSessionDisposal, SessionDisposalError, SessionDisposalIdentity,
@@ -21,27 +21,9 @@ struct SessionDetachment {
     response_before_event: bool,
 }
 
-mod recovery;
-pub(crate) use recovery::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
-
-#[derive(Clone)]
 enum SessionDetachmentCommit {
     Browser { emit_event: bool },
     Target(TargetSessionDetachCleanupPlan),
-}
-
-pub(crate) struct TargetDetachmentOutput {
-    sessions: Vec<SessionDetachmentOutput>,
-}
-
-struct SessionDetachmentOutput {
-    identity: SessionDisposalIdentity,
-    commit: SessionDetachmentCommit,
-    child: bool,
-    response_before_event: bool,
-    background_events: Vec<BackgroundProtocolEvent>,
-    protocol_events: Vec<BackgroundProtocolEvent>,
-    result: Result<Option<moli_core::RendererOutputFence>>,
 }
 
 impl TargetDetachment {
@@ -77,10 +59,6 @@ impl TargetDetachment {
             })
             .collect();
         Self { sessions }
-    }
-
-    pub(in crate::domains::target) fn failure_cleanup(&self) -> TargetDetachmentFailureCleanup {
-        TargetDetachmentFailureCleanup::new(&self.sessions)
     }
 
     pub(super) fn prepare(
@@ -200,27 +178,44 @@ impl TargetDetachment {
     }
 
     pub(crate) fn commit_in_browser(self, conn: &mut CdpConnection) -> CommandOutputPlan {
-        let mut native = Vec::new();
-        let mut sessions = Vec::new();
+        let mut native = Vec::with_capacity(self.sessions.len());
         let mut prefix = CommandOutputPlan::default();
+        let mut output = CommandOutputPlan::default();
+        let mut replied = false;
         for mut session in self.sessions {
             prefix.extend_background_events(session.disposal.take_browser_events());
-            native.push((session.identity.clone(), session.disposal));
-            sessions.push(SessionDetachmentOutput {
-                identity: session.identity,
-                commit: session.commit,
-                child: session.child,
-                response_before_event: session.response_before_event,
-                background_events: Vec::new(),
-                protocol_events: Vec::new(),
-                result: Ok(None),
-            });
+            let (events, error) =
+                commit_session_detachment(conn, &session.identity, session.commit);
+            if let Some(error) = error {
+                output.extend_background_events(events);
+                if session.child {
+                    tracing::warn!(session_id = session.identity.plan().session_id(), %error,
+                        "failed to dispose child session");
+                } else if !replied {
+                    let code = if matches!(
+                        session.identity.plan().target(),
+                        SessionDisposalTarget::Browser
+                    ) {
+                        -31998
+                    } else {
+                        -32000
+                    };
+                    output.push_error_without_session(code, format!("{error:#}"));
+                    replied = true;
+                }
+            } else {
+                if !session.child && session.response_before_event && !replied {
+                    output.push_success();
+                    replied = true;
+                }
+                output.extend_background_events(events);
+            }
+            native.push((session.identity, session.disposal));
         }
-        // No Renderer receipt/fence belongs to the Browser detach response.
-        prefix.extend(
-            TargetDetachmentOutput { sessions }
-                .finish(conn, &mut CommandDispatchContext::default()),
-        );
+        if !replied {
+            output.push_success();
+        }
+        prefix.extend(output);
         // Each retirement owns its native barrier. A busy target must not
         // delay another target's finalizer or its successor session.
         for (identity, disposal) in native {
@@ -243,100 +238,6 @@ impl TargetDetachment {
             crate::conn::PendingProtocolSchedulerWork::publish_workflow(conn, workflow, None);
         }
         prefix
-    }
-
-    #[cfg(test)]
-    pub(in crate::domains::target) async fn run(
-        self,
-        driver: &mut ProtocolWorkflowDriver,
-    ) -> TargetDetachmentOutput {
-        let mut sessions = Vec::with_capacity(self.sessions.len());
-        for session in self.sessions {
-            let mut background_events = Vec::new();
-            let mut protocol_events = Vec::new();
-            let result = session
-                .disposal
-                .run(driver, &mut background_events, &mut protocol_events)
-                .await;
-            sessions.push(SessionDetachmentOutput {
-                identity: session.identity,
-                commit: session.commit,
-                child: session.child,
-                response_before_event: session.response_before_event,
-                background_events,
-                protocol_events,
-                result,
-            });
-        }
-        TargetDetachmentOutput { sessions }
-    }
-}
-
-impl TargetDetachmentOutput {
-    pub(crate) fn finish(
-        self,
-        conn: &mut CdpConnection,
-        command_context: &mut CommandDispatchContext,
-    ) -> CommandOutputPlan {
-        let mut output = TargetCommandOutput::default();
-        let mut replied = false;
-        for session in self.sessions {
-            command_context
-                .protocol_events_mut()
-                .extend(session.protocol_events);
-            output
-                .background_events_mut()
-                .extend(session.background_events);
-            let cleanup_error = match session.result {
-                Ok(predecessor) => {
-                    if let Some(predecessor) = predecessor {
-                        command_context.add_renderer_output_dependency(predecessor);
-                    }
-                    None
-                }
-                Err(error) => Some(error),
-            };
-            let (events, commit_error) =
-                commit_session_detachment(conn, &session.identity, session.commit);
-            let result = match cleanup_error.or(commit_error) {
-                Some(error) => {
-                    output.target_events_mut().extend_background_events(events);
-                    Err(error)
-                }
-                None => Ok(events),
-            };
-            match result {
-                Ok(events) => {
-                    if !session.child && session.response_before_event && !replied {
-                        output.push_success();
-                        replied = true;
-                    }
-                    output.target_events_mut().extend_background_events(events);
-                }
-                Err(error) if session.child => {
-                    tracing::warn!(session_id = session.identity.plan().session_id(), %error,
-                        "failed to dispose child session");
-                }
-                Err(error) => {
-                    if !replied {
-                        let code = if matches!(
-                            session.identity.plan().target(),
-                            SessionDisposalTarget::Browser
-                        ) {
-                            -31998
-                        } else {
-                            -32000
-                        };
-                        output.push_error(code, error);
-                        replied = true;
-                    }
-                }
-            }
-        }
-        if !replied {
-            output.push_success();
-        }
-        output.into_plan()
     }
 }
 
@@ -382,18 +283,11 @@ fn route_target_id(route: &CdpSessionRoute) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, RendererPageResidenceIdentity};
+    use crate::conn::BrowserContext;
     use crate::testing::TestContext;
 
     #[tokio::test]
-    async fn multi_page_detachment_waits_for_every_original_output_prefix() {
-        use moli_core::{
-            PageId, RendererOutputCursor, RendererOutputFence, RendererOutputItem,
-            RendererOutputPublication, RendererOutputRecord, RendererOutputStreamControl,
-            RendererOutputStreamIdentity, RendererOutputTransportMessage,
-            RendererProtocolObservation,
-        };
-
+    async fn browser_commit_preserves_cascade_order_and_supervises_native_cleanup() {
         let mut browser = BrowserContext::new("BID-detach-prefixes".into());
         browser.set_active_target_id("TID-first");
         browser.attach_active_session("SID-first");
@@ -406,286 +300,185 @@ mod tests {
         );
         let mut context = TestContext::new();
         context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
-        let prefixes = [
-            ("TID-first", "SID-first", 71, 3),
-            ("TID-second", "SID-second", 72, 1),
-        ]
-        .map(|(target, session, page, sequence)| {
-            let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(
-                PageId::new_for_testing(page),
-            );
-            context.with_fixture(|conn| {
-                let residence =
-                    RendererPageResidenceIdentity::from_residence(stream.residence()).unwrap();
-                conn.bind_renderer_page_output_owner(
-                    residence,
-                    crate::conn::TargetPageResidenceIdentity::new_for_test(
-                        "BID-detach-prefixes".into(),
-                        Some(target.into()),
-                        page,
-                    ),
-                );
-                conn.apply_renderer_output_stream_control(RendererOutputStreamControl::Opened {
-                    stream,
-                });
-            });
-            (target, session, stream, sequence)
-        });
-        let (output, dependencies) = context.with_fixture(|conn| {
-            let sessions = prefixes
-                .iter()
-                .map(|&(target, session, stream, sequence)| {
+        let (output, work) = context.with_fixture(|conn| {
+            let sessions = [("TID-first", "SID-first"), ("TID-second", "SID-second")]
+                .into_iter()
+                .map(|(target, session)| {
                     let route = conn.session_route(Some(session)).unwrap();
                     let plan = SessionDisposalPlan::for_session_route(session, &route).unwrap();
-                    let identity = SessionDisposalIdentity::capture(conn, plan.clone());
-                    conn.mark_session_closing(&plan);
-                    SessionDetachmentOutput {
-                        identity,
+                    let disposal = PreparedSessionDisposal::prepare(conn, plan);
+                    SessionDetachment {
+                        identity: disposal.identity(),
+                        disposal,
                         commit: SessionDetachmentCommit::Target(
                             TargetSessionDetachCleanupPlan::new(target, session, None, None),
                         ),
                         child: true,
                         response_before_event: false,
-                        background_events: Vec::new(),
-                        protocol_events: Vec::new(),
-                        result: Ok(Some(RendererOutputFence::new_for_test(
-                            RendererOutputCursor::new_for_test(stream, sequence),
-                        ))),
                     }
                 })
                 .collect();
-            let mut command_context = CommandDispatchContext::default();
-            let output = TargetDetachmentOutput { sessions }.finish(conn, &mut command_context);
-            assert!(
-                !output.is_empty(),
-                "the original response must remain in the command output plan"
-            );
-            assert!(command_context.take_protocol_events().is_empty());
-            assert!(
-                conn.take_published_protocol_work().is_empty(),
-                "Target cleanup must not publish the command response as background work"
-            );
-            (output, command_context.take_renderer_output_dependencies())
-        });
-        assert_eq!(dependencies.iter().count(), 2);
-        for (index, &(_, _, stream, sequence)) in prefixes.iter().enumerate() {
-            context.with_fixture(|conn| {
-                assert!(
-                    !dependencies
-                        .iter()
-                        .all(|fence| conn.renderer_output_cursor_is_projected(fence.cursor()))
-                )
-            });
-            for sequence in 1..=sequence {
-                let outcome = context
-                    .handle()
-                    .with_state(|state| {
-                        state.admit_renderer_output(RendererOutputTransportMessage::Publication(
-                            RendererOutputPublication::new_for_test(
-                                RendererOutputCursor::new_for_test(stream, sequence),
-                                vec![RendererOutputRecord::new_for_test(
-                                    RendererOutputItem::Observation(
-                                        RendererProtocolObservation::RuntimeLifecycleError {
-                                            text: "historical renderer output".into(),
-                                            execution_context_id: None,
-                                        },
-                                    ),
-                                )],
-                            ),
-                        ))
-                    })
-                    .unwrap();
-                let (events, scheduler) = outcome.into_protocol_event_parts();
-                assert!(events.is_empty());
-                for event in scheduler {
-                    let crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending } = event
-                    else {
-                        panic!("expected the exact renderer projection");
-                    };
-                    let completed = context.drive_owned_wait(pending.wait()).await;
-                    let outcome = context
-                        .handle()
-                        .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
-                        .unwrap();
-                    assert!(outcome.into_protocol_event_parts().0.is_empty());
-                }
+            let output = TargetDetachment { sessions }.commit_in_browser(conn);
+            for session in ["SID-first", "SID-second"] {
+                assert!(conn.session_route(Some(session)).is_none());
             }
-            context.with_fixture(|conn| {
-                assert_eq!(
-                    dependencies
-                        .iter()
-                        .all(|fence| conn.renderer_output_cursor_is_projected(fence.cursor())),
-                    index == 1
-                );
-            });
-        }
-        let events = output
+            let work = conn.take_scheduler_events();
+            assert_eq!(
+                work.iter()
+                    .filter(|event| matches!(
+                        event,
+                        crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { .. }
+                    ))
+                    .count(),
+                2,
+                "each session has independent supervised native work"
+            );
+            (output, work)
+        });
+        let messages = output
             .into_background_events(Some(91), Some("SID-browser-command"))
             .into_iter()
             .map(BackgroundProtocolEvent::into_protocol_message)
             .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        for (message, session) in messages.iter().zip(["SID-first", "SID-second"]) {
+            assert_eq!(message["method"], "Target.detachedFromTarget");
+            assert_eq!(message["params"]["sessionId"], session);
+        }
         assert_eq!(
-            events.len(),
-            3,
-            "each detach and the response appear once: {events:?}"
+            messages[2],
+            json!({"id":91,"sessionId":"SID-browser-command","result":{}})
         );
+
+        context
+            .route_direct_command_output_for_test(Vec::new(), work)
+            .await;
+        context
+            .wait_for_direct_command_work_completion_for_test("cascade native cleanup")
+            .await;
         assert!(
-            events[..2]
-                .iter()
-                .all(|event| event["method"] == "Target.detachedFromTarget")
-        );
-        assert_eq!(
-            events[2],
-            json!({"id": 91, "sessionId": "SID-browser-command", "result": {}})
+            context.take_all().is_empty(),
+            "native cleanup cannot publish a second Browser response"
         );
     }
 
     #[tokio::test]
-    async fn rebound_session_keeps_new_scripts_and_binding_after_old_cleanup_or_recovery() {
-        for cancelled in [false, true] {
-            let mut context = TestContext::new();
-            let mut browser = BrowserContext::new("BID-rebound-disposal".into());
-            browser.set_active_target_id("TID-rebound-disposal");
-            browser.attach_active_session("SID-rebound-disposal");
-            context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
-            context
-                .install_navigation_fixture_for_session_owner(
-                    "about:blank",
-                    Some("SID-rebound-disposal"),
-                )
-                .await;
-            context
-                .process_async(json!({"id":1,"sessionId":"SID-rebound-disposal",
+    async fn rebound_session_keeps_new_scripts_and_binding_after_old_cleanup() {
+        let mut context = TestContext::new();
+        let mut browser = BrowserContext::new("BID-rebound-disposal".into());
+        browser.set_active_target_id("TID-rebound-disposal");
+        browser.attach_active_session("SID-rebound-disposal");
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        context
+            .install_navigation_fixture_for_session_owner(
+                "about:blank",
+                Some("SID-rebound-disposal"),
+            )
+            .await;
+        context
+            .process_async(json!({"id":1,"sessionId":"SID-rebound-disposal",
                 "method":"Page.addScriptToEvaluateOnNewDocument",
                 "params":{"source":"globalThis.originalBinding = true;"}}))
-                .await;
-            assert!(context.take_response_by_id(1).get("result").is_some());
-            let state_owner = context.handle();
-            let (prepared, recovery, route, page, successor) = state_owner
-                .with_state(|state| {
-                    state.fixture(|connection| {
-                        let prepared = TargetDetachment::prepare(
-                            connection,
-                            None,
-                            DetachParams {
-                                session_id: Some("SID-rebound-disposal".into()),
-                                target_id: None,
-                            },
+            .await;
+        assert!(context.take_response_by_id(1).get("result").is_some());
+        let state_owner = context.handle();
+        let (prepared, route, page, successor) = state_owner
+            .with_state(|state| {
+                state.fixture(|connection| {
+                    let prepared = TargetDetachment::prepare(
+                        connection,
+                        None,
+                        DetachParams {
+                            session_id: Some("SID-rebound-disposal".into()),
+                            target_id: None,
+                        },
+                    )
+                    .unwrap();
+                    let original = prepared.sessions[0].identity.clone();
+                    let route = connection
+                        .session_route(Some("SID-rebound-disposal"))
+                        .unwrap();
+                    let page = connection.renderer_page_residence_identity_for_owner(
+                        &CommandOwnerScope::for_session("SID-rebound-disposal"),
+                    );
+                    // Reuse the route and Page while replacing only the binding lifetime.
+                    connection
+                        .with_target_devtools_session_state_for_owner_mut(
+                            &CommandOwnerScope::for_session("SID-rebound-disposal"),
+                            |state| state.lifecycle = Default::default(),
                         )
                         .unwrap();
-                        let original = prepared.sessions[0].identity.clone();
-                        let recovery = cancelled.then(|| prepared.failure_cleanup());
-                        let route = connection
-                            .session_route(Some("SID-rebound-disposal"))
-                            .unwrap();
-                        let page = connection.renderer_page_residence_identity_for_owner(
-                            &CommandOwnerScope::for_session("SID-rebound-disposal"),
-                        );
-                        // Reuse the route and Page while replacing only the binding lifetime.
-                        connection
-                            .with_target_devtools_session_state_for_owner_mut(
-                                &CommandOwnerScope::for_session("SID-rebound-disposal"),
-                                |state| state.lifecycle = Default::default(),
-                            )
-                            .unwrap();
-                        connection
-                            .register_session_route_for_test("SID-rebound-disposal", route.clone());
-                        let successor = connection
-                            .session_binding_lifetime("SID-rebound-disposal")
-                            .unwrap();
-                        assert!(!original.binding_is_current(connection));
-                        (prepared, recovery, route, page, successor)
-                    })
+                    connection
+                        .register_session_route_for_test("SID-rebound-disposal", route.clone());
+                    let successor = connection
+                        .session_binding_lifetime("SID-rebound-disposal")
+                        .unwrap();
+                    assert!(!original.binding_is_current(connection));
+                    (prepared, route, page, successor)
                 })
-                .unwrap();
-            let add_successor_script = context.process_and_wait_for_response_async(json!({
+            })
+            .unwrap();
+        let (events, work) = context.with_fixture(|connection| {
+            let output = prepared.commit_in_browser(connection);
+            (
+                output.into_background_events(None, None),
+                connection.take_scheduler_events(),
+            )
+        });
+        context
+            .route_direct_command_output_for_test(events, work)
+            .await;
+        context
+            .process_and_wait_for_response_async(json!({
                 "id":2,"sessionId":"SID-rebound-disposal",
                 "method":"Page.addScriptToEvaluateOnNewDocument",
                 "params":{"source":"globalThis.successorBinding = true;"}
-            }));
-            let settle_original = async {
-                if let Some(recovery) = recovery {
-                    drop(prepared);
-                    let pending = state_owner
-                        .with_state(|state| {
-                            state.fixture(|connection| {
-                                recovery.prepare(
-                                    connection,
-                                    &mut CommandDispatchContext::default(),
-                                    CommandOutputPlan::default(),
-                                )
-                            })
-                        })
-                        .unwrap();
-                    let completed = pending.wait().await;
-                    state_owner
-                        .with_state(|state| {
-                            state.fixture(|connection| completed.finish(connection))
-                        })
-                        .unwrap();
-                } else {
-                    let output = prepared
-                        .run(&mut ProtocolWorkflowDriver::new(state_owner.clone()))
-                        .await;
-                    state_owner
-                        .with_state(|state| {
-                            state.fixture(|connection| {
-                                output.finish(connection, &mut CommandDispatchContext::default())
-                            })
-                        })
-                        .unwrap();
-                }
-            };
-            // A successor may enqueue Main work immediately, but its native
-            // execution stays behind the original session's retirement.
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                tokio::join!(add_successor_script, settle_original);
-            })
-            .await
-            .unwrap();
-            let added = context.take_response_by_id(2);
-            let identifier = added["result"]["identifier"].as_str().unwrap().to_owned();
-            state_owner
-                .with_state(|state| {
-                    state.fixture(|connection| {
-            assert_eq!(
-                connection.session_route(Some("SID-rebound-disposal")),
-                Some(route)
-            );
-            assert_eq!(
-                connection
-                    .session_binding_lifetime("SID-rebound-disposal"),
-                Some(successor)
-            );
-            assert_eq!(
-                connection.renderer_page_residence_identity_for_owner(
-                    &CommandOwnerScope::for_session("SID-rebound-disposal")
-                ),
-                page
-            );
-            assert!(
-                connection
-                    .target_owner_state_for_session(Some("SID-rebound-disposal"))
-                    .unwrap()
-                    .document_start_scripts
-                    .iter()
-                    .any(|(id, _)| id == &identifier),
-                "old cleanup cannot remove the successor's script (cancelled: {cancelled})"
-            );
-            })
+            }))
+            .await;
+        context
+            .wait_for_direct_command_work_completion_for_test("old binding native cleanup")
+            .await;
+        let added = context.take_response_by_id(2);
+        let identifier = added["result"]["identifier"].as_str().unwrap().to_owned();
+        state_owner
+            .with_state(|state| {
+                state.fixture(|connection| {
+                    assert_eq!(
+                        connection.session_route(Some("SID-rebound-disposal")),
+                        Some(route)
+                    );
+                    assert_eq!(
+                        connection.session_binding_lifetime("SID-rebound-disposal"),
+                        Some(successor)
+                    );
+                    assert_eq!(
+                        connection.renderer_page_residence_identity_for_owner(
+                            &CommandOwnerScope::for_session("SID-rebound-disposal")
+                        ),
+                        page
+                    );
+                    assert!(
+                        connection
+                            .target_owner_state_for_session(Some("SID-rebound-disposal"))
+                            .unwrap()
+                            .document_start_scripts
+                            .iter()
+                            .any(|(id, _)| id == &identifier),
+                        "old cleanup cannot remove the successor's script"
+                    );
                 })
-                .unwrap();
-            context
-                .process_and_wait_for_response_async(json!({
-                    "id":3,"sessionId":"SID-rebound-disposal",
-                    "method":"Runtime.evaluate","params":{"expression":"6 * 7","returnByValue":true}
-                }))
-                .await;
-            let evaluated = context.take_response_by_id(3);
-            assert_eq!(
-                evaluated["result"]["result"]["value"], 42,
-                "old cleanup cannot detach the successor Inspector: {evaluated:?}"
-            );
-        }
+            })
+            .unwrap();
+        context
+            .process_and_wait_for_response_async(json!({
+                "id":3,"sessionId":"SID-rebound-disposal",
+                "method":"Runtime.evaluate","params":{"expression":"6 * 7","returnByValue":true}
+            }))
+            .await;
+        let evaluated = context.take_response_by_id(3);
+        assert_eq!(
+            evaluated["result"]["result"]["value"], 42,
+            "old cleanup cannot detach the successor Inspector: {evaluated:?}"
+        );
     }
 }

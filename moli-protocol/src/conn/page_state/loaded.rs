@@ -372,24 +372,13 @@ impl PageTargetHost {
     }
 
     pub(crate) fn initialize_runtime_inspector_sessions(&self) {
-        let Some(endpoint) = self
-            .runtime_slot
-            .page_slot()
-            .prepared_document_inspector_endpoint()
-            .or_else(|| self.loaded_page().map(|page| page.inspector_endpoint()))
-        else {
+        let Some(endpoint) = self.runtime_slot.current_inspector_endpoint() else {
             return;
         };
         // Endpoint membership includes empty sessions; configuration snapshots
         // alone cannot decide whether a first IO command has a receiver.
-        for restore in self
-            .devtools_sessions
-            .runtime_inspector_connection_snapshots()
-        {
-            endpoint.connect(
-                restore.inspector_session_id,
-                &restore.protocol_configuration.runtime_bindings,
-            );
+        for (key, bindings) in self.devtools_sessions.runtime_inspector_connections() {
+            endpoint.connect(key.wire_session_id().map(str::to_owned), bindings);
         }
     }
 

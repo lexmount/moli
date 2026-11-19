@@ -101,8 +101,7 @@ mod resource_runtime_support;
 mod runtime_eval;
 mod session_cleanup;
 pub(crate) use session_cleanup::{
-    CompletedSessionPageUpdates, CompletedSessionScriptCleanup, SessionPageUpdateResult,
-    SessionPageUpdates, SessionScriptCleanup,
+    CompletedSessionPageUpdates, SessionPageUpdateResult, SessionPageUpdates,
 };
 mod runtime_load;
 mod scheduler_hooks;
@@ -664,12 +663,6 @@ impl CommandDispatchContext {
     pub fn take_renderer_output_predecessor(&mut self) -> Option<moli_core::RendererOutputFence> {
         self.take_renderer_output_dependencies()
             .into_single_stream()
-    }
-
-    /// Browser/Target commands explicitly compose independently owned renderer
-    /// streams without moving their response out of the command lifecycle.
-    pub(crate) fn add_renderer_output_dependency(&mut self, fence: moli_core::RendererOutputFence) {
-        self.renderer_output_dependencies.add(fence);
     }
 
     pub(crate) fn extend_renderer_output_dependencies(

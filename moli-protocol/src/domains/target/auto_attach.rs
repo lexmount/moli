@@ -9,7 +9,7 @@ use super::*;
 
 mod workflow;
 pub(crate) use workflow::{
-    AutoAttachSweepRollback, PreparedAutoAttachCommand, PreparedAutoAttachSweep,
+    AutoAttachSweepRollback, PreparedAutoAttachEnable, PreparedAutoAttachSweep,
 };
 
 #[derive(Deserialize)]
@@ -373,7 +373,14 @@ pub(super) fn start_set_auto_attach_command(
         cmd.session_id,
         pause_dedicated_workers_on_start,
     );
-    let command = PreparedAutoAttachCommand::prepare(conn, params.auto_attach, cmd.session_id);
+    if !params.auto_attach {
+        let detach = super::attachment::TargetDetachment::prepare_auto_attached_sessions(
+            conn,
+            cmd.session_id,
+        );
+        return TargetCommandTaskStep::Complete(detach.commit_in_browser(conn));
+    }
+    let command = PreparedAutoAttachEnable::prepare(conn, cmd.session_id);
     {
         let access = conn.protocol_state_access();
         TargetCommandTaskStep::Workflow(command.into_workflow(access))

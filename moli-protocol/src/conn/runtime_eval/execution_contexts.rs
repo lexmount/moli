@@ -177,11 +177,7 @@ impl CdpConnection {
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let endpoint = self
             .runtime_session_owner_slot_for_owner(owner)
-            .and_then(|slot| {
-                slot.page_slot()
-                    .prepared_document_inspector_endpoint()
-                    .or_else(|| slot.loaded_page().map(|page| page.inspector_endpoint()))
-            });
+            .and_then(|slot| slot.current_inspector_endpoint());
         let Some(endpoint) = endpoint else {
             return;
         };

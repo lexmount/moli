@@ -4,21 +4,11 @@ use moli_core::page::{CompletedPageCommand, Page, PendingPageCommand, RendererAg
 
 use super::{CdpConnection, CommandOwnerScope, RendererPageResidenceIdentity};
 
-pub(crate) struct SessionScriptCleanup {
-    owner: CommandOwnerScope,
-    removals: Vec<SessionPageUpdates>,
-}
-
-pub(crate) struct CompletedSessionScriptCleanup {
-    owner: CommandOwnerScope,
-    removals: Vec<CompletedSessionPageUpdates>,
-}
-
 impl CdpConnection {
     pub(crate) fn prepare_session_script_cleanup(
         &mut self,
         session_id: &str,
-    ) -> SessionScriptCleanup {
+    ) -> SessionPageUpdates {
         let owner = self
             .session_route(Some(session_id))
             .map(CommandOwnerScope::for_route)
@@ -36,46 +26,17 @@ impl CdpConnection {
         let _ = self.with_target_owner_state_for_owner_mut(&owner, |state| {
             state.remove_document_start_scripts_for_session(&session)
         });
-        let mut removals = Vec::with_capacity(keys.len());
+        let mut updates = SessionPageUpdates::default();
         if let Some(page) = self.loaded_page_mut_for_owner(&owner) {
             for key in keys {
-                let mut updates = SessionPageUpdates::default();
                 updates.push(
                     page,
                     "detached-session document-start script cleanup",
                     page.start_remove_document_start_script_by_registry_key(&key),
                 );
-                removals.push(updates.retain_session_cleanup_authority());
             }
         }
-        SessionScriptCleanup { owner, removals }
-    }
-}
-
-impl SessionScriptCleanup {
-    pub(crate) async fn wait(self) -> CompletedSessionScriptCleanup {
-        let mut removals = Vec::with_capacity(self.removals.len());
-        for updates in self.removals {
-            removals.push(updates.wait().await);
-        }
-        CompletedSessionScriptCleanup {
-            owner: self.owner,
-            removals,
-        }
-    }
-}
-
-impl CompletedSessionScriptCleanup {
-    pub(crate) fn finish(self, mut conn: Option<&mut CdpConnection>) -> SessionPageUpdateResult {
-        let mut result = SessionPageUpdateResult::default();
-        for updates in self.removals {
-            let completed = updates.finish(
-                conn.as_deref_mut()
-                    .and_then(|conn| conn.loaded_page_mut_for_owner(&self.owner)),
-            );
-            result.extend(completed);
-        }
-        result
+        updates.retain_session_cleanup_authority()
     }
 }
 
@@ -107,14 +68,6 @@ pub(crate) struct SessionPageUpdateResult {
 }
 
 impl SessionPageUpdateResult {
-    pub(crate) fn extend(&mut self, other: Self) {
-        if self.first_error.is_none() {
-            self.first_error = other.first_error;
-        }
-        if let Some(predecessor) = other.predecessor {
-            predecessor.merge_into_same_stream_tail(&mut self.predecessor);
-        }
-    }
     #[cfg(test)]
     pub(crate) fn into_result(self) -> Result<()> {
         self.first_error.map_or(Ok(()), Err)

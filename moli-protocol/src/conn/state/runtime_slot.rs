@@ -154,6 +154,14 @@ impl TargetRuntimeSlot {
         &mut self.page_slot
     }
 
+    pub(crate) fn current_inspector_endpoint(
+        &self,
+    ) -> Option<moli_core::page::RendererPageInspectorEndpoint> {
+        self.page_slot
+            .prepared_document_inspector_endpoint()
+            .or_else(|| self.loaded_page().map(Page::inspector_endpoint))
+    }
+
     pub(crate) fn loaded_page(&self) -> Option<&Page> {
         self.page_slot.loaded_page()
     }

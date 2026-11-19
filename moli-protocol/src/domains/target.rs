@@ -17,7 +17,6 @@ pub(crate) mod activation;
 mod automation;
 pub(crate) use automation::{PreparedAutomationTargetCreation, start_automation_lifecycle_command};
 mod attachment;
-pub(crate) use attachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
 mod auto_attach;
 mod browser_context;
 mod browser_context_disposal;
@@ -27,7 +26,6 @@ mod events;
 pub(crate) use events::target_created_automation_event;
 mod info;
 mod opening;
-pub(crate) use attachment::TargetDetachment;
 pub(crate) use auto_attach::{AutoAttachSweepRollback, PreparedAutoAttachSweep};
 pub(crate) use browser_context_disposal::{
     BrowserContextDisposalIdentity, PreparedBrowserContextDisposal,

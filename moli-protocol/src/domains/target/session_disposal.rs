@@ -80,10 +80,6 @@ impl PreparedSessionDisposal {
         }
     }
 
-    pub(crate) fn owns_cleanup(&self) -> bool {
-        matches!(self, Self::Own(_))
-    }
-
     pub(crate) async fn run(
         self,
         driver: &mut ProtocolWorkflowDriver,
