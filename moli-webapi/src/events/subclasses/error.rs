@@ -1,5 +1,7 @@
 use super::super::init::EventInit;
-use moli_v8_util::v8_string;
+use super::{
+    EventSubclassKind, SubclassInit, construct_native_subclass, construct_trusted_subclass,
+};
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
@@ -54,7 +56,6 @@ pub fn construct_original_error_event<'s>(
     colno: u32,
     error: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let event_type = v8_string(scope, "error")?;
     let init = ErrorEventInit {
         base: EventInit {
             cancelable: true,
@@ -66,16 +67,35 @@ pub fn construct_original_error_event<'s>(
         colno,
         error: Some(error),
     };
-    let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "ErrorEvent")?;
-    super::construct_subclass(
+    construct_native_subclass(
         scope,
-        wrapper,
-        super::EventSubclassKind::ErrorEvent,
-        event_type,
-        init.event_flags(),
-        |scope, event| {
-            init.initialize(scope, event);
-            true
-        },
+        EventSubclassKind::ErrorEvent,
+        "error",
+        SubclassInit::Error(init),
+    )
+}
+
+pub fn construct_native_navigation_error_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    error: v8::Local<'s, v8::Value>,
+    filename: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let message = error
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let init = ErrorEventInit {
+        base: EventInit::default(),
+        message: webidl::DomString16(message.encode_utf16().collect()),
+        filename: filename.to_owned(),
+        lineno: 1,
+        colno: 1,
+        error: (!error.is_undefined()).then_some(error),
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::ErrorEvent,
+        "navigateerror",
+        SubclassInit::Error(init),
     )
 }

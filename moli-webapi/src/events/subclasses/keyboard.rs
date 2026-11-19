@@ -93,6 +93,50 @@ pub(super) fn initialize_keyboard_event<'s>(
         .expect("KeyboardEvent state should initialize");
 }
 
+pub fn construct_native_keyboard_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    key: &str,
+    code: &str,
+    alt: bool,
+    ctrl: bool,
+    meta: bool,
+    shift: bool,
+    repeat: bool,
+    location: u32,
+    char_code: u32,
+    key_code: u32,
+    which: u32,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let base = EventInit {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+    };
+    let ui = crate::events::ui::UiEventInit::from_native(base, 0, None);
+    let init = KeyboardEventInit {
+        modifiers: crate::events::modifiers::EventModifierInit::from_native(
+            ui, alt, ctrl, meta, shift,
+        ),
+        keyboard: KeyboardEventInitMembers {
+            key: webidl::DomString16(key.encode_utf16().collect()),
+            code: webidl::DomString16(code.encode_utf16().collect()),
+            location,
+            repeat,
+            char_code,
+            key_code,
+            which,
+            is_composing: false,
+        },
+    };
+    super::construct_trusted_subclass(
+        scope,
+        EventSubclassKind::KeyboardEvent,
+        event_type,
+        SubclassInit::Keyboard(init),
+    )
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "KeyboardEvent.initKeyboardEvent")]
 struct InitKeyboardEventArgs<'s> {

@@ -192,7 +192,6 @@ pub fn construct_original_page_transition_event<'s>(
     event_type: &str,
     persisted: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let event_type = moli_v8_util::v8_string(scope, event_type)?;
     let init = ValueEventInit::PageTransition(PageTransitionInit {
         base: EventInit {
             bubbles: true,
@@ -201,18 +200,45 @@ pub fn construct_original_page_transition_event<'s>(
         },
         persisted,
     });
-    let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "PageTransitionEvent")?;
-    let event = super::construct_subclass(
+    construct_trusted_subclass(
         scope,
-        wrapper,
         EventSubclassKind::PageTransitionEvent,
         event_type,
-        init.event_flags(),
-        |scope, event| {
-            init.initialize(scope, event);
-            true
-        },
-    )?;
-    super::mark_event_trusted(scope, event);
-    Some(event)
+        SubclassInit::Values(init),
+    )
+}
+
+pub fn construct_native_popstate_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = ValueEventInit::PopState(PopStateInit {
+        base: EventInit::default(),
+        state: (!state.is_undefined()).then_some(state),
+        has_ua_visual_transition: false,
+    });
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::PopStateEvent,
+        "popstate",
+        SubclassInit::Values(init),
+    )
+}
+
+pub fn construct_native_hash_change_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    old_url: &str,
+    new_url: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = ValueEventInit::HashChange(HashChangeInit {
+        base: EventInit::default(),
+        old_url: webidl::DomString16(old_url.encode_utf16().collect()),
+        new_url: webidl::DomString16(new_url.encode_utf16().collect()),
+    });
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::HashChangeEvent,
+        "hashchange",
+        SubclassInit::Values(init),
+    )
 }

@@ -67,6 +67,23 @@ struct EventModifierProperties {
 }
 
 impl<'s> EventModifierInit<'s> {
+    pub(super) fn from_native(
+        ui: super::ui::UiEventInit<'s>,
+        alt_key: bool,
+        ctrl_key: bool,
+        meta_key: bool,
+        shift_key: bool,
+    ) -> Self {
+        Self {
+            ui,
+            alt_key,
+            ctrl_key,
+            meta_key,
+            shift_key,
+            ..Self::default()
+        }
+    }
+
     pub fn event_flags(&self) -> (bool, bool, bool) {
         self.ui.event_flags()
     }

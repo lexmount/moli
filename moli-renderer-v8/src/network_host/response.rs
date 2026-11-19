@@ -5,9 +5,6 @@ mod materialize;
 mod metadata;
 pub(crate) use metadata::fetch_response_metadata;
 pub(crate) use moli_webapi::fetch_response::set_response_metadata;
-pub(in crate::network_host) use moli_webapi::fetch_response::{
-    RESPONSE_METADATA_SLOT, response_metadata_attribute,
-};
 
 use super::headers::{HeadersGuard, build_headers_object_with_state, filter_headers_for_guard};
 use super::*;

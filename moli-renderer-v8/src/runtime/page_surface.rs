@@ -537,32 +537,7 @@ pub struct RendererInputDispatchOutcome {
     pub intercepted_drag: Option<RendererInterceptedDrag>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct RendererPointerEventProperties {
-    pub pointer_id: i32,
-    pub pointer_type: String,
-    pub is_primary: bool,
-    pub pressure: f64,
-    pub tangential_pressure: f64,
-    pub tilt_x: f64,
-    pub tilt_y: f64,
-    pub twist: f64,
-}
-
-impl Default for RendererPointerEventProperties {
-    fn default() -> Self {
-        Self {
-            pointer_id: 1,
-            pointer_type: "mouse".to_owned(),
-            is_primary: true,
-            pressure: 0.0,
-            tangential_pressure: 0.0,
-            tilt_x: 0.0,
-            tilt_y: 0.0,
-            twist: 0.0,
-        }
-    }
-}
+pub use moli_webapi::events::subclasses::PointerEventProperties as RendererPointerEventProperties;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RendererTouchPoint {

@@ -10,7 +10,11 @@ fn same_document_navigation_fires_navigate_event_before_mutation() {
             (() => {
               const seen = {};
               let capturedDestination = null;
+              const controllerSignal = Object.getOwnPropertyDescriptor(AbortController.prototype, "signal");
+              const poison = () => { throw new Error("author initializer read"); };
               navigation.onnavigate = e => {
+                delete Object.prototype.hasUAVisualTransition;
+                Object.defineProperty(AbortController.prototype, "signal", controllerSignal);
                 capturedDestination = e.destination;
                 seen.type = e.type;
                 seen.navigationType = e.navigationType;
@@ -42,6 +46,8 @@ fn same_document_navigation_fires_navigate_event_before_mutation() {
                 e.preventDefault();
               };
               const startLength = history.length;
+              Object.defineProperty(AbortController.prototype, "signal", { configurable: true, get: poison });
+              Object.defineProperty(Object.prototype, "hasUAVisualTransition", { configurable: true, get: poison });
               history.pushState({ ok: 7 }, "", "#blocked");
               return JSON.stringify({
                 seen,

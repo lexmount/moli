@@ -843,6 +843,20 @@ fn webassembly_runtime_exposes_type_reflection_surface() {
               });
               Array.from = arrayFrom;
               const tagType = tag.type();
+              const tagCopy = tag.type();
+              tagCopy.parameters[0] = "f64";
+              const tagTypeIsolated = tag.type().parameters[0] === "i32";
+              const memoryWithoutMaximum = new WebAssembly.Memory({ minimum: 1 });
+              Object.defineProperty(Object.prototype, "maximum", {
+                configurable: true,
+                get() { throw new Error("private descriptor read inherited maximum"); }
+              });
+              let memoryTypeKeys;
+              try {
+                memoryTypeKeys = Object.keys(memoryWithoutMaximum.type());
+              } finally {
+                delete Object.prototype.maximum;
+              }
               const exception = new WebAssembly.Exception(tag, [7, 9n]);
               const fakeMemory = { buffer: { byteLength: 65536 } };
               Object.setPrototypeOf(fakeMemory, WebAssembly.Memory.prototype);
@@ -854,6 +868,7 @@ fn webassembly_runtime_exposes_type_reflection_surface() {
               return JSON.stringify({
                 memoryTypeMinimum: memoryType.minimum,
                 memoryTypeMaximum: memoryType.maximum,
+                memoryTypeKeys,
                 memoryBothBounds: throwsName(() => new WebAssembly.Memory({ initial: 1, minimum: 1 })),
                 memoryPlainReceiver: throwsName(() => WebAssembly.Memory.prototype.type.call({ buffer: { byteLength: 65536 } })),
                 memorySpoofedReceiver: throwsName(() => WebAssembly.Memory.prototype.type.call(fakeMemory)),
@@ -873,6 +888,7 @@ fn webassembly_runtime_exposes_type_reflection_surface() {
                 globalConstructorOrder: globalConstructorOrder.join("|"),
                 wasmFunction: typeof WebAssembly.Function,
                 tagType,
+                tagTypeIsolated,
                 exceptionLength: WebAssembly.Exception.length,
                 exceptionOutOfRange: throwsName(() => exception.getArg(tag, 2)),
                 exceptionValue: String(exception.getArg(tag, 1)),
@@ -891,7 +907,7 @@ fn webassembly_runtime_exposes_type_reflection_surface() {
 
     assert_eq!(
         result,
-        r#"{"memoryTypeMinimum":2,"memoryTypeMaximum":4,"memoryBothBounds":"TypeError","memoryPlainReceiver":"TypeError","memorySpoofedReceiver":"TypeError","tableTypeMinimum":1,"tableTypeMaximum":3,"tableTypeElement":"funcref","tableBothBounds":"TypeError","tablePlainReceiver":"TypeError","tableSpoofedReceiver":"TypeError","globalTypeMutable":false,"globalTypeValue":"funcref","globalTypeKeys":["mutable","value"],"globalValueSetterName":"set value","globalValueSetterLength":1,"missingSetterValue":0,"globalConstructorOrder":"descriptor mutable|descriptor value|descriptor value toString|value valueOf()","wasmFunction":"undefined","tagType":{"parameters":["i32","i64"]},"exceptionLength":2,"exceptionOutOfRange":"RangeError","exceptionValue":"9","namespaceInstanceName":"namespaceInstance","namespaceInstanceLength":1,"namespaceInstanceEnumerable":false,"namespaceInstanceWritable":true,"namespaceInstanceConfigurable":true,"namespaceInstancePlainObject":"TypeError","namespaceInstanceMissing":"TypeError"}"#
+        r#"{"memoryTypeMinimum":2,"memoryTypeMaximum":4,"memoryTypeKeys":["minimum"],"memoryBothBounds":"TypeError","memoryPlainReceiver":"TypeError","memorySpoofedReceiver":"TypeError","tableTypeMinimum":1,"tableTypeMaximum":3,"tableTypeElement":"funcref","tableBothBounds":"TypeError","tablePlainReceiver":"TypeError","tableSpoofedReceiver":"TypeError","globalTypeMutable":false,"globalTypeValue":"funcref","globalTypeKeys":["mutable","value"],"globalValueSetterName":"set value","globalValueSetterLength":1,"missingSetterValue":0,"globalConstructorOrder":"descriptor mutable|descriptor value|descriptor value toString|value valueOf()","wasmFunction":"undefined","tagType":{"parameters":["i32","i64"]},"tagTypeIsolated":true,"exceptionLength":2,"exceptionOutOfRange":"RangeError","exceptionValue":"9","namespaceInstanceName":"namespaceInstance","namespaceInstanceLength":1,"namespaceInstanceEnumerable":false,"namespaceInstanceWritable":true,"namespaceInstanceConfigurable":true,"namespaceInstancePlainObject":"TypeError","namespaceInstanceMissing":"TypeError"}"#
     );
 }
 #[test]

@@ -19,12 +19,13 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
         "<!doctype html><main>ready</main>",
     );
     vm.eval(r#"
-        globalThis.originalEventFactories = {MessageEvent, StorageEvent, ErrorEvent, PageTransitionEvent};
+        globalThis.originalEventFactories = {MessageEvent, StorageEvent, ErrorEvent, PageTransitionEvent, KeyboardEvent};
         for (const name of Object.keys(originalEventFactories)) {
             delete globalThis[name];
             Object.defineProperty(globalThis, name, {configurable: true, get() {throw new Error('public event constructor');}});
         }
         Object.defineProperty(Object.prototype, 'composed', {configurable: true, get() {throw new Error('native event dictionary read');}});
+        Object.defineProperty(Object.prototype, 'isComposing', {configurable: true, get() {throw new Error('keyboard dictionary read');}});
     "#).unwrap();
     vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
         let data = v8::Integer::new(scope, 7).into();
@@ -64,12 +65,17 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
             scope, "pageshow", true,
         )
         .unwrap();
+        let keyboard = crate::native_bridge::element::construct_keyboard_event(
+            scope, "keydown", "A", "KeyA", false, true, false, true, true, 0,
+        )
+        .unwrap();
         let global = scope.get_current_context().global(scope);
         for (name, interface, event) in [
             ("nativeMessageFactory", "MessageEvent", message),
             ("nativeStorageFactory", "StorageEvent", storage),
             ("nativeErrorFactory", "ErrorEvent", error),
             ("nativePageFactory", "PageTransitionEvent", transition),
+            ("nativeKeyboardFactory", "KeyboardEvent", keyboard),
         ] {
             assert_eq!(
                 event.get_constructor_name().to_rust_string_lossy(scope),
@@ -92,11 +98,13 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
     .unwrap();
     assert_eq!(vm.eval(r#"(() => {
         delete Object.prototype.composed;
+        delete Object.prototype.isComposing;
         for (const [event, Ctor] of [
             [nativeMessageFactory, originalEventFactories.MessageEvent],
             [nativeStorageFactory, originalEventFactories.StorageEvent],
             [nativeErrorFactory, originalEventFactories.ErrorEvent],
             [nativePageFactory, originalEventFactories.PageTransitionEvent],
+            [nativeKeyboardFactory, originalEventFactories.KeyboardEvent],
         ]) {
             if (!(event instanceof Ctor) || !Number.isFinite(event.timeStamp)) return false;
         }
@@ -105,6 +113,10 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
             && nativeStorageFactory.key === '\ud800' && nativeStorageFactory.newValue === '\udfff'
             && nativeErrorFactory.message === 'boom' && nativeErrorFactory.error === 9 && nativeErrorFactory.cancelable
             && nativePageFactory.persisted && nativePageFactory.bubbles && nativePageFactory.cancelable
-            && !nativePageFactory.composed && nativePageFactory.isTrusted;
+            && !nativePageFactory.composed && nativePageFactory.isTrusted
+            && nativeKeyboardFactory.key === 'A' && nativeKeyboardFactory.code === 'KeyA'
+            && nativeKeyboardFactory.keyCode === 65 && !nativeKeyboardFactory.isComposing
+            && nativeKeyboardFactory.repeat && nativeKeyboardFactory.ctrlKey && nativeKeyboardFactory.shiftKey
+            && nativeKeyboardFactory.isTrusted;
     })()"#).unwrap(), "true");
 }
