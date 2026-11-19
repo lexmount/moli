@@ -316,6 +316,32 @@ pub fn construct_original_page_reveal_event<'s>(
     )
 }
 
+pub fn construct_original_page_swap_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    activation: Option<v8::Local<'s, v8::Object>>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event_type = moli_v8_util::v8_string(scope, "pageswap")?;
+    let init = ValueEventInit::PageSwap(PageSwapInit {
+        base: EventInit::default(),
+        activation,
+        view_transition: None,
+    });
+    let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "PageSwapEvent")?;
+    let event = super::construct_subclass(
+        scope,
+        wrapper,
+        EventSubclassKind::PageSwapEvent,
+        event_type,
+        init.event_flags(),
+        |scope, event| {
+            init.initialize(scope, event);
+            true
+        },
+    )?;
+    super::mark_event_trusted(scope, event);
+    Some(event)
+}
+
 pub fn construct_original_page_transition_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

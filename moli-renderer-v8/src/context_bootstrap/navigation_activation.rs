@@ -67,20 +67,27 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
     current_entry: v8::Local<'s, v8::Object>,
     snapshot: &NavigationHistorySerializedEntry,
 ) -> v8::Local<'s, v8::Object> {
+    existing_navigation_entry_from_snapshot(scope, current_entry, snapshot).unwrap_or_else(|| {
+        let owner = runtime_window_owner(scope, current_entry);
+        entry_wrappers::for_window(scope, owner, history_entry_from_snapshot(snapshot))
+    })
+}
+
+pub(super) fn existing_navigation_entry_from_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    current_entry: v8::Local<'s, v8::Object>,
+    snapshot: &NavigationHistorySerializedEntry,
+) -> Option<v8::Local<'s, v8::Object>> {
     if current_entry_matches_activation_snapshot(scope, current_entry, snapshot) {
-        return current_entry;
+        return Some(current_entry);
     }
     let owner = runtime_window_owner(scope, current_entry);
-    if let Some(history) = window_history_for_holder(scope, owner)
-        && let Some(entries) = history_entries(scope, history)
-    {
-        for entry in entries {
-            if native_entry_matches_activation_snapshot(&entry.borrow(), snapshot) {
-                return entry_wrappers::for_window(scope, owner, entry);
-            }
-        }
-    }
-    entry_wrappers::for_window(scope, owner, history_entry_from_snapshot(snapshot))
+    let history = window_history_for_holder(scope, owner)?;
+    let entries = history_entries(scope, history)?;
+    let entry = entries
+        .into_iter()
+        .find(|entry| native_entry_matches_activation_snapshot(&entry.borrow(), snapshot))?;
+    Some(entry_wrappers::for_window(scope, owner, entry))
 }
 
 pub(super) fn create_navigation_activation_object<'s>(

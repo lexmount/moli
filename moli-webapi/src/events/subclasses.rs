@@ -423,4 +423,7 @@ pub fn build_template<'s>(
     }
 }
 
-pub use values::{construct_original_page_reveal_event, construct_original_page_transition_event};
+pub use values::{
+    construct_original_page_reveal_event, construct_original_page_swap_event,
+    construct_original_page_transition_event,
+};

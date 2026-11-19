@@ -69,7 +69,10 @@ pub(crate) struct MainWindowProxyNavigationCommit {
 }
 
 impl MainWindowProxyNavigationCommit {
-    pub(crate) fn unload_and_detach(self) -> Option<crate::network::context::DocumentUnloadTiming> {
+    pub(crate) fn unload_and_detach(
+        self,
+        page_swap: crate::context_bootstrap::PageSwapNavigation,
+    ) -> Option<crate::network::context::DocumentUnloadTiming> {
         let context = self.context?;
         let _unload_callbacks = self.devtools_target.pause_ref().begin_unload_callbacks();
         let previous_unload = self
@@ -85,7 +88,9 @@ impl MainWindowProxyNavigationCommit {
                     let host_ptr = (*self.context_host).as_ptr();
                     let loader = unsafe { &*host_ptr }.current_main_document_resource_loader();
                     PageScriptHost::dispatch_main_document_unload_for_navigation_commit(
-                        scope, host_ptr,
+                        scope,
+                        host_ptr,
+                        Some(&page_swap),
                     );
                     crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
                     loader.and_then(|loader| loader.document_unload_timing())
