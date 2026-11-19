@@ -1239,6 +1239,7 @@ mod tests {
             moli_dom::NodeId::new(7),
             Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
                 LoadedChildDocument {
+                    cross_origin_redirect: false,
                     response_status: None,
                     response_links: Default::default(),
                     final_url: Url::parse("https://example.test/child").unwrap(),
@@ -1266,6 +1267,7 @@ mod tests {
             ),
             Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                 LoadedChildDocument {
+                    cross_origin_redirect: false,
                     response_status: None,
                     response_links: Default::default(),
                     final_url: Url::parse("https://example.test/popup").unwrap(),

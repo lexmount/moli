@@ -7,7 +7,8 @@ enum ChildDocumentInteractiveScriptDisposition {
 }
 use crate::{
     context_bootstrap::{
-        dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner,
+        PageSwapNavigation, dispatch_beforeunload_for_runtime_owner,
+        dispatch_pagehide_for_runtime_owner, dispatch_pageswap_for_runtime_owner,
         dispatch_unload_for_runtime_owner, navigation_unload_event_active,
         replace_navigation_unload_event_active,
     },
@@ -1040,10 +1041,34 @@ impl PageScriptHost {
         is_current(self)
     }
 
+    pub(in crate::native_bridge::context_host) fn page_swap_navigation_for_child(
+        &self,
+        handle: DomHandle,
+        final_url: &url::Url,
+        expose_destination: bool,
+    ) -> PageSwapNavigation {
+        let activation = self
+            .child_browsing_contexts
+            .get(&handle)
+            .and_then(|entry| entry.activation_for_document_commit());
+        let destination_origin = expose_destination.then(|| {
+            if moli_url::is_about_srcdoc(final_url) {
+                self.child_browsing_context_creator_origin(handle)
+            } else {
+                moli_url::origin_ascii_serialization_with_about_blank_inheritance(
+                    final_url,
+                    &self.child_browsing_context_creator_origin(handle),
+                )
+            }
+        });
+        PageSwapNavigation::for_document(activation, final_url, destination_origin)
+    }
+
     pub(in crate::native_bridge::context_host) fn dispatch_child_browsing_context_unload_lifecycle_if_needed(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
+        page_swap: PageSwapNavigation,
     ) -> bool {
         let documents = self.child_document_unload_tree_snapshot(handle);
         let mut actions = Vec::new();
@@ -1084,7 +1109,8 @@ impl PageScriptHost {
                 .child_document_task_owner_is_current(action.child_handle(), action.owner())
             {
                 unload_guards.push((document, self.enter_document_unload(document)));
-                Self::dispatch_child_document_unload_action(scope, self, action);
+                let swap = (action.child_handle() == handle).then_some(&page_swap);
+                Self::dispatch_child_document_unload_action(scope, self, action, swap);
             }
         }
         dispatched
@@ -1213,13 +1239,14 @@ impl PageScriptHost {
         else {
             return;
         };
-        Self::dispatch_child_document_unload_action(scope, host_ptr, action);
+        Self::dispatch_child_document_unload_action(scope, host_ptr, action, None);
     }
 
     fn dispatch_child_document_unload_action(
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut Self,
         action: FrameDocumentUnloadLifecycleAction,
+        page_swap: Option<&PageSwapNavigation>,
     ) {
         let handle = action.child_handle();
         if !unsafe { &mut *host_ptr }
@@ -1251,6 +1278,15 @@ impl PageScriptHost {
         let _document_unload = unsafe { &mut *host_ptr }
             .child_browsing_context_document_handle(handle)
             .map(|document| unsafe { &mut *host_ptr }.enter_document_unload(document));
+        if let Some(page_swap) = page_swap {
+            dispatch_pageswap_for_runtime_owner(scope, window, page_swap);
+        }
+        if !unsafe { &*host_ptr }
+            .frame_owner_store
+            .child_document_task_owner_is_current(handle, action.owner())
+        {
+            return;
+        }
         dispatch_pagehide_for_runtime_owner(scope, window);
         if let Some(document_handle) =
             unsafe { &mut *host_ptr }.child_browsing_context_document_handle(handle)

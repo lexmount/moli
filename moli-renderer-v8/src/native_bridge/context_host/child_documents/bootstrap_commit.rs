@@ -6,6 +6,7 @@ use super::{
     ChildDocumentCommitResult, ChildDocumentNavigationInitiator, LocalChildDocumentPreparation,
 };
 use crate::{
+    context_bootstrap::PageSwapNavigation,
     document_runtime::DomHandle,
     frame_owner_model::{DocumentCreationKind, FrameDocumentNavigationLoadBinding},
 };
@@ -223,7 +224,11 @@ impl PageScriptHost {
             );
             let window_commit_preflight =
                 self.capture_child_document_window_commit_preflight(handle);
-            self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
+            self.dispatch_child_browsing_context_unload_lifecycle_if_needed(
+                scope,
+                handle,
+                PageSwapNavigation::default(),
+            );
             if !self
                 .child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
             {
@@ -274,7 +279,20 @@ impl PageScriptHost {
 
         let sandbox = self.child_browsing_context_sandbox_policy_from_owner(handle);
         let window_commit_preflight = self.capture_child_document_window_commit_preflight(handle);
-        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
+        let page_swap =
+            cached_snapshot
+                .as_ref()
+                .map_or_else(PageSwapNavigation::default, |snapshot| {
+                    let target_sandbox = sandbox
+                        .with_response_content_security_policy(snapshot.policy_container.sandbox);
+                    self.page_swap_navigation_for_child(
+                        handle,
+                        &snapshot.url,
+                        creation_kind != DocumentCreationKind::Error
+                            && !target_sandbox.forces_opaque_origin,
+                    )
+                });
+        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle, page_swap);
         if !self.child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
         {
             let _ =

@@ -1,6 +1,7 @@
 use super::{LightweightPopupNavigationTaskToken, PageScriptHost};
 use crate::context_bootstrap::{
-    dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner,
+    PageSwapNavigation, dispatch_beforeunload_for_runtime_owner,
+    dispatch_pagehide_for_runtime_owner, dispatch_pageswap_for_runtime_owner,
     dispatch_unload_for_runtime_owner, navigation_unload_event_active,
     replace_navigation_unload_event_active,
 };
@@ -60,6 +61,7 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
+        page_swap: Option<&PageSwapNavigation>,
     ) -> bool {
         let Some(document) = self.lightweight_popup_document_record_mut(popup_id) else {
             return false;
@@ -84,6 +86,12 @@ impl PageScriptHost {
         // Descendant unload handlers must not erase or navigate the ancestor
         // document while its replacement is being committed.
         let _unload = self.enter_document_unload(handle);
+        if let Some(page_swap) = page_swap {
+            dispatch_pageswap_for_runtime_owner(scope, window, page_swap);
+        }
+        if !self.lightweight_popup_document_owner_is_current(owner) {
+            return true;
+        }
         dispatch_pagehide_for_runtime_owner(scope, window);
         if self.lightweight_popup_document_owner_is_current(owner)
             && self

@@ -745,6 +745,10 @@ impl ChildBrowsingContextEntry {
         self.navigation_entry_seed.clone()
     }
 
+    pub(super) fn activation_for_document_commit(&self) -> Option<&NavigationActivationSeed> {
+        self.navigation_entry_seed.activation.as_ref()
+    }
+
     pub(super) fn committed_navigation_entry_seed(&self) -> NavigationHistoryEntrySeed {
         self.committed_navigation_entry_seed.clone()
     }

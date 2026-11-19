@@ -9,12 +9,22 @@ async fn history_visibility(flow: &str, api: &str, depth: usize) -> Result<Value
     let child = r#"<!doctype html><body><p>child</p><script>
       const label = new URL(location.href).searchParams.get('label');
       function record(event) {
-        top.events.push({label, type: event.type, hidden: document.hidden,
+        const observed = {label, type: event.type, hidden: document.hidden,
           target: event.target === document ? 'document' : event.target === window ? 'window' : 'other',
           currentWindow: event.currentTarget === window, trusted: event.isTrusted,
-          bubbles: event.bubbles, cancelable: event.cancelable});
+          bubbles: event.bubbles, cancelable: event.cancelable};
+        if (event.type === 'pageswap' && event.activation) {
+          const {entry, from, navigationType} = event.activation;
+          observed.activation = {
+            destination: new URL(entry.url).searchParams.get('label'),
+            existingEntry: navigation.entries().includes(entry),
+            fromCurrentEntry: from === navigation.currentEntry,
+            navigationType,
+          };
+        }
+        top.events.push(observed);
       }
-      for (const type of ['beforeunload', 'pagehide', 'unload', 'load', 'pageshow'])
+      for (const type of ['beforeunload', 'pageswap', 'pagehide', 'unload', 'load', 'pageshow'])
         addEventListener(type, record);
       for (const type of ['load', 'pageshow', 'pagehide', 'unload'])
         document.addEventListener(type, () => top.documentWindowEventCalls++, true);
@@ -189,19 +199,37 @@ async fn history_traversal_updates_visibility_and_unloads_descendants_once() -> 
                 );
                 for label in &labels {
                     let actual: Vec<_> = events.iter().filter(|e| e["label"] == *label).collect();
-                    assert_eq!(actual.len(), 4, "{api}/{depth}: {result}");
-                    for (event, kind) in actual.iter().zip([
-                        "beforeunload",
-                        "pagehide",
-                        "visibilitychange",
-                        "unload",
-                    ]) {
+                    let kinds: &[_] = if label == old {
+                        &[
+                            "beforeunload",
+                            "pageswap",
+                            "pagehide",
+                            "visibilitychange",
+                            "unload",
+                        ]
+                    } else {
+                        &["beforeunload", "pagehide", "visibilitychange", "unload"]
+                    };
+                    assert_eq!(actual.len(), kinds.len(), "{api}/{depth}: {result}");
+                    for (&event, &kind) in actual.iter().zip(kinds) {
                         assert_eq!(event["type"], kind, "{api}/{depth}: {result}");
                         assert_eq!(
                             event["hidden"],
                             matches!(kind, "visibilitychange" | "unload")
                         );
-                        if kind != "beforeunload" {
+                        if kind == "pageswap" {
+                            assert_eq!(event["target"], "window", "{result}");
+                            assert_eq!(
+                                event["activation"],
+                                json!({
+                                    "destination": new,
+                                    "existingEntry": true,
+                                    "fromCurrentEntry": true,
+                                    "navigationType": "traverse",
+                                }),
+                                "{api}/{depth}: {result}"
+                            );
+                        } else if kind != "beforeunload" {
                             assert_eq!(event["target"], "document", "{result}");
                         }
                         assert_eq!(event["trusted"], true);
@@ -214,7 +242,7 @@ async fn history_traversal_updates_visibility_and_unloads_descendants_once() -> 
                     assert_eq!(event["target"], "document");
                     assert_eq!(event["hidden"], false);
                 }
-                assert_eq!(events.len(), labels.len() * 4 + 2);
+                assert_eq!(events.len(), labels.len() * 4 + 3);
             }
         }
     }

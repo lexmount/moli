@@ -1123,6 +1123,7 @@ pub(super) fn stale_loaded_completion(
         ChildDocumentLoadNetworkAttribution::new(frame_id.to_owned(), None, loader_id),
         Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
             LoadedChildDocument {
+                cross_origin_redirect: false,
                 response_status: None,
                 response_links: Default::default(),
                 final_url: Url::parse(request_url).expect("final URL"),

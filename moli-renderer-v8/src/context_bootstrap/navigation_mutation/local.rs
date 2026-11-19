@@ -1,12 +1,14 @@
 use super::super::history_runtime::state::{push_history_entry, replace_history_entry};
 use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
+use crate::native_bridge::NavigationHistorySerializedEntry;
 
 pub(crate) fn apply_local_window_location_navigation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     resolved: &url::Url,
     kind: LocationNavigationKind,
+    destination: &NavigationHistorySerializedEntry,
 ) {
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
@@ -29,11 +31,10 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                 resolved.as_str(),
                 None,
                 next_navigation_index,
-                &new_navigation_entry_id(),
-                &new_navigation_entry_key(),
+                &destination.id,
+                &destination.key,
             );
-            let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
-            set_navigation_entry_document_id(scope, next_entry, document_id.as_str());
+            set_navigation_entry_document_id(scope, next_entry, destination.document_id.as_str());
             let _ = push_history_entry(scope, history, next_entry);
             if super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
                 scope, owner,
@@ -53,21 +54,16 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
         }
         LocationNavigationKind::Replace => {
             let state = v8::null(scope).into();
-            let key = previous_entry
-                .filter(|entry| replacement_keeps_navigation_key(scope, *entry, resolved))
-                .and_then(|entry| navigation_entry_key_value(scope, entry))
-                .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
             let entry = create_navigation_entry(
                 scope,
                 owner,
                 resolved.as_str(),
                 None,
                 current_navigation_index,
-                &new_navigation_entry_id(),
-                &key,
+                &destination.id,
+                &destination.key,
             );
-            let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
-            set_navigation_entry_document_id(scope, entry, document_id.as_str());
+            set_navigation_entry_document_id(scope, entry, destination.document_id.as_str());
             replace_history_entry(scope, history, entry);
             cache_current_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, entry);
@@ -130,14 +126,4 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             }
         },
     );
-}
-
-fn replacement_keeps_navigation_key<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    previous_entry: v8::Local<'s, v8::Object>,
-    resolved: &url::Url,
-) -> bool {
-    navigation_entry_url_value(scope, previous_entry)
-        .and_then(|url| url::Url::parse(&url).ok())
-        .is_some_and(|previous_url| moli_url::same_origin(&previous_url, resolved))
 }
