@@ -214,6 +214,7 @@ impl ScriptVm {
                             if let Err(error) = dispatch_error_and_maybe_propagate(
                                 scope,
                                 host_ptr,
+                                owner.execution_context(),
                                 worker,
                                 DedicatedWorkerError {
                                     message: &message,
