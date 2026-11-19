@@ -7,7 +7,10 @@
 //! checkpoint is not the HTML task-end checkpoint: the selected Page-task
 //! dispatcher still submits the ordinary completion after this body returns.
 
-use crate::diagnostics::{ErrorReportOutcome, PendingExceptionReport};
+use crate::{
+    diagnostics::{ErrorReportOutcome, PendingExceptionReport},
+    native_bridge::{PageScriptHost, WindowExecutionContextIdentity},
+};
 use anyhow::Result;
 
 pub(super) fn dispatch_script_load_failure<'s>(
@@ -40,7 +43,8 @@ pub(super) struct DedicatedWorkerError<'a> {
 
 pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::PageScriptHost,
+    host_ptr: *mut PageScriptHost,
+    owner_window: WindowExecutionContextIdentity,
     worker: Option<v8::Local<'s, v8::Object>>,
     error: DedicatedWorkerError<'_>,
     pending_report: Option<Box<PendingExceptionReport>>,
@@ -67,6 +71,11 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     // `error` event at the Worker object. Runtime script errors additionally
     // propagate to the owning Window when that Worker event is not canceled.
     if unhandled && error.phase == crate::worker::WorkerErrorPhase::Runtime {
+        // The Worker listener may have retired its Window. Dropping the
+        // pending report records the interruption.
+        if !unsafe { &*host_ptr }.window_execution_context_identity_is_current(owner_window) {
+            return Ok(());
+        }
         let event = crate::context_bootstrap::dispatch_window_error_event(
             scope,
             host_ptr,
