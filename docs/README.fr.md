@@ -88,6 +88,9 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/rele
 
 ## Démonstration
 
+Découvrez des projets, des intégrations et des options de déploiement dans
+[Awesome Moli](https://github.com/lexmount/awesome-moli).
+
 <p align="center">
   <a href="../assets/moli-game.jpg">
     <img
