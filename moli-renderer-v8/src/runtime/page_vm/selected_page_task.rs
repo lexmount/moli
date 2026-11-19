@@ -18,6 +18,18 @@ impl PageVm {
         task: RendererPageSchedulerTask,
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
+        let (result, long_tasks) =
+            crate::long_task::measure(self.apply_selected_page_scheduler_task_body(task, loader))
+                .await;
+        self.vm_mut().report_long_tasks(long_tasks);
+        result
+    }
+
+    async fn apply_selected_page_scheduler_task_body(
+        &mut self,
+        task: RendererPageSchedulerTask,
+        loader: &crate::network::ResourceRequestClient,
+    ) -> Result<()> {
         match task {
             #[cfg(any(test, feature = "devtools"))]
             RendererPageSchedulerTask::ActionWindow { deadline } => {

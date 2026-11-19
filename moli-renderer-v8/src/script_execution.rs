@@ -14,6 +14,7 @@ pub(crate) fn evaluate_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     module: v8::Local<'_, v8::Module>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    crate::long_task::note_window_execution(scope);
     run(scope, |scope| module.evaluate(scope))
 }
 
@@ -26,6 +27,7 @@ pub(crate) fn call_function<'s>(
     if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
         return None;
     }
+    crate::long_task::note_window_execution(scope);
     run(scope, |scope| function.call(scope, receiver, arguments))
 }
 

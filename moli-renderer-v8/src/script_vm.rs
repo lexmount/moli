@@ -719,6 +719,7 @@ mod input_dispatch;
 pub(crate) use input_dispatch::MouseDispatchCompletion;
 mod input_helpers;
 mod inspector;
+mod long_task_reporting;
 mod main_world;
 use main_world::MainWorld;
 #[cfg(feature = "devtools")]

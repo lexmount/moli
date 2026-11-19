@@ -377,11 +377,18 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
     }
 }
 
-pub(super) unsafe extern "C" fn promise_trace_hook(
+pub(super) unsafe extern "C" fn window_promise_hook(
     hook_type: v8::PromiseHookType,
-    _promise: v8::Local<v8::Promise>,
+    promise: v8::Local<v8::Promise>,
     _parent: v8::Local<v8::Value>,
 ) {
+    if hook_type == v8::PromiseHookType::Before && crate::long_task::TaskScope::is_active() {
+        let scope = pin!(unsafe { v8::CallbackScope::new(promise) });
+        crate::long_task::note_window_execution(&mut scope.init());
+    }
+    if !moli_trace::dom_binding_timing_enabled() {
+        return;
+    }
     match hook_type {
         v8::PromiseHookType::Init => moli_trace::record_promise_hook_init(),
         v8::PromiseHookType::Resolve => moli_trace::record_promise_hook_resolve(),

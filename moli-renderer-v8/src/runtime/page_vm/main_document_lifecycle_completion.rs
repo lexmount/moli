@@ -112,6 +112,7 @@ async fn execute_main_document_lifecycle_body_on_owner_local_task(
             });
 
             let lifecycle_task_started = Instant::now();
+            let long_task = crate::long_task::TaskScope::begin();
             let execution_result: Result<MainDocumentLifecycleExecution> = {
                 let mut step = page_vm.vm_mut().begin_main_document_lifecycle_body(body);
                 loop {
@@ -137,6 +138,7 @@ async fn execute_main_document_lifecycle_body_on_owner_local_task(
                     }
                 }
             };
+            page_vm.vm_mut().report_long_tasks(long_task.finish());
             let execution = match execution_result {
                 Ok(execution) => execution,
                 Err(error) => {

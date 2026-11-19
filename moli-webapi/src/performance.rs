@@ -3,6 +3,7 @@
 pub mod entries;
 pub mod entry_list;
 pub mod legacy;
+pub mod long_task;
 pub mod memory;
 pub mod name;
 pub mod observer;

@@ -144,6 +144,7 @@ pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
     super::measurement_interfaces::install(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     moli_webapi::performance::legacy::install(scope, template, interface_name);
+    moli_webapi::performance::long_task::install(scope, prototype, interface_name);
     match interface_name {
         "Performance" => {
             PerformancePrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);

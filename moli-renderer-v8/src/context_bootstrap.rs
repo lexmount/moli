@@ -561,6 +561,7 @@ pub(crate) use self::notification_runtime::{
 };
 #[cfg(test)]
 pub(crate) use self::performance_runtime::bind_window_performance_seed;
+pub(crate) use self::performance_runtime::record_long_task_entry;
 pub(crate) use self::performance_runtime::{
     FetchResourceTiming, ResourcePerformanceEntry, ResourceTimingInitiator,
     bind_document_performance, bind_window_document_performance, current_performance_time_origin,

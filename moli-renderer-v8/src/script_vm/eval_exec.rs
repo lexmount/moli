@@ -200,6 +200,8 @@ fn execute_source_text_on_current_stack_with_completion(
     report_target: UncaughtScriptReportTarget,
     completion_mode: SourceTextScriptCompletionMode,
 ) -> RawScriptExecutionResult<SourceTextScriptCompletion> {
+    let task_timing = crate::long_task::TaskScope::begin();
+    crate::long_task::note_window_execution(scope);
     let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     let result = run_source_text_on_current_stack_with_completion(
         scope,
@@ -225,6 +227,11 @@ fn execute_source_text_on_current_stack_with_completion(
             scope,
             provenance.map(CompiledStringProvenance::source_url),
         )?;
+    }
+    if let Some(task) = task_timing.finish()
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        unsafe { &mut *host_ptr }.report_long_task(scope, task);
     }
     result
 }

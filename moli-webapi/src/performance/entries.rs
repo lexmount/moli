@@ -605,40 +605,26 @@ fn performance_entry_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let receiver = args.this();
-    let Some(id) = performance_entry_slot_number(scope, receiver, PERFORMANCE_ENTRY_ID_SLOT) else {
+    if let Some(snapshot) = performance_entry_json_snapshot(scope, args.this()) {
+        rv.set(snapshot.into());
+    } else {
         throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    let Some(name) = PerformanceEntryName::from_entry(scope, receiver) else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    let Some(entry_type) =
-        performance_entry_slot_string(scope, receiver, PERFORMANCE_ENTRY_TYPE_SLOT)
-    else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    let Some(start_time) =
-        performance_entry_slot_number(scope, receiver, PERFORMANCE_ENTRY_START_TIME_SLOT)
-    else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    let Some(duration) =
-        performance_entry_slot_number(scope, receiver, PERFORMANCE_ENTRY_DURATION_SLOT)
-    else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    let Some(navigation_id) =
-        performance_entry_slot_number(scope, receiver, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)
-    else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    let snapshot = PerformanceEntryJsonSnapshotDeclaration::new(
+    }
+}
+
+pub(super) fn performance_entry_json_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let id = performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_ID_SLOT)?;
+    let name = PerformanceEntryName::from_entry(scope, entry)?;
+    let entry_type = performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_TYPE_SLOT)?;
+    let start_time =
+        performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_START_TIME_SLOT)?;
+    let duration = performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_DURATION_SLOT)?;
+    let navigation_id =
+        performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT)?;
+    PerformanceEntryJsonSnapshotDeclaration::new(
         id,
         name,
         entry_type,
@@ -647,8 +633,7 @@ fn performance_entry_to_json_callback<'s>(
         navigation_id,
     )
     .bind(scope)
-    .expect("PerformanceEntry toJSON snapshot declaration should bind");
-    rv.set(snapshot.into());
+    .ok()
 }
 
 fn performance_resource_timing_to_json_callback<'s>(
@@ -676,7 +661,7 @@ pub fn resource_timing_json_snapshot<'s>(
     )
 }
 
-fn performance_entry_base_attribute_getter_callback<'s>(
+pub(super) fn performance_entry_base_attribute_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -854,6 +839,8 @@ pub fn create_performance_entry<'s>(
         "mark" => "PerformanceMark",
         "measure" => "PerformanceMeasure",
         "resource" => "PerformanceResourceTiming",
+        "longtask" => "PerformanceLongTaskTiming",
+        "taskattribution" => "TaskAttributionTiming",
         _ => "PerformanceEntry",
     };
     web_api_interfaces::initialize(scope, entry, prototype_name)

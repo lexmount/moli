@@ -480,6 +480,7 @@ interfaces! {
     Path2D;
     Performance: EventTarget;
     PerformanceEntry;
+    PerformanceLongTaskTiming: PerformanceEntry;
     PerformanceMark: PerformanceEntry;
     PerformanceMeasure: PerformanceEntry;
     PerformanceNavigation;
@@ -654,6 +655,7 @@ interfaces! {
     SubtleCrypto;
     SyncEvent: ExtendableEvent;
     SyncManager;
+    TaskAttributionTiming: PerformanceEntry;
     Text: CharacterData;
     TextDecoder;
     TextDecoderStream;

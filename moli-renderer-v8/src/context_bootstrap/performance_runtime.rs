@@ -9,6 +9,7 @@ mod resource_initiator;
 pub(crate) use resource_initiator::ResourceTimingInitiator;
 mod install;
 mod lazy_subobjects;
+mod long_task;
 mod marks_measures;
 use moli_webapi::performance::memory;
 use moli_webapi::performance::name;
@@ -32,6 +33,9 @@ pub(in crate::context_bootstrap) const PERFORMANCE_NAVIGATION_SLOT: &str =
 
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_SLOT: &str =
     "__moliPerformanceEventCounts";
+pub(crate) use long_task::record_long_task_entry;
+pub(super) use long_task::{LONG_TASK_BUFFER_SLOT, long_task_dropped_entries_count};
+
 pub(super) const PERFORMANCE_NAVIGATION_ENTRY_SLOT: &str = "__moliPerformanceNavigationEntry";
 pub(super) const PERFORMANCE_LAST_ENTRY_ID_SLOT: &str = "__moliPerformanceLastEntryId";
 pub(super) const PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT: &str =
@@ -46,6 +50,7 @@ pub(in crate::context_bootstrap) const WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENT
     &[&str] = &[
     "event",
     "first-input",
+    "longtask",
     "mark",
     "measure",
     "navigation",

@@ -343,23 +343,29 @@ pub(super) fn take_performance_observer_dropped_entries_count<'s>(
     {
         return None;
     }
-    // Resource Timing is the bounded entry buffer currently exposed by
-    // Moli; mark/measure and the other timelines do not discard queued entries.
-    let observes_resource = performance_observer_entry_types(scope, observer)
-        .is_some_and(|types| array_contains_string(scope, types, "resource"));
-    let count = if observes_resource {
-        super::super::performance_runtime::ensure_current_performance_for_api(scope).map_or(
-            0,
-            |performance| {
-                super::super::performance_runtime::resource_timing_dropped_entries_count(
-                    scope,
-                    performance,
-                )
-            },
-        )
-    } else {
-        0
+    let types = performance_observer_entry_types(scope, observer);
+    use super::super::performance_runtime::{
+        ensure_current_performance_for_api, long_task_dropped_entries_count,
+        resource_timing_dropped_entries_count,
     };
+    let count = types
+        .and_then(|types| {
+            let resource = array_contains_string(scope, types, "resource");
+            let long_task = array_contains_string(scope, types, "longtask");
+            if !resource && !long_task {
+                return None;
+            }
+            let performance = ensure_current_performance_for_api(scope)?;
+            let mut count = 0_u64;
+            if resource {
+                count = resource_timing_dropped_entries_count(scope, performance);
+            }
+            if long_task {
+                count = count.saturating_add(long_task_dropped_entries_count(scope, performance));
+            }
+            Some(count)
+        })
+        .unwrap_or_default();
     set_performance_observer_bool_slot(
         scope,
         observer,

@@ -39,8 +39,15 @@ fn performance_timing_interface_exposure_interfaces_have_realm_local_constructor
         assert_eq!(vm.eval(r#"
 (() => {
   const assert = (ok, message) => { if (!ok) throw Error(message); };
-  const names = ["LargestContentfulPaint", "PerformanceEventTiming", "PerformancePaintTiming", "PerformanceServerTiming"];
-  const parents = {"LargestContentfulPaint": "PerformanceEntry", "PerformanceEventTiming": "PerformanceEntry", "PerformancePaintTiming": "PerformanceEntry", "PerformanceServerTiming": null};
+  const parents = {
+    LargestContentfulPaint: "PerformanceEntry",
+    PerformanceEventTiming: "PerformanceEntry",
+    PerformanceLongTaskTiming: "PerformanceEntry",
+    PerformancePaintTiming: "PerformanceEntry",
+    PerformanceServerTiming: null,
+    TaskAttributionTiming: "PerformanceEntry",
+  };
+  const names = Object.keys(parents);
   if (!document.documentElement) document.appendChild(document.createElement('html'));
   if (!document.body) document.documentElement.appendChild(document.createElement('body'));
   const child = document.createElement('iframe');
@@ -106,7 +113,9 @@ fn performance_timing_interface_exposure_interfaces_worker_exposure_follows_real
             for name in [
                 "LargestContentfulPaint",
                 "PerformanceEventTiming",
+                "PerformanceLongTaskTiming",
                 "PerformancePaintTiming",
+                "TaskAttributionTiming",
             ] {
                 let key = crate::util::v8str(scope, name);
                 assert_eq!(
