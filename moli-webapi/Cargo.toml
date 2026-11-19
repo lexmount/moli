@@ -27,6 +27,7 @@ cssparser = "0.38"
 moli-web-errors = { path = "../moli-web-errors" }
 moli-canvas = { path = "../moli-canvas" }
 moli-geometry = { path = "../moli-geometry" }
+moli-svg = { path = "../moli-svg" }
 moli-v8-util = { path = "../moli-v8-util" }
 moli-webapi-declare = { path = "../moli-webapi-declare" }
 moli-webidl = { path = "../moli-webidl" }

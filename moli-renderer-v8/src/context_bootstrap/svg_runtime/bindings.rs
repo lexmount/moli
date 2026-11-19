@@ -388,51 +388,6 @@ struct SvgTransformTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMatrix, enumerable)]
-struct SvgMatrixTemplateMethodsDeclaration {
-    #[webapi(method = "multiply", length = 1, callback = svg_matrix_multiply_callback)]
-    multiply: (),
-
-    #[webapi(method = "inverse", length = 0, callback = svg_matrix_inverse_callback)]
-    inverse: (),
-
-    #[webapi(method = "translate", length = 2, callback = svg_matrix_translate_callback)]
-    translate: (),
-
-    #[webapi(method = "scale", length = 1, callback = svg_matrix_scale_callback)]
-    scale: (),
-
-    #[webapi(
-        method = "scaleNonUniform",
-        length = 2,
-        callback = svg_matrix_scale_non_uniform_callback
-    )]
-    scale_non_uniform: (),
-
-    #[webapi(method = "rotate", length = 1, callback = svg_matrix_rotate_callback)]
-    rotate: (),
-
-    #[webapi(
-        method = "rotateFromVector",
-        length = 2,
-        callback = svg_matrix_rotate_from_vector_callback
-    )]
-    rotate_from_vector: (),
-
-    #[webapi(method = "flipX", length = 0, callback = svg_matrix_flip_x_callback)]
-    flip_x: (),
-
-    #[webapi(method = "flipY", length = 0, callback = svg_matrix_flip_y_callback)]
-    flip_y: (),
-
-    #[webapi(method = "skewX", length = 1, callback = svg_matrix_skew_x_callback)]
-    skew_x: (),
-
-    #[webapi(method = "skewY", length = 1, callback = svg_matrix_skew_y_callback)]
-    skew_y: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable)]
 struct SvgGraphicsElementTemplateMethodsDeclaration {
     #[webapi(method = "getBBox", length = 0, callback = svg_graphics_get_bbox_callback)]
@@ -1097,58 +1052,6 @@ struct SvgTransformTemplateAccessorsDeclaration {
         data = callback_data_index_value(scope, 2)
     )]
     angle: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SVGMatrix, enumerable)]
-struct SvgMatrixTemplateAccessorsDeclaration {
-    #[webapi(
-        accessor_property = "a",
-        getter = svg_matrix_getter,
-        setter = svg_matrix_setter,
-        data = callback_data_index_value(scope, 0)
-    )]
-    a: (),
-
-    #[webapi(
-        accessor_property = "b",
-        getter = svg_matrix_getter,
-        setter = svg_matrix_setter,
-        data = callback_data_index_value(scope, 1)
-    )]
-    b: (),
-
-    #[webapi(
-        accessor_property = "c",
-        getter = svg_matrix_getter,
-        setter = svg_matrix_setter,
-        data = callback_data_index_value(scope, 2)
-    )]
-    c: (),
-
-    #[webapi(
-        accessor_property = "d",
-        getter = svg_matrix_getter,
-        setter = svg_matrix_setter,
-        data = callback_data_index_value(scope, 3)
-    )]
-    d: (),
-
-    #[webapi(
-        accessor_property = "e",
-        getter = svg_matrix_getter,
-        setter = svg_matrix_setter,
-        data = callback_data_index_value(scope, 4)
-    )]
-    e: (),
-
-    #[webapi(
-        accessor_property = "f",
-        getter = svg_matrix_getter,
-        setter = svg_matrix_setter,
-        data = callback_data_index_value(scope, 5)
-    )]
-    f: (),
 }
 
 macro_rules! define_svg_animated_number_accessors {
@@ -2137,15 +2040,6 @@ pub(super) fn install_svg_transform_bindings<'s>(
     SvgTransformTemplateMethodsDeclaration::initialize_template(scope, template);
     SvgTransformTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
     SvgTransformTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
-}
-
-pub(super) fn install_svg_matrix_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-) {
-    let proto = template.prototype_template(scope);
-    SvgMatrixTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
-    SvgMatrixTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
 }
 
 pub(super) fn install_svg_graphics_element_bindings<'s>(

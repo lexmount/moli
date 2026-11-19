@@ -1,6 +1,7 @@
 //! SVG declaration values and the state populated by their factories.
 
 pub mod constants;
+pub mod matrix;
 
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{get_private_value, set_private_value};

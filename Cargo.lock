@@ -3818,6 +3818,7 @@ dependencies = [
  "moli-geometry",
  "moli-indexeddb-types",
  "moli-streams",
+ "moli-svg",
  "moli-time",
  "moli-url",
  "moli-v8-test-util",
