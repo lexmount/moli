@@ -160,8 +160,9 @@
           await rejection(name, container, [{publicKey, signal: controller({}).signal}], TypeErrorCtor);
         });
       }
-      if (typeof w.SharedArrayBuffer === 'function') {
-        for (const [index, binary] of [new w.SharedArrayBuffer(2), new Uint8Array(new w.SharedArrayBuffer(2)), new DataView(new w.SharedArrayBuffer(2))].entries()) {
+      {
+        const SharedBuffer = new w.WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
+        for (const [index, binary] of [new SharedBuffer(2), new Uint8Array(new SharedBuffer(2)), new DataView(new SharedBuffer(2))].entries()) {
           await run(name + '/reject shared BufferSource/' + index, async () => {
             const publicKey = name === 'create' ? validCreation() : validRequest(); publicKey.challenge = binary;
             await rejection(name, container, [{publicKey, signal: controller({}).signal}], TypeErrorCtor);
