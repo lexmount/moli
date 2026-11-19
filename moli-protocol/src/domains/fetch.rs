@@ -78,6 +78,9 @@ pub(in crate::domains) fn prepare_owner_disposal(
     session_id: Option<&str>,
 ) -> Option<PreparedFetchCleanup> {
     let (pending, policy) = conn.start_disable_fetch_for_session_owner(session_id)?;
+    let policy = policy.map(|pending| {
+        pending.map(moli_core::page::PendingPageCommand::retain_session_cleanup_authority)
+    });
     let owner = CommandOwnerScope::capture(conn, session_id);
     Some(PreparedFetchCleanup::new(
         conn,

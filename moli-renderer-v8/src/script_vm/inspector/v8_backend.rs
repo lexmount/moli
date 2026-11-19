@@ -430,9 +430,9 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     #[cfg(feature = "devtools")]
-    fn dispatch_next_io_command_from_owner(&self) {
+    fn dispatch_next_io_command_from_owner(&self) -> bool {
         let Some(command) = self.target.io_ref().claim_for_owner() else {
-            return;
+            return false;
         };
         let session_key = command.ticket().session();
         let session = self
@@ -440,7 +440,9 @@ impl RendererInspectorSessionExecutorLocal {
             .borrow()
             .get(&(command.agent_token, session_key.clone()))
             .cloned();
+        let completes_termination = command.completes_idle_termination() && session.is_some();
         self.dispatch_io_command_to_session(command, session);
+        completes_termination
     }
 
     #[cfg(feature = "devtools")]

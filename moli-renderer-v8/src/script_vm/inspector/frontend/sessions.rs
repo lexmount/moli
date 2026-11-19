@@ -111,10 +111,14 @@ impl RendererInspectorSessionConnection {
         let executor_registration = self.isolate_backend.register_session_executor_route(
             self.context_group_id,
             self.agent_token,
-            session_key,
+            session_key.clone(),
             &native.session,
             native.outbound.clone(),
         );
+        #[cfg(feature = "devtools")]
+        self.isolate_backend
+            .devtools_target()
+            .confirm_session_connection(self.agent_token, session_key);
         RendererFrontendInspectorSession {
             native,
             replayed_runtime_bindings: Vec::new(),

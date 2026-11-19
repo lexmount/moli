@@ -93,11 +93,6 @@ pub(super) fn execute_devtools_get_target_info_command(
         });
     }
     if let Some(target_info) = conn.devtools_target_info(wanted) {
-        if let Some(message) =
-            super::transient_no_page_devtools_target_info_error(conn, &target_info)
-        {
-            return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
-        }
         return Ok(DevToolsGetTargetInfoResult { target_info });
     }
     if conn.browser_context.is_none() && conn.inactive_browser_contexts.is_empty() {

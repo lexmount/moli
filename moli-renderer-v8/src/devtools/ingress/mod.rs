@@ -5,3 +5,6 @@ pub(crate) mod io;
 pub(crate) mod lane;
 #[cfg(feature = "devtools")]
 pub(crate) mod main;
+
+#[cfg(feature = "devtools")]
+pub(crate) mod session;

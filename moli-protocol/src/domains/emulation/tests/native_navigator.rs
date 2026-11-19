@@ -728,6 +728,8 @@ async fn hardware_concurrency_sessions_follow_agent_activation_and_detach() {
     for (session, expected) in [(0, json!(8)), (1, baseline)] {
         ctx.process_async(json!({"id":88114,"method":"Target.detachFromTarget","params":{"sessionId":sessions[session]}})).await;
         ctx.expect_result(88114, json!({}), None);
+        ctx.wait_for_direct_command_work_completion_for_test("native Emulation cleanup")
+            .await;
         assert_eq!(
             evaluate(&mut ctx, "navigator.hardwareConcurrency").await,
             expected

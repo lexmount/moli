@@ -226,7 +226,7 @@ impl RendererOwnerHandle {
                         } => {
                             debug_assert!(pending_turn.reply_tx.is_none());
                             pending_turns.push_front(RenderRuntimePendingTurn {
-                                reply_tx: Some(reply_tx),
+                                reply_tx,
                                 turn: *turn,
                                 allow_command_overtake: false,
                                 command_admission_output_predecessor,
@@ -589,9 +589,11 @@ impl RendererOwnerHandle {
                 command_admission_output_predecessor: _,
             } => {
                 self.cancel_pending_turn_on_owner_local_store(*turn);
-                let _ = main_reply_tx.send(Err(anyhow!(
-                    "Inspector Main receiver outcome escaped into owner command dispatch"
-                )));
+                if let Some(main_reply_tx) = main_reply_tx {
+                    let _ = main_reply_tx.send(Err(anyhow!(
+                        "Inspector Main receiver outcome escaped into owner command dispatch"
+                    )));
+                }
                 let _ = reply_tx.send(Err(anyhow!(
                     "renderer command unexpectedly entered the Inspector Main receiver"
                 )));
@@ -1090,8 +1092,12 @@ impl RendererOwnerHandle {
                 };
                 let (token, capture_policy, envelope, first_dispatch, reply_tx) =
                     dispatch.into_parts();
-                let command_admission_output_predecessor =
-                    renderer_output_fence_for_tail_on_bound_owner_local_store(token);
+                // An unobserved initialization has no Browser completion to
+                // keep the previous stream alive for. Its facts remain ordered
+                // by the same native journal as later commands.
+                let command_admission_output_predecessor = reply_tx
+                    .as_ref()
+                    .and_then(|_| renderer_output_fence_for_tail_on_bound_owner_local_store(token));
                 RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
                     reply_tx,
                     command_admission_output_predecessor,

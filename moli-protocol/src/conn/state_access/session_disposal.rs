@@ -3,7 +3,7 @@ use anyhow::Result;
 use super::ProtocolWorkflowState;
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, CompletedSessionPageUpdates,
-    CompletedSessionScriptCleanup, CompletedSessionWorkerCleanup, SessionPageUpdateResult,
+    CompletedSessionScriptCleanup, SessionPageUpdateResult,
 };
 use crate::domains::target::session_disposal::{
     FailedSessionPageRetirement, SessionDisposalIdentity,
@@ -181,11 +181,12 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn finish_session_page_updates(
         self,
         identity: &SessionDisposalIdentity,
-        owner: &CommandOwnerScope,
+        _owner: &CommandOwnerScope,
         completed: CompletedSessionPageUpdates,
     ) -> SessionPageUpdateResult {
-        let page = if identity.binding_is_current(self.connection) {
-            self.connection.loaded_page_mut_for_owner(owner)
+        let page = if identity.cleanup_binding_was_not_replaced(self.connection) {
+            self.connection
+                .loaded_page_mut_for_owner(identity.cleanup_owner())
         } else {
             None
         };
@@ -197,31 +198,7 @@ impl ProtocolWorkflowState<'_> {
         identity: &SessionDisposalIdentity,
         completed: CompletedSessionScriptCleanup,
     ) -> SessionPageUpdateResult {
-        let current = identity.binding_is_current(self.connection);
+        let current = identity.cleanup_binding_was_not_replaced(self.connection);
         completed.finish(current.then_some(self.connection))
-    }
-
-    pub(crate) fn finish_session_runtime_cleanup(
-        self,
-        identity: &SessionDisposalIdentity,
-        completed: Option<CompletedSessionWorkerCleanup>,
-    ) -> (
-        Vec<BackgroundProtocolEvent>,
-        Vec<BackgroundProtocolEvent>,
-        Option<anyhow::Error>,
-    ) {
-        if !identity.binding_is_current(self.connection) {
-            return (Vec::new(), Vec::new(), None);
-        }
-        let error = completed.and_then(|completed| completed.finish().err());
-        let mut background_events = Vec::new();
-        let mut protocol_events = Vec::new();
-        crate::domains::runtime::fail_pending_session_calls(
-            self.connection,
-            &mut background_events,
-            &mut protocol_events,
-            identity.plan().session_id(),
-        );
-        (background_events, protocol_events, error)
     }
 }

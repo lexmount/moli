@@ -5,14 +5,25 @@ use crate::conn::target::TargetAttachRollbackPlan;
 use crate::conn::{
     BackgroundProtocolEvent, CommandWorkflowContext, FailedInitialDocumentPageBuild,
 };
-use crate::conn::{
-    CommandOwnerScope, CompletedRuntimeBindingPageCommandDispatch,
-    PendingRuntimeBindingPageCommandDispatch, TargetAttachSessionCommit, TargetEventPlan,
-};
+use crate::conn::{TargetAttachSessionCommit, TargetEventPlan};
 use crate::domains::target::session_disposal::{LiveSessionDisposal, SessionDisposalIdentity};
 use crate::domains::target::{PreparedPopupNavigation, TargetCreationCommit};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_attached_target_initial_navigation(
+        self,
+        owner: crate::conn::CommandOwnerScope,
+        host: Option<crate::conn::PageTargetHostIdentity>,
+    ) -> Option<PreparedPopupNavigation> {
+        let current = self
+            .connection
+            .page_target_host_identity_for_owner(&owner)?;
+        if !host.as_ref().is_some_and(|host| host.matches(&current)) {
+            return None;
+        }
+        let (_, target) = self.connection.target_owner_identity_for_owner(&owner)?;
+        crate::domains::target::prepare_initial_target_url_navigation(self.connection, &target?)
+    }
     pub(crate) fn created_target_has_channel_preload(
         self,
         host: &crate::conn::ProtocolPageHostScope,
@@ -58,94 +69,6 @@ impl ProtocolWorkflowState<'_> {
             ));
         }
         commit.emit_automation_creation(self.connection, context.protocol_events_mut())
-    }
-
-    pub(crate) fn prepare_target_attachment_bindings(
-        self,
-        owner: CommandOwnerScope,
-    ) -> Result<PendingRuntimeBindingPageCommandDispatch> {
-        anyhow::ensure!(
-            !self.connection.target_is_closing_for_owner(&owner),
-            crate::domains::target::session_disposal::SessionDisposalError::Closing
-        );
-        self.connection
-            .start_initialize_runtime_inspector_session_for_owner(&owner)
-    }
-
-    /// Same exact Page check as the dialog commands use: a dialog that is
-    /// already published for this target must not park the attach response
-    /// behind its modal.
-    pub(crate) fn has_current_javascript_dialog_for_owner(self, owner: &CommandOwnerScope) -> bool {
-        self.connection
-            .has_current_javascript_dialog_for_owner(owner)
-    }
-
-    pub(crate) fn finish_target_attachment_bindings(
-        self,
-        completed: CompletedRuntimeBindingPageCommandDispatch,
-        context: &mut CommandWorkflowContext,
-    ) -> Result<()> {
-        if let Some(predecessor) = completed.renderer_output_predecessor() {
-            context
-                .context_mut()
-                .set_renderer_output_predecessor(predecessor);
-        }
-        self.connection
-            .complete_runtime_binding_page_command(completed)
-    }
-
-    /// Publish the admitted wait to the existing task supervisor. It owns
-    /// cancellation and removes the task when its completion is consumed.
-    pub(crate) fn defer_target_attachment_binding_apply(
-        self,
-        owner: &CommandOwnerScope,
-        pending: PendingRuntimeBindingPageCommandDispatch,
-    ) {
-        let target_id = self
-            .connection
-            .target_owner_identity_for_owner(owner)
-            .and_then(|(_, target)| target);
-        let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
-            let result = pending.wait().await;
-            context.defer_owner_turn_completion(move |state, _| {
-                state.finish_deferred_target_attachment_bindings(result);
-                crate::domains::command_output::CommandOutputPlan::default()
-            });
-            context.complete(crate::domains::command_output::CommandOutputPlan::default())
-        });
-        crate::conn::PendingProtocolSchedulerWork::publish_workflow(
-            self.connection,
-            workflow,
-            target_id,
-        );
-    }
-
-    fn finish_deferred_target_attachment_bindings(
-        self,
-        result: Result<CompletedRuntimeBindingPageCommandDispatch>,
-    ) {
-        // The attach response has already been published. Refresh the state
-        // without adding a response predecessor to this later owner turn.
-        let result = result.and_then(|completed| {
-            self.connection
-                .complete_runtime_binding_page_command(completed)
-        });
-        if let Err(error) = result
-            && !error.is::<crate::conn::NoDocumentLoaded>()
-        {
-            tracing::warn!(%error, "target attach renderer binding state apply failed");
-        }
-    }
-
-    pub(crate) fn commit_target_attachment(
-        self,
-        prepared: TargetAttachSessionCommit,
-        target_info: crate::automation::DevToolsTargetInfo,
-    ) -> Result<
-        crate::domains::command_output::CommandOutputPlan,
-        crate::domains::command_output::CommandOutputPlan,
-    > {
-        crate::domains::target::commit_target_attachment(self.connection, prepared, target_info)
     }
 
     pub(crate) fn prepare_target_attachment_rollback(

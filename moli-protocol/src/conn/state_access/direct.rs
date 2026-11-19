@@ -683,8 +683,7 @@ mod tests {
     #[tokio::test]
     async fn complete_session_detachment_uses_direct_access_without_a_mailbox() {
         use crate::conn::{
-            BrowserContext, CdpCommandTaskStep, CommandDispatchContext, CommandOwnerScope,
-            ParsedCdpCommand,
+            BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
         };
         use crate::testing::TestContext;
         use serde_json::json;
@@ -717,141 +716,64 @@ mod tests {
             context.process_async(json!({"id": id, "sessionId": "SID-direct-detachment", "method": method, "params": params})).await;
             assert!(context.take_response_by_id(id).get("result").is_some());
         }
-        let owner = context.state;
-        let handle = owner.handle();
-        let command = ParsedCdpCommand::parse_str(json!({
-            "id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-direct-detachment"}
-        }).to_string()).unwrap();
-        let mut dispatch_context = CommandDispatchContext::default();
-        let CdpCommandTaskStep::Pending(pending) = handle
-            .with_state(|state| {
-                state.start_parsed_command_dispatch_with_context(&command, &mut dispatch_context)
-            })
-            .unwrap()
-        else {
-            panic!("native cleanup must be owned work");
-        };
-
-        handle
-            .with_state(|state| {
-                let connection = state.connection;
-                assert!(
-                    connection.state_access.is_some(),
-                    "no actor is pumping a mailbox"
-                );
-                assert!(connection.session_is_closing("SID-direct-detachment"));
-                let owner = CommandOwnerScope::for_session("SID-direct-detachment");
-                let inputs = connection.navigation_load_inputs_for_owner(&owner);
-                assert!(inputs.document_start_scripts.is_empty());
-                assert!(inputs.runtime_bindings.is_empty());
-                assert!(
-                    inputs
-                        .runtime_inspector_session_restore_snapshots
-                        .is_empty()
-                );
-                assert!(!inputs.script_execution_disabled);
-                assert!(
-                    !connection
-                        .target_owner_state_for_session(Some("SID-direct-detachment"))
-                        .unwrap()
-                        .document_start_scripts
-                        .is_empty(),
-                    "script cleanup authority remains until native results are consumed"
-                );
-            })
-            .unwrap();
-
-        for (id, method, session, params) in [
-            (11, "Browser.getVersion", None, json!({})),
-            (
-                12,
-                "Page.addScriptToEvaluateOnNewDocument",
-                Some("SID-direct-detachment"),
-                json!({"source": "throw 1"}),
-            ),
-            (
-                13,
-                "Fetch.continueRequest",
-                Some("SID-direct-detachment"),
-                json!({"requestId": "missing"}),
-            ),
-        ] {
-            let mut value = json!({"id": id, "method": method, "params": params});
-            if let Some(session) = session {
-                value["sessionId"] = json!(session);
-            }
-            let command = ParsedCdpCommand::parse_str(value.to_string()).unwrap();
-            let CdpCommandTaskStep::Complete(outcome) = handle
-                .with_state(|state| {
-                    state.start_parsed_command_dispatch_with_context(
-                        &command,
-                        &mut CommandDispatchContext::default(),
-                    )
-                })
-                .unwrap()
-            else {
-                panic!("the independent command must finish before cleanup is polled");
-            };
-            let response = outcome
-                .into_parts()
-                .0
-                .into_iter()
-                .find(|message| message["id"] == id)
-                .unwrap();
-            match id {
-                11 => assert!(response.get("result").is_some()),
-                12 => assert_eq!(response["error"]["message"], "Session is closing"),
-                13 => assert_ne!(
-                    response["error"]["message"], "Session is closing",
-                    "continuations bypass Closing"
-                ),
-                _ => unreachable!(),
-            }
-        }
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(30), pending.wait())
-            .await
-            .expect("all handlers must finish using synchronous access");
-        assert!(
-            handle
-                .with_state(|state| state
-                    .connection
-                    .has_attached_devtools_session("SID-direct-detachment"))
-                .unwrap(),
-            "a ready result cannot unbind before the command owner consumes it"
-        );
-        let step = handle
-            .with_state(|state| {
-                state.complete_command_dispatch_with_context(completed, &mut dispatch_context)
-            })
-            .unwrap();
-        let CdpCommandTaskStep::Complete(outcome) = step else {
-            panic!("detachment must finish synchronously");
-        };
-        let messages = outcome.into_parts().0;
+        let command = ParsedCdpCommand::parse_str(json!({"id":10,"method":"Target.detachFromTarget","params":{"sessionId":"SID-direct-detachment"}}).to_string()).unwrap();
+        let mut dispatch = CommandDispatchContext::default();
+        let step = context.with_fixture(|conn| {
+            conn.start_parsed_command_dispatch_with_context(&command, &mut dispatch)
+        });
+        assert!(matches!(&step, CdpCommandTaskStep::Complete(_)));
+        let (messages, work) = context
+            .complete_command_task_step_with_context_for_test(step, &mut dispatch)
+            .await;
         let response = messages
             .iter()
             .position(|message| message["id"] == 10)
             .unwrap();
-        assert!(messages[response].get("result").is_some());
         let detached = messages
             .iter()
             .position(|message| message["method"] == "Target.detachedFromTarget")
             .unwrap();
-        assert!(
-            response < detached,
-            "explicit target detachment preserves its response/event boundary"
-        );
-        assert!(
-            !handle
-                .with_state(|state| state
-                    .connection
-                    .has_attached_devtools_session("SID-direct-detachment"))
-                .unwrap()
-        );
+        assert!(response < detached);
+        context.with_fixture(|conn| {
+            assert!(conn.state_access.is_some());
+            assert!(!conn.has_attached_devtools_session("SID-direct-detachment"));
+        });
+        context
+            .process_async(json!({"id":11,"method":"Browser.getVersion"}))
+            .await;
+        assert!(context.take_response_by_id(11).get("result").is_some());
+        for method in [
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Fetch.continueRequest",
+        ] {
+            context.process_async(json!({"id":12,"sessionId":"SID-direct-detachment","method":method,"params":{}})).await;
+            assert!(context.take_response_by_id(12).get("error").is_some());
+        }
+        context
+            .route_direct_command_output_for_test(Vec::new(), work)
+            .await;
+        context
+            .wait_for_direct_command_work_completion_for_test("captured native detachment")
+            .await;
+        context.with_fixture(|conn| {
+            let owner = crate::conn::CommandOwnerScope::for_route(
+                crate::conn::CdpSessionRoute::PageTarget {
+                    browser_context_id: "BID-direct-detachment".into(),
+                    target_id: "TID-direct-detachment".into(),
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                },
+            );
+            assert!(
+                conn.target_owner_state_for_owner(&owner)
+                    .unwrap()
+                    .document_start_scripts
+                    .is_empty()
+            );
+        });
     }
 
     #[tokio::test]
-    async fn cancelled_detachment_observes_page_close_before_releasing_its_binding() {
+    async fn dropping_detachment_response_does_not_cancel_its_native_cleanup() {
         use crate::conn::{
             BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
         };
@@ -870,104 +792,48 @@ mod tests {
             )
             .await;
         context.process_async(json!({"id": 1, "sessionId": "SID-cancel-detachment", "method": "Page.addScriptToEvaluateOnNewDocument", "params": {"source": "globalThis.cancelPreload = true;"}})).await;
-        let owner = context.state;
-        let handle = owner.handle();
-        let command = ParsedCdpCommand::parse_str(json!({"id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-cancel-detachment"}}).to_string()).unwrap();
-        let mut dispatch_context = CommandDispatchContext::default();
-        let CdpCommandTaskStep::Pending(pending) = handle
-            .with_state(|state| {
-                state.start_parsed_command_dispatch_with_context(&command, &mut dispatch_context)
-            })
-            .unwrap()
-        else {
-            panic!("cleanup must have an owned wait");
-        };
-        assert!(pending.owns_session_disposal());
-        let mut retained_context = dispatch_context.clone();
-        drop(pending);
-        let recovery = handle
-            .with_state(|state| {
-                state.complete_failed_command_wait_with_context(
-                    Some(10),
-                    None,
-                    "controlled cancellation",
-                    &mut dispatch_context,
-                )
-            })
-            .unwrap();
-        let CdpCommandTaskStep::Pending(recovery) = recovery else {
-            panic!("failure retains the native close acknowledgement");
-        };
-        assert!(recovery.owns_session_disposal());
-        assert!(
-            retained_context.take_command_failure_cleanup().is_none(),
-            "cloned contexts share one recovery authority"
-        );
-        assert!(
-            handle
-                .with_state(|state| state
-                    .connection
-                    .has_attached_devtools_session("SID-cancel-detachment"))
-                .unwrap()
-        );
-        assert!(
-            handle
-                .with_state(|state| state
-                    .connection
-                    .renderer_page_residence_identity_for_owner(
-                        &crate::conn::CommandOwnerScope::for_session("SID-cancel-detachment"),
-                    )
-                    .is_none())
-                .unwrap()
-        );
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(30), recovery.wait())
-            .await
-            .unwrap();
-        assert!(
-            handle
-                .with_state(|state| state
-                    .connection
-                    .has_attached_devtools_session("SID-cancel-detachment"))
-                .unwrap()
-        );
-        let step = handle
-            .with_state(|state| {
-                state.complete_command_dispatch_with_context(completed, &mut dispatch_context)
-            })
-            .unwrap();
-        let CdpCommandTaskStep::Complete(outcome) = step else {
-            panic!("recovery must terminate the command");
-        };
-        let messages = outcome.into_parts().0;
-        assert_eq!(
-            messages
-                .iter()
-                .filter(|message| message["id"] == 10)
-                .count(),
-            1
-        );
-        assert!(
-            messages
-                .iter()
-                .find(|message| message["id"] == 10)
-                .unwrap()
-                .get("error")
-                .is_some()
-        );
-        assert!(
-            !handle
-                .with_state(|state| state
-                    .connection
-                    .has_attached_devtools_session("SID-cancel-detachment"))
-                .unwrap()
-        );
+        let command = ParsedCdpCommand::parse_str(json!({"id":10,"method":"Target.detachFromTarget","params":{"sessionId":"SID-cancel-detachment"}}).to_string()).unwrap();
+        let mut dispatch = CommandDispatchContext::default();
+        let step = context.with_fixture(|conn| {
+            conn.start_parsed_command_dispatch_with_context(&command, &mut dispatch)
+        });
+        assert!(matches!(&step, CdpCommandTaskStep::Complete(_)));
+        let (messages, work) = context
+            .complete_command_task_step_with_context_for_test(step, &mut dispatch)
+            .await;
+        drop(messages); // Losing frontend observation cannot own native cleanup.
+        context.with_fixture(|conn| {
+            assert!(!conn.has_attached_devtools_session("SID-cancel-detachment"))
+        });
+        context
+            .route_direct_command_output_for_test(Vec::new(), work)
+            .await;
+        context
+            .wait_for_direct_command_work_completion_for_test(
+                "cleanup after dropped Browser response",
+            )
+            .await;
+        context.with_fixture(|conn| {
+            let owner = crate::conn::CommandOwnerScope::for_route(
+                crate::conn::CdpSessionRoute::PageTarget {
+                    browser_context_id: "BID-cancel-detachment".into(),
+                    target_id: "TID-cancel-detachment".into(),
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                },
+            );
+            assert!(
+                conn.target_owner_state_for_owner(&owner)
+                    .unwrap()
+                    .document_start_scripts
+                    .is_empty()
+            );
+            assert!(conn.loaded_page_mut_for_owner(&owner).is_some());
+        });
     }
 
     #[tokio::test]
-    async fn parent_detachment_joins_a_child_already_being_disposed() {
-        use crate::conn::{
-            BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
-        };
+    async fn parent_detachment_preserves_a_childs_already_owned_native_cleanup() {
+        use crate::conn::BrowserContext;
         use crate::testing::TestContext;
         use serde_json::json;
 
@@ -988,84 +854,40 @@ mod tests {
                 route,
             )
         });
-        let owner = context.state;
-        let handle = owner.handle();
-        let mut child_context = CommandDispatchContext::default();
-        let mut parent_context = CommandDispatchContext::default();
-        let child = ParsedCdpCommand::parse_str(json!({"id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-child"}}).to_string()).unwrap();
-        let parent = ParsedCdpCommand::parse_str(json!({"id": 11, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-parent"}}).to_string()).unwrap();
-        let CdpCommandTaskStep::Pending(child) = handle
-            .with_state(|state| {
-                state.start_parsed_command_dispatch_with_context(&child, &mut child_context)
-            })
-            .unwrap()
-        else {
-            panic!("child cleanup must be pending");
-        };
-        let CdpCommandTaskStep::Pending(parent) = handle
-            .with_state(|state| {
-                state.start_parsed_command_dispatch_with_context(&parent, &mut parent_context)
-            })
-            .unwrap()
-        else {
-            panic!("parent must join its closing child");
-        };
-        let parent = parent.wait();
-        tokio::pin!(parent);
-        tokio::select! { biased;
-            _ = &mut parent => panic!("the child binding has not been released"),
-            _ = std::future::ready(()) => {},
-        }
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
-            .await
-            .unwrap();
-        let child = handle
-            .with_state(|state| {
-                state.complete_command_dispatch_with_context(completed, &mut child_context)
-            })
-            .unwrap();
-        let CdpCommandTaskStep::Complete(child) = child else {
-            panic!("child must finish");
-        };
-        assert_eq!(
-            child
-                .into_parts()
-                .0
+        let child_work = context.process_command_only_async(json!({"id":10,"method":"Target.detachFromTarget","params":{"sessionId":"SID-child"}})).await;
+        context.with_fixture(|conn| assert!(!conn.has_attached_devtools_session("SID-child")));
+        context.process_async(json!({"id":11,"method":"Target.detachFromTarget","params":{"sessionId":"SID-parent"}})).await;
+        let messages = context.take_all();
+        assert!(
+            messages
                 .iter()
-                .filter(|event| event["method"] == "Target.detachedFromTarget"
-                    && event["params"]["sessionId"] == "SID-child")
+                .any(|message| message["id"] == 10 && message.get("result").is_some())
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message["id"] == 11 && message.get("result").is_some())
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["method"] == "Target.detachedFromTarget"
+                    && message["params"]["sessionId"] == "SID-child")
                 .count(),
             1
         );
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(30), parent)
-            .await
-            .unwrap();
-        let parent = handle
-            .with_state(|state| {
-                state.complete_command_dispatch_with_context(completed, &mut parent_context)
-            })
-            .unwrap();
-        let CdpCommandTaskStep::Complete(parent) = parent else {
-            panic!("parent must finish");
-        };
-        let events = parent.into_parts().0;
-        assert!(
-            events
-                .iter()
-                .any(|event| event["id"] == 11 && event.get("result").is_some())
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| event["method"] == "Target.detachedFromTarget"
-                    && event["params"]["sessionId"] == "SID-child")
-        );
-        handle
-            .with_state(|state| {
-                assert!(!state.connection.has_attached_devtools_session("SID-parent"));
-                assert!(!state.connection.has_attached_devtools_session("SID-child"));
-            })
-            .unwrap();
+        context
+            .route_direct_command_output_for_test(Vec::new(), child_work)
+            .await;
+        context
+            .wait_for_direct_command_work_completion_for_test(
+                "child cleanup after parent detachment",
+            )
+            .await;
+        context.with_fixture(|conn| {
+            assert!(!conn.has_attached_devtools_session("SID-parent"));
+            assert!(!conn.has_attached_devtools_session("SID-child"));
+        });
     }
 
     #[tokio::test]
@@ -1151,8 +973,8 @@ mod tests {
                         .len()
                 })
                 .unwrap(),
-            1,
-            "metadata is retained until the exact native result is consumed"
+            0,
+            "Browser scripts are revoked before native result consumption"
         );
 
         release.send(()).unwrap();

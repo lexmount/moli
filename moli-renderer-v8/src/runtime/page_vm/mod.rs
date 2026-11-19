@@ -3989,7 +3989,8 @@ impl PageVm {
                     self.report_snapshot_cache = None;
                 }
             }
-            super::RendererPageStateCapturePolicy::ProtocolTurn => {
+            super::RendererPageStateCapturePolicy::ProtocolTurn
+            | super::RendererPageStateCapturePolicy::BackgroundInitialization => {
                 if self.report.mark_globals_snapshot_dirty() {
                     self.report_snapshot_cache = None;
                 }

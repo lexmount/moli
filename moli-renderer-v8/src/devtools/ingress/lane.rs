@@ -4,6 +4,10 @@ use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 
 pub(crate) trait RendererDevToolsIngressCommand {
     fn ingress_command_id(&self) -> u64;
+    fn has_cleanup_authority(&self) -> bool {
+        false
+    }
+    fn retain_cleanup_authority(&mut self) {}
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -13,6 +17,10 @@ pub(crate) struct RendererDevToolsSessionLaneKey {
 }
 
 impl RendererDevToolsSessionLaneKey {
+    pub(crate) fn belongs_to_agent(&self, agent: RendererDevToolsAgentToken) -> bool {
+        self.agent_token == agent
+    }
+
     pub(crate) fn new(
         agent_token: RendererDevToolsAgentToken,
         session: DevToolsSessionKey,
@@ -156,7 +164,10 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
                 .get_mut(&lane_key)
                 .expect("an active DevTools session lane must still exist");
             assert_eq!(lane.active_command_id.take(), Some(command_id), "{message}");
-            let make_ready = lane.pending_detaches == 0 && !lane.queued.is_empty() && !lane.ready;
+            let make_ready = !lane.ready
+                && lane.queued.front().is_some_and(|command| {
+                    lane.pending_detaches == 0 || command.has_cleanup_authority()
+                });
             if make_ready {
                 lane.ready = true;
             }
@@ -216,7 +227,34 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
             .pending_detaches
             .checked_add(1)
             .expect("renderer DevTools session pending-detach count overflow");
-        lane.queued.drain(..).collect()
+        let mut canceled = Vec::new();
+        for command in std::mem::take(&mut lane.queued) {
+            if command.has_cleanup_authority() {
+                lane.queued.push_back(command);
+            } else {
+                canceled.push(command);
+            }
+        }
+        if lane.active_command_id.is_none() && !lane.queued.is_empty() {
+            lane.ready = true;
+            self.ready_sessions.push_back(lane_key.clone());
+        }
+        canceled
+    }
+
+    pub(crate) fn retain_cleanup_authority(&mut self, command_id: u64) {
+        for lane in self.sessions.values_mut() {
+            if let Some(command) = lane
+                .queued
+                .iter_mut()
+                .find(|command| command.ingress_command_id() == command_id)
+            {
+                command.retain_cleanup_authority();
+                return;
+            }
+        }
+        // An already claimed command retains its native capability until its
+        // observed completion. Detach never cancels an active owner turn.
     }
 
     /// Releases replacement frontend commands only after every detach queued
@@ -266,6 +304,42 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
         self.sessions
             .retain(|_, lane| lane.active_command_id.is_some());
         commands
+    }
+
+    pub(crate) fn drain_queued_if(&mut self, mut should_drain: impl FnMut(&C) -> bool) -> Vec<C> {
+        let mut drained = Vec::new();
+        for lane in self.sessions.values_mut() {
+            let mut retained = VecDeque::with_capacity(lane.queued.len());
+            while let Some(command) = lane.queued.pop_front() {
+                if should_drain(&command) {
+                    drained.push(command);
+                } else {
+                    retained.push_back(command);
+                }
+            }
+            lane.queued = retained;
+            if lane.queued.is_empty() {
+                lane.ready = false;
+            }
+        }
+        self.sessions.retain(|_, lane| {
+            lane.pending_detaches != 0
+                || lane.active_command_id.is_some()
+                || !lane.queued.is_empty()
+        });
+        self.ready_sessions
+            .retain(|key| self.sessions.get(key).is_some_and(|lane| lane.ready));
+        drained
+    }
+
+    pub(crate) fn has_eligible(&self, mut eligible: impl FnMut(&C) -> bool) -> bool {
+        !self.closed
+            && self.ready_sessions.iter().any(|key| {
+                self.sessions
+                    .get(key)
+                    .and_then(|lane| lane.queued.front())
+                    .is_some_and(&mut eligible)
+            })
     }
 
     pub(crate) fn has_ready(&self) -> bool {

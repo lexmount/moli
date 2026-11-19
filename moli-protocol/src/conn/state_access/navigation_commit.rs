@@ -198,9 +198,17 @@ impl ProtocolWorkflowState<'_> {
                 PreparedDocumentCommitError::MissingCommitIdentity.into(),
             )
         })?;
+        let inspector_endpoint = navigation.inspector_endpoint();
         if !conn
             .runtime_session_owner_slot_mut_for_owner(owner)
-            .is_some_and(|slot| slot.register_renderer_document_commit(token, attachment, fact))
+            .is_some_and(|slot| {
+                slot.register_renderer_document_commit(
+                    token,
+                    attachment,
+                    fact,
+                    Some(inspector_endpoint),
+                )
+            })
         {
             return Err(RendererPageReplacementError::document_preserved(
                 PreparedDocumentCommitError::RequestNotCurrent.into(),

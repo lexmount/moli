@@ -718,25 +718,23 @@ mod tests {
 
     #[tokio::test]
     async fn shared_worker_close_uses_direct_with_state_while_original_cleanup_waits() {
-        let owner = crate::conn::ProtocolStateOwner::new(fixture());
-        let handle = owner.handle();
+        let mut ctx = crate::testing::TestContext::from_conn(fixture());
+        let handle = ctx.handle();
         let detach_command = ParsedCdpCommand::parse_str(
             json!({"id":701,"method":"Target.detachFromTarget","params":{"sessionId":SESSION}})
                 .to_string(),
         )
         .unwrap();
         let mut detach_context = CommandDispatchContext::default();
-        let CdpCommandTaskStep::Pending(detach) = handle
+        let detach_step = handle
             .with_state(|state| {
                 state.start_parsed_command_dispatch_with_context(
                     &detach_command,
                     &mut detach_context,
                 )
             })
-            .unwrap()
-        else {
-            panic!("direct detachment has owned waits");
-        };
+            .unwrap();
+        assert!(matches!(&detach_step, CdpCommandTaskStep::Complete(_)));
         let close_command = ParsedCdpCommand::parse_str(
             json!({"id":702,"method":"Target.closeTarget","params":{"targetId":TARGET}})
                 .to_string(),
@@ -751,8 +749,7 @@ mod tests {
         else {
             panic!("direct SharedWorker close owns its wait");
         };
-        let mut close = Box::pin(close.wait());
-        assert!(close.as_mut().now_or_never().is_none());
+        let close = Box::pin(close.wait());
         for id in 710..718 {
             let command = ParsedCdpCommand::parse_str(
                 json!({"id":id,"method":"Browser.getVersion"}).to_string(),
@@ -767,16 +764,13 @@ mod tests {
                 CdpCommandTaskStep::Complete(_)
             ));
         }
-        let detached = tokio::time::timeout(std::time::Duration::from_secs(10), detach.wait())
-            .await
-            .unwrap();
-        assert!(matches!(
-            handle
-                .with_state(|state| state
-                    .complete_command_dispatch_with_context(detached, &mut detach_context))
-                .unwrap(),
-            CdpCommandTaskStep::Complete(_)
-        ));
+        let (_, work) = ctx
+            .complete_command_task_step_with_context_for_test(detach_step, &mut detach_context)
+            .await;
+        ctx.route_direct_command_output_for_test(Vec::new(), work)
+            .await;
+        ctx.wait_for_direct_command_work_completion_for_test("detached SharedWorker cleanup")
+            .await;
         let completed = tokio::time::timeout(std::time::Duration::from_secs(10), close)
             .await
             .unwrap();
@@ -895,7 +889,7 @@ mod tests {
             let original_route = conn.session_route(Some(SESSION)).unwrap();
             let mut ctx = crate::testing::TestContext::from_conn(conn);
             let mut detach_context = CommandDispatchContext::default();
-            let CdpCommandTaskStep::Pending(detach) = ctx.with_fixture(|conn| {
+            let detach_step = ctx.with_fixture(|conn| {
                 start(
                     conn,
                     601,
@@ -903,9 +897,8 @@ mod tests {
                     json!({"sessionId":SESSION}),
                     &mut detach_context,
                 )
-            }) else {
-                panic!("original detachment owns its handlers");
-            };
+            });
+            assert!(matches!(&detach_step, CdpCommandTaskStep::Complete(_)));
             let mut close_context = CommandDispatchContext::default();
             let CdpCommandTaskStep::Pending(close) = ctx.with_fixture(|conn| {
                 start(
@@ -919,9 +912,13 @@ mod tests {
                 panic!("close joins the admitted cleanup");
             };
             let mut close = Box::pin(close.wait());
-            assert!(close.as_mut().now_or_never().is_none());
-            let completed = drive(&mut ctx, *detach).await;
-            let detached = ctx.with_fixture(|conn| finish(conn, completed, &mut detach_context));
+            let (detached, work) = ctx
+                .complete_command_task_step_with_context_for_test(detach_step, &mut detach_context)
+                .await;
+            ctx.route_direct_command_output_for_test(Vec::new(), work)
+                .await;
+            ctx.wait_for_direct_command_work_completion_for_test("original SharedWorker cleanup")
+                .await;
             assert_eq!(
                 detached
                     .iter()

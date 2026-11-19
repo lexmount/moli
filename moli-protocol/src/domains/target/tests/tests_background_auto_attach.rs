@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_auto_attach_true_ensures_existing_background_initial_document_before_attached_event() {
+async fn auto_attach_registers_before_initial_document_and_agent_commands_wait_for_adoption() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -39,44 +39,42 @@ async fn set_auto_attach_true_ensures_existing_background_initial_document_befor
         )
     });
 
-    ctx.process_async(json!({
-        "id": 10330,
-        "method": "Target.setAutoAttach",
-        "params": {
-            "autoAttach": true,
-            "waitForDebuggerOnStart": false
-        }
-    }))
-    .await;
-
-    ctx.expect_result(10330, json!({}), None);
-    let attached = ctx.take_one();
-    assert_eq!(attached["method"], "Target.attachedToTarget");
+    let (messages, backend) = browser_registration_without_backend_progress(&mut ctx, json!({
+        "id":10330,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":false}
+    })).await;
+    assert!(
+        messages
+            .iter()
+            .any(|value| value["id"] == 10330 && value.get("result").is_some())
+    );
+    let attached = messages
+        .iter()
+        .find(|value| value["method"] == "Target.attachedToTarget")
+        .unwrap();
     assert_eq!(
         attached["params"]["targetInfo"]["targetId"],
         "TID-background-pending"
     );
-    let session_id = attached["params"]["sessionId"]
-        .as_str()
-        .expect("background session id")
-        .to_owned();
+    let session_id = attached["params"]["sessionId"].as_str().unwrap().to_owned();
     {
         ctx.with_fixture(|conn| {
-let bc = conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(
-            bc.pending_document_page_build_count(),
-            0,
-            "auto-attach must complete background initial document before emitting attachedToTarget"
-        );
-        assert!(
-            bc.background_target("TID-background-pending")
-                .expect("background target")
-                .has_loaded_page(),
-            "attached background target should expose a current Page immediately"
-        );
-});
+            let bc = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(
+                bc.pending_document_page_build_count(),
+                1,
+                "auto-attach publishes the Browser session before the shared Page is adopted"
+            );
+            assert!(
+                !bc.background_target("TID-background-pending")
+                    .expect("background target")
+                    .has_loaded_page(),
+                "backend readiness is a later boundary"
+            );
+        });
     }
 
+    ctx.route_direct_command_output_for_test(Vec::new(), backend)
+        .await;
     ctx.process_async(json!({
         "id": 10331,
         "method": "Runtime.evaluate",

@@ -110,6 +110,8 @@ impl RendererDevToolsTargetHandle {
         #[cfg(feature = "devtools")] main: RendererInspectorMainIngress,
         io: RendererInspectorIoIngress,
     ) -> Self {
+        #[cfg(feature = "devtools")]
+        main.bind_session_connections(io.session_connections());
         Self {
             pause,
             #[cfg(feature = "devtools")]
@@ -146,6 +148,29 @@ impl RendererDevToolsTargetHandle {
     }
 
     #[cfg(feature = "devtools")]
+    pub(crate) fn confirm_session_connection(
+        &self,
+        agent: RendererDevToolsAgentToken,
+        session: DevToolsSessionKey,
+    ) {
+        if self.io.session_is_detaching(agent, &session) {
+            return;
+        }
+        self.io
+            .session_connections()
+            .confirm_connected(agent, session);
+        self.main.notify_execution_opportunities();
+        self.io.notify_execution_opportunities();
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn retire_agent_connections(&self, agent: RendererDevToolsAgentToken) {
+        self.io.session_connections().retire_agent(agent);
+        self.main.reject_failed_connections();
+        self.io.reject_failed_connections();
+    }
+
+    #[cfg(feature = "devtools")]
     pub(crate) fn begin_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -153,6 +178,7 @@ impl RendererDevToolsTargetHandle {
     ) {
         self.main.begin_session_detach(agent_token, session);
         self.io.begin_session_detach(agent_token, session);
+        self.io.session_connections().detach(agent_token, session);
     }
 
     #[cfg(feature = "devtools")]
@@ -166,6 +192,8 @@ impl RendererDevToolsTargetHandle {
     }
 
     pub(crate) fn close(&self, message: &str) -> bool {
+        #[cfg(feature = "devtools")]
+        self.io.session_connections().close();
         self.pause.close_target();
         #[cfg(feature = "devtools")]
         self.main.close(message);
@@ -185,6 +213,8 @@ impl RendererDevToolsTargetHandle {
 
     pub(crate) fn detach_page(&self, page_id: PageId, _message: &str) {
         if self.pause.detach_page(page_id) {
+            #[cfg(feature = "devtools")]
+            self.io.session_connections().close();
             #[cfg(feature = "devtools")]
             self.main.cancel_all_queued(_message);
             #[cfg(feature = "devtools")]

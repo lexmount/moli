@@ -612,7 +612,7 @@ async fn detach_tab_session_detaches_auto_attached_child_page_session() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn attach_to_target_ensures_pending_background_initial_document_before_attached_event() {
+async fn attach_to_target_registers_before_initial_document_and_commands_join_the_target_build() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -644,45 +644,45 @@ async fn attach_to_target_ensures_pending_background_initial_document_before_att
         )
     });
 
-    ctx.process_async(json!({
-        "id": 12001,
-        "method": "Target.attachToTarget",
-        "params": {"targetId": "TID-background-pending"}
-    }))
-    .await;
-
-    let attach_response = take_response_by_id(&mut ctx, 12001);
-    let session_id = attach_response["result"]["sessionId"]
+    let (messages, backend) = browser_registration_without_backend_progress(&mut ctx, json!({
+        "id":12001,"method":"Target.attachToTarget","params":{"targetId":"TID-background-pending"}
+    })).await;
+    let response_index = messages
+        .iter()
+        .position(|value| value["id"] == 12001)
+        .unwrap();
+    let event_index = messages
+        .iter()
+        .position(|value| value["method"] == "Target.attachedToTarget")
+        .unwrap();
+    assert!(
+        event_index < response_index,
+        "attached publication precedes the response"
+    );
+    let session_id = messages[response_index]["result"]["sessionId"]
         .as_str()
-        .expect("attached session id")
+        .unwrap()
         .to_owned();
-    let attached_event = ctx.take_one();
-    assert_eq!(attached_event["method"], "Target.attachedToTarget");
-    assert_eq!(
-        attached_event["params"]["targetInfo"]["targetId"],
-        "TID-background-pending"
-    );
-    assert_eq!(
-        attached_event["params"]["sessionId"],
-        json!(session_id.as_str())
-    );
+    assert_eq!(messages[event_index]["params"]["sessionId"], session_id);
     {
         ctx.with_fixture(|conn| {
             let bc = conn.browser_context.as_ref().expect("browser context");
             assert_eq!(
                 bc.pending_document_page_build_count(),
-                0,
-                "attachToTarget must complete initial document before emitting attachedToTarget"
+                1,
+                "Browser attachment must not consume the target-owned initial Page build"
             );
             assert!(
-                bc.background_target("TID-background-pending")
+                !bc.background_target("TID-background-pending")
                     .expect("background target")
                     .has_loaded_page(),
-                "attached background target should expose a current Page immediately"
+                "a session can exist before its Renderer Page is adopted"
             );
         });
     }
 
+    ctx.route_direct_command_output_for_test(Vec::new(), backend)
+        .await;
     ctx.process_async(json!({
         "id": 12002,
         "method": "Runtime.evaluate",
@@ -1854,6 +1854,8 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     ctx.expect_result(120_004, json!({}), None);
     ctx.expect_event(
         "Target.detachedFromTarget",
@@ -1940,6 +1942,8 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     ctx.expect_result(120_009, json!({}), None);
     ctx.expect_event(
         "Target.detachedFromTarget",
@@ -2011,6 +2015,8 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     ctx.expect_result(120_012, json!({}), None);
     ctx.expect_event(
         "Target.detachedFromTarget",
@@ -2393,6 +2399,8 @@ async fn detach_from_target_removes_only_selected_session_document_start_scripts
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     ctx.expect_result(120_103, json!({}), None);
     ctx.expect_event(
         "Target.detachedFromTarget",
@@ -2510,20 +2518,6 @@ async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
             .expect("fixture should retain a loaded Page")
             .crash_devtools_target_from_io()
     });
-    let cleanup_error = async {
-        let pending =
-            ctx.with_fixture(|conn| conn.prepare_session_script_cleanup("SID-cleanup-attached"));
-        let completed = ctx.drive_owned_wait(pending.wait()).await;
-        ctx.with_fixture(|conn| completed.finish(Some(conn)).into_result())
-    }
-    .await
-    .expect_err("a closed renderer ingress must reject script cleanup");
-    assert!(
-        cleanup_error
-            .to_string()
-            .contains("document-start script cleanup"),
-        "unexpected cleanup failure: {cleanup_error:#}"
-    );
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context
@@ -2539,7 +2533,7 @@ async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
                             "SID-cleanup-attached".to_owned(),
                         ))
                 }),
-            "failed renderer cleanup must retain protocol-side retry authority"
+            "the session owns its Browser preload before withdrawal"
         )
     });
 
@@ -2552,6 +2546,8 @@ async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     ctx.expect_result(120_111, json!({}), None);
 
     ctx.with_fixture(|conn| {
@@ -2660,6 +2656,8 @@ async fn detach_fail_closes_page_when_fetch_disable_cannot_reach_renderer() {
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     ctx.expect_result(120_113, json!({}), None);
 
     ctx.with_fixture(|conn| {
@@ -2837,6 +2835,8 @@ async fn detach_from_service_worker_target_disposes_session_runtime_state() {
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
 
     ctx.expect_result(14, json!({}), None);
     let failed_await = ctx.take_one();
@@ -3268,6 +3268,8 @@ async fn set_auto_attach_false_cleans_shared_worker_runtime_state_before_detache
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
 
     ctx.expect_result(17, json!({}), None);
     let failed_await = ctx.take_one();
@@ -3963,6 +3965,8 @@ async fn dedicated_worker_existing_target_auto_attach_requires_its_owner_page_se
         "params": {"targetId": "TID-owner-page", "flatten": true}
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     let owner_attached = ctx.take_one();
     let owner_session_id = owner_attached["params"]["sessionId"]
         .as_str()
@@ -3990,6 +3994,8 @@ async fn dedicated_worker_existing_target_auto_attach_requires_its_owner_page_se
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     ctx.expect_result(2472, json!({}), None);
     assert!(
         ctx.sent.is_empty(),
@@ -4012,6 +4018,8 @@ async fn dedicated_worker_existing_target_auto_attach_requires_its_owner_page_se
         }
     }))
     .await;
+    ctx.wait_for_direct_command_work_completion_for_test("native session lifecycle work")
+        .await;
     let attached = ctx.take_one();
     assert_eq!(attached["method"], "Target.attachedToTarget");
     assert_eq!(attached["sessionId"], owner_session_id);
@@ -4476,7 +4484,7 @@ async fn push_current_javascript_dialog_for_active_target(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn attach_with_open_javascript_dialog_responds_and_defers_binding_apply() {
+async fn attach_with_published_dialog_uses_the_normal_backend_connection() {
     // The deferred apply settles on a `spawn_local` supervised wait, exactly
     // like the background navigation tasks it mirrors.
     tokio::task::LocalSet::new()
@@ -4539,10 +4547,9 @@ async fn attach_with_open_javascript_dialog_responds_and_defers_binding_apply() 
                 .to_owned();
             ctx.expect_event("Target.attachedToTarget", None);
 
-            // TestContext services ProtocolTaskPrepared through the same owned
-            // workflow completion as the production scheduler.
-            // Settled bindings are live for the new session even though the dialog is
-            // still open.
+            // This Browser-side dialog fixture leaves the native VM idle.
+            // It uses ordinary native connect and ordered Main replay, with
+            // no dialog-specific Browser readiness observer.
             ctx.process_async(json!({
                 "id": 306_903,
                 "method": "Runtime.enable",
@@ -4571,4 +4578,105 @@ async fn attach_with_open_javascript_dialog_responds_and_defers_binding_apply() 
             assert!(dialog_completion.finish(false, String::new()));
         })
         .await;
+}
+
+#[tokio::test]
+async fn attachments_share_one_target_build_and_detach_terminates_only_its_queued_commands() {
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-attach-build",
+        "TID-active",
+        "<title>active</title>",
+    )
+    .await;
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .stage_background_target(
+                "TID-shared-build".into(),
+                None,
+                "about:blank#shared-build".into(),
+                None,
+                None,
+            )
+    });
+    let (first, mut backend) = browser_registration_without_backend_progress(&mut ctx, json!({
+        "id": 181,"method":"Target.attachToTarget","params":{"targetId":"TID-shared-build","flatten":true}
+    })).await;
+    let first_session =
+        first.iter().find(|value| value["id"] == 181).unwrap()["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let (second, joins) = browser_registration_without_backend_progress(&mut ctx, json!({
+        "id":182,"method":"Target.attachToTarget","params":{"targetId":"TID-shared-build","flatten":true}
+    })).await;
+    let second_session =
+        second.iter().find(|value| value["id"] == 182).unwrap()["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    assert_eq!(
+        backend
+            .iter()
+            .chain(&joins)
+            .filter(|event| matches!(
+                event,
+                crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { .. }
+            ))
+            .count(),
+        1,
+        "one target owns one installer, independently of its sessions"
+    );
+    backend.extend(joins);
+    let command = crate::conn::ParsedCdpCommand::parse_value(
+        json!({"id":183,"sessionId":first_session,"method":"DOM.getDocument"}),
+    )
+    .unwrap();
+    let mut command_context = crate::conn::CommandDispatchContext::default();
+    let crate::conn::CdpCommandTaskStep::Pending(pending) = ctx.with_fixture(|conn| {
+        conn.start_parsed_command_dispatch_with_context(&command, &mut command_context)
+    }) else {
+        panic!("DOM commands join Page readiness rather than return NoDocumentLoaded");
+    };
+    let mut queued = Box::pin(pending.wait());
+    use futures_util::FutureExt as _;
+    assert!(queued.as_mut().now_or_never().is_none());
+    let (detached, cleanup) = browser_registration_without_backend_progress(
+        &mut ctx,
+        json!({"id":184,"method":"Target.detachFromTarget","params":{"sessionId":first_session}}),
+    )
+    .await;
+    assert!(
+        detached
+            .iter()
+            .any(|value| value["id"] == 184 && value.get("result").is_some())
+    );
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), queued)
+        .await
+        .expect("retirement wakes the queued command before Page construction finishes");
+    let crate::conn::CdpCommandTaskStep::Complete(outcome) = ctx.with_fixture(|conn| {
+        conn.complete_command_dispatch_with_context(completed, &mut command_context)
+    }) else {
+        panic!("a retired binding cannot requeue against another session");
+    };
+    let errors = ctx
+        .route_completed_command_outcome_for_test(outcome)
+        .await
+        .0;
+    assert!(
+        errors
+            .iter()
+            .any(|value| value["id"] == 183 && value.get("error").is_some())
+    );
+    backend.extend(cleanup);
+    ctx.route_direct_command_output_for_test(Vec::new(), backend)
+        .await;
+    ctx.process_and_wait_for_response_async(json!({"id":185,"sessionId":second_session,"method":"Runtime.evaluate","params":{"expression":"document.URL"}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 185)["result"]["result"]["value"],
+        "about:blank#shared-build"
+    );
 }

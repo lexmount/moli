@@ -231,6 +231,24 @@ impl PageVm {
                 self.remove_document_start_script_by_registry_key(&registry_key);
                 Ok(RendererPageReply::Unit)
             }
+            RendererDevToolsPageCommand::ConnectRuntimeInspectorSession { inspector_session_id, connection } => {
+                anyhow::ensure!(connection.is_current(), "Inspector session connection was retired");
+                self.vm_mut().ensure_runtime_inspector_session(inspector_session_id.as_deref());
+                connection.connected();
+                Ok(RendererPageReply::Unit)
+            }
+            RendererDevToolsPageCommand::SetSessionRuntimeBindingState { agent, inspector_session_id, session_runtime_bindings } => {
+                anyhow::ensure!(self.devtools_agent_token() == agent, "Inspector agent was replaced before binding replay");
+                // Replace this session's contribution, never an old snapshot
+                // of bindings contributed by other Browser sessions.
+                let session = DevToolsSessionKey::from_wire_session_id(inspector_session_id.as_deref());
+                self.runtime_bindings.retain(|binding| binding.devtools_session.as_ref() != Some(&session));
+                self.runtime_bindings.extend(session_runtime_bindings.iter().map(|binding| binding.with_devtools_session(session.clone())));
+                let bindings = self.runtime_bindings.clone();
+                self.vm_mut().set_stored_runtime_bindings(&bindings);
+                self.set_inspector_session_runtime_bindings(inspector_session_id.as_deref(), &session_runtime_bindings);
+                Ok(RendererPageReply::Unit)
+            }
             RendererDevToolsPageCommand::SetRuntimeBindingState {
                 inspector_session_id,
                 stored_runtime_bindings,

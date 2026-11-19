@@ -956,121 +956,95 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
 }
 
 #[tokio::test]
-async fn tab_auto_attach_waits_outside_completion_for_the_original_page_install() {
-    use futures_util::FutureExt as _;
+async fn tab_auto_attach_commits_before_the_targets_shared_page_install() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     ctx.with_fixture(|conn| conn.publish_default_browser_target());
-    let mut page_context = CommandDispatchContext::default();
-    let page_command = ParsedCdpCommand::parse_str(
+    let command = ParsedCdpCommand::parse_str(
         json!({"id":1,"method":"Target.attachToTarget",
         "params":{"targetId":crate::DEFAULT_CDP_PAGE_TARGET_ID,"flatten":true}})
         .to_string(),
     )
     .unwrap();
-    let CdpCommandTaskStep::Pending(page_attach) = ctx.with_fixture(|conn| {
-        conn.start_parsed_command_dispatch_with_context(&page_command, &mut page_context)
-    }) else {
-        panic!("the first Page attachment must own its initial document build");
-    };
-    let tab_command = ParsedCdpCommand::parse_str(
-        json!({"id":2,"method":"Target.attachToTarget",
-        "params":{"targetId":crate::DEFAULT_CDP_TAB_TARGET_ID,"flatten":true}})
-        .to_string(),
-    )
-    .unwrap();
-    let CdpCommandTaskStep::Complete(tab) = ctx.with_fixture(|conn| {
-        conn.start_parsed_command_dispatch_with_context(
-            &tab_command,
-            &mut CommandDispatchContext::default(),
-        )
-    }) else {
-        panic!("attaching the Tab host does not wait for its Page");
-    };
-    let (events, _, _) = tab.into_protocol_event_parts();
-    let tab_session = events
-        .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
-        .find(|message| message["id"] == 2)
+    let step = ctx.with_fixture(|conn| {
+        conn.start_parsed_command_dispatch_with_context(&command, &mut Default::default())
+    });
+    assert!(matches!(&step, CdpCommandTaskStep::Complete(_)));
+    let (page_messages, page_work) = ctx.complete_command_task_step_for_test(step).await;
+    let page_session = page_messages
+        .iter()
+        .find(|message| message["id"] == 1)
         .unwrap()["result"]["sessionId"]
         .as_str()
         .unwrap()
         .to_owned();
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.loaded_page_mut_for_owner(&crate::conn::CommandOwnerScope::for_session(
+                &page_session
+            ))
+            .is_none()
+        )
+    });
+    ctx.process_async(json!({"id":2,"method":"Target.attachToTarget",
+        "params":{"targetId":crate::DEFAULT_CDP_TAB_TARGET_ID,"flatten":true}}))
+        .await;
+    let tab_session = ctx.take_response_by_id(2)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let mut auto_context = CommandDispatchContext::default();
-    let auto_command = ParsedCdpCommand::parse_str(
+    let command = ParsedCdpCommand::parse_str(
         json!({"id":3,"sessionId":tab_session,"method":"Target.setAutoAttach",
         "params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}})
         .to_string(),
     )
     .unwrap();
-    let CdpCommandTaskStep::Pending(auto_attach) = ctx.with_fixture(|conn| {
-        conn.start_parsed_command_dispatch_with_context(&auto_command, &mut auto_context)
-    }) else {
-        panic!("auto-attach retains its pending dependency");
-    };
-    // Hold the original Page's ready result until after the dependent command
-    // is polled. The actor must remain able to install that original result.
-    let completed_page = page_attach.wait().await;
-    let mut auto_wait = Box::pin(auto_attach.wait());
-    assert!(
-        auto_wait.as_mut().now_or_never().is_none(),
-        "auto-attach cannot join installation while borrowing the actor"
-    );
-    ctx.with_fixture(|conn| {
-        assert!(matches!(
-            conn.start_command_dispatch(r#"{"id":4,"method":"Browser.getVersion"}"#),
-            CdpCommandTaskStep::Complete(_)
-        ))
+    let step = ctx.with_fixture(|conn| {
+        conn.start_parsed_command_dispatch_with_context(&command, &mut auto_context)
     });
-    let page_step = {
-        let completed = completed_page;
-        ctx.state
-            .with_state(|state| {
-                state.complete_command_dispatch_with_context(completed, &mut page_context)
-            })
-            .expect("live test owner")
-    };
-    let (page_messages, page_events) = ctx
-        .complete_command_task_step_with_context_for_test(page_step, &mut page_context)
-        .await;
-    assert!(
-        page_messages
-            .iter()
-            .any(|message| message["id"] == 1 && message.get("result").is_some()),
-        "the original Page attach must finish installation: {page_messages:?}"
-    );
-    ctx.sent.extend(page_messages);
-    ctx.route_direct_command_output_for_test(Vec::new(), page_events)
-        .await;
-    let completed_auto = auto_wait.await;
-    let CdpCommandTaskStep::Complete(outcome) = ({
-        let completed = completed_auto;
-        ctx.state
-            .with_state(|state| {
-                state.complete_command_dispatch_with_context(completed, &mut auto_context)
-            })
-            .expect("live test owner")
-    }) else {
-        panic!("auto-attach can now publish its child session");
-    };
-    let (events, _, _) = outcome.into_protocol_event_parts();
-    let messages: Vec<_> = events
-        .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
-        .collect();
-    let response = messages
-        .iter()
-        .position(|message| message["id"] == 3)
-        .expect("auto-attach response");
+    let (messages, auto_work) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        ctx.complete_command_task_step_with_context_for_test(step, &mut auto_context),
+    )
+    .await
+    .unwrap();
     let attached = messages
         .iter()
         .position(|message| {
             message["method"] == "Target.attachedToTarget"
                 && message["params"]["targetInfo"]["targetId"] == crate::DEFAULT_CDP_PAGE_TARGET_ID
         })
-        .expect("original Page child attachment");
-    assert!(
-        attached < response,
-        "the child session must precede the auto-attach ACK"
-    );
-    assert_eq!(messages[response]["result"], json!({}));
+        .unwrap();
+    let reply = messages
+        .iter()
+        .position(|message| message["id"] == 3)
+        .unwrap();
+    assert!(attached < reply);
+    assert_eq!(messages[reply]["result"], json!({}));
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.loaded_page_mut_for_owner(&crate::conn::CommandOwnerScope::for_session(
+                &page_session
+            ))
+            .is_none()
+        )
+    });
+    ctx.process_async(json!({"id":4,"method":"Browser.getVersion"}))
+        .await;
+    assert!(ctx.take_response_by_id(4).get("result").is_some());
+    ctx.route_direct_command_output_for_test(
+        Vec::new(),
+        page_work.into_iter().chain(auto_work).collect(),
+    )
+    .await;
+    ctx.wait_for_direct_command_work_completion_for_test("target-owned shared Page installation")
+        .await;
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.loaded_page_mut_for_owner(&crate::conn::CommandOwnerScope::for_session(
+                &page_session
+            ))
+            .is_some()
+        )
+    });
 }

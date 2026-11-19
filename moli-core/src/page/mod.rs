@@ -381,3 +381,8 @@ mod tests {
 
 mod resource_command;
 pub use resource_command::{CompletedResourceCommand, PendingResourceCommand};
+
+#[cfg(feature = "devtools")]
+pub use moli_renderer_v8::{
+    RendererPageInspectorEndpoint, RendererRuntimeInspectorSessionRetirement,
+};

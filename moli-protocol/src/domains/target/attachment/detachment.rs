@@ -9,7 +9,7 @@ use crate::domains::target::session_disposal::{
     PreparedSessionDisposal, SessionDisposalError, SessionDisposalIdentity,
 };
 
-pub(in crate::domains::target) struct TargetDetachment {
+pub(crate) struct TargetDetachment {
     sessions: Vec<SessionDetachment>,
 }
 
@@ -199,6 +199,51 @@ impl TargetDetachment {
         Ok(Self { sessions })
     }
 
+    pub(crate) fn commit_in_browser(self, conn: &mut CdpConnection) -> CommandOutputPlan {
+        let mut native = Vec::new();
+        let mut sessions = Vec::new();
+        let mut prefix = CommandOutputPlan::default();
+        for mut session in self.sessions {
+            prefix.extend_background_events(session.disposal.take_browser_events());
+            native.push((session.identity.clone(), session.disposal));
+            sessions.push(SessionDetachmentOutput {
+                identity: session.identity,
+                commit: session.commit,
+                child: session.child,
+                response_before_event: session.response_before_event,
+                background_events: Vec::new(),
+                protocol_events: Vec::new(),
+                result: Ok(None),
+            });
+        }
+        // No Renderer receipt/fence belongs to the Browser detach response.
+        prefix.extend(
+            TargetDetachmentOutput { sessions }
+                .finish(conn, &mut CommandDispatchContext::default()),
+        );
+        let access = conn.protocol_state_access();
+        let workflow = crate::conn::PreparedCommandWorkflow::new(move |context| async move {
+            let mut driver = ProtocolWorkflowDriver::new(access);
+            let mut output = CommandOutputPlan::default();
+            for (identity, disposal) in native {
+                let mut background = Vec::new();
+                let mut protocol = Vec::new();
+                if let Err(error) = disposal
+                    .run(&mut driver, &mut background, &mut protocol)
+                    .await
+                {
+                    tracing::warn!(session_id = identity.plan().session_id(), %error, "retired session native cleanup failed");
+                }
+                output.extend_background_events(background);
+                output.extend_background_events(protocol);
+            }
+            context.complete(output)
+        });
+        crate::conn::PendingProtocolSchedulerWork::publish_workflow(conn, workflow, None);
+        prefix
+    }
+
+    #[cfg(test)]
     pub(in crate::domains::target) async fn run(
         self,
         driver: &mut ProtocolWorkflowDriver,
@@ -551,44 +596,53 @@ mod tests {
                     })
                 })
                 .unwrap();
-            context
-                .process_and_wait_for_response_async(json!({
-                    "id":2,"sessionId":"SID-rebound-disposal",
-                    "method":"Page.addScriptToEvaluateOnNewDocument",
-                    "params":{"source":"globalThis.successorBinding = true;"}
-                }))
-                .await;
+            let add_successor_script = context.process_and_wait_for_response_async(json!({
+                "id":2,"sessionId":"SID-rebound-disposal",
+                "method":"Page.addScriptToEvaluateOnNewDocument",
+                "params":{"source":"globalThis.successorBinding = true;"}
+            }));
+            let settle_original = async {
+                if let Some(recovery) = recovery {
+                    drop(prepared);
+                    let pending = state_owner
+                        .with_state(|state| {
+                            state.fixture(|connection| {
+                                recovery.prepare(
+                                    connection,
+                                    &mut CommandDispatchContext::default(),
+                                    CommandOutputPlan::default(),
+                                )
+                            })
+                        })
+                        .unwrap();
+                    let completed = pending.wait().await;
+                    state_owner
+                        .with_state(|state| {
+                            state.fixture(|connection| completed.finish(connection))
+                        })
+                        .unwrap();
+                } else {
+                    let output = prepared
+                        .run(&mut ProtocolWorkflowDriver::new(state_owner.clone()))
+                        .await;
+                    state_owner
+                        .with_state(|state| {
+                            state.fixture(|connection| {
+                                output.finish(connection, &mut CommandDispatchContext::default())
+                            })
+                        })
+                        .unwrap();
+                }
+            };
+            // A successor may enqueue Main work immediately, but its native
+            // execution stays behind the original session's retirement.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(add_successor_script, settle_original);
+            })
+            .await
+            .unwrap();
             let added = context.take_response_by_id(2);
             let identifier = added["result"]["identifier"].as_str().unwrap().to_owned();
-            if let Some(recovery) = recovery {
-                drop(prepared);
-                let pending = state_owner
-                    .with_state(|state| {
-                        state.fixture(|connection| {
-                            recovery.prepare(
-                                connection,
-                                &mut CommandDispatchContext::default(),
-                                CommandOutputPlan::default(),
-                            )
-                        })
-                    })
-                    .unwrap();
-                let completed = pending.wait().await;
-                state_owner
-                    .with_state(|state| state.fixture(|connection| completed.finish(connection)))
-                    .unwrap();
-            } else {
-                let output = prepared
-                    .run(&mut ProtocolWorkflowDriver::new(state_owner.clone()))
-                    .await;
-                state_owner
-                    .with_state(|state| {
-                        state.fixture(|connection| {
-                            output.finish(connection, &mut CommandDispatchContext::default())
-                        })
-                    })
-                    .unwrap();
-            }
             state_owner
                 .with_state(|state| {
                     state.fixture(|connection| {

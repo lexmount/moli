@@ -412,20 +412,34 @@ impl Page {
         self.detach_runtime_inspector_session(inspector_session_id)
     }
 
+    /// Capture this native agent's Inspector admission without DOM authority.
+    pub fn inspector_endpoint(&self) -> moli_renderer_v8::RendererPageInspectorEndpoint {
+        self.handle.inspector_endpoint()
+    }
+
+    /// Revoke frontend ingress now; keep exact native cleanup authority for
+    /// already admitted disposal after the Browser SID retires.
+    pub fn prepare_runtime_inspector_session_retirement(
+        &mut self,
+        inspector_session_id: Option<String>,
+    ) -> moli_renderer_v8::RendererRuntimeInspectorSessionRetirement {
+        let retirement = self
+            .handle
+            .prepare_runtime_inspector_session_retirement(inspector_session_id.clone());
+        if self.renderer_devtools_command_session_id == inspector_session_id {
+            // Background observations must not inherit the retired frontend's
+            // provenance while its captured native cleanup is still pending.
+            self.renderer_devtools_command_session_id = None;
+        }
+        retirement
+    }
+
     pub fn detach_runtime_inspector_session(
         &mut self,
         inspector_session_id: Option<&str>,
     ) -> Result<bool> {
-        self.handle
-            .detach_runtime_inspector_session(inspector_session_id.map(str::to_owned))?;
-        if self.renderer_devtools_command_session_id.as_deref() == inspector_session_id {
-            // `runtime_session_owner_slot_mut` stamps the current frontend
-            // session onto the Page before command construction. Do not leave
-            // a detached child session as the fallback provenance for a
-            // later owner-side observation that is not itself entered through
-            // a CDP session lookup.
-            self.renderer_devtools_command_session_id = None;
-        }
+        self.prepare_runtime_inspector_session_retirement(inspector_session_id.map(str::to_owned))
+            .finish()?;
         Ok(true)
     }
 
@@ -862,17 +876,19 @@ impl Page {
         .await
     }
 
-    /// Attachment can publish before Main initialization settles. Keep this
-    /// session's IO commands queued until that exact dispatch finishes.
-    pub fn hold_runtime_inspector_io_until_settled(
+    pub fn has_runtime_inspector_session_endpoint(&self, id: Option<&str>) -> bool {
+        self.handle.has_runtime_inspector_session_endpoint(id)
+    }
+
+    /// Connect the native endpoint independently of Browser response delivery.
+    /// The target owns connect and ordered Main configuration through teardown.
+    pub fn initialize_runtime_inspector_session(
         &self,
-        mut pending: PendingPageCommand,
-        inspector_session_id: Option<&str>,
-    ) -> PendingPageCommand {
-        pending.pending = self
-            .handle
-            .hold_runtime_inspector_io_until_settled(pending.pending, inspector_session_id);
-        pending
+        inspector_session_id: Option<String>,
+        bindings: &[RuntimeBindingRegistration],
+    ) {
+        self.handle
+            .connect_runtime_inspector_session(inspector_session_id, bindings)
     }
 
     pub fn start_set_runtime_binding_state(

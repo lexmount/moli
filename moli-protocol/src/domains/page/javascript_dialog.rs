@@ -84,8 +84,7 @@ impl CdpConnection {
             .is_some_and(|owner| current_javascript_dialog_for_owner(self, &owner).is_some())
     }
 
-    /// Owner-scoped variant of the same exact Page check: a queued stale
-    /// dialog on a replaced Page must not defer a target attach.
+    #[cfg(test)]
     pub(crate) fn has_current_javascript_dialog_for_owner(
         &self,
         owner: &CommandOwnerScope,

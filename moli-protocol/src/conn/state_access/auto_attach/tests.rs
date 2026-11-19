@@ -3,7 +3,6 @@ use crate::conn::{
     ParsedCdpCommand, PendingCdpCommandDispatch, ProtocolStateHandle,
 };
 use crate::testing::TestContext;
-use futures_util::FutureExt as _;
 use serde_json::{Value, json};
 
 struct ReleaseOnDrop(Option<std::sync::mpsc::Sender<()>>);
@@ -188,7 +187,7 @@ fn success(messages: &[Value], id: u64) {
 }
 
 #[tokio::test]
-async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_loss() {
+async fn auto_attach_enable_owns_browser_commit_and_rejects_retired_policy_after_ready_loss() {
     for phase in 0..6 {
         let (mut fixture, owner_session) = fixture().await;
         let (gate, guard, release) = hold_renderer(&mut fixture).await;
@@ -197,13 +196,17 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
         let mut context = CommandDispatchContext::default();
         let pending = start(&handle, 1901, &owner_session, true, &mut context);
         let mut waiting = Box::pin(pending.wait());
-        assert!(waiting.as_mut().now_or_never().is_none());
         peer(&handle);
         if phase == 1 {
             drop(waiting);
             waiting = Box::pin(recover(&handle, 1901, &owner_session, &mut context).wait());
-            assert!(waiting.as_mut().now_or_never().is_none());
         }
+        // Browser attachment is ready while the native owner is still held.
+        // Retain the ready envelope to exercise cancellation and policy changes
+        // before its owner-turn commit, without depending on Renderer progress.
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .unwrap();
         let mut replacement = None;
         let mut replacement_context = CommandDispatchContext::default();
         if phase == 3 || phase == 4 {
@@ -216,7 +219,7 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
                 1902,
             );
             if phase == 4 {
-                let mut reenabled = Box::pin(
+                let reenabled = Box::pin(
                     start(
                         &handle,
                         1903,
@@ -226,7 +229,6 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
                     )
                     .wait(),
                 );
-                assert!(reenabled.as_mut().now_or_never().is_none());
                 replacement = Some(reenabled);
             }
         }
@@ -247,9 +249,6 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
         drop(release);
         gate.wait().await.unwrap();
         drop(guard);
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-            .await
-            .unwrap();
         let completed = if phase == 2 {
             drop(completed);
             recover(&handle, 1901, &owner_session, &mut context)
@@ -304,7 +303,7 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
 }
 
 #[tokio::test]
-async fn auto_attach_disable_owns_cleanup_and_preserves_a_reenabled_successor() {
+async fn auto_attach_disable_revokes_browser_route_before_native_cleanup_and_preserves_successor() {
     for phase in 0..4 {
         let (fixture, owner_session) = fixture().await;
         let owner = fixture.state;
@@ -369,15 +368,17 @@ async fn auto_attach_disable_owns_cleanup_and_preserves_a_reenabled_successor() 
         let mut context = CommandDispatchContext::default();
         let mut waiting =
             Box::pin(start(&handle, 1911, &owner_session, false, &mut context).wait());
-        assert!(waiting.as_mut().now_or_never().is_none());
         peer(&handle);
         if phase == 1 {
             drop(waiting);
             waiting = Box::pin(recover(&handle, 1911, &owner_session, &mut context).wait());
         }
         let mut replacement_context = CommandDispatchContext::default();
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .unwrap();
         let replacement = if phase == 3 {
-            let mut pending = Box::pin(
+            let pending = Box::pin(
                 start(
                     &handle,
                     1912,
@@ -387,7 +388,6 @@ async fn auto_attach_disable_owns_cleanup_and_preserves_a_reenabled_successor() 
                 )
                 .wait(),
             );
-            assert!(pending.as_mut().now_or_never().is_none());
             Some(pending)
         } else {
             None
@@ -395,9 +395,6 @@ async fn auto_attach_disable_owns_cleanup_and_preserves_a_reenabled_successor() 
         drop(release);
         gate.wait().await.unwrap();
         drop(guard);
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-            .await
-            .unwrap();
         let completed = if phase == 2 {
             drop(completed);
             recover(&handle, 1911, &owner_session, &mut context)

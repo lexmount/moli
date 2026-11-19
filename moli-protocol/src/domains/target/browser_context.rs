@@ -393,11 +393,6 @@ fn devtools_target_infos(
 ) -> Result<Vec<DevToolsTargetInfo>, DevToolsError> {
     let mut targets = Vec::new();
     for target_info in conn.devtools_target_infos() {
-        if let Some(message) =
-            super::transient_no_page_devtools_target_info_error(conn, &target_info)
-        {
-            return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
-        }
         if target_info_matches_root(&target_info, root)
             && target_filter_allows_info(filter, &target_info)
         {

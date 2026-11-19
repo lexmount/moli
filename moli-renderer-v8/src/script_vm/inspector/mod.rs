@@ -83,6 +83,9 @@ impl Drop for DocumentInspectorBinding {
     fn drop(&mut self) {
         self.context_registrations.destroy_all();
         self.agent.deactivate_all_routes();
+        #[cfg(feature = "devtools")]
+        self.devtools_target
+            .retire_agent_connections(self.agent.token());
     }
 }
 

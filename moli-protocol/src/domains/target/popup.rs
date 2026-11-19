@@ -512,7 +512,7 @@ fn push_committed_auto_attached_session_events(
     }
 }
 
-pub(super) fn prepare_initial_target_url_navigation(
+pub(crate) fn prepare_initial_target_url_navigation(
     conn: &mut CdpConnection,
     target_id: &str,
 ) -> Option<PreparedPopupNavigation> {

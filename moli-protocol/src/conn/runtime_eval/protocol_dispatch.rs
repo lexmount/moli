@@ -82,6 +82,25 @@ impl CdpConnection {
         let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        if inspector_route == RendererInspectorCommandRoute::Io
+            && let Some(endpoint) = self
+                .runtime_session_owner_slot_for_owner(owner)
+                .and_then(|slot| slot.page_slot().prepared_document_inspector_endpoint())
+        {
+            let pending = moli_core::page::PendingRuntimeInspectorCommandDispatch::start_io(
+                &endpoint,
+                route.renderer_agent_attachment_id,
+                inspector_session_id,
+                raw_json,
+                None,
+            );
+            return Ok(PendingRuntimeProtocolMessageDispatch {
+                owner: owner.clone(),
+                route,
+                pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
+                response_route: RuntimeProtocolResponseRoute::adapter_reply_without_receiver(),
+            });
+        }
         let page = match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
                 self.loaded_page_mut_for_protocol_access_for_owner(owner)?
@@ -157,6 +176,25 @@ impl CdpConnection {
             )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        if inspector_route == RendererInspectorCommandRoute::Io
+            && let Some(endpoint) = self
+                .runtime_session_owner_slot_for_owner(owner)
+                .and_then(|slot| slot.page_slot().prepared_document_inspector_endpoint())
+        {
+            let pending = moli_core::page::PendingRuntimeInspectorCommandDispatch::start_io(
+                &endpoint,
+                route.renderer_agent_attachment_id,
+                inspector_session_id,
+                raw_json,
+                Some(response_sender),
+            );
+            return Ok(PendingRuntimeProtocolMessageDispatch {
+                owner: owner.clone(),
+                route,
+                pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
+                response_route,
+            });
+        }
         let page_result = match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
                 self.loaded_page_mut_for_protocol_access_for_owner(owner)

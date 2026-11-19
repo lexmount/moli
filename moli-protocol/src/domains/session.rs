@@ -120,6 +120,25 @@ impl PreparedSessionHandlers {
         Self { identity, handlers }
     }
 
+    pub(crate) fn take_browser_events(&mut self) -> Vec<BackgroundProtocolEvent> {
+        let mut events = Vec::new();
+        for (_, prepared) in &mut self.handlers {
+            match prepared {
+                PreparedSessionHandlerDisposal::Page { events: page, .. } => events.append(page),
+                PreparedSessionHandlerDisposal::Runtime {
+                    background,
+                    protocol,
+                    ..
+                } => {
+                    events.append(background);
+                    events.append(protocol);
+                }
+                _ => {}
+            }
+        }
+        events
+    }
+
     pub(crate) fn identity(
         &self,
     ) -> &crate::domains::target::session_disposal::SessionDisposalIdentity {
@@ -317,7 +336,11 @@ pub(crate) enum PreparedSessionHandlerDisposal {
     Complete,
     Tracing(Option<super::tracing::PendingTraceCancel>),
     Fetch(Option<Box<super::fetch::PreparedFetchCleanup>>),
-    Runtime(Option<crate::conn::SessionWorkerCleanup>),
+    Runtime {
+        pending: Option<crate::conn::SessionWorkerCleanup>,
+        background: Vec<BackgroundProtocolEvent>,
+        protocol: Vec<BackgroundProtocolEvent>,
+    },
     Page {
         scripts: crate::conn::SessionScriptCleanup,
         events: Vec<BackgroundProtocolEvent>,
@@ -350,10 +373,22 @@ impl PreparedSessionHandlerDisposal {
             DevToolsSessionDomainHandler::Fetch => Self::Fetch(
                 super::fetch::prepare_owner_disposal(conn, Some(session_id)).map(Box::new),
             ),
-            DevToolsSessionDomainHandler::Runtime => Self::Runtime(
-                (!matches!(plan.target(), SessionDisposalTarget::PageTarget { .. }))
-                    .then(|| conn.prepare_session_worker_cleanup(session_id)),
-            ),
+            DevToolsSessionDomainHandler::Runtime => {
+                let mut background = Vec::new();
+                let mut protocol = Vec::new();
+                super::runtime::fail_pending_session_calls(
+                    conn,
+                    &mut background,
+                    &mut protocol,
+                    session_id,
+                );
+                Self::Runtime {
+                    pending: (!matches!(plan.target(), SessionDisposalTarget::PageTarget { .. }))
+                        .then(|| conn.prepare_session_worker_cleanup(session_id)),
+                    background,
+                    protocol,
+                }
+            }
             DevToolsSessionDomainHandler::Page => {
                 let events = super::page::prepare_page_session_disposal(conn, session_id);
                 Self::Page {
@@ -363,11 +398,14 @@ impl PreparedSessionHandlerDisposal {
             }
             DevToolsSessionDomainHandler::Emulation => Self::PageUpdates {
                 owner: CommandOwnerScope::capture(conn, Some(session_id)),
-                updates: super::emulation::prepare_page_session_disposal(conn, session_id),
+                updates: super::emulation::prepare_page_session_disposal(conn, session_id)
+                    .retain_session_cleanup_authority(),
             },
             DevToolsSessionDomainHandler::Network => Self::PageUpdates {
                 owner: CommandOwnerScope::capture(conn, Some(session_id)),
-                updates: conn.start_clear_devtools_network_session_policy(session_id),
+                updates: conn
+                    .start_clear_devtools_network_session_policy(session_id)
+                    .retain_session_cleanup_authority(),
             },
             DevToolsSessionDomainHandler::PrimaryPageTargetState => {
                 let owner = CommandOwnerScope::capture(conn, Some(session_id));
@@ -395,7 +433,10 @@ impl PreparedSessionHandlerDisposal {
                         );
                     }
                 }
-                Self::PageUpdates { owner, updates }
+                Self::PageUpdates {
+                    owner,
+                    updates: updates.retain_session_cleanup_authority(),
+                }
             }
         }
     }
@@ -422,19 +463,17 @@ impl PreparedSessionHandlerDisposal {
                     .into_disposal_output(background_events)),
                 None => Ok(Default::default()),
             },
-            Self::Runtime(pending) => {
-                let completed = match pending {
-                    Some(pending) => Some(pending.wait().await),
-                    None => None,
-                };
-                let identity = identity.clone();
-                let (background, protocol, first_error) = driver.with_state(move |state| {
-                    state.finish_session_runtime_cleanup(&identity, completed)
-                })?;
+            Self::Runtime {
+                pending,
+                background,
+                protocol,
+            } => {
                 background_events.extend(background);
                 protocol_events.extend(protocol);
+                if let Some(pending) = pending {
+                    pending.wait().await.finish()?;
+                }
                 Ok(crate::conn::SessionPageUpdateResult {
-                    first_error,
                     ..Default::default()
                 })
             }
@@ -608,7 +647,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn renderer_cleanup_failure_keeps_script_authority_and_still_clears_later_domains() {
+    async fn renderer_cleanup_failure_revokes_browser_scripts_and_still_clears_later_domains() {
         let (context, plan) = fixture().await;
         let owner = context
             .with_fixture(|conn| CommandOwnerScope::capture(conn, Some("SID-handler-disposal")));
@@ -638,7 +677,7 @@ mod tests {
                 state.fixture(|connection| {
                     assert!(connection.has_attached_devtools_session("SID-handler-disposal"));
                     assert!(
-                        !connection
+                        connection
                             .target_owner_state_for_session(Some("SID-handler-disposal"))
                             .unwrap()
                             .document_start_scripts

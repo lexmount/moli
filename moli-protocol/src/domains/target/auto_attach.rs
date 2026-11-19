@@ -373,25 +373,7 @@ pub(super) fn start_set_auto_attach_command(
         cmd.session_id,
         pause_dedicated_workers_on_start,
     );
-    let initial_document = params
-        .auto_attach
-        .then(|| {
-            let tab_target = conn.tab_target_id_for_session_id(cmd.session_id?)?;
-            let page_target = conn.primary_page_target_id_for_tab_target_id(tab_target)?;
-            if !conn.auto_attach_owner_allows_target_type(cmd.session_id, "page") {
-                return None;
-            }
-            let route = conn.target_session_route_for_target_id(page_target)?;
-            conn.runtime_session_owner_slot_for_owner(&CommandOwnerScope::for_route(route))?
-                .initial_document_page_build_waiter()
-        })
-        .flatten();
-    let command = PreparedAutoAttachCommand::prepare(
-        conn,
-        params.auto_attach,
-        cmd.session_id,
-        initial_document,
-    );
+    let command = PreparedAutoAttachCommand::prepare(conn, params.auto_attach, cmd.session_id);
     {
         let access = conn.protocol_state_access();
         TargetCommandTaskStep::Workflow(command.into_workflow(access))

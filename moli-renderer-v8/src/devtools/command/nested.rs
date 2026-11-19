@@ -172,6 +172,8 @@ impl RendererDevToolsPageCommand {
             | Self::RemoveDefaultRuntimeBinding(..)
             | Self::AddDocumentStartScriptRuntimeActivity { .. }
             | Self::RemoveDocumentStartScriptByRegistryKey(..)
+            | Self::ConnectRuntimeInspectorSession { .. }
+            | Self::SetSessionRuntimeBindingState { .. }
             | Self::SetRuntimeBindingState { .. }
             | Self::EnsureIsolatedWorldsAttachedToInspector
             | Self::InspectorExecutionContextIdForIsolatedContext(..)

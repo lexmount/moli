@@ -323,6 +323,7 @@ impl PageTargetHost {
             browsing_context_group,
         );
         self.runtime_slot.finish_existing_page_document_commit();
+        self.initialize_runtime_inspector_sessions();
         self.runtime_slot.finish_loaded_document_network_adoption();
         Ok(LoadedNavigationPageCommit {
             // Old Document producers were retired by the renderer commit.
@@ -370,8 +371,31 @@ impl PageTargetHost {
         self.loaded_page().is_some()
     }
 
+    pub(crate) fn initialize_runtime_inspector_sessions(&self) {
+        let Some(endpoint) = self
+            .runtime_slot
+            .page_slot()
+            .prepared_document_inspector_endpoint()
+            .or_else(|| self.loaded_page().map(|page| page.inspector_endpoint()))
+        else {
+            return;
+        };
+        // Endpoint membership includes empty sessions; configuration snapshots
+        // alone cannot decide whether a first IO command has a receiver.
+        for restore in self
+            .devtools_sessions
+            .runtime_inspector_connection_snapshots()
+        {
+            endpoint.connect(
+                restore.inspector_session_id,
+                &restore.protocol_configuration.runtime_bindings,
+            );
+        }
+    }
+
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
         let previous = self.runtime_slot.replace_loaded_page(page);
+        self.initialize_runtime_inspector_sessions();
         self.runtime_slot
             .ingest_owner_page_observable_output_updates();
         previous

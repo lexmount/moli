@@ -1036,14 +1036,6 @@ impl BrowserContext {
             .count()
     }
 
-    pub(crate) fn target_has_pending_initial_document_page_build(&self, target_id: &str) -> bool {
-        self.page_target(target_id).is_some_and(|target| {
-            target
-                .runtime_slot()
-                .has_pending_initial_document_page_build()
-        })
-    }
-
     pub(crate) fn target_transient_no_page_reason_for_protocol_output(
         &self,
         target_id: &str,

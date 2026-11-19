@@ -87,13 +87,13 @@ fn finish(
 
 #[tokio::test]
 async fn worker_close_joins_original_detachment_and_recovers_its_admitted_workflow() {
-    for cancel_phase in 0..3 {
+    for cancel_phase in [0, 2] {
         let (mut conn, owner_page, renderer_page) = dedicated_worker_fixture();
         install_attached_worker(&mut conn, owner_page, renderer_page.owner_local_host_id());
         discover_worker(&mut conn);
         let mut ctx = crate::testing::TestContext::from_conn(conn);
         let mut detachment_context = CommandDispatchContext::default();
-        let CdpCommandTaskStep::Pending(detachment) = ctx.with_fixture(|conn| {
+        let detachment_step = ctx.with_fixture(|conn| {
             start(
                 conn,
                 201,
@@ -101,9 +101,8 @@ async fn worker_close_joins_original_detachment_and_recovers_its_admitted_workfl
                 json!({"sessionId":"SID-retiring-worker"}),
                 &mut detachment_context,
             )
-        }) else {
-            panic!("the original detachment owns the handlers")
-        };
+        });
+        assert!(matches!(&detachment_step, CdpCommandTaskStep::Complete(_)));
         let mut close_context = CommandDispatchContext::default();
         let CdpCommandTaskStep::Pending(closing) = ctx.with_fixture(|conn| {
             start(
@@ -118,9 +117,6 @@ async fn worker_close_joins_original_detachment_and_recovers_its_admitted_workfl
         };
         assert!(closing.continues_after_session_detachment());
         let mut close_wait = Box::pin(closing.wait());
-        if cancel_phase != 0 {
-            assert!(close_wait.as_mut().now_or_never().is_none());
-        }
         let peer = ctx.with_fixture(|conn| {
             start(
                 conn,
@@ -160,8 +156,16 @@ async fn worker_close_joins_original_detachment_and_recovers_its_admitted_workfl
             events[0].clone().into_protocol_message()["error"]["message"],
             "Target is closing"
         );
-        let completed = drive(&mut ctx, *detachment).await;
-        let detached = ctx.with_fixture(|conn| finish(conn, completed, &mut detachment_context));
+        let (detached, work) = ctx
+            .complete_command_task_step_with_context_for_test(
+                detachment_step,
+                &mut detachment_context,
+            )
+            .await;
+        ctx.route_direct_command_output_for_test(Vec::new(), work)
+            .await;
+        ctx.wait_for_direct_command_work_completion_for_test("original worker cleanup")
+            .await;
         assert!(
             detached
                 .iter()
