@@ -1,5 +1,53 @@
 use super::*;
 
+#[tokio::test]
+async fn pending_runtime_expression_publishes_timer_output_before_promise_settlement() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<html><body>pending output</body></html>").await;
+    let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 42_501).await;
+    ctx.sent.clear();
+    ctx.process_async(json!({
+        "id": 42_502,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": "new Promise(resolve => { globalThis.finishOutputAwait = resolve; setTimeout(() => { document.title = 'pending output'; console.log('pending-output-turn'); }, 0); })",
+            "awaitPromise": true,
+            "returnByValue": true
+        }
+    }))
+    .await;
+    crate::testing::wait_until_message(
+        &mut ctx,
+        None,
+        "timer output while Runtime.evaluate is still pending",
+        |message| {
+            message["method"] == "Runtime.consoleAPICalled"
+                && message["params"]["args"][0]["value"] == "pending-output-turn"
+        },
+    )
+    .await;
+    assert!(!ctx.sent.iter().any(|message| message["id"] == 42_502));
+    ctx.process_async(json!({
+        "id": 42_503,
+        "method": "Runtime.evaluate",
+        "params": {"expression": "finishOutputAwait(42)", "returnByValue": true}
+    }))
+    .await;
+    let response = wait_for_response_by_id_async(&mut ctx, None, 42_502).await;
+    assert_eq!(response["result"]["result"]["value"], 42);
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| {
+                message["method"] == "Runtime.consoleAPICalled"
+                    && message["params"]["args"][0]["value"] == "pending-output-turn"
+            })
+            .count(),
+        1,
+        "pending-turn output must publish exactly once"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_discard_console_entries_suppresses_buffered_runtime_events() {
     let mut ctx = TestContext::new();
