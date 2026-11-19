@@ -384,7 +384,7 @@ Generado cada hora a partir de la cronología de stars por [lexmount/moli-metric
   <img alt="Historial de stars de lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## Moli's Friends
+## Amigos de Moli
 
 Descubre proyectos, integraciones y opciones de despliegue en
 [Awesome Moli](https://github.com/lexmount/awesome-moli).

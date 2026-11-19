@@ -382,7 +382,7 @@ Moli のエージェント向けブラウザとしての対応範囲を検証す
   <img alt="lexmount/moli の Star 推移" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## Moli's Friends
+## Moli の仲間たち
 
 関連プロジェクトや連携ツール、デプロイ方法については、
 [Awesome Moli](https://github.com/lexmount/awesome-moli) をご覧ください。

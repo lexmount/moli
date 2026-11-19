@@ -383,7 +383,7 @@ Stündlich aus der Stargazer-Timeline erzeugt von [lexmount/moli-metrics](https:
   <img alt="Star-Verlauf von lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## Moli's Friends
+## Freunde von Moli
 
 Eine Übersicht über Projekte, Integrationen und Bereitstellungsoptionen bietet
 [Awesome Moli](https://github.com/lexmount/awesome-moli).
