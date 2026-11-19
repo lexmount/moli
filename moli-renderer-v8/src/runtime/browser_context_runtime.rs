@@ -574,6 +574,10 @@ impl RendererBrowserContextRuntime {
             service_worker_context_runtime.broadcast_channel_registry();
         let storage_partition_identity =
             service_worker_context_runtime.storage_partition_identity();
+        let diagnostics = service_worker_context_runtime.diagnostics.clone();
+        let next_dedicated_worker_instance_id = service_worker_context_runtime
+            .next_dedicated_worker_instance_id
+            .clone();
         let debugger_enabled = service_worker_context_runtime.debugger_enabled;
         let id = super::RendererBrowserContextRuntimeId::new(
             NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
@@ -599,7 +603,7 @@ impl RendererBrowserContextRuntime {
         );
         Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
-                diagnostics: DiagnosticEmitter::default(),
+                diagnostics,
                 debugger_enabled,
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
@@ -612,7 +616,7 @@ impl RendererBrowserContextRuntime {
                 storage_partition_identity,
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
-                next_dedicated_worker_instance_id: Arc::default(),
+                next_dedicated_worker_instance_id,
                 dedicated_worker_targets: Mutex::new(HashMap::new()),
                 #[cfg(feature = "devtools")]
                 dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
@@ -1141,8 +1145,9 @@ mod tests {
 
     use moli_fetch::{FetchCancelHandle, Request};
 
-    use super::{ClipboardSnapshot, RendererBrowserContextRuntime};
+    use super::{ClipboardSnapshot, RendererBrowserContextRuntime, RendererWorkerContextRuntime};
     use crate::{
+        DiagnosticSource,
         network::ResourceRequestClient,
         runtime::{
             JsRuntime, RendererOutputTransportMessage, RendererPageContextCancelReason,
@@ -1353,6 +1358,27 @@ mod tests {
         assert_eq!(
             worker_runtime.storage_partition_identity(),
             runtime.storage_partition_identity()
+        );
+    }
+
+    #[test]
+    fn restored_worker_context_shares_dedicated_worker_instance_ids() {
+        let restored = RendererWorkerContextRuntime::new(
+            crate::message_port_runtime::new_message_port_registry(),
+            crate::broadcast_channel_runtime::new_broadcast_channel_registry(),
+        );
+        let owner = RendererBrowserContextRuntime::new_with_worker_context_and_service_worker_store_for_test(
+            restored.clone(),
+            crate::new_shared_service_worker_resource_store(),
+        );
+
+        let page_worker_id = owner.handle().allocate_dedicated_worker_instance_id();
+        let nested_worker = restored.for_nested_dedicated_worker();
+        assert_eq!(
+            nested_worker.diagnostic_source,
+            Some(DiagnosticSource::DedicatedWorker {
+                instance_id: page_worker_id + 1,
+            }),
         );
     }
 
