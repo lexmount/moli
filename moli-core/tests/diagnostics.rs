@@ -687,6 +687,83 @@ async fn service_worker_entry_load_failure_reaches_diagnostics() -> Result<()> {
 }
 
 #[tokio::test]
+async fn restored_service_worker_exceptions_reach_browser_diagnostics() -> Result<()> {
+    let server = DiagnosticFixtureServer::spawn().await?;
+    let profile = tempfile::tempdir()?;
+    let mut config = BrowserConfig::default();
+    config.set_profile_dir(Some(profile.path().to_path_buf()));
+    let page_url = server.url("/page");
+    let script_url = server.url("/restored-sw.js");
+
+    {
+        let browser = Browser::new(config.clone())?;
+        let mut page = browser.fetch(&page_url).await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            page.evaluate_runtime_expression_with_await_async(
+                r#"(async () => {
+                    await navigator.serviceWorker.register("/restored-sw.js");
+                    const registration = await navigator.serviceWorker.ready;
+                    return registration.active.scriptURL;
+                })()"#,
+                true,
+            ),
+        )
+        .await??;
+        assert_eq!(result["value"], script_url, "{result}");
+    }
+
+    let browser = Browser::new(config)?;
+    let mut diagnostics = browser
+        .subscribe_diagnostics()
+        .context("first subscription for reopened profile")?;
+    let mut page = browser.fetch(&page_url).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+                const registration = await navigator.serviceWorker.getRegistration();
+                if (!registration?.active) throw new Error("expected a restored registration");
+                const channel = new MessageChannel();
+                const reply = new Promise(resolve => {
+                    channel.port1.onmessage = ({data}) => {
+                        channel.port1.close();
+                        resolve(data);
+                    };
+                });
+                registration.active.postMessage("report", [channel.port2]);
+                return reply;
+            })()"#,
+            true,
+        ),
+    )
+    .await??;
+    assert_eq!(result["value"], "reported", "{result}");
+
+    // The reply is a separate Worker task, so reporting has already completed.
+    let event = diagnostics
+        .try_recv()
+        .context("expected a diagnostic from the restored ServiceWorker")?;
+    assert!(
+        matches!(
+            &event,
+            DiagnosticEvent::RuntimeException {
+                source: DiagnosticSource::ServiceWorker { version_id },
+                origin: ExceptionOrigin::UncaughtException,
+                message,
+                filename,
+                outcome: ErrorReportOutcome::Uncanceled,
+                ..
+            } if *version_id != 0 && message.contains("restored service worker failure")
+                && filename == &script_url
+        ),
+        "{event:?}",
+    );
+    assert_empty(&mut diagnostics);
+    Ok(())
+}
+
+#[tokio::test]
 async fn shared_worker_diagnostics_identify_the_instance_across_clients() -> Result<()> {
     let server = DiagnosticFixtureServer::spawn().await?;
     let browser = Browser::new(BrowserConfig::default())?;
@@ -919,6 +996,19 @@ fn fixture_response(path: Option<&str>) -> (&'static str, &'static str, &'static
             "200 OK",
             "text/javascript",
             "throw new Error('module exception');",
+        ),
+        Some("/restored-sw.js") => (
+            "200 OK",
+            "text/javascript",
+            r#"self.addEventListener("message", event => {
+                event.waitUntil(new Promise(resolve => {
+                    setTimeout(() => {
+                        event.ports[0].postMessage("reported");
+                        resolve();
+                    }, 0);
+                }));
+                throw new Error("restored service worker failure");
+            });"#,
         ),
         Some("/page") => ("200 OK", "text/html", "<!doctype html>"),
         Some("/worker-module.js") => (
