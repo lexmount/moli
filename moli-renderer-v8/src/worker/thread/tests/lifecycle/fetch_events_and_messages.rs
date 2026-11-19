@@ -251,7 +251,7 @@ async fn service_worker_fetch_handler_throw_without_respond_with_still_falls_bac
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 assert!(
                     message.contains("boom"),
                     "unexpected error message: {message}"
@@ -430,7 +430,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
                 assert_eq!(response.body, b"ABC".to_vec());
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error while waiting for stream: {message}");
             }
             WorkerToParentMessage::Post(_)
@@ -523,7 +523,7 @@ async fn service_worker_fetch_respond_with_readable_stream_error_fails_open_stre
                 chunks.extend(chunk.bytes);
             }
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error while waiting for stream error: {message}");
             }
             other => panic!("unexpected message while waiting for stream error: {other:?}"),
@@ -597,7 +597,7 @@ async fn service_worker_fetch_respond_with_invalid_readable_stream_chunk_fails_o
                 chunks.extend(chunk.bytes);
             }
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!(
                     "unexpected service worker error while waiting for invalid chunk: {message}"
                 );
@@ -664,7 +664,7 @@ async fn service_worker_fetch_stream_cancel_from_parent_notifies_source_and_fail
         | WorkerToParentMessage::ServiceWorkerFetchCompleted(_) => {
             panic!("stream body completed before stream start was reported");
         }
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             panic!("unexpected service worker error while waiting for stream start: {message}");
         }
         other => panic!("unexpected message while waiting for stream start: {other:?}"),
@@ -704,7 +704,7 @@ async fn service_worker_fetch_stream_cancel_from_parent_notifies_source_and_fail
                 }
             }
             WorkerToParentMessage::ServiceWorkerFetchStreamChunk(_) => {}
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!(
                     "unexpected service worker error while waiting for stream cancel: {message}"
                 );
@@ -1405,7 +1405,7 @@ async fn service_worker_fetch_respond_with_keeps_response_when_handler_throws_af
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 assert!(
                     message.contains("after-respond"),
                     "unexpected error message: {message}"

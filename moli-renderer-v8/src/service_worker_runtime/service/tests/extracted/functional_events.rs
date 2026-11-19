@@ -332,7 +332,10 @@ self.addEventListener("message", event => {
                 assert_eq!(push_subscribe_count, 2);
                 break;
             }
-            crate::worker::WorkerToParentMessage::Error { message, .. } => {
+            crate::worker::WorkerToParentMessage::Error(crate::worker::WorkerErrorReport {
+                ref message,
+                ..
+            }) => {
                 panic!("unexpected service worker error: {message}");
             }
             crate::worker::WorkerToParentMessage::RuntimeInspectorMessages(_) => {}

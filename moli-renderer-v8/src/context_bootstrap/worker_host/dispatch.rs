@@ -18,24 +18,17 @@ pub(crate) fn dispatch_worker_event<'s>(
             dispatch_onmessage(scope, worker, payload);
             true
         }
-        WorkerToParentMessage::Error {
-            message,
-            filename,
-            lineno,
-            colno,
-            event_kind,
-            ..
-        } => {
-            let error = v8::null(scope).into();
+        WorkerToParentMessage::Error(error) => {
+            let omitted_error = v8::null(scope).into();
             dispatch_worker_error_event_with_kind(
                 scope,
                 worker,
-                message,
-                filename,
-                *lineno,
-                *colno,
-                error,
-                *event_kind,
+                &error.message,
+                &error.filename,
+                error.lineno,
+                error.colno,
+                omitted_error,
+                error.event_kind,
             )
             .unwrap_or(false)
         }

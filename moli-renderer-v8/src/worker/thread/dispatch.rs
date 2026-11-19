@@ -20,7 +20,7 @@ use crate::context_bootstrap::{
     mark_event_trusted, runtime_message_allowed_for_current_target, set_event_internal_flag,
     structured_deserialize_value_for_message_event,
 };
-use crate::diagnostics::{ErrorReportOutcome, PendingExceptionReport, RuntimeExceptionSnapshot};
+use crate::diagnostics::ErrorReportOutcome;
 use crate::exception_reporting::{V8ExceptionReport, log_unhandled_promise_rejection};
 use crate::network_host::{
     MaterializedResponseBody, MaterializedResponseHead,
@@ -62,8 +62,8 @@ use super::super::global_scope::{
     register_shared_worker_connection_port, worker_exception_report_target,
 };
 use super::super::handle::{
-    WorkerErrorPhase, WorkerErrorSource, WorkerMessage, WorkerParentErrorEventKind,
-    WorkerToParentMessage,
+    WorkerErrorPhase, WorkerErrorReport, WorkerErrorSource, WorkerMessage,
+    WorkerParentErrorEventKind, WorkerToParentMessage,
 };
 use super::super::timer_callback::WorkerTimerCallbackOutcome;
 use super::{ActiveTimer, WorkerGlobalKind};
@@ -561,24 +561,6 @@ fn new_worker_message_event<'s>(
     .expect("worker MessageEvent should initialize")
 }
 
-fn new_worker_error_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    report: &V8ExceptionReport,
-    default_url: &str,
-    exception: Option<v8::Local<'s, v8::Value>>,
-) -> v8::Local<'s, v8::Object> {
-    let error = exception.unwrap_or_else(|| v8::undefined(scope).into());
-    crate::context_bootstrap::construct_original_error_event(
-        scope,
-        &report.summary,
-        report.source.as_deref().unwrap_or(default_url),
-        report.line.unwrap_or(0) as u32,
-        report.column.unwrap_or(0) as u32,
-        error,
-    )
-    .expect("native Worker ErrorEvent should initialize")
-}
-
 fn new_worker_promise_rejection_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -650,30 +632,6 @@ fn dispatch_worker_promise_rejection_event<'s>(
     !event_bool_property(scope, event, "defaultPrevented")
 }
 
-pub(super) fn report_exception_to_parent(
-    report: &V8ExceptionReport,
-    script_url: &str,
-    event_kind: WorkerParentErrorEventKind,
-    phase: WorkerErrorPhase,
-    source: WorkerErrorSource,
-    pending_report: Option<Box<PendingExceptionReport>>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-) {
-    let _ = parent_tx.send(WorkerToParentMessage::Error {
-        message: report.summary.clone(),
-        filename: report
-            .source
-            .clone()
-            .unwrap_or_else(|| script_url.to_owned()),
-        lineno: report.line.unwrap_or(0) as u32,
-        colno: report.column.unwrap_or(0) as u32,
-        event_kind,
-        phase,
-        source,
-        pending_report,
-    });
-}
-
 fn worker_exception_source_override<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: v8::Local<'s, v8::Value>,
@@ -733,9 +691,8 @@ impl Drop for WorkerErrorReportingScope {
 pub(super) fn dispatch_worker_error_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
-    report: &V8ExceptionReport,
+    report: &WorkerErrorReport,
     exception: Option<v8::Local<'s, v8::Value>>,
-    script_url: &str,
 ) -> bool {
     let _reporting_scope = if let Some(state) = get_worker_state(scope) {
         if state.borrow().in_error_reporting_mode {
@@ -748,7 +705,16 @@ pub(super) fn dispatch_worker_error_event<'s>(
     } else {
         None
     };
-    let event = new_worker_error_event(scope, report, script_url, exception);
+    let error = exception.unwrap_or_else(|| v8::undefined(scope).into());
+    let event = crate::context_bootstrap::construct_original_error_event(
+        scope,
+        &report.message,
+        &report.filename,
+        report.lineno,
+        report.colno,
+        error,
+    )
+    .expect("native Worker ErrorEvent should initialize");
     mark_event_trusted(scope, event);
     !crate::context_bootstrap::dispatch_simple_event_target_event(scope, global, "error", event)
 }
@@ -3500,66 +3466,50 @@ pub(super) fn dispatch_worker_reported_error<'s>(
     failed_resource: Option<&url::Url>,
 ) -> bool {
     apply_worker_exception_location_overrides(scope, &mut report, exception);
-    let handled = dispatch_worker_error_event(scope, global, &report, exception, script_url);
-    let pending_report = if let Some(resource) = failed_resource {
+    let mut report = WorkerErrorReport::new(
+        report.summary,
+        report.source.unwrap_or_else(|| script_url.to_owned()),
+        (
+            report
+                .line
+                .and_then(|line| u32::try_from(line).ok())
+                .unwrap_or(0),
+            report
+                .column
+                .and_then(|column| u32::try_from(column).ok())
+                .unwrap_or(0),
+        ),
+        parent_event_kind,
+        parent_phase,
+        source,
+    );
+    let handled = dispatch_worker_error_event(scope, global, &report, exception);
+    if let Some(resource) = failed_resource {
         with_worker_diagnostic(scope, |_, source| {
             crate::DiagnosticEvent::script_load_failure(
                 source,
                 script_url,
                 resource.as_str(),
-                &report.summary,
+                &report.message,
             )
         });
-        None
-    } else {
-        get_worker_state(scope).and_then(|state| {
-            let state = state.borrow();
-            let pending = state
-                .worker_context_runtime
-                .prepare_exception_report(|source| {
-                    let stack = if handled {
-                        None
-                    } else {
-                        exception.and_then(|value| {
-                            crate::exception_reporting::captured_exception_stack(scope, value)
-                        })
-                    };
-                    RuntimeExceptionSnapshot::new(
-                        source,
-                        crate::ExceptionOrigin::UncaughtException,
-                        &report.summary,
-                        report.source.as_deref().unwrap_or(script_url),
-                        (
-                            report
-                                .line
-                                .and_then(|line| u32::try_from(line).ok())
-                                .unwrap_or(0),
-                            report
-                                .column
-                                .and_then(|column| u32::try_from(column).ok())
-                                .unwrap_or(0),
-                        ),
-                        stack.as_deref(),
-                    )
-                })?;
-            if !handled && matches!(state.global_kind, WorkerGlobalKind::Dedicated { .. }) {
-                Some(Box::new(pending))
-            } else {
-                pending.complete(ErrorReportOutcome::from_default_prevented(handled));
+    } else if let Some(state) = get_worker_state(scope) {
+        let state = state.borrow();
+        report.diagnostic = state.worker_context_runtime.prepare_worker_exception(|| {
+            if handled {
                 None
+            } else {
+                exception.and_then(|value| {
+                    crate::exception_reporting::captured_exception_stack(scope, value)
+                })
             }
-        })
-    };
+        });
+        if handled || !matches!(state.global_kind, WorkerGlobalKind::Dedicated { .. }) {
+            report.complete(|| ErrorReportOutcome::from_default_prevented(handled));
+        }
+    }
     if !handled {
-        report_exception_to_parent(
-            &report,
-            script_url,
-            parent_event_kind,
-            parent_phase,
-            source,
-            pending_report,
-            parent_tx,
-        );
+        let _ = parent_tx.send(WorkerToParentMessage::Error(report));
     }
     handled
 }

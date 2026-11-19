@@ -1158,9 +1158,11 @@ async fn worker_error_report_ignores_throwing_accessors() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error {
-            message, filename, ..
-        } => {
+        WorkerToParentMessage::Error(WorkerErrorReport {
+            ref message,
+            ref filename,
+            ..
+        }) => {
             assert!(
                 message.contains("Uncaught"),
                 "message should come from the original report: {message}"
@@ -1425,7 +1427,9 @@ async fn unhandled_classic_worker_top_level_exception_is_runtime_phase() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, phase, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport {
+            ref message, phase, ..
+        }) => {
             assert!(
                 message.contains("top-level-runtime"),
                 "expected top-level-runtime, got {message:?}"
@@ -1598,7 +1602,7 @@ async fn worker_syntax_error() {
         .await
         .expect("timed out")
         .expect("channel closed");
-    assert!(matches!(msg, WorkerToParentMessage::Error { .. }));
+    assert!(matches!(msg, WorkerToParentMessage::Error(_)));
 }
 
 #[tokio::test]

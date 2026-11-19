@@ -32,7 +32,7 @@ async fn dispatch_service_worker_lifecycle_event_and_console_for_test(
             WorkerToParentMessage::Console(message) => {
                 console = Some(message.message);
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error while waiting for lifecycle: {message}");
             }
             other => panic!("unexpected message while waiting for lifecycle console: {other:?}"),
@@ -77,7 +77,7 @@ async fn dispatch_service_worker_message_event_and_console_for_test(
             WorkerToParentMessage::Console(message) => {
                 console = Some(message.message);
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error while waiting for message: {message}");
             }
             other => panic!("unexpected message while waiting for message console: {other:?}"),
@@ -117,7 +117,7 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
             WorkerToParentMessage::Console(message) => {
                 handled_console = Some(message.message);
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error while waiting for handled: {message}");
             }
             WorkerToParentMessage::Post(_)

@@ -1965,9 +1965,11 @@ async fn worker_error_propagation() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error {
-            message, filename, ..
-        } => {
+        WorkerToParentMessage::Error(WorkerErrorReport {
+            ref message,
+            ref filename,
+            ..
+        }) => {
             assert!(message.contains("worker error"), "got: {message}");
             assert_eq!(filename, "test://error");
         }

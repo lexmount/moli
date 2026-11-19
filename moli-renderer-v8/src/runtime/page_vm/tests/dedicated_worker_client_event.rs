@@ -5,7 +5,10 @@ use crate::page_task_queue::{
     RendererDedicatedWorkerClientEventKind, RendererDedicatedWorkerMessageEvent,
 };
 use crate::runtime::PageTaskCompletion;
-use crate::worker::{WorkerErrorPhase, WorkerParentErrorEventKind, WorkerRuntimeEvent};
+use crate::worker::{
+    WorkerErrorPhase, WorkerErrorReport, WorkerErrorSource, WorkerParentErrorEventKind,
+    WorkerRuntimeEvent,
+};
 
 fn current_single_child_document_owner(
     page_vm: &PageVm,
@@ -240,15 +243,14 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
 
         producer
             .send(RendererDedicatedWorkerClientEvent::Message(
-                RendererDedicatedWorkerMessageEvent::Error {
-                    message: "bootstrap syntax".to_owned(),
-                    filename: "https://example.com/bootstrap-worker.js".to_owned(),
-                    lineno: 1,
-                    colno: 1,
-                    event_kind: WorkerParentErrorEventKind::Event,
-                    phase: WorkerErrorPhase::Bootstrap,
-                    pending_report: None,
-                },
+                RendererDedicatedWorkerMessageEvent::Error(WorkerErrorReport::new(
+                    "bootstrap syntax".to_owned(),
+                    "https://example.com/bootstrap-worker.js".to_owned(),
+                    (1, 1),
+                    WorkerParentErrorEventKind::Event,
+                    WorkerErrorPhase::Bootstrap,
+                    WorkerErrorSource::Runtime,
+                )),
             ))
             .expect("bootstrap Worker error should enter its typed source");
         assert!(
@@ -270,15 +272,14 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
 
         producer
             .send(RendererDedicatedWorkerClientEvent::Message(
-                RendererDedicatedWorkerMessageEvent::Error {
-                    message: "runtime boom".to_owned(),
-                    filename: "https://example.com/runtime-worker.js".to_owned(),
-                    lineno: 2,
-                    colno: 3,
-                    event_kind: WorkerParentErrorEventKind::ErrorEvent,
-                    phase: WorkerErrorPhase::Runtime,
-                    pending_report: None,
-                },
+                RendererDedicatedWorkerMessageEvent::Error(WorkerErrorReport::new(
+                    "runtime boom".to_owned(),
+                    "https://example.com/runtime-worker.js".to_owned(),
+                    (2, 3),
+                    WorkerParentErrorEventKind::ErrorEvent,
+                    WorkerErrorPhase::Runtime,
+                    WorkerErrorSource::Runtime,
+                )),
             ))
             .expect("runtime Worker error should enter its typed source");
         assert!(
@@ -471,15 +472,14 @@ globalThis.__bootstrapEventWorker = new Worker("data:text/javascript,onmessage =
             .only_dedicated_worker_client_event_producer_for_test()?;
         producer
             .send(RendererDedicatedWorkerClientEvent::Message(
-                RendererDedicatedWorkerMessageEvent::Error {
-                    message: "bootstrap parse error".to_owned(),
-                    filename: "https://worker-bootstrap-event.test/broken.js".to_owned(),
-                    lineno: 3,
-                    colno: 5,
-                    event_kind: WorkerParentErrorEventKind::Event,
-                    phase: WorkerErrorPhase::Bootstrap,
-                    pending_report: None,
-                },
+                RendererDedicatedWorkerMessageEvent::Error(WorkerErrorReport::new(
+                    "bootstrap parse error".to_owned(),
+                    "https://worker-bootstrap-event.test/broken.js".to_owned(),
+                    (3, 5),
+                    WorkerParentErrorEventKind::Event,
+                    WorkerErrorPhase::Bootstrap,
+                    WorkerErrorSource::Runtime,
+                )),
             ))
             .expect("bootstrap error should enter the typed Worker source");
         assert!(

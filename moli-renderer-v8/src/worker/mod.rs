@@ -60,9 +60,10 @@ pub(crate) use global_scope::{
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
-    WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
-    WorkerParentErrorEventKind, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
-    WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
+    WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorReport, WorkerErrorSource,
+    WorkerFetchHandlerType, WorkerParentErrorEventKind, WorkerRuntimeEvent,
+    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerScriptResourceKind,
+    WorkerToParentMessage,
 };
 pub(crate) use handle::{
     WorkerControlHandle, WorkerHandle, WorkerNetworkPolicy, WorkerSecureContextPolicy,

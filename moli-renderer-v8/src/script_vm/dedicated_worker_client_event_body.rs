@@ -10,7 +10,7 @@ use anyhow::Result;
 use super::{
     ScriptVm,
     dedicated_worker_error_dispatch::{
-        DedicatedWorkerError, dispatch_error_and_maybe_propagate, dispatch_script_load_failure,
+        dispatch_error_and_maybe_propagate, dispatch_script_load_failure,
     },
 };
 use crate::{
@@ -200,15 +200,7 @@ impl ScriptVm {
                         (
                             worker,
                             RendererDedicatedWorkerClientEvent::Message(
-                                RendererDedicatedWorkerMessageEvent::Error {
-                                    message,
-                                    filename,
-                                    lineno,
-                                    colno,
-                                    event_kind,
-                                    phase,
-                                    pending_report,
-                                },
+                                RendererDedicatedWorkerMessageEvent::Error(error),
                             ),
                         ) => {
                             if let Err(error) = dispatch_error_and_maybe_propagate(
@@ -216,15 +208,7 @@ impl ScriptVm {
                                 host_ptr,
                                 owner.execution_context(),
                                 worker,
-                                DedicatedWorkerError {
-                                    message: &message,
-                                    filename: &filename,
-                                    lineno,
-                                    colno,
-                                    event_kind,
-                                    phase,
-                                },
-                                pending_report,
+                                error,
                             ) {
                                 target.owner.restore(scope, previous_owner_context);
                                 return Err(error);

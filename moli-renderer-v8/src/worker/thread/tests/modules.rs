@@ -1533,7 +1533,9 @@ async fn worker_module_redirected_http_dependency_blocked_before_network_by_scri
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, phase, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport {
+            ref message, phase, ..
+        }) => {
             assert!(
                 message.contains("Content Security Policy"),
                 "expected CSP error, got {message:?}"
@@ -2316,7 +2318,7 @@ async fn shared_worker_data_module_dynamic_import_allows_cors_dependency() {
             .expect("channel closed");
         match msg {
             WorkerToParentMessage::SharedWorkerClosed => break,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("shared worker reported unexpected error: {message}");
             }
             _ => {}
@@ -2372,7 +2374,7 @@ async fn shared_worker_data_module_dynamic_import_allows_data_dependency() {
             .expect("channel closed");
         match msg {
             WorkerToParentMessage::SharedWorkerClosed => break,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("shared worker reported unexpected error: {message}");
             }
             _ => {}
@@ -2547,12 +2549,12 @@ async fn expect_service_worker_async_module_error(handle: &mut WorkerHandle) {
     loop {
         match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
             WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. } => {}
-            WorkerToParentMessage::Error {
-                message,
+            WorkerToParentMessage::Error(WorkerErrorReport {
+                ref message,
                 phase,
                 event_kind,
                 ..
-            } => {
+            }) => {
                 assert!(message.contains("TypeError"), "{message}");
                 assert!(message.contains("Top-level await"), "{message}");
                 assert_eq!(phase, WorkerErrorPhase::Bootstrap);
@@ -2741,7 +2743,7 @@ async fn worker_module_top_level_await_rejection_reports_parent_error() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(message.contains("worker tla rejected"), "{message}");
         }
         other => panic!("expected Error, got {other:?}"),
@@ -3446,7 +3448,7 @@ async fn worker_module_static_wasm_import_preserves_v8_compile_exception() {
         .await
         .expect("timed out")
         .expect("channel closed");
-    let WorkerToParentMessage::Error { message, .. } = msg else {
+    let WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) = msg else {
         panic!("expected worker module compile error, got {msg:?}");
     };
     assert!(message.contains("CompileError"), "{message}");
@@ -3504,7 +3506,7 @@ async fn worker_module_wasm_js_cycle_is_rejected_without_recursive_evaluate() {
         .await
         .expect("timed out")
         .expect("channel closed");
-    let WorkerToParentMessage::Error { message, .. } = msg else {
+    let WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) = msg else {
         panic!("expected worker wasm cycle error, got {msg:?}");
     };
     assert!(
@@ -4354,7 +4356,7 @@ async fn worker_module_static_unsupported_import_rejects_invalid_module_type() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("module type `unsupported` is not a valid module type"),
                 "{message}"
@@ -4383,7 +4385,7 @@ async fn worker_module_static_css_import_rejects_invalid_module_type() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("module type `css` is not a valid module type"),
                 "{message}"
@@ -4524,9 +4526,11 @@ async fn worker_module_top_level_return_reports_syntax_error() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error {
-            message, filename, ..
-        } => {
+        WorkerToParentMessage::Error(WorkerErrorReport {
+            ref message,
+            ref filename,
+            ..
+        }) => {
             assert!(message.contains("return"), "{message}");
             assert_eq!(filename, "data:text/javascript,main");
         }
@@ -4554,7 +4558,9 @@ async fn worker_module_with_statement_reports_syntax_error() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, phase, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport {
+            ref message, phase, ..
+        }) => {
             assert!(
                 message.contains("with") || message.contains("strict"),
                 "{message}"
@@ -4597,7 +4603,7 @@ async fn worker_module_dependency_parse_error_reports_syntax_error() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("with") || message.contains("strict"),
                 "{message}"
@@ -4629,7 +4635,7 @@ async fn worker_module_missing_named_import_reports_link_error() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("missing export") || message.contains("SyntaxError"),
                 "{message}"
@@ -4666,7 +4672,7 @@ async fn worker_module_missing_reexport_reports_link_error() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("missing export") || message.contains("SyntaxError"),
                 "{message}"
@@ -4705,7 +4711,7 @@ async fn worker_module_http_dependency_404_reports_load_error() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(message.contains("404"), "{message}");
             assert!(message.contains("Not Found"), "{message}");
         }
@@ -4745,7 +4751,7 @@ async fn worker_module_http_dependency_rejects_non_script_mime() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("unsupported module script MIME type"),
                 "{message}"
@@ -4823,7 +4829,7 @@ async fn worker_module_http_dependency_reports_json_attribute_mismatch_before_sc
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(message.contains("non-JSON module"), "{message}");
             assert!(message.contains("JSON import attribute"), "{message}");
         }
@@ -4853,7 +4859,7 @@ async fn worker_module_invalid_static_import_specifier_reports_resolution_error(
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(message.contains("Failed to resolve"), "{message}");
         }
         other => panic!("expected Error, got {other:?}"),
@@ -4879,7 +4885,7 @@ async fn worker_module_static_import_rejects_invalid_attribute_key() {
         .expect("timed out")
         .expect("channel closed");
     match msg {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("Invalid attribute key \"foo\"."),
                 "{message}"
@@ -5364,7 +5370,7 @@ async fn service_worker_importscripts_reports_imported_script_resource() {
                 assert_eq!(version_id, ServiceWorkerVersionId::from_u64_for_test(9));
                 saw_skip_waiting = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             _ => {}
@@ -5456,7 +5462,7 @@ async fn service_worker_module_static_import_reports_imported_script_resource() 
                 assert_eq!(version_id, ServiceWorkerVersionId::from_u64_for_test(9));
                 saw_skip_waiting = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker module error: {message}");
             }
             _ => {}
@@ -5547,7 +5553,7 @@ async fn service_worker_module_static_json_import_reports_json_resource_kind() {
                 assert_eq!(version_id, ServiceWorkerVersionId::from_u64_for_test(13));
                 saw_skip_waiting = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker module JSON error: {message}");
             }
             _ => {}
@@ -5639,7 +5645,7 @@ async fn service_worker_module_static_text_import_reports_text_resource_kind() {
                 assert_eq!(version_id, ServiceWorkerVersionId::from_u64_for_test(13));
                 saw_skip_waiting = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker module text error: {message}");
             }
             _ => {}
@@ -5688,7 +5694,7 @@ async fn service_worker_module_static_css_import_rejects_invalid_module_type() {
         .expect("timed out waiting for service worker module CSS error")
         .expect("channel closed");
     match message {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("module type `css` is not a valid module type"),
                 "{message}"
@@ -5724,7 +5730,7 @@ async fn service_worker_module_static_unsupported_import_rejects_invalid_module_
         .expect("timed out waiting for service worker module text error")
         .expect("channel closed");
     match message {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(
                 message.contains("module type `unsupported` is not a valid module type"),
                 "{message}"
@@ -5942,7 +5948,7 @@ async fn worker_module_internal_root_rejection_reports_one_bootstrap_error() {
         .await
         .expect("root error deadline")
         .expect("bootstrap error");
-    let WorkerToParentMessage::Error { message, .. } = message else {
+    let WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) = message else {
         panic!("internal evaluation promise escaped as an unhandled rejection: {message:?}");
     };
     assert!(message.contains("root-evaluation-marker"), "{message}");

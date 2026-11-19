@@ -522,8 +522,8 @@ async fn nested_worker_report_reaches_window_after_its_intermediate_owner_termin
                     worker.terminate();
                     channel.close();
                 };
-                window.onerror = (message, filename) => {
-                    setTimeout(() => resolve([message, filename].join("|")), 0);
+                window.onerror = (message, filename, lineno, colno) => {
+                    setTimeout(() => resolve(JSON.stringify({message, filename, lineno, colno})), 0);
                     return true;
                 };
             })"#,
@@ -532,10 +532,16 @@ async fn nested_worker_report_reaches_window_after_its_intermediate_owner_termin
     )
     .await??;
     let filename = server.url("/nested-report-child.js");
-    assert!(
+    let error_event: serde_json::Value = serde_json::from_str(
         result["value"]
             .as_str()
-            .is_some_and(|value| value.contains("nested report") && value.ends_with(&filename)),
+            .context("nested Worker Window error event")?,
+    )?;
+    assert_eq!(error_event["filename"], filename, "{result}");
+    assert!(
+        error_event["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("nested report")),
         "{result}"
     );
 
@@ -547,9 +553,15 @@ async fn nested_worker_report_reaches_window_after_its_intermediate_owner_termin
                 source: DiagnosticSource::DedicatedWorker { instance_id: 2 },
                 message,
                 filename: source_url,
+                lineno,
+                colno,
+                stack: Some(stack),
                 outcome: ErrorReportOutcome::Canceled,
                 ..
-            } if message.contains("nested report") && source_url == &filename
+            } if error_event["message"] == *message && source_url == &filename
+                && *lineno > 0 && error_event["lineno"] == *lineno
+                && *colno > 0 && error_event["colno"] == *colno
+                && stack.contains("at throwNestedReport")
         ),
         "{diagnostic:?}"
     );
@@ -919,7 +931,7 @@ fn fixture_response(path: Option<&str>) -> (&'static str, &'static str, &'static
             "200 OK",
             "text/javascript",
             r#"const channel = new BroadcastChannel("nested-report");
-               setTimeout(() => { throw new Error("nested report"); }, 0);
+               setTimeout(function throwNestedReport() { throw new Error("nested report"); }, 0);
                setTimeout(() => channel.postMessage("reported"), 0);"#,
         ),
         Some("/shared.js") => (

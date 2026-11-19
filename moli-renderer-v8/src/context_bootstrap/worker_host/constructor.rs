@@ -470,16 +470,16 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                         .wake_tx
                         .send(crate::worker::WorkerMessage::NestedWorkerEvent {
                             worker_id: nested_context.worker_id,
-                            message: Box::new(crate::worker::WorkerToParentMessage::Error {
-                                message,
-                                filename: resolved_url.to_string(),
-                                lineno: 0,
-                                colno: 0,
-                                event_kind: crate::worker::WorkerParentErrorEventKind::Event,
-                                phase: crate::worker::WorkerErrorPhase::Bootstrap,
-                                source: crate::worker::WorkerErrorSource::Runtime,
-                                pending_report: None,
-                            }),
+                            message: Box::new(crate::worker::WorkerToParentMessage::Error(
+                                crate::worker::WorkerErrorReport::new(
+                                    message,
+                                    resolved_url.to_string(),
+                                    (0, 0),
+                                    crate::worker::WorkerParentErrorEventKind::Event,
+                                    crate::worker::WorkerErrorPhase::Bootstrap,
+                                    crate::worker::WorkerErrorSource::Runtime,
+                                ),
+                            )),
                         });
                 set_private_value(
                     scope,

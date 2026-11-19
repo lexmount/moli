@@ -225,7 +225,9 @@ async fn worker_synthetic_error_reporting_cancels_propagation_and_prevents_reent
                         ))
                         .unwrap();
                     }
-                    WorkerToParentMessage::Error { message, phase, .. } => {
+                    WorkerToParentMessage::Error(WorkerErrorReport {
+                        ref message, phase, ..
+                    }) => {
                         assert_eq!(phase, WorkerErrorPhase::Runtime, "{config}");
                         let tag = message.split_whitespace().last().expect("error message");
                         assert!(

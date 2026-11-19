@@ -7,7 +7,7 @@ use crate::{
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::{PageOwnerTurnOutcome, RendererDocumentToken},
     types::{DedicatedWorkerId, SubresourcePolicyContext},
-    worker::{WorkerErrorPhase, WorkerParentErrorEventKind, WorkerScriptKind, WorkerScriptSource},
+    worker::{WorkerErrorPhase, WorkerErrorReport, WorkerScriptKind, WorkerScriptSource},
 };
 
 use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskReadySignal};
@@ -59,15 +59,7 @@ impl RendererPageDedicatedWorkerClientEventOwner {
 #[derive(Debug)]
 pub(crate) enum RendererDedicatedWorkerMessageEvent {
     Message(Box<crate::structured_clone::V8StructuredClonePayload>),
-    Error {
-        message: String,
-        filename: String,
-        lineno: u32,
-        colno: u32,
-        event_kind: WorkerParentErrorEventKind,
-        phase: WorkerErrorPhase,
-        pending_report: Option<Box<crate::diagnostics::PendingExceptionReport>>,
-    },
+    Error(WorkerErrorReport),
 }
 
 /// One owner-side task emitted by a DedicatedWorker relay.
@@ -122,7 +114,7 @@ impl RendererDedicatedWorkerClientEvent {
             Self::Message(RendererDedicatedWorkerMessageEvent::Message(_)) => {
                 RendererDedicatedWorkerClientEventKind::Message
             }
-            Self::Message(RendererDedicatedWorkerMessageEvent::Error { .. }) => {
+            Self::Message(RendererDedicatedWorkerMessageEvent::Error(_)) => {
                 RendererDedicatedWorkerClientEventKind::Error
             }
             Self::ClientSourceDrained => {
@@ -158,10 +150,10 @@ impl RendererPageDedicatedWorkerClientEventTask {
         matches!(
             &self.event,
             RendererDedicatedWorkerClientEvent::Message(
-                RendererDedicatedWorkerMessageEvent::Error {
+                RendererDedicatedWorkerMessageEvent::Error(WorkerErrorReport {
                     phase: WorkerErrorPhase::Runtime,
                     ..
-                }
+                })
             )
         )
     }

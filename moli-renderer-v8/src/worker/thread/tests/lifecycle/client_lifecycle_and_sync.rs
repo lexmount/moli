@@ -166,7 +166,7 @@ self.addEventListener("message", event => {
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -306,7 +306,7 @@ self.addEventListener("message", event => {
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -522,7 +522,7 @@ self.addEventListener("message", event => {
                     break;
                 }
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -623,7 +623,7 @@ self.addEventListener("message", event => {
             WorkerToParentMessage::ServiceWorkerGetNotifications(_)
             | WorkerToParentMessage::ServiceWorkerCloseNotification(_) => {}
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             other => panic!("unexpected worker message: {other:?}"),
@@ -727,7 +727,7 @@ self.addEventListener("message", event => {
             WorkerToParentMessage::ServiceWorkerMessageCompleted(completion) => {
                 panic!("showNotification completed before owner ack: {completion:?}");
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -761,7 +761,7 @@ self.addEventListener("message", event => {
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -895,7 +895,7 @@ self.addEventListener("message", event => {
                 );
                 saw_completion = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -1032,7 +1032,7 @@ self.addEventListener("message", event => {
                 );
                 saw_completion = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -1107,7 +1107,7 @@ self.addEventListener("message", event => {
                 assert_eq!(completion.result, Ok(()));
                 saw_completion = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker navigation preload error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -1183,7 +1183,7 @@ self.addEventListener("message", event => {
                 assert_eq!(completion.result, Ok(()));
                 saw_completion = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker navigation preload error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -1344,7 +1344,7 @@ self.addEventListener("message", event => {
                 );
                 saw_completion = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -1432,7 +1432,7 @@ self.addEventListener("message", event => {
             WorkerToParentMessage::ServiceWorkerSyncRegistration(request) => {
                 panic!("denied background sync should not reach parent: {request:?}");
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -1522,7 +1522,7 @@ self.addEventListener("message", event => {
             WorkerToParentMessage::ServiceWorkerPeriodicSyncRegistration(request) => {
                 panic!("denied periodic sync should not reach parent: {request:?}");
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
