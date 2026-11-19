@@ -1,11 +1,7 @@
 //! Diagnostics shared by the Pages and Workers of one Browser.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, OnceLock};
 
-use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 const TEXT_MAX_BYTES: usize = 4 * 1024;
@@ -92,12 +88,12 @@ pub enum DiagnosticEvent {
     },
 }
 
-/// A live subscription to future diagnostics in one Browser.
+/// A Browser's one-time subscription to future diagnostics.
 ///
 /// Producers enqueue events without waiting for the receiver. Consume events
-/// regularly to limit the memory used by the unbounded queue. To stop collection,
-/// close the receiver and then drain the queue. Dropping the receiver discards
-/// any queued events.
+/// regularly to limit the memory used by the unbounded queue. Closing the
+/// receiver stops collection permanently and allows the queue to be drained.
+/// Dropping the receiver stops collection and discards queued events.
 pub type DiagnosticsSubscription = mpsc::UnboundedReceiver<DiagnosticEvent>;
 
 impl DiagnosticEvent {
@@ -153,25 +149,17 @@ fn bound_stack(mut stack: String) -> String {
 type DiagnosticSender = mpsc::UnboundedSender<DiagnosticEvent>;
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DiagnosticEmitter(Arc<DiagnosticState>);
-
-#[derive(Debug, Default)]
-struct DiagnosticState {
-    // Both this hint and the sender slot are updated under the same lock.
-    may_have_receiver: AtomicBool,
-    sender: Mutex<Option<DiagnosticSender>>,
-}
+pub(crate) struct DiagnosticEmitter(Arc<OnceLock<DiagnosticSender>>);
 
 impl DiagnosticEmitter {
     pub(crate) fn subscribe(&self) -> Option<DiagnosticsSubscription> {
-        let mut slot = self.0.sender.lock();
-        if slot.as_ref().is_some_and(|sender| !sender.is_closed()) {
-            return None;
-        }
-        let (sender, receiver) = mpsc::unbounded_channel();
-        *slot = Some(sender);
-        self.0.may_have_receiver.store(true, Ordering::Release);
-        Some(receiver)
+        let mut subscription = None;
+        self.0.get_or_init(|| {
+            let (sender, receiver) = mpsc::unbounded_channel();
+            subscription = Some(receiver);
+            sender
+        });
+        subscription
     }
 
     pub(crate) fn emit(&self, build: impl FnOnce() -> Option<DiagnosticEvent>) {
@@ -187,7 +175,7 @@ impl DiagnosticEmitter {
         source: DiagnosticSource,
         capture_stack: impl FnOnce() -> Option<String>,
     ) -> Option<WorkerExceptionDiagnostic> {
-        let sender = self.active_sender()?;
+        let sender = self.active_sender()?.clone();
         Some(WorkerExceptionDiagnostic {
             sender,
             source,
@@ -195,17 +183,8 @@ impl DiagnosticEmitter {
         })
     }
 
-    fn active_sender(&self) -> Option<DiagnosticSender> {
-        if !self.0.may_have_receiver.load(Ordering::Acquire) {
-            return None;
-        }
-        let mut slot = self.0.sender.lock();
-        if let Some(sender) = slot.as_ref().filter(|sender| !sender.is_closed()) {
-            return Some(sender.clone());
-        }
-        *slot = None;
-        self.0.may_have_receiver.store(false, Ordering::Release);
-        None
+    fn active_sender(&self) -> Option<&DiagnosticSender> {
+        self.0.get().filter(|sender| !sender.is_closed())
     }
 }
 
@@ -246,39 +225,20 @@ mod tests {
     #[test]
     fn diagnostics_are_lazy_without_an_open_receiver() {
         let diagnostics = DiagnosticEmitter::default();
-        assert!(!diagnostics.0.may_have_receiver.load(Ordering::Acquire));
+        let source = DiagnosticSource::DedicatedWorker { instance_id: 2 };
+        assert!(diagnostics.0.get().is_none());
         diagnostics.emit(|| panic!("no receiver"));
         assert!(
             diagnostics
-                .prepare_worker_exception(
-                    DiagnosticSource::DedicatedWorker { instance_id: 2 },
-                    || { panic!("no receiver") }
-                )
+                .prepare_worker_exception(source, || panic!("no receiver"))
                 .is_none()
         );
 
         let mut receiver = diagnostics.subscribe().expect("first subscription");
         assert!(diagnostics.clone().subscribe().is_none());
         let report = diagnostics
-            .prepare_worker_exception(DiagnosticSource::DedicatedWorker { instance_id: 2 }, || {
-                None
-            })
-            .expect("report for first subscription");
-        receiver.close();
-        diagnostics.emit(|| panic!("the receiver was closed"));
-        assert!(!diagnostics.0.may_have_receiver.load(Ordering::Acquire));
-        assert!(diagnostics.0.sender.lock().is_none());
-
-        let mut replacement = diagnostics
-            .subscribe()
-            .expect("closed receiver can be replaced");
-        report.publish("stale report", "worker.js", (1, 1), || {
-            panic!("the original receiver was closed")
-        });
-        assert_eq!(
-            replacement.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        );
+            .prepare_worker_exception(source, || None)
+            .expect("in-flight report");
 
         let event = DiagnosticEvent::script_load_failure(
             DiagnosticSource::Page { page_id: 1 },
@@ -287,10 +247,38 @@ mod tests {
             "missing",
         );
         diagnostics.emit(|| Some(event.clone()));
-        assert_eq!(replacement.try_recv(), Ok(event));
-        drop(replacement);
-        diagnostics.emit(|| panic!("the receiver was dropped"));
-        assert!(diagnostics.subscribe().is_some());
+        receiver.close();
+        diagnostics.emit(|| panic!("the receiver was closed"));
+        assert!(
+            diagnostics
+                .prepare_worker_exception(source, || panic!("the receiver was closed"))
+                .is_none()
+        );
+        report.publish("in-flight report", "worker.js", (1, 1), || {
+            panic!("the receiver was closed")
+        });
+        assert_eq!(receiver.try_recv(), Ok(event));
+        assert_eq!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        );
+        assert!(diagnostics.subscribe().is_none());
+    }
+
+    #[test]
+    fn concurrent_diagnostic_subscriptions_have_one_winner() {
+        let diagnostics = DiagnosticEmitter::default();
+        let start = std::sync::Barrier::new(2);
+        let subscribe = || {
+            start.wait();
+            diagnostics.subscribe()
+        };
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(subscribe);
+            let second = subscribe();
+            (first.join().expect("subscription thread"), second)
+        });
+        assert_ne!(first.is_some(), second.is_some());
     }
 
     #[test]

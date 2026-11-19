@@ -782,7 +782,7 @@ impl RendererBrowserContextRuntime {
         self.inner.broadcast_channel_registry.clone()
     }
 
-    /// Subscribe to future diagnostics if this Browser has no open subscription.
+    /// Create this Browser's only subscription to future diagnostics.
     pub fn subscribe_diagnostics(&self) -> Option<crate::DiagnosticsSubscription> {
         self.inner.diagnostics.subscribe()
     }
