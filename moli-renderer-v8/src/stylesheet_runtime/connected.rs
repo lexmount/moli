@@ -1133,6 +1133,7 @@ impl DocumentRuntime {
                         blocking_operation: None,
                         source_operation: None,
                         import_roots: Vec::new(),
+                        parsed_stylesheet: None,
                         document_url,
                         request_url: url,
                         source_owners: vec![handle],

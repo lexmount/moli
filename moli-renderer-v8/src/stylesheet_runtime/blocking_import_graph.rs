@@ -204,6 +204,7 @@ impl DocumentRuntime {
         owner_install_successful: bool,
         graph: Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
     ) {
+        graph.discard_parsed_responses();
         match source {
             ReadyBlockingStyleImportGraphSource::Linked(fetch) => {
                 self.note_stylesheet_import_graph_completion(&fetch, graph);

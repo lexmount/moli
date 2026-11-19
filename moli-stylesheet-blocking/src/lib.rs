@@ -38,4 +38,5 @@ pub use state::StylesheetBlockingState;
 pub use types::{
     StylesheetBlockingOperation, StylesheetBlockingStatus, StylesheetCompletion,
     StylesheetImportGraphFetchResult, StylesheetImportNetworkResult,
+    StylesheetImportParsedResponse,
 };

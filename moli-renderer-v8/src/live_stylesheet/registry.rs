@@ -29,6 +29,25 @@ impl LiveStylesheetRegistry {
         allow_import_rules: AllowImportRules,
         shared_lock: SharedRwLock,
     ) -> LiveStylesheetRef {
+        self.create_with_parsed(
+            css_text,
+            base_url,
+            quirks_mode,
+            allow_import_rules,
+            shared_lock,
+            None,
+        )
+    }
+
+    fn create_with_parsed(
+        &self,
+        css_text: &str,
+        base_url: url::Url,
+        quirks_mode: QuirksMode,
+        allow_import_rules: AllowImportRules,
+        shared_lock: SharedRwLock,
+        parsed_stylesheet: Option<&StylesheetImportParsedResponse>,
+    ) -> LiveStylesheetRef {
         let id = self.allocate_id();
         let stylesheet = Rc::new(LiveStylesheet::parse(
             id,
@@ -37,6 +56,7 @@ impl LiveStylesheetRegistry {
             quirks_mode,
             allow_import_rules,
             shared_lock,
+            parsed_stylesheet,
         ));
         self.entries
             .borrow_mut()
@@ -57,56 +77,62 @@ impl LiveStylesheetRegistry {
             quirks_mode,
             AllowImportRules::Yes,
             shared_lock,
+            None,
         )
     }
 
-    pub(crate) fn create_with_shared_initial_contents(
+    fn create_with_shared_initial_contents(
         &self,
         css_text: &str,
         base_url: url::Url,
         quirks_mode: QuirksMode,
         allow_import_rules: AllowImportRules,
         shared_lock: SharedRwLock,
+        parsed_stylesheet: Option<&StylesheetImportParsedResponse>,
     ) -> LiveStylesheetRef {
         // Import-bearing sheets never enter this cache because every import
         // edge owns an independently mutable child stylesheet graph.
         let key =
             StylesheetContentsCacheKey::new(css_text, &base_url, quirks_mode, allow_import_rules);
-        let shared_contents = self
-            .initial_contents_cache
-            .borrow()
-            .get(&key)
-            .and_then(StdWeak::upgrade);
-        if let Some(shared_contents) = shared_contents {
-            // The registry belongs to one PageScriptHost and therefore one
-            // author-lock domain. Assert that invariant before reusing parsed
-            // contents so an accidental cross-engine call fails at the owner.
-            {
-                let guard = shared_lock.read();
-                let _ = shared_contents.contents.rules(&guard);
-            }
-            let id = self.allocate_id();
-            let stylesheet = Rc::new(LiveStylesheet::from_shared_initial_contents(
-                id,
-                shared_lock,
-                shared_contents,
+        if let Some(shared_contents) = self.cached_initial_contents(&key) {
+            drop(LiveStylesheet::take_matching_parsed_stylesheet(
+                parsed_stylesheet,
+                &base_url,
+                quirks_mode,
             ));
-            self.entries
-                .borrow_mut()
-                .insert(id, Rc::downgrade(&stylesheet));
-            return stylesheet;
+            return self.create_from_shared_initial_contents(shared_contents, shared_lock);
         }
-        self.initial_contents_cache.borrow_mut().remove(&key);
 
-        let stylesheet = self.create(
+        let stylesheet = self.create_with_parsed(
             css_text,
             base_url,
             quirks_mode,
             allow_import_rules,
             shared_lock,
+            parsed_stylesheet,
         );
+        self.cache_initial_contents(key, &stylesheet);
+        stylesheet
+    }
+
+    fn cached_initial_contents(
+        &self,
+        key: &StylesheetContentsCacheKey,
+    ) -> Option<StdArc<SharedStylesheetContents>> {
+        let contents = self
+            .initial_contents_cache
+            .borrow()
+            .get(key)
+            .and_then(StdWeak::upgrade);
+        if contents.is_none() {
+            self.initial_contents_cache.borrow_mut().remove(key);
+        }
+        contents
+    }
+
+    fn cache_initial_contents(&self, key: StylesheetContentsCacheKey, stylesheet: &LiveStylesheet) {
         if !stylesheet.initial_contents_can_be_shared() {
-            return stylesheet;
+            return;
         }
 
         let mut cache = self.initial_contents_cache.borrow_mut();
@@ -117,7 +143,6 @@ impl LiveStylesheetRegistry {
             let shared_contents = stylesheet.share_initial_contents();
             cache.insert(key, StdArc::downgrade(&shared_contents));
         }
-        stylesheet
     }
 
     pub(crate) fn create_linked_resource_template_with_shared_initial_contents(
@@ -126,6 +151,7 @@ impl LiveStylesheetRegistry {
         base_url: url::Url,
         quirks_mode: QuirksMode,
         shared_lock: SharedRwLock,
+        parsed_stylesheet: Option<&StylesheetImportParsedResponse>,
     ) -> LiveStylesheetRef {
         self.create_with_shared_initial_contents(
             css_text,
@@ -133,6 +159,7 @@ impl LiveStylesheetRegistry {
             quirks_mode,
             AllowImportRules::Yes,
             shared_lock,
+            parsed_stylesheet,
         )
     }
 
@@ -141,18 +168,14 @@ impl LiveStylesheetRegistry {
         shared_contents: StdArc<SharedStylesheetContents>,
         shared_lock: SharedRwLock,
     ) -> LiveStylesheetRef {
-        // Shared contents are scoped to one PageScriptHost author lock. Reading
-        // through the destination lock makes an accidental cross-domain use
-        // fail at the ownership boundary before the stylesheet is installed.
-        {
-            let guard = shared_lock.read();
-            let _ = shared_contents.contents.rules(&guard);
-        }
         let id = self.allocate_id();
+        let media = ServoArc::new(shared_lock.wrap(MediaList::empty()));
         let stylesheet = Rc::new(LiveStylesheet::from_shared_initial_contents(
             id,
             shared_lock,
             shared_contents,
+            media,
+            LiveStylesheetRuntimeStateKind::Cascade,
         ));
         self.entries
             .borrow_mut()
@@ -207,6 +230,7 @@ impl LiveStylesheetRegistry {
         stylesheet
     }
 
+    #[cfg(test)]
     pub(crate) fn install_import_response(
         &self,
         parent_id: StylesheetId,
@@ -217,25 +241,85 @@ impl LiveStylesheetRegistry {
         successful: bool,
         origin_clean: bool,
     ) -> Option<LiveStylesheetRef> {
+        self.install_import_with_response(
+            parent_id,
+            expected_contents_revision,
+            edge_id,
+            &LiveStylesheetImportResponse {
+                request_url: response_url.clone(),
+                response_url,
+                css_text: css_text.to_owned(),
+                parsed_stylesheet: None,
+                successful,
+                origin_clean,
+            },
+        )
+    }
+
+    fn install_import_with_response(
+        &self,
+        parent_id: StylesheetId,
+        expected_contents_revision: u64,
+        edge_id: StylesheetImportEdgeId,
+        response: &LiveStylesheetImportResponse,
+    ) -> Option<LiveStylesheetRef> {
         let parent = self.get(parent_id)?;
         if parent.contents_revision() != expected_contents_revision {
             return None;
         }
         let media = parent.import_edge_media(edge_id)?;
         let id = self.allocate_id();
-        let child = Rc::new(LiveStylesheet::parse_with_media(
-            id,
-            if successful { css_text } else { "" },
-            response_url,
-            parent.quirks_mode,
-            AllowImportRules::Yes,
-            parent.stylesheet.shared_lock.clone(),
-            media,
-            LiveStylesheetRuntimeStateKind::IndependentCssom,
-        ));
-        child.set_origin_clean(origin_clean);
+        let shared_lock = parent.stylesheet.shared_lock.clone();
+        let (css_text, parsed_stylesheet) = if response.successful {
+            (&*response.css_text, response.parsed_stylesheet.as_ref())
+        } else {
+            ("", None)
+        };
+        let key = (!css_text.is_empty()).then(|| {
+            StylesheetContentsCacheKey::new(
+                css_text,
+                &response.response_url,
+                parent.quirks_mode,
+                AllowImportRules::Yes,
+            )
+        });
+        let child = if let Some(contents) = key
+            .as_ref()
+            .and_then(|key| self.cached_initial_contents(key))
+        {
+            drop(LiveStylesheet::take_matching_parsed_stylesheet(
+                parsed_stylesheet,
+                &response.response_url,
+                parent.quirks_mode,
+            ));
+            LiveStylesheet::from_shared_initial_contents(
+                id,
+                shared_lock,
+                contents,
+                media,
+                LiveStylesheetRuntimeStateKind::IndependentCssom,
+            )
+        } else {
+            let child = LiveStylesheet::parse_with_media(
+                id,
+                css_text,
+                response.response_url.clone(),
+                parent.quirks_mode,
+                AllowImportRules::Yes,
+                shared_lock,
+                media,
+                LiveStylesheetRuntimeStateKind::IndependentCssom,
+                parsed_stylesheet,
+            );
+            if let Some(key) = key {
+                self.cache_initial_contents(key, &child);
+            }
+            child
+        };
+        let child = Rc::new(child);
+        child.set_origin_clean(response.origin_clean);
         self.entries.borrow_mut().insert(id, Rc::downgrade(&child));
-        if !parent.install_import_child(edge_id, child.clone(), successful) {
+        if !parent.install_import_child(edge_id, child.clone(), response.successful) {
             self.entries.borrow_mut().remove(&id);
             return None;
         }
@@ -336,14 +420,18 @@ impl LiveStylesheetRegistry {
                 let request_identity = import_url_identity(&request.url);
                 if active_ancestors.contains(&request_identity) {
                     all_successful = false;
-                    let _ = self.install_import_response(
+                    let _ = self.install_import_with_response(
                         parent.id(),
                         parent.contents_revision(),
                         request.edge_id,
-                        "",
-                        request.url,
-                        false,
-                        true,
+                        &LiveStylesheetImportResponse {
+                            request_url: request.url.clone(),
+                            response_url: request.url,
+                            css_text: String::new(),
+                            parsed_stylesheet: None,
+                            successful: false,
+                            origin_clean: true,
+                        },
                     );
                     continue;
                 }
@@ -352,17 +440,18 @@ impl LiveStylesheetRegistry {
                     if let Some(response) = responses_by_request_identity.get(&request_identity) {
                         // An explicitly refused data: import must not be decoded
                         // again after the fetch graph has applied Document policy.
-                        (**response).clone()
+                        Cow::Borrowed(*response)
                     } else if request.url.scheme() == "data" {
                         *data_expansions = data_expansions.saturating_add(1);
                         let decoded = (*data_expansions <= MAX_DATA_STYLESHEET_IMPORT_EXPANSIONS)
                             .then(|| decode_data_stylesheet(&request.url))
                             .flatten();
-                        match decoded {
+                        Cow::Owned(match decoded {
                             Some(css_text) => LiveStylesheetImportResponse {
                                 request_url: request.url.clone(),
                                 response_url: request.url.clone(),
                                 css_text,
+                                parsed_stylesheet: None,
                                 successful: true,
                                 origin_clean: true,
                             },
@@ -370,29 +459,28 @@ impl LiveStylesheetRegistry {
                                 request_url: request.url.clone(),
                                 response_url: request.url.clone(),
                                 css_text: String::new(),
+                                parsed_stylesheet: None,
                                 successful: false,
                                 origin_clean: true,
                             },
-                        }
+                        })
                     } else {
-                        LiveStylesheetImportResponse {
+                        Cow::Owned(LiveStylesheetImportResponse {
                             request_url: request.url.clone(),
                             response_url: request.url.clone(),
                             css_text: String::new(),
+                            parsed_stylesheet: None,
                             successful: false,
                             origin_clean: false,
-                        }
+                        })
                     };
                 all_successful &= response.successful;
                 if self
-                    .install_import_response(
+                    .install_import_with_response(
                         parent.id(),
                         parent.contents_revision(),
                         request.edge_id,
-                        &response.css_text,
-                        response.response_url.clone(),
-                        response.successful,
-                        response.origin_clean,
+                        response.as_ref(),
                     )
                     .is_none()
                 {

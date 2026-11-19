@@ -1,4 +1,4 @@
-//! Renderer projections of an immutable stylesheet import graph result.
+//! Renderer projections of a stylesheet import graph result.
 //!
 //! Graph acquisition does not know about DOM owners. This module is the one
 //! boundary that decorates a terminal graph for network observation or turns
@@ -31,6 +31,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
             let start_unix_millis = result.start_unix_millis();
             let terminal = result.terminal();
             let origin_clean = terminal.origin_clean().unwrap_or(false);
+            let parsed_stylesheet = result.parsed_stylesheet().cloned();
             let result = terminal.physical().as_result();
             ConnectedLoadNetworkResult {
                 network_observed: terminal.network_was_observed(),
@@ -39,6 +40,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
                 blocking_operation: None,
                 source_operation: None,
                 import_roots: Vec::new(),
+                parsed_stylesheet,
                 document_url: document_url.clone(),
                 request_url,
                 source_owners: source_owners.clone(),
@@ -74,6 +76,7 @@ pub(crate) fn live_stylesheet_import_responses(
                 css_text: ready_response
                     .map(|response| response.body_text().to_owned())
                     .unwrap_or_default(),
+                parsed_stylesheet: result.parsed_stylesheet().cloned(),
                 successful: ready_response.is_some(),
                 origin_clean: terminal.origin_clean().unwrap_or(false),
             }

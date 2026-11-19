@@ -11,6 +11,7 @@ mod font_selection;
 mod math;
 mod media;
 mod root_margin;
+mod stylesheet_imports;
 mod stylo_stylesheet;
 mod transform;
 mod util;
@@ -48,6 +49,12 @@ pub use style::moli_declaration_block::{
     CssDeclarationBlock, CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
     parse_declaration_block,
 };
+pub use stylesheet_imports::{
+    StylesheetImportPlaceholderLoader, StylesheetImports,
+    clone_detached_stylesheet_contents_with_stylo, native_stylesheet_import_rules,
+    parse_detached_author_stylesheet_with_stylo, stylesheet_import_urls_with_stylo,
+    stylesheet_imports_from_native_with_stylo,
+};
 pub use stylo_stylesheet::{
     CssConditionRuleView, CssCounterStyleRuleView, CssDetachedRuleListMutation,
     CssFontFaceDescriptorEntryView, CssFontFaceRuleView, CssFontFeatureValueEntryView,
@@ -77,7 +84,7 @@ pub use stylo_stylesheet::{
     parse_page_selectors_with_stylo_context, parse_property_rule_view_with_stylo,
     parse_stylesheet_rule_snapshot_for_insert_with_stylo,
     parse_stylesheet_rule_snapshots_with_stylo, parse_stylesheet_rule_texts_with_stylo,
-    refresh_native_stylesheet_namespaces_after_cssom_mutation, stylesheet_import_urls_with_stylo,
+    refresh_native_stylesheet_namespaces_after_cssom_mutation,
 };
 pub use transform::{CssTransformFunction, parse_transform_function_list};
 pub use util::{

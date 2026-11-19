@@ -447,6 +447,7 @@ impl DocumentRuntime {
             mut network_results,
         } = completion;
         if authority == StylesheetImportCompletionAuthority::HistoricalOnly {
+            graph.discard_parsed_responses();
             for result in &mut network_results {
                 result.import_roots.clear();
                 result.source_owners.clear();
@@ -468,6 +469,9 @@ impl DocumentRuntime {
                         .is_some_and(|state| state.active_load().fetch().ptr_eq(&fetch))
             })
             .collect::<Vec<_>>();
+        if roots.is_empty() {
+            graph.discard_parsed_responses();
+        }
         let source_owners = roots.iter().map(|root| root.owner).collect::<Vec<_>>();
         for result in &mut network_results {
             result.import_roots = roots.clone();
@@ -485,6 +489,25 @@ impl DocumentRuntime {
             .linked_stylesheet_import_graphs
             .entries
             .len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completed_linked_stylesheet_import_graph_for_test(
+        &self,
+        url: &Url,
+    ) -> Option<&crate::stylesheet_blocking::StylesheetImportGraphFetchResult> {
+        self.stylesheet_lifecycle
+            .linked_stylesheet_import_graphs
+            .entries
+            .values()
+            .find_map(|entry| match &entry.phase {
+                LinkedStylesheetImportGraphPhase::Completed(graph)
+                    if entry.fetch.key().request_url() == url =>
+                {
+                    Some(graph.as_ref())
+                }
+                _ => None,
+            })
     }
 }
 

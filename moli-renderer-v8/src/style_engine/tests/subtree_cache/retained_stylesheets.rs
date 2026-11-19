@@ -520,6 +520,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
                 "src: url('./fonts/shared.woff2') format('woff2'); }",
             )
             .to_owned(),
+            parsed_stylesheet: None,
             successful: true,
             origin_clean: true,
         },
@@ -532,6 +533,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
                 "src: url('./fonts/shared.woff2') format('woff2'); }",
             )
             .to_owned(),
+            parsed_stylesheet: None,
             successful: true,
             origin_clean: true,
         },
@@ -539,6 +541,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
             request_url: url::Url::parse("https://example.test/redirect/entry.css").unwrap(),
             response_url: url::Url::parse("https://cdn.example.test/final/entry.css").unwrap(),
             css_text: "@import './nested.css';".to_owned(),
+            parsed_stylesheet: None,
             successful: true,
             origin_clean: true,
         },
@@ -552,6 +555,7 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
                 "url('../fonts/nested.woff2') format('woff2'); }",
             )
             .to_owned(),
+            parsed_stylesheet: None,
             successful: true,
             origin_clean: true,
         },

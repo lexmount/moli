@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use moli_dom::NodeId;
+use parking_lot::Mutex;
 use url::Url;
 
 use crate::discovery::DocumentBlockingStylesheetSignature;
@@ -133,6 +134,18 @@ impl StylesheetImportGraphFetchResult {
         &self.network_results
     }
 
+    /// Drop any detached parse that still remains after the installation batch.
+    /// The terminal responses can still be replayed for later owners.
+    pub fn discard_parsed_responses(&self) {
+        for parsed in self
+            .network_results
+            .iter()
+            .filter_map(StylesheetImportNetworkResult::parsed_stylesheet)
+        {
+            parsed.discard();
+        }
+    }
+
     pub fn into_parts(self) -> (bool, Vec<StylesheetImportNetworkResult>) {
         (self.successful, self.network_results)
     }
@@ -143,11 +156,39 @@ pub(crate) struct StylesheetImportCompletion {
     pub(crate) graph: StylesheetImportGraphFetchResult,
 }
 
+/// A detached parse can be transferred to the renderer once. Network records
+/// and graph subscribers share this slot, so archiving either cannot pin the
+/// detached tree after installation.
+#[derive(Debug, Clone)]
+pub struct StylesheetImportParsedResponse(Arc<Mutex<Option<moli_css_parse::CssNativeStylesheet>>>);
+
+impl StylesheetImportParsedResponse {
+    pub fn new(stylesheet: moli_css_parse::CssNativeStylesheet) -> Self {
+        Self(Arc::new(Mutex::new(Some(stylesheet))))
+    }
+
+    pub fn take_if(
+        &self,
+        matches: impl FnOnce(&moli_css_parse::CssNativeStylesheet) -> bool,
+    ) -> Option<moli_css_parse::CssNativeStylesheet> {
+        let mut stylesheet = self.0.lock();
+        if stylesheet.as_ref().is_some_and(matches) {
+            return stylesheet.take();
+        }
+        None
+    }
+
+    pub fn discard(&self) {
+        drop(self.take_if(|_| true));
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StylesheetImportNetworkResult {
     pub(crate) request_url: Url,
     pub(crate) start_unix_millis: f64,
     pub(crate) terminal: StylesheetFetchTerminal,
+    parsed_stylesheet: Option<StylesheetImportParsedResponse>,
 }
 
 impl StylesheetImportNetworkResult {
@@ -160,7 +201,16 @@ impl StylesheetImportNetworkResult {
             request_url,
             start_unix_millis,
             terminal,
+            parsed_stylesheet: None,
         }
+    }
+
+    pub fn set_parsed_stylesheet(&mut self, stylesheet: moli_css_parse::CssNativeStylesheet) {
+        self.parsed_stylesheet = Some(StylesheetImportParsedResponse::new(stylesheet));
+    }
+
+    pub fn parsed_stylesheet(&self) -> Option<&StylesheetImportParsedResponse> {
+        self.parsed_stylesheet.as_ref()
     }
 
     pub fn request_url(&self) -> &Url {

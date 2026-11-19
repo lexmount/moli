@@ -8,7 +8,6 @@ use std::{
 
 use moli_crypto::Sha256Context;
 use moli_selector::StyloSourceDependencySummary;
-use style::stylesheets::{CssRule, StylesheetInDocument};
 use style_traits::ToCss;
 
 use super::super::{
@@ -422,20 +421,9 @@ impl StyloStylesheetSource {
         match &self.contents {
             StyloStylesheetSourceContents::Text { shared } => shared.import_urls_handle(),
             StyloStylesheetSourceContents::Live { stylesheet, .. } => {
-                let guard = stylesheet.shared_lock.read();
-                let mut urls = Vec::new();
-                for rule in stylesheet.contents(&guard).rules(&guard) {
-                    let CssRule::Import(rule) = rule else {
-                        continue;
-                    };
-                    let Some(url) = rule.read_with(&guard).url.url() else {
-                        continue;
-                    };
-                    if !urls.iter().any(|existing| existing == url.as_ref()) {
-                        urls.push(url.as_ref().clone());
-                    }
-                }
-                urls.into()
+                moli_css_parse::stylesheet_imports_from_native_with_stylo(stylesheet)
+                    .urls
+                    .into()
             }
         }
     }

@@ -174,9 +174,7 @@ pub use moli_storage_service::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES;
 
 #[cfg(test)]
 pub(crate) use self::css_runtime::css_lazy_state_diagnostics;
-pub(crate) use self::css_runtime::{
-    css_supports_condition_text, install_css_runtime_state_for_document,
-};
+pub(crate) use self::css_runtime::install_css_runtime_state_for_document;
 #[cfg(any(feature = "devtools", test))]
 pub(crate) use self::events::construct_native_touch_event;
 #[cfg(feature = "devtools")]

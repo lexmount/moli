@@ -45,9 +45,19 @@ pub(crate) struct RendererStylesheetFetcher {
     interception: Option<crate::network::interception_output::ResourceInterceptionContext>,
     frame_id: Option<String>,
     request_initiator_type: SubresourceRequestInitiatorType,
+    quirks_mode: style::context::QuirksMode,
 }
 
 impl RendererStylesheetFetcher {
+    pub(crate) fn with_quirks_mode(mut self, quirks_mode: style::context::QuirksMode) -> Self {
+        self.quirks_mode = quirks_mode;
+        self
+    }
+
+    pub(crate) fn quirks_mode(&self) -> style::context::QuirksMode {
+        self.quirks_mode
+    }
+
     pub(crate) fn with_request_initiator_type(
         mut self,
         initiator: SubresourceRequestInitiatorType,
@@ -93,6 +103,7 @@ impl RendererStylesheetFetcher {
             interception: None,
             frame_id: None,
             request_initiator_type: SubresourceRequestInitiatorType::Parser,
+            quirks_mode: style::context::QuirksMode::NoQuirks,
         }
     }
 
@@ -111,6 +122,7 @@ impl RendererStylesheetFetcher {
             interception: None,
             frame_id: None,
             request_initiator_type: SubresourceRequestInitiatorType::Parser,
+            quirks_mode: style::context::QuirksMode::NoQuirks,
         }
     }
 

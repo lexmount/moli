@@ -196,6 +196,7 @@ fn descendant_import_replacement_invalidates_a_root_graph_snapshot() {
                 request_url: stale_leaf_request.url.clone(),
                 response_url: stale_leaf_request.url,
                 css_text: ".stale { color: red; }".to_owned(),
+                parsed_stylesheet: None,
                 successful: true,
                 origin_clean: true,
             }],
@@ -209,6 +210,71 @@ fn descendant_import_replacement_invalidates_a_root_graph_snapshot() {
 }
 
 #[test]
+fn imported_leaf_releases_detached_parse_and_reuses_contents_for_later_owners() {
+    let registry = LiveStylesheetRegistry::default();
+    let shared_lock = SharedRwLock::new();
+    let root_url = url::Url::parse("https://example.test/styles/root.css").unwrap();
+    let leaf_url = root_url.join("leaf.css").unwrap();
+    let leaf_text = ".leaf { color: green; }";
+    let parsed = StylesheetImportParsedResponse::new(
+        moli_css_parse::parse_detached_author_stylesheet_with_stylo(
+            leaf_text,
+            &leaf_url,
+            QuirksMode::NoQuirks,
+        ),
+    );
+    let response = LiveStylesheetImportResponse {
+        request_url: leaf_url.clone(),
+        response_url: leaf_url,
+        css_text: leaf_text.to_owned(),
+        parsed_stylesheet: Some(parsed.clone()),
+        successful: true,
+        origin_clean: true,
+    };
+    let create_root = || {
+        registry.create(
+            "@import 'leaf.css' screen;",
+            root_url.clone(),
+            QuirksMode::NoQuirks,
+            AllowImportRules::Yes,
+            shared_lock.clone(),
+        )
+    };
+    let first_root = create_root();
+    let second_root = create_root();
+    let install_child = |root: &LiveStylesheetRef| {
+        assert_eq!(
+            registry.install_import_graph(
+                root.id(),
+                root.contents_revision(),
+                root.import_generation(),
+                std::slice::from_ref(&response),
+                Some(&root_url),
+            ),
+            Some(true)
+        );
+        root.loaded_import_children().pop().unwrap().1
+    };
+
+    reset_live_stylesheet_parse_count_for_test();
+    let first = install_child(&first_root);
+    assert!(parsed.take_if(|_| true).is_none());
+    let second = install_child(&second_root);
+    assert_ne!(first.id(), second.id());
+    assert!(ServoArc::ptr_eq(
+        &stylesheet_contents(&first),
+        &stylesheet_contents(&second)
+    ));
+    assert_eq!(live_stylesheet_parse_count_for_test(), 0);
+
+    first
+        .insert_rule(".first-only { color: blue; }", 1)
+        .unwrap();
+    assert!(serialized_stylesheet_text(&first).contains("first-only"));
+    assert!(!serialized_stylesheet_text(&second).contains("first-only"));
+}
+
+#[test]
 fn import_graph_uses_each_response_url_as_the_nested_parser_base() {
     let registry = LiveStylesheetRegistry::default();
     let root = registry.create(
@@ -218,18 +284,32 @@ fn import_graph_uses_each_response_url_as_the_nested_parser_base() {
         AllowImportRules::Yes,
         SharedRwLock::new(),
     );
+    let child_url = url::Url::parse("https://cdn.example.test/final/child.css").unwrap();
+    let leaf_url = url::Url::parse("https://cdn.example.test/final/leaf.css").unwrap();
+    let parsed_child = moli_css_parse::parse_detached_author_stylesheet_with_stylo(
+        "@import './leaf.css' layer(theme) screen; .child { color: blue; }",
+        &child_url,
+        QuirksMode::NoQuirks,
+    );
+    let parsed_leaf = moli_css_parse::parse_detached_author_stylesheet_with_stylo(
+        ".leaf { color: green; }",
+        &leaf_url,
+        QuirksMode::NoQuirks,
+    );
     let responses = vec![
         LiveStylesheetImportResponse {
             request_url: url::Url::parse("https://example.test/assets/redirected.css").unwrap(),
-            response_url: url::Url::parse("https://cdn.example.test/final/child.css").unwrap(),
-            css_text: "@import './leaf.css'; .child { color: blue; }".to_owned(),
+            response_url: child_url,
+            css_text: String::new(),
+            parsed_stylesheet: Some(StylesheetImportParsedResponse::new(parsed_child)),
             successful: true,
             origin_clean: true,
         },
         LiveStylesheetImportResponse {
-            request_url: url::Url::parse("https://cdn.example.test/final/leaf.css").unwrap(),
-            response_url: url::Url::parse("https://cdn.example.test/final/leaf.css").unwrap(),
-            css_text: ".leaf { color: green; }".to_owned(),
+            request_url: leaf_url.clone(),
+            response_url: leaf_url,
+            css_text: String::new(),
+            parsed_stylesheet: Some(StylesheetImportParsedResponse::new(parsed_leaf)),
             successful: true,
             origin_clean: true,
         },
@@ -252,6 +332,7 @@ fn import_graph_uses_each_response_url_as_the_nested_parser_base() {
     };
     let child = root.imported_child_for_rule(&child_rule).unwrap();
     assert!(child.pending_import_requests().is_empty());
+    assert!(serialized_stylesheet_text(&child).contains("layer(theme) screen"));
     let NativeStylesheetRule::Css(CssRule::Import(leaf_rule)) =
         child.native_rule_at_path(&[0]).unwrap()
     else {
@@ -315,6 +396,7 @@ fn deep_import_graph_walks_and_generation_propagation_are_iterative() {
                 request_url: pending[0].url.clone(),
                 response_url: pending[0].url.clone(),
                 css_text: ".terminal { color: green; }".to_owned(),
+                parsed_stylesheet: None,
                 successful: true,
                 origin_clean: true,
             }],
@@ -427,6 +509,61 @@ fn data_import_ignores_the_declared_mime_type_like_chromium() {
         root.import_edge_state(request.edge_id),
         Some(LiveStylesheetImportState::Loaded { successful: true })
     );
+}
+
+#[test]
+fn preparsed_linked_stylesheets_share_initial_contents_before_copy_on_write() {
+    let registry = LiveStylesheetRegistry::default();
+    let shared_lock = SharedRwLock::new();
+    let base_url = url::Url::parse("https://example.test/styles/shared.css").unwrap();
+    let css_text = ".subject { color: red; }";
+    let parsed = StylesheetImportParsedResponse::new(
+        moli_css_parse::parse_detached_author_stylesheet_with_stylo(
+            css_text,
+            &base_url,
+            QuirksMode::NoQuirks,
+        ),
+    );
+    reset_live_stylesheet_parse_count_for_test();
+
+    let create_owner = |parsed| {
+        registry.create_linked_resource_template_with_shared_initial_contents(
+            css_text,
+            base_url.clone(),
+            QuirksMode::NoQuirks,
+            shared_lock.clone(),
+            parsed,
+        )
+    };
+    let first = create_owner(Some(&parsed));
+    let second = create_owner(Some(&parsed));
+    let text_only = create_owner(None);
+    let initial_contents = stylesheet_contents(&first);
+    assert!(ServoArc::ptr_eq(
+        &initial_contents,
+        &stylesheet_contents(&second)
+    ));
+    assert!(ServoArc::ptr_eq(
+        &initial_contents,
+        &stylesheet_contents(&text_only)
+    ));
+    assert_ne!(first.id(), second.id());
+    assert!(!ServoArc::ptr_eq(&first.stylesheet(), &second.stylesheet()));
+    assert_eq!(live_stylesheet_parse_count_for_test(), 0);
+
+    first
+        .insert_rule(".first-only { color: blue; }", 1)
+        .unwrap();
+    assert!(!ServoArc::ptr_eq(
+        &initial_contents,
+        &stylesheet_contents(&first)
+    ));
+    assert!(ServoArc::ptr_eq(
+        &initial_contents,
+        &stylesheet_contents(&second)
+    ));
+    assert!(serialized_stylesheet_text(&first).contains("first-only"));
+    assert!(!serialized_stylesheet_text(&second).contains("first-only"));
 }
 
 #[test]
