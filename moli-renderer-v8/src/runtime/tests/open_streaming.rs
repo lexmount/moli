@@ -21,6 +21,7 @@ struct OpenStreamingPage {
     activity_wake_rx: RendererExternalActivityTestReceiver,
 }
 
+#[cfg(feature = "devtools")]
 async fn recv_timer_console_publication(
     receiver: &mut RendererExternalActivityTestReceiver,
     page: &RendererPageHandle,

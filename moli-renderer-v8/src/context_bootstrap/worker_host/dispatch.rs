@@ -73,8 +73,9 @@ pub(crate) fn dispatch_worker_event<'s>(
         | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
         | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
         | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-        | WorkerToParentMessage::SharedWorkerClosed
-        | WorkerToParentMessage::RuntimeInspectorResponse(_) => false,
+        | WorkerToParentMessage::SharedWorkerClosed => false,
+        #[cfg(feature = "devtools")]
+        WorkerToParentMessage::RuntimeInspectorResponse(_) => false,
     }
 }
 

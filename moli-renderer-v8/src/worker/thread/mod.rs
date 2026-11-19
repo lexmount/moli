@@ -94,9 +94,9 @@ use super::handle::{
     WorkerNetworkPolicy, WorkerParentErrorEventKind, WorkerRuntimeInspectorMessageBatch,
     WorkerScriptResource, WorkerToParentMessage,
 };
-use super::inspector_task_runner::{
-    WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
-};
+use super::inspector_task_runner::WorkerInspectorTaskRunner;
+#[cfg(feature = "devtools")]
+use super::inspector_task_runner::{WorkerInspectorTask, WorkerInspectorTaskMode};
 use super::module_runtime::{
     WorkerBootstrapError, WorkerModuleBootstrapResume, WorkerModuleBootstrapStart,
     WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource, WorkerModuleGraphFetchCompletion,
@@ -923,6 +923,7 @@ fn drain_worker_dynamic_module_imports_for_context(
     drain_worker_dynamic_module_imports(scope, state, module_graph_fetch_tx);
 }
 
+#[cfg(feature = "devtools")]
 fn dispatch_worker_inspector_task(
     worker_isolate: &mut WorkerIsolateState,
     context: &v8::Global<v8::Context>,
@@ -942,9 +943,11 @@ fn dispatch_worker_inspector_task(
 
 async fn run_worker_pre_bootstrap_debugger_pause(
     worker_isolate: &mut WorkerIsolateState,
-    context: &v8::Global<v8::Context>,
+    #[cfg(feature = "devtools")] context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
+    #[cfg(feature = "devtools")] module_graph_fetch_tx: &mpsc::UnboundedSender<
+        WorkerModuleGraphFetchCompletion,
+    >,
     script_url: &str,
     rx: &mut mpsc::UnboundedReceiver<WorkerMessage>,
     pending_bootstrap_messages: &mut VecDeque<WorkerMessage>,
@@ -963,6 +966,7 @@ async fn run_worker_pre_bootstrap_debugger_pause(
                     invalidation.notify_isolate(worker_isolate.worker_isolate_mut());
                 }
             }
+            #[cfg(feature = "devtools")]
             Some(WorkerMessage::RunInspectorTask(mode)) => {
                 if let Some(task) = inspector_task_runner.claim_task(mode) {
                     dispatch_worker_inspector_task(
@@ -1606,6 +1610,7 @@ async fn worker_main(
         matches!(global_kind, WorkerGlobalKind::Shared { .. }),
         worker_context_runtime.debugger_enabled(),
     );
+    #[cfg(feature = "devtools")]
     worker_isolate
         .worker_runtime_inspector()
         .bind_request_client(loader.request_client().clone());
@@ -1881,8 +1886,10 @@ async fn worker_main(
     if pause_evaluation_until_debugger
         && !run_worker_pre_bootstrap_debugger_pause(
             &mut worker_isolate,
+            #[cfg(feature = "devtools")]
             &context,
             &state,
+            #[cfg(feature = "devtools")]
             &module_graph_fetch_tx,
             &script_url,
             &mut rx,
@@ -2814,6 +2821,7 @@ async fn worker_main(
                     invalidation.notify_isolate(worker_isolate.worker_isolate_mut());
                 }
             }
+            #[cfg(feature = "devtools")]
             WorkerLoopWake::Message(Some(WorkerMessage::RunInspectorTask(mode))) => {
                 if let Some(task) = inspector_task_runner.claim_task(mode) {
                     dispatch_worker_inspector_task(

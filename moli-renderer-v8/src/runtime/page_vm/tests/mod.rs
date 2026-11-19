@@ -42,9 +42,10 @@ use crate::planning::{
     PreparedScript, PreparedScriptSourceLoadOutcome, ScriptFetchMetadata, ScriptSource,
     SharedScriptSourceLoad,
 };
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererSharedWorkerTargetEvent;
 use crate::runtime::{
     RendererOwnerResourceActivitySource, RendererPageCommand, RendererRuntimeObservableSourceItem,
-    RendererSharedWorkerTargetEvent,
 };
 use crate::script_vm::{PostParseLifecycleAdvance, PostParseLifecycleCompletionAction};
 use crate::types::{

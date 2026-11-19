@@ -411,7 +411,7 @@ impl ScriptVm {
     #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn set_fetch_subresource_interception(
         &mut self,
-        classes: SubresourceInterceptionClasses,
+        classes: crate::types::SubresourceInterceptionClasses,
     ) {
         self._context_host
             .borrow_mut()

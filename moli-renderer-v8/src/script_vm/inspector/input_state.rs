@@ -1,4 +1,3 @@
-#[cfg(feature = "devtools")]
 use crate::{
     document_runtime::DomHandle,
     dom::{forms::InputType, native::Node},
@@ -16,7 +15,6 @@ pub(in crate::script_vm) struct KeyTargetInfo {
     pub(in crate::script_vm) is_select: bool,
 }
 
-#[cfg(feature = "devtools")]
 pub(in crate::script_vm) fn key_target_info(
     runtime: &PageScriptHost,
     handle: DomHandle,
@@ -69,12 +67,10 @@ pub(in crate::script_vm) fn key_target_info(
     }
 }
 
-#[cfg(feature = "devtools")]
 pub(in crate::script_vm) fn is_space_key(key: &str) -> bool {
     matches!(key, " " | "space" | "spacebar")
 }
 
-#[cfg(feature = "devtools")]
 pub(in crate::script_vm) fn radio_group_members(
     runtime: &PageScriptHost,
     handle: DomHandle,
@@ -113,7 +109,6 @@ pub(in crate::script_vm) fn radio_group_members(
         .collect()
 }
 
-#[cfg(feature = "devtools")]
 pub(in crate::script_vm) fn current_selection_state(
     runtime: &PageScriptHost,
     handle: DomHandle,
@@ -134,7 +129,6 @@ pub(in crate::script_vm) fn current_selection_state(
         .unwrap_or((0, 0, "none".to_owned()))
 }
 
-#[cfg(feature = "devtools")]
 pub(in crate::script_vm) fn option_is_disabled(
     runtime: &PageScriptHost,
     handle: DomHandle,

@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use url::Url;
 
+#[cfg(any(test, feature = "devtools"))]
 use crate::RendererSyntheticResponseBody;
 use crate::types::SubresourceRequestInitiatorType;
 
@@ -22,9 +23,11 @@ pub(crate) enum InterceptionPhase {
 /// Consuming a decision cannot enter V8, run DOM work, or wait for a Page turn.
 #[derive(Clone, Debug)]
 pub struct ResourceInterceptionPause {
+    #[cfg(any(test, feature = "devtools"))]
     internal_id: u64,
     worker_network: bool,
     phase: InterceptionPhase,
+    #[cfg(feature = "devtools")]
     target_policy: crate::network::PageNetworkPolicy,
     request_redirect: Option<Arc<moli_fetch::RedirectInfo>>,
     request_initiator_type: SubresourceRequestInitiatorType,
@@ -54,9 +57,12 @@ pub(crate) enum ResourceInterceptionDecision {
         status: Option<u16>,
         headers: Option<Vec<(String, Vec<u8>)>>,
     },
+    #[cfg(any(test, feature = "devtools"))]
     Auth(crate::SubresourceAuthCredentials),
     CancelAuth,
+    #[cfg(any(test, feature = "devtools"))]
     Fail(String),
+    #[cfg(any(test, feature = "devtools"))]
     Fulfill {
         request_overrides: Option<Box<moli_fetch::RequestOverrides>>,
         status: u16,
@@ -77,12 +83,18 @@ impl ResourceInterceptionPause {
         phase: InterceptionPhase,
         target_policy: crate::network::PageNetworkPolicy,
     ) -> (Self, oneshot::Receiver<ResourceInterceptionDecision>) {
+        #[cfg(not(feature = "devtools"))]
+        let _ = target_policy;
+        #[cfg(not(any(test, feature = "devtools")))]
+        let _ = internal_id;
         let (tx, rx) = oneshot::channel();
         (
             Self {
+                #[cfg(any(test, feature = "devtools"))]
                 internal_id,
                 worker_network: false,
                 phase,
+                #[cfg(feature = "devtools")]
                 target_policy,
                 request_redirect: None,
                 request_initiator_type: SubresourceRequestInitiatorType::Script,

@@ -157,6 +157,7 @@ impl DocumentInspectorContextRegistrations {
         self.registrations.clear();
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn len(&self) -> usize {
         self.registrations.len()
     }

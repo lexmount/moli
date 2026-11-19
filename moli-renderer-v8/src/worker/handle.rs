@@ -28,7 +28,9 @@ use crate::runtime::{
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{BroadcastChannelId, DedicatedWorkerId, MessagePortId, NetworkBodySourceId};
-use crate::worker::inspector_task_runner::{WorkerInspectorTaskMode, WorkerInspectorTaskRunner};
+#[cfg(feature = "devtools")]
+use crate::worker::inspector_task_runner::WorkerInspectorTaskMode;
+use crate::worker::inspector_task_runner::WorkerInspectorTaskRunner;
 use anyhow::Result;
 use moli_crypto::sha256_hex;
 use moli_fetch::ResponseHead;
@@ -167,6 +169,7 @@ pub(crate) enum WorkerMessage {
         worker_id: DedicatedWorkerId,
         message: Box<WorkerToParentMessage>,
     },
+    #[cfg(feature = "devtools")]
     /// Owner-thread dispatch or fallback for one queued Inspector task.
     RunInspectorTask(WorkerInspectorTaskMode),
     /// One coalesced fallback wake for the isolate's environment mailbox.
@@ -221,6 +224,7 @@ pub(crate) enum WorkerToParentMessage {
     Console(WorkerConsoleMessage),
     /// A SharedWorker global is closing and its owner service should remove the instance.
     SharedWorkerClosed,
+    #[cfg(feature = "devtools")]
     /// A V8 Inspector response waiting for its Worker target's concrete output
     /// boundary.
     ///

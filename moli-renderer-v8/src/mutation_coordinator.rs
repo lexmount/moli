@@ -173,6 +173,7 @@ impl MutationCoordinator {
         if options.source == DomMutationSource::JsDomApi {
             Self::note_script_children_changed_by_api(dom_host, &effects);
         }
+        #[cfg(feature = "devtools")]
         unsafe { &mut *host_ptr }.note_mouse_input_target_removals(dom_host, &effects);
         let cpu_profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = cpu_profile_enabled.then(Instant::now);

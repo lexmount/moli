@@ -10,8 +10,10 @@ struct CloseProbe {
     processed: Arc<AtomicBool>,
 }
 
+#[cfg(feature = "devtools")]
 struct ResumeFailureGuard(Option<RendererDevToolsTargetHandle>);
 
+#[cfg(feature = "devtools")]
 impl Drop for ResumeFailureGuard {
     fn drop(&mut self) {
         if let Some(target) = self.0.take() {

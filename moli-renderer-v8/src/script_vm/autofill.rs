@@ -21,6 +21,7 @@ use crate::runtime::{
     RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
 };
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
 enum CreditCardField {
     Number,

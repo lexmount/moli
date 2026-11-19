@@ -389,6 +389,7 @@ impl LazyServiceWorkerRuntime {
 }
 
 impl RendererBrowserContextRuntime {
+    #[cfg(feature = "devtools")]
     fn service_worker_runtime_for_existing_registration(
         &self,
     ) -> Option<crate::service_worker_runtime::ServiceWorkerRuntimeService> {

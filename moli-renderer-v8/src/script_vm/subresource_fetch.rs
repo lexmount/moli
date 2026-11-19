@@ -1,11 +1,16 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use std::cell::RefCell;
 use std::pin::pin;
 use std::rc::Rc;
 use std::time::Instant;
 use url::Url;
 
-use super::{AsyncSubresourceCommandExecution, ScriptVm};
+use super::ScriptVm;
+#[cfg(any(test, feature = "devtools"))]
+use {
+    super::AsyncSubresourceCommandExecution,
+    crate::types::{PendingSubresourceAuthResponse, PendingSubresourceResponseDetails},
+};
 
 mod document_completion;
 mod fetch_dispatch;
@@ -14,7 +19,6 @@ mod intercepted_redirects;
 mod pending_fetch;
 mod streaming;
 
-use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::ContentSecurityPolicyRedirectStatus;
 use crate::document_runtime::DocumentRuntime;
 use crate::frame_owner_model::FrameDocumentModuleTerminalQueueFollowup;
@@ -32,10 +36,10 @@ use crate::types::{
     ChildDocumentLoadCompletion, ChildModuleDependencyFetchCompletion,
     ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion, NetworkBodySourceId,
     PendingSubresourceAuthInfo, PendingSubresourceAuthState, PendingSubresourceContinuation,
-    PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
-    PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseInfo,
-    PendingSubresourceResponseState, PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
-    RunningSubresourceFetchState, StreamingSubresourceFetchState, SubresourceNetworkRequestHandle,
+    PendingSubresourceContinueEvent, PendingSubresourceFetchInfo, PendingSubresourceFetchState,
+    PendingSubresourceResponseInfo, PendingSubresourceResponseState,
+    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion, RunningSubresourceFetchState,
+    StreamingSubresourceFetchState, SubresourceNetworkRequestHandle,
     SubresourceRequestInitiatorType, SubresourceResourceType, SubresourceResponseBody,
 };
 use crate::util::v8_string;
@@ -569,7 +573,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",
-        PendingSubresourceContinuation::WebSocket(_) => "websocket",
+        PendingSubresourceContinuation::WebSocket(..) => "websocket",
         PendingSubresourceContinuation::ChildDocument(_) => "child_document",
     }
 }

@@ -16,7 +16,6 @@ use mouse_boundary::dispatch_mouse_boundary_events;
 use touch_tap::dispatch_touch_tap_activation;
 
 use super::input_dispatch_outcome;
-use super::input_helpers::{mouse_button_mask, single_changed_mouse_button};
 use super::inspector::{
     current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
 };
@@ -3041,5 +3040,35 @@ impl ScriptVm {
             self.suppress_next_keypress_after_canceled_raw_keydown = true;
         }
         self.finish_input_event_dispatch_turn(result)
+    }
+}
+
+fn mouse_button_mask(button: i32) -> i32 {
+    match button {
+        0 => 1,
+        1 => 4,
+        2 => 2,
+        3 => 8,
+        4 => 16,
+        _ => 0,
+    }
+}
+
+fn mouse_button_from_mask(mask: i32) -> Option<i32> {
+    match mask {
+        1 => Some(0),
+        4 => Some(1),
+        2 => Some(2),
+        8 => Some(3),
+        16 => Some(4),
+        _ => None,
+    }
+}
+
+fn single_changed_mouse_button(mask: i32) -> Option<i32> {
+    if mask.count_ones() == 1 {
+        mouse_button_from_mask(mask)
+    } else {
+        None
     }
 }

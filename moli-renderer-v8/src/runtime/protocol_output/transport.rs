@@ -526,7 +526,7 @@ fn renderer_output_transport_channel_with_limits(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 #[derive(Clone, Copy, Debug)]
 pub(in crate::runtime) struct RendererOutputTransportTestLimits {
     pub max_pending_messages: usize,
@@ -536,7 +536,7 @@ pub(in crate::runtime) struct RendererOutputTransportTestLimits {
     pub max_message_bytes: usize,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 pub(in crate::runtime) fn renderer_output_transport_channel_with_test_limits(
     limits: RendererOutputTransportTestLimits,
 ) -> (

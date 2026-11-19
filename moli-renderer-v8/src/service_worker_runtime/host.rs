@@ -888,6 +888,7 @@ fn spawn_parent_message_pump(
                             messages,
                         );
                     }
+                    #[cfg(feature = "devtools")]
                     WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
                         let _ = publication.commit(None);
                     }

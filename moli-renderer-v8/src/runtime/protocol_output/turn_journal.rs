@@ -275,6 +275,7 @@ impl RendererTurnOutputJournal {
         ))
     }
 
+    #[cfg(feature = "devtools")]
     /// Atomically appends and publishes one already-resolved producer batch.
     ///
     /// A DevTools session response is a terminal renderer observation, not a

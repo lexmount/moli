@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(any(test, feature = "devtools"))]
+use crate::RendererSyntheticResponseBody;
 use moli_fetch::{RedirectInfo, Request, RequestRedirectMode, ResponseHead};
 
 pub(super) fn follow_intercepted_redirect(
@@ -106,7 +108,8 @@ pub(super) fn follow_intercepted_redirect(
 }
 
 impl ScriptVm {
-    pub(super) fn fulfill_intercepted_window_fetch(
+    #[cfg(any(test, feature = "devtools"))]
+    pub(in crate::script_vm::subresource_fetch) fn fulfill_intercepted_window_fetch(
         &mut self,
         pending: PendingSubresourceFetchState,
         status: u16,

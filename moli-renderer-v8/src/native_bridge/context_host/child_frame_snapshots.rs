@@ -26,6 +26,7 @@ pub(crate) struct ChildBrowsingContextFrameSnapshot {
     pub(crate) child_frames: Vec<ChildBrowsingContextFrameSnapshot>,
 }
 
+#[cfg(feature = "devtools")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DetachedChildBrowsingContextDocumentSnapshot {
     pub(crate) parent_frame_id: String,

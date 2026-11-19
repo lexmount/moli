@@ -5,6 +5,7 @@ use super::backend_node_registry::{
     new_shared_renderer_backend_node_registry,
 };
 use crate::{document_runtime::DomHandle, frame_owner_model::DocumentId};
+#[cfg(feature = "devtools")]
 use moli_page_types::DocumentNodeInspectorIdentity;
 
 #[cfg(not(feature = "devtools"))]
@@ -44,6 +45,7 @@ impl RendererDomAgentState {
             .id_for_node(document_id, handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn backend_node_id_for_inspector_node(
         &self,
         document_id: DocumentId,
@@ -62,6 +64,7 @@ impl RendererDomAgentState {
         self.backend_nodes.borrow().key_for_id(backend_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn retain_detached_backend_node_resolution(&self, backend_node_id: u32) -> bool {
         self.backend_nodes
             .borrow_mut()

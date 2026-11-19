@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(feature = "devtools")]
 use anyhow::Result;
 
 #[tokio::test]

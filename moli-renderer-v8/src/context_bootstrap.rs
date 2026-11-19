@@ -142,9 +142,11 @@ mod performance_observer_runtime;
 mod performance_runtime;
 mod range;
 mod range_algorithms;
+#[cfg(feature = "devtools")]
+pub(crate) use range_algorithms::selection_text_element_is_hidden;
+#[cfg(feature = "devtools")]
 pub(crate) use range_algorithms::{
     NativeSelectionDragSnapshot, document_selection_drag_snapshot_at_point,
-    selection_text_element_is_hidden,
 };
 mod range_live;
 mod range_surface;
@@ -343,35 +345,31 @@ pub(crate) use self::events::{
     set_event_internal_flag, set_event_private_value, set_event_trusted,
     submit_event_submitter_value,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 pub(crate) use self::file_api::drag_data_read_count_for_test;
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,
     DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
+
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use self::file_api::readonly_data_transfer_for_input;
 #[cfg(feature = "devtools")]
 pub(crate) use self::file_api::{
-    DragDataStoreMode, create_drag_data_transfer_view, create_native_drag_data_store,
-    native_set_drag_drop_effect, populate_native_drag_data_store, protect_native_drag_source_view,
-    read_string_drag_data,
+    DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
+    create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
+    native_data_transfer_drop_effect, native_data_transfer_effect_allowed,
+    native_data_transfer_file_count, native_data_transfer_files, native_data_transfer_get_data,
+    native_data_transfer_has_type, native_set_drag_drop_effect, populate_native_drag_data_store,
+    protect_native_drag_source_view, read_string_drag_data, replace_drag_data_store_contents,
+    update_drag_data_store_operations_mask,
 };
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,
     build_file_object_unpublished, file_clone_metadata, file_list_files_from_object,
     finish_file_reader_read, flush_one_pending_file_reading_task, is_file_list_object,
     queue_file_reading_task, selected_file_from_object, set_file_relative_path,
-};
-pub(crate) use self::file_api::{
-    NativeDragDataStore, finish_drag_data_transfer_view, native_data_transfer_drop_effect,
-    native_data_transfer_effect_allowed, native_data_transfer_file_count,
-    native_data_transfer_files, native_data_transfer_get_data, native_data_transfer_has_type,
-    readonly_data_transfer_for_input,
-};
-#[cfg(feature = "devtools")]
-pub(crate) use self::file_api::{
-    create_external_drag_data_store, replace_drag_data_store_contents,
-    update_drag_data_store_operations_mask,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{

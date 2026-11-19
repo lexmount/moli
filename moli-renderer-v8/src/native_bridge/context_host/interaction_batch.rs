@@ -32,6 +32,7 @@ pub(super) struct ScrollObservableEffectBatchState {
 }
 
 impl ScrollObservableEffectBatchState {
+    #[cfg(any(test, feature = "devtools"))]
     fn begin(&mut self) {
         self.depth = self
             .depth
@@ -58,6 +59,7 @@ impl ScrollObservableEffectBatchState {
         true
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     fn finish(&mut self) -> Option<Vec<PendingScrollObservableEffects>> {
         assert!(
             self.depth != 0,
@@ -69,10 +71,6 @@ impl ScrollObservableEffectBatchState {
 }
 
 impl PageScriptHost {
-    pub(crate) fn begin_scroll_observable_effect_batch(&mut self) {
-        self.scroll_observable_effect_batch.begin();
-    }
-
     /// Retains a scroll's derived work while an input batch is active.
     /// Returns `true` when the caller must not perform that work immediately.
     pub(crate) fn defer_scroll_observable_effects(
@@ -82,6 +80,13 @@ impl PageScriptHost {
     ) -> bool {
         self.scroll_observable_effect_batch
             .defer(document, queue_document_events)
+    }
+}
+
+#[cfg(feature = "devtools")]
+impl PageScriptHost {
+    pub(crate) fn begin_scroll_observable_effect_batch(&mut self) {
+        self.scroll_observable_effect_batch.begin();
     }
 
     /// Closes one batch level. The outermost close owns the accumulated

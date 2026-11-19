@@ -604,8 +604,9 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
     }
     handle.terminate_and_join();
@@ -704,8 +705,9 @@ async fn service_worker_clients_claim_waits_for_runtime_result() {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
     }
     handle.terminate_and_join();
@@ -968,8 +970,9 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
     }
     handle.terminate_and_join();
@@ -1152,8 +1155,9 @@ async fn assert_service_worker_base_client_query_shape(
             }
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
-            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
             other => panic!("unexpected worker message: {other:?}"),
         }
     }
@@ -1326,8 +1330,9 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
     }
     handle.terminate_and_join();
@@ -1466,8 +1471,9 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
     }
     handle.terminate_and_join();

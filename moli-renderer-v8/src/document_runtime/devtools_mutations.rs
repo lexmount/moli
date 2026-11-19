@@ -59,6 +59,7 @@ impl DevToolsDomPrepublishedRemoval {
 }
 
 impl DevToolsDomChildListMutationFact {
+    #[cfg(feature = "devtools")]
     pub(crate) fn removal_was_prepublished_for_session(
         &self,
         inspector_session_id: Option<&str>,

@@ -1,9 +1,8 @@
+#[cfg(feature = "devtools")]
+use std::sync::atomic::AtomicBool;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Weak,
-        atomic::{AtomicBool, AtomicU64},
-    },
+    sync::{Weak, atomic::AtomicU64},
 };
 
 use parking_lot::Mutex;
@@ -75,6 +74,7 @@ pub(super) struct WeakServiceWorkerRuntimeService {
     pub(super) inner: Weak<ServiceWorkerRuntimeInner>,
 }
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ServiceWorkerDevToolsRelatedPauseOnStartPolicy {
     pub(super) registration_id: ServiceWorkerRegistrationId,
@@ -83,6 +83,7 @@ pub(super) struct ServiceWorkerDevToolsRelatedPauseOnStartPolicy {
     pub(super) scope_url: Url,
 }
 
+#[cfg(feature = "devtools")]
 impl ServiceWorkerDevToolsRelatedPauseOnStartPolicy {
     pub(super) fn matches(
         &self,
@@ -120,16 +121,33 @@ fn target_status_for_lifecycle_state(
     }
 }
 
+#[cfg(feature = "devtools")]
+pub(super) struct ServiceWorkerDevToolsOptions {
+    pub(super) next_force_update_page_load_waiter_id: AtomicU64,
+    pub(super) force_update_on_page_load: AtomicBool,
+    pub(super) pause_new_workers_on_start_for_devtools: AtomicBool,
+}
+
+#[cfg(feature = "devtools")]
+impl Default for ServiceWorkerDevToolsOptions {
+    fn default() -> Self {
+        Self {
+            next_force_update_page_load_waiter_id: AtomicU64::new(1),
+            force_update_on_page_load: AtomicBool::new(false),
+            pause_new_workers_on_start_for_devtools: AtomicBool::new(false),
+        }
+    }
+}
+
 pub(super) struct ServiceWorkerRuntimeInner {
     pub(super) next_registration_id: AtomicU64,
     pub(super) next_version_id: AtomicU64,
     pub(super) client_id_allocator: super::ids::ServiceWorkerClientIdAllocator,
     pub(super) next_event_id: AtomicU64,
-    pub(super) next_force_update_page_load_waiter_id: AtomicU64,
+    #[cfg(feature = "devtools")]
+    pub(super) devtools: ServiceWorkerDevToolsOptions,
     pub(super) next_notification_id: AtomicU64,
     pub(super) idle_delay_ms: AtomicU64,
-    pub(super) force_update_on_page_load: AtomicBool,
-    pub(super) pause_new_workers_on_start_for_devtools: AtomicBool,
     pub(super) state: Mutex<ServiceWorkerRuntimeState>,
     pub(super) service_lane: ServiceWorkerServiceLane,
     pub(super) owner_wake: Mutex<WorkerOwnerWakeRoutes<ServiceWorkerRuntimeOwnerWake>>,
@@ -156,11 +174,10 @@ impl ServiceWorkerRuntimeInner {
             next_version_id: AtomicU64::new(1),
             client_id_allocator,
             next_event_id: AtomicU64::new(1),
-            next_force_update_page_load_waiter_id: AtomicU64::new(1),
+            #[cfg(feature = "devtools")]
+            devtools: ServiceWorkerDevToolsOptions::default(),
             next_notification_id: AtomicU64::new(1),
             idle_delay_ms: AtomicU64::new(default_idle_delay_ms),
-            force_update_on_page_load: AtomicBool::new(false),
-            pause_new_workers_on_start_for_devtools: AtomicBool::new(false),
             state: Mutex::new(ServiceWorkerRuntimeState::new(
                 browser_context_runtime_id,
                 output_transport,
@@ -207,6 +224,7 @@ pub(super) struct ServiceWorkerRuntimeState {
     service_worker_target_run_projections:
         HashMap<ServiceWorkerVersionId, RendererServiceWorkerTargetRunResidence>,
     target_output_streams: ServiceWorkerTargetOutputStreams,
+    #[cfg(feature = "devtools")]
     pub(super) devtools_related_pause_on_start_policies:
         Vec<ServiceWorkerDevToolsRelatedPauseOnStartPolicy>,
     pub(super) stored_registration_cache_revision: Option<u64>,
@@ -306,6 +324,7 @@ impl ServiceWorkerRuntimeState {
                 browser_context_runtime_id,
                 output_transport,
             ),
+            #[cfg(feature = "devtools")]
             devtools_related_pause_on_start_policies: Vec::new(),
             stored_registration_cache_revision: None,
             stored_registration_cache: HashMap::new(),
@@ -622,6 +641,7 @@ impl ServiceWorkerRuntimeState {
         true
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn insert_force_update_page_load_waiter(
         &mut self,
         waiter_id: u64,

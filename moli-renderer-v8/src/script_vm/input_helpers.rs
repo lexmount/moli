@@ -4,39 +4,8 @@ use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
 use crate::types::ScriptErrorConstructorKind;
 
-pub(super) fn mouse_button_mask(button: i32) -> i32 {
-    match button {
-        0 => 1,
-        1 => 4,
-        2 => 2,
-        3 => 8,
-        4 => 16,
-        _ => 0,
-    }
-}
-
-pub(super) fn mouse_button_from_mask(mask: i32) -> Option<i32> {
-    match mask {
-        1 => Some(0),
-        4 => Some(1),
-        2 => Some(2),
-        8 => Some(3),
-        16 => Some(4),
-        _ => None,
-    }
-}
-
-pub(super) fn single_changed_mouse_button(mask: i32) -> Option<i32> {
-    if mask.count_ones() == 1 {
-        mouse_button_from_mask(mask)
-    } else {
-        None
-    }
-}
-
 pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
-    vm._context_host.borrow_mut().clear_mouse_input_state();
     vm.hovered_mouse_handle = None;
     vm.hovered_mouse_root_to_frame = moli_layout::LayoutTransform2D::IDENTITY;
     vm._context_host
@@ -45,19 +14,23 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
         .clear_hovered_element_handles();
     vm.active_touch_pointer_handles.clear();
     vm.active_touch_points.clear();
-    vm.pending_touch_tap = None;
-    // Target views were disabled when their dispatch ended. Retiring the
-    // Document must also disable its protected source view without dragend.
-    if let Some(session) = vm.active_drag_session.take()
-        && let Some(source) = session.source_transfer
+    #[cfg(feature = "devtools")]
     {
-        let _ = vm.with_default_context_scope(|scope, _| {
-            let transfer = v8::Local::new(scope, &source);
-            crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
-            Ok(())
-        });
+        vm._context_host.borrow_mut().clear_mouse_input_state();
+        vm.pending_touch_tap = None;
+        // Target views were disabled when their dispatch ended. Retiring the
+        // Document must also disable its protected source view without dragend.
+        if let Some(session) = vm.active_drag_session.take()
+            && let Some(source) = session.source_transfer
+        {
+            let _ = vm.with_default_context_scope(|scope, _| {
+                let transfer = v8::Local::new(scope, &source);
+                crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
+                Ok(())
+            });
+        }
+        vm.pending_drag_gesture = None;
     }
-    vm.pending_drag_gesture = None;
     vm.active_scrollbar_drag = None;
     vm.suppress_compat_mouse_events = false;
     vm._context_host.borrow_mut().clear_pointer_capture_state();

@@ -129,6 +129,7 @@ pub(crate) use text_track_loads::{
 mod message_ports;
 mod messages;
 mod module_owner_tasks;
+#[cfg(feature = "devtools")]
 mod mouse_click;
 #[cfg(feature = "devtools")]
 pub(crate) use mouse_click::MouseReleaseFollowUp;
@@ -979,6 +980,7 @@ pub(crate) struct PageScriptHost {
     active_pointer_capture_ids: HashSet<i32>,
     pending_pointer_capture_targets: HashMap<i32, DomHandle>,
     pointer_capture_targets: HashMap<i32, DomHandle>,
+    #[cfg(feature = "devtools")]
     mouse_input: mouse_click::MouseInputState,
     lazy_media_load_candidates: HashSet<DomHandle>,
     canvas_resources: canvas_resources::CanvasResourceStore,
@@ -1240,6 +1242,7 @@ fn child_browsing_context_url_inherits_security_origin(url: &url::Url) -> bool {
 
 pub use crate::protocol_types::PendingRuntimeBindingCall;
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PointerCaptureDispatchEvent {
     pub(crate) event_name: &'static str,

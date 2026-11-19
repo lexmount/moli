@@ -13,7 +13,12 @@ use tokio::sync::oneshot;
 /// frontend terminal, and a published frontend reply cannot also be returned
 /// through an adapter value channel.
 enum Destination<Completion, Settlement> {
-    Adapter(oneshot::Sender<Completion>),
+    Adapter {
+        tx: oneshot::Sender<Completion>,
+        #[cfg(not(feature = "devtools"))]
+        settlement: std::marker::PhantomData<fn() -> Settlement>,
+    },
+    #[cfg(feature = "devtools")]
     Session(Option<oneshot::Sender<Settlement>>),
 }
 
@@ -68,7 +73,11 @@ impl<C, S> RendererCommandResponseAuthority<C, S> {
     }
 
     pub(crate) fn adapter(tx: oneshot::Sender<C>) -> Self {
-        Self::new(Destination::Adapter(tx))
+        Self::new(Destination::Adapter {
+            tx,
+            #[cfg(not(feature = "devtools"))]
+            settlement: std::marker::PhantomData,
+        })
     }
 
     #[cfg(feature = "devtools")]
@@ -163,7 +172,8 @@ impl<C, S> RendererCommandResponseLease<C, S> {
         let state = self.lifetime.authority.state.lock();
         state.active_lease_id == Some(self.lifetime.lease_id)
             && match state.destination.as_ref() {
-                Some(Destination::Adapter(tx)) => !tx.is_closed(),
+                Some(Destination::Adapter { tx, .. }) => !tx.is_closed(),
+                #[cfg(feature = "devtools")]
                 Some(Destination::Session(_)) => true,
                 None => false,
             }
@@ -173,12 +183,12 @@ impl<C, S> RendererCommandResponseLease<C, S> {
         let tx = {
             let mut state = self.lifetime.authority.state.lock();
             if state.active_lease_id != Some(self.lifetime.lease_id)
-                || !matches!(state.destination, Some(Destination::Adapter(_)))
+                || !matches!(state.destination, Some(Destination::Adapter { .. }))
             {
                 return Err(completion);
             }
             state.active_lease_id = None;
-            let Some(Destination::Adapter(tx)) = state.destination.take() else {
+            let Some(Destination::Adapter { tx, .. }) = state.destination.take() else {
                 unreachable!("destination was checked under the same lock")
             };
             tx

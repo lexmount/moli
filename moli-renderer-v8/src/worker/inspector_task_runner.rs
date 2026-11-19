@@ -1,4 +1,5 @@
 use crate::runtime::WorkerInspectorError;
+#[cfg(feature = "devtools")]
 use anyhow::Result;
 use std::{
     cell::RefCell,
@@ -17,7 +18,9 @@ use moli_v8_platform::{ProcessEnvironmentNotifications, ProcessEnvironmentNotifi
 use parking_lot::{Condvar, Mutex};
 #[cfg(feature = "devtools")]
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+#[cfg(feature = "devtools")]
+use tokio::sync::oneshot;
 
 #[cfg(feature = "devtools")]
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
@@ -91,100 +94,10 @@ fn worker_inspector_task_mode(method: &str) -> WorkerInspectorTaskMode {
     }
 }
 
-/// One native session incarnation. Wire ids may be reused after attach; tasks
-/// and channels retain this token so retired work cannot address its successor.
-#[derive(Clone)]
-pub(crate) struct WorkerInspectorSessionLifetime(Arc<WorkerInspectorSessionLifetimeState>);
-
-struct WorkerInspectorSessionLifetimeState {
-    active: AtomicBool,
-    native_created: AtomicBool,
-    detachment: Mutex<WorkerInspectorSessionCompletion>,
-    retirement: Mutex<WorkerInspectorSessionCompletion>,
-}
-
-#[derive(Default)]
-struct WorkerInspectorSessionCompletion {
-    result: Option<std::result::Result<(), WorkerInspectorError>>,
-    waiters: Vec<oneshot::Sender<Result<()>>>,
-}
-
-impl WorkerInspectorSessionCompletion {
-    fn complete(&mut self, result: std::result::Result<(), WorkerInspectorError>) {
-        if self.result.is_some() {
-            return;
-        }
-        self.result = Some(result);
-        for waiter in self.waiters.drain(..) {
-            let _ = waiter.send(result.map_err(Into::into));
-        }
-    }
-
-    #[cfg(feature = "devtools")]
-    fn subscribe(&mut self) -> oneshot::Receiver<Result<()>> {
-        let (tx, rx) = oneshot::channel();
-        if let Some(result) = self.result {
-            let _ = tx.send(result.map_err(Into::into));
-        } else {
-            self.waiters.push(tx);
-        }
-        rx
-    }
-}
-
-impl WorkerInspectorSessionLifetime {
-    #[cfg(feature = "devtools")]
-    fn new() -> Self {
-        Self(Arc::new(WorkerInspectorSessionLifetimeState {
-            active: AtomicBool::new(true),
-            native_created: AtomicBool::new(false),
-            detachment: Mutex::new(WorkerInspectorSessionCompletion::default()),
-            retirement: Mutex::new(WorkerInspectorSessionCompletion::default()),
-        }))
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn is_active(&self) -> bool {
-        self.0.active.load(Ordering::Acquire)
-    }
-    pub(crate) fn matches(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-    #[cfg(feature = "devtools")]
-    pub(crate) fn mark_native_created(&self) {
-        self.0.native_created.store(true, Ordering::Release);
-    }
-    #[cfg(feature = "devtools")]
-    pub(crate) fn native_was_created(&self) -> bool {
-        self.0.native_created.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn complete_retirement(
-        &self,
-        result: std::result::Result<(), WorkerInspectorError>,
-    ) {
-        self.0.retirement.lock().complete(result);
-    }
-
-    #[cfg(feature = "devtools")]
-    #[cfg(test)]
-    pub(crate) fn retirement(&self) -> oneshot::Receiver<Result<()>> {
-        self.0.retirement.lock().subscribe()
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn complete_detachment(
-        &self,
-        result: std::result::Result<(), WorkerInspectorError>,
-    ) {
-        self.0.detachment.lock().complete(result);
-    }
-
-    #[cfg(feature = "devtools")]
-    fn detachment(&self) -> oneshot::Receiver<Result<()>> {
-        self.0.detachment.lock().subscribe()
-    }
-}
+#[cfg(feature = "devtools")]
+mod session;
+#[cfg(feature = "devtools")]
+pub(crate) use session::WorkerInspectorSessionLifetime;
 
 pub(crate) enum WorkerInspectorTask {
     EnvironmentInvalidation(moli_v8_platform::ProcessEnvironmentInvalidation),
@@ -254,9 +167,11 @@ impl WorkerInspectorTask {
 struct WorkerInspectorTaskRunnerState {
     interrupting_tasks: VecDeque<WorkerInspectorTask>,
     dont_interrupting_tasks: VecDeque<WorkerInspectorTask>,
+    #[cfg(feature = "devtools")]
     sessions: HashMap<String, WorkerInspectorSessionLifetime>,
     disposed: bool,
     isolate_ready: bool,
+    #[cfg(feature = "devtools")]
     pause_loop_active: bool,
     quit_pause_loop: bool,
 }
@@ -299,9 +214,11 @@ impl WorkerInspectorTaskRunner {
                 state: Mutex::new(WorkerInspectorTaskRunnerState {
                     interrupting_tasks: VecDeque::new(),
                     dont_interrupting_tasks: VecDeque::new(),
+                    #[cfg(feature = "devtools")]
                     sessions: HashMap::new(),
                     disposed: false,
                     isolate_ready: false,
+                    #[cfg(feature = "devtools")]
                     pause_loop_active: false,
                     quit_pause_loop: false,
                 }),
@@ -319,7 +236,7 @@ impl WorkerInspectorTaskRunner {
         self.shared.interrupt_target.route_id
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn session_count(&self) -> usize {
         self.shared.state.lock().sessions.len()
     }
@@ -474,6 +391,7 @@ impl WorkerInspectorTaskRunner {
         Ok(lifetime)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn complete_retirement(
         &self,
         id: Option<&str>,
@@ -702,6 +620,7 @@ impl WorkerInspectorTaskRunner {
                 return;
             }
             state.disposed = true;
+            #[cfg(feature = "devtools")]
             for (_, lifetime) in state.sessions.drain() {
                 lifetime.0.active.store(false, Ordering::Release);
             }
@@ -788,11 +707,14 @@ fn environment_bursts_and_interrupt_consumption_keep_the_owner_wake_bounded() {
 mod tests {
     use super::WorkerInspectorProtocolTask;
     use crate::runtime::WorkerInspectorError;
+    #[cfg(feature = "devtools")]
     use anyhow::Result;
     use std::sync::Arc;
 
     use parking_lot::Mutex;
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::mpsc;
+    #[cfg(feature = "devtools")]
+    use tokio::sync::oneshot;
 
     use super::{
         WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,

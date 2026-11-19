@@ -1,14 +1,6 @@
 use super::*;
 
 impl PageScriptHost {
-    pub(crate) fn set_pointer_capture_active(&mut self, pointer_id: i32, active: bool) {
-        if active {
-            self.active_pointer_capture_ids.insert(pointer_id);
-        } else {
-            self.active_pointer_capture_ids.remove(&pointer_id);
-        }
-    }
-
     pub(crate) fn pointer_capture_is_active(&self, pointer_id: i32) -> bool {
         self.active_pointer_capture_ids.contains(&pointer_id)
     }
@@ -34,6 +26,56 @@ impl PageScriptHost {
         self.pending_pointer_capture_targets
             .get(&pointer_id)
             .is_some_and(|current| *current == target)
+    }
+
+    pub(crate) fn clear_pending_pointer_capture_targets_in_disconnected_subtree(
+        &mut self,
+        root: DomHandle,
+    ) {
+        if self.pending_pointer_capture_targets.is_empty() {
+            return;
+        }
+        let pending_targets = self
+            .pending_pointer_capture_targets
+            .iter()
+            .map(|(pointer_id, target)| (*pointer_id, *target))
+            .collect::<Vec<_>>();
+        for (pointer_id, target) in pending_targets {
+            if self.pointer_capture_subtree_contains(root, target) {
+                self.pending_pointer_capture_targets.remove(&pointer_id);
+            }
+        }
+    }
+
+    fn pointer_capture_subtree_contains(&self, root: DomHandle, target: DomHandle) -> bool {
+        let mut stack = vec![root];
+        while let Some(handle) = stack.pop() {
+            if handle == target {
+                return true;
+            }
+            if let Some(shadow_root) = self.dom_host().shadow_root_handle(handle) {
+                stack.push(shadow_root);
+            }
+            stack.extend(self.dom_host().child_handles(handle));
+        }
+        false
+    }
+
+    pub(crate) fn clear_pointer_capture_state(&mut self) {
+        self.active_pointer_capture_ids.clear();
+        self.pending_pointer_capture_targets.clear();
+        self.pointer_capture_targets.clear();
+    }
+}
+
+#[cfg(feature = "devtools")]
+impl PageScriptHost {
+    pub(crate) fn set_pointer_capture_active(&mut self, pointer_id: i32, active: bool) {
+        if active {
+            self.active_pointer_capture_ids.insert(pointer_id);
+        } else {
+            self.active_pointer_capture_ids.remove(&pointer_id);
+        }
     }
 
     pub(crate) fn active_pointer_capture_target(&self, pointer_id: i32) -> Option<DomHandle> {
@@ -86,39 +128,6 @@ impl PageScriptHost {
         Some(self.document_handle())
     }
 
-    pub(crate) fn clear_pending_pointer_capture_targets_in_disconnected_subtree(
-        &mut self,
-        root: DomHandle,
-    ) {
-        if self.pending_pointer_capture_targets.is_empty() {
-            return;
-        }
-        let pending_targets = self
-            .pending_pointer_capture_targets
-            .iter()
-            .map(|(pointer_id, target)| (*pointer_id, *target))
-            .collect::<Vec<_>>();
-        for (pointer_id, target) in pending_targets {
-            if self.pointer_capture_subtree_contains(root, target) {
-                self.pending_pointer_capture_targets.remove(&pointer_id);
-            }
-        }
-    }
-
-    fn pointer_capture_subtree_contains(&self, root: DomHandle, target: DomHandle) -> bool {
-        let mut stack = vec![root];
-        while let Some(handle) = stack.pop() {
-            if handle == target {
-                return true;
-            }
-            if let Some(shadow_root) = self.dom_host().shadow_root_handle(handle) {
-                stack.push(shadow_root);
-            }
-            stack.extend(self.dom_host().child_handles(handle));
-        }
-        false
-    }
-
     pub(crate) fn process_pending_pointer_capture(
         &mut self,
         pointer_id: i32,
@@ -162,11 +171,5 @@ impl PageScriptHost {
         }
 
         events
-    }
-
-    pub(crate) fn clear_pointer_capture_state(&mut self) {
-        self.active_pointer_capture_ids.clear();
-        self.pending_pointer_capture_targets.clear();
-        self.pointer_capture_targets.clear();
     }
 }

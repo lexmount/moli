@@ -14,7 +14,9 @@ pub(super) struct WebSocketConnectionState {
     pub(super) frame_id: Option<String>,
     pub(super) document_url: Url,
     pub(super) opened: bool,
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) synthetic_peer: Option<moli_websocket::SyntheticPeer>,
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) handshake_controller: Option<moli_websocket::HandshakeController>,
     pub(super) fetch_internal_id: Option<u64>,
     pub(super) response_interception_pending: Option<u64>,

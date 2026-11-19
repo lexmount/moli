@@ -21,6 +21,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight(
         .map(NetworkFetchResult::into_response)
 }
 
+#[cfg(any(test, feature = "devtools"))]
 /// Fetch interception owns redirect decisions, so every HTTP hop must return
 /// before the next request can run. Preflight still belongs to this hop.
 pub(crate) async fn fetch_intercepted_window_hop(
@@ -62,6 +63,7 @@ pub(crate) async fn fetch_intercepted_window_hop(
     ))
 }
 
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) async fn fetch_browser_subresource_with_preflight_and_network_metadata(
     loader: ResourceRequestClient,
     request: Request,

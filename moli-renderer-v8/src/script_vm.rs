@@ -25,17 +25,18 @@ use crate::page_task_queue::{
     PageRuntimeWakeSender, PageTask, PageTaskSender, PostParseLifecycleWork,
     RendererResourceCompletionSender, RuntimePageTaskSender,
 };
-#[cfg(feature = "devtools")]
-use crate::runtime::RendererScrollIntoViewResult;
 use crate::runtime::{
     RendererBrowserContextRuntime, RendererCountEntry, RendererMoliDomMemoryDiagnostics,
+    RendererPerformanceMetricSnapshot, RendererRuntimeInspectorAsyncCompletion,
+    RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
+    RendererRuntimeRealmInfo, RuntimeConsoleMessageSnapshot, SharedRendererBackendNodeRegistry,
+};
+#[cfg(feature = "devtools")]
+use crate::runtime::{RendererInputDispatchOutcome, RendererScrollIntoViewResult};
+#[cfg(any(test, feature = "devtools"))]
+use crate::runtime::{
     RendererMoliMemoryDiagnostics, RendererMoliMemoryScopeDiagnostics,
-    RendererMoliRuntimeMemoryDiagnostics, RendererPerformanceMetricSnapshot,
-    RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
-    RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorResponseSender, RendererRuntimeRealmInfo,
-    RendererScriptExecutionMemoryDiagnostics, RendererScriptSourceMemoryDiagnostics,
-    RuntimeConsoleMessageSnapshot, SharedRendererBackendNodeRegistry,
+    RendererMoliRuntimeMemoryDiagnostics, RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
 };
 use crate::runtime_binding_data::{build_runtime_binding_data, runtime_binding_callback};
 use crate::script_provenance::CompiledStringProvenance;
@@ -120,6 +121,7 @@ where
     }
 }
 
+#[cfg(feature = "devtools")]
 const PERFORMANCE_METRICS_SNAPSHOT_EXPRESSION: &str = r#"
 (() => {
   const numeric = (value) => {
@@ -552,115 +554,6 @@ fn top_count_entries(counts: BTreeMap<String, usize>, limit: usize) -> Vec<Rende
     entries
 }
 
-#[derive(Default)]
-struct ScriptExecutionMemoryCounters {
-    execution_count: usize,
-    total_source_bytes: usize,
-    inline_source_bytes: usize,
-    external_source_bytes: usize,
-    classic_source_bytes: usize,
-    module_source_bytes: usize,
-    import_map_source_bytes: usize,
-    data_block_source_bytes: usize,
-    inline_execution_count: usize,
-    external_execution_count: usize,
-    classic_execution_count: usize,
-    module_execution_count: usize,
-    import_map_execution_count: usize,
-    data_block_execution_count: usize,
-    largest_sources: Vec<ScriptSourceMemorySample>,
-}
-
-#[derive(Clone)]
-struct ScriptSourceMemorySample {
-    url: String,
-    source_bytes: usize,
-    kind: ScriptKind,
-    mode: ScriptMode,
-    source_kind: ScriptSourceKind,
-}
-
-impl ScriptExecutionMemoryCounters {
-    fn record(&mut self, script: &PreparedScript, source_len: usize) {
-        self.execution_count += 1;
-        self.total_source_bytes = self.total_source_bytes.saturating_add(source_len);
-        match script.source_kind {
-            ScriptSourceKind::Inline => {
-                self.inline_execution_count += 1;
-                self.inline_source_bytes = self.inline_source_bytes.saturating_add(source_len);
-            }
-            ScriptSourceKind::External => {
-                self.external_execution_count += 1;
-                self.external_source_bytes = self.external_source_bytes.saturating_add(source_len);
-            }
-        }
-        match script.kind {
-            ScriptKind::Classic => {
-                self.classic_execution_count += 1;
-                self.classic_source_bytes = self.classic_source_bytes.saturating_add(source_len);
-            }
-            ScriptKind::Module => {
-                self.module_execution_count += 1;
-                self.module_source_bytes = self.module_source_bytes.saturating_add(source_len);
-            }
-            ScriptKind::ImportMap => {
-                self.import_map_execution_count += 1;
-                self.import_map_source_bytes =
-                    self.import_map_source_bytes.saturating_add(source_len);
-            }
-            ScriptKind::DataBlock => {
-                self.data_block_execution_count += 1;
-                self.data_block_source_bytes =
-                    self.data_block_source_bytes.saturating_add(source_len);
-            }
-        }
-        self.largest_sources.push(ScriptSourceMemorySample {
-            url: script.url.as_str().to_owned(),
-            source_bytes: source_len,
-            kind: script.kind,
-            mode: script.mode,
-            source_kind: script.source_kind,
-        });
-        self.largest_sources.sort_by(|left, right| {
-            right
-                .source_bytes
-                .cmp(&left.source_bytes)
-                .then_with(|| left.url.cmp(&right.url))
-        });
-        self.largest_sources.truncate(12);
-    }
-
-    fn to_diagnostics(&self) -> RendererScriptExecutionMemoryDiagnostics {
-        RendererScriptExecutionMemoryDiagnostics {
-            execution_count: self.execution_count,
-            total_source_bytes: self.total_source_bytes,
-            inline_source_bytes: self.inline_source_bytes,
-            external_source_bytes: self.external_source_bytes,
-            classic_source_bytes: self.classic_source_bytes,
-            module_source_bytes: self.module_source_bytes,
-            import_map_source_bytes: self.import_map_source_bytes,
-            data_block_source_bytes: self.data_block_source_bytes,
-            inline_execution_count: self.inline_execution_count,
-            external_execution_count: self.external_execution_count,
-            classic_execution_count: self.classic_execution_count,
-            module_execution_count: self.module_execution_count,
-            import_map_execution_count: self.import_map_execution_count,
-            data_block_execution_count: self.data_block_execution_count,
-            largest_sources: self
-                .largest_sources
-                .iter()
-                .map(|sample| RendererScriptSourceMemoryDiagnostics {
-                    url: sample.url.clone(),
-                    source_bytes: sample.source_bytes,
-                    kind: format!("{:?}", sample.kind),
-                    mode: format!("{:?}", sample.mode),
-                    source_kind: format!("{:?}", sample.source_kind),
-                })
-                .collect(),
-        }
-    }
-}
-
 use super::context_bootstrap::{set_window_navigator_identity, sync_global_location_runtime_state};
 use super::custom_elements;
 use super::document_runtime::{CurrentScriptContextSpec, DocumentRuntime, DomHandle};
@@ -680,13 +573,12 @@ use super::native_bridge::{
 use super::planning::PreparedScript;
 use super::renderer_resource_scheduler::RendererResourceScheduler;
 use super::runtime::{
-    RendererActivityDiagnostics, RendererInputDispatchOutcome, RendererPageContextCancelReason,
-    RendererPageContextCancelSender, RendererPageDiagnosticsSnapshot,
-    RendererRuntimeObservableSourceQueue, renderer_page_context_cancel_channel,
+    RendererActivityDiagnostics, RendererPageContextCancelReason, RendererPageContextCancelSender,
+    RendererPageDiagnosticsSnapshot, RendererRuntimeObservableSourceQueue,
+    renderer_page_context_cancel_channel,
 };
 use super::types::{
-    JsValueSnapshot, ScriptKind, ScriptMode, ScriptSourceKind, SubresourceInterceptionClasses,
-    SubresourceResourceType,
+    JsValueSnapshot, ScriptKind, ScriptMode, ScriptSourceKind, SubresourceResourceType,
 };
 use super::util::v8_string;
 
@@ -764,6 +656,7 @@ mod input_helpers;
 mod inspector;
 mod main_world;
 use main_world::MainWorld;
+#[cfg(feature = "devtools")]
 mod native_drag_data;
 pub(crate) use inspector::dispatch_inspector_io_owner_wake;
 #[cfg(feature = "devtools")]
@@ -827,6 +720,8 @@ pub(crate) use runtime_script_continuation::RuntimeScriptContinuationBodyEffect;
 pub(crate) use runtime_script_continuation::RuntimeScriptOwnerAdvance;
 mod security_policy;
 pub(crate) use security_policy::string_code_generation_check_callback;
+#[cfg(any(test, feature = "devtools"))]
+mod script_execution_memory;
 mod service_worker_client_message_body;
 #[cfg(test)]
 mod service_worker_client_message_test_support;
@@ -844,8 +739,10 @@ mod storage_event_delivery;
 #[cfg(test)]
 mod stylesheet_page_task_test_support;
 mod stylesheet_page_tasks;
+#[cfg(any(test, feature = "devtools"))]
 mod subresource_command_completion;
 mod subresource_fetch;
+#[cfg(any(test, feature = "devtools"))]
 pub(crate) use subresource_command_completion::AsyncSubresourceCommandExecution;
 pub(crate) use subresource_fetch::AsyncSubresourceFetchBodyActivity;
 mod page_resource_completion_task_completion;
@@ -893,6 +790,7 @@ pub(crate) use post_parse::{
     bootstrap_child_default_context_in_scope, bootstrap_isolated_window_context_in_scope,
 };
 
+#[cfg(feature = "devtools")]
 fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
     RendererInputDispatchOutcome {
         handled,
@@ -932,10 +830,11 @@ pub(crate) use document_isolate::{
 };
 pub(crate) use eval_exec::execute_source_text_on_current_stack;
 pub(crate) use input_helpers::*;
+#[cfg(feature = "devtools")]
+pub(crate) use inspector::RendererInspectorObjectWrapper;
 use inspector::*;
 pub(crate) use inspector::{
     DocumentInspectorBinding, RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause,
-    RendererInspectorObjectWrapper,
 };
 use isolated_worlds::*;
 pub(crate) use runtime_bindings::PromiseRejectDispatchSlot;
@@ -1048,7 +947,8 @@ pub(super) struct ScriptVm {
         Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     queued_main_document_parser_module_continuation_owner:
         Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
-    script_execution_memory: ScriptExecutionMemoryCounters,
+    #[cfg(any(test, feature = "devtools"))]
+    script_execution_memory: script_execution_memory::ScriptExecutionMemoryCounters,
     runtime_observable_source_queue: RendererRuntimeObservableSourceQueue,
     page_context_cancel_tx: RendererPageContextCancelSender,
     pressed_mouse_buttons: i32,
@@ -1059,14 +959,19 @@ pub(super) struct ScriptVm {
     hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D,
     active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
+    #[cfg(feature = "devtools")]
     pending_touch_tap: Option<PendingTouchTap>,
+    #[cfg(feature = "devtools")]
     suppress_next_keypress_after_canceled_raw_keydown: bool,
     suppress_compat_mouse_events: bool,
     active_scrollbar_drag: Option<ActiveScrollbarDrag>,
+    #[cfg(feature = "devtools")]
     active_drag_session: Option<ActiveDragSession>,
+    #[cfg(feature = "devtools")]
     pending_drag_gesture: Option<PendingDragGesture>,
     promise_reject_dispatch: PromiseRejectDispatchSlot,
     next_internal_runtime_evaluate_call_id: i32,
+    #[cfg(feature = "devtools")]
     next_internal_frontend_inspector_call_id: i32,
     pending_internal_runtime_evaluates:
         HashMap<i32, tokio::sync::oneshot::Receiver<RendererRuntimeInspectorAsyncCompletion>>,
@@ -1128,6 +1033,7 @@ pub(super) struct ActiveTouchPoint {
     pub is_primary: bool,
 }
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
 pub(super) struct PendingTouchTap {
     pub id: i32,
@@ -1138,6 +1044,7 @@ pub(super) struct PendingTouchTap {
     pub suppress_mouse: bool,
 }
 
+#[cfg(feature = "devtools")]
 pub(super) struct ActiveDragSession {
     pub data_store: crate::context_bootstrap::NativeDragDataStore,
     /// Chromium retains the source view for dragend, without restoring data access.
@@ -1158,6 +1065,7 @@ pub(super) struct ActiveDragSession {
     pub modifiers: u8,
 }
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
 pub(super) struct PendingDragGesture {
     pub handle: DomHandle,
@@ -1435,6 +1343,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn child_frame_id_for_live_node_handle(&self, handle: DomHandle) -> Option<String> {
         let host = self._context_host.borrow();
         let handle = host.dom_host().document_identity_handle(handle)?;
@@ -2562,21 +2471,28 @@ impl ScriptVmDefaultWorldBootstrap {
             queued_main_document_runtime_continuation_owner: None,
             queued_main_document_module_continuation_owner: None,
             queued_main_document_parser_module_continuation_owner: None,
-            script_execution_memory: ScriptExecutionMemoryCounters::default(),
+            #[cfg(any(test, feature = "devtools"))]
+            script_execution_memory:
+                script_execution_memory::ScriptExecutionMemoryCounters::default(),
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
             pressed_mouse_buttons: 0,
             hovered_mouse_handle: None,
             hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D::IDENTITY,
             active_touch_pointer_handles: BTreeMap::new(),
             active_touch_points: BTreeMap::new(),
+            #[cfg(feature = "devtools")]
             pending_touch_tap: None,
+            #[cfg(feature = "devtools")]
             suppress_next_keypress_after_canceled_raw_keydown: false,
             suppress_compat_mouse_events: false,
             active_scrollbar_drag: None,
+            #[cfg(feature = "devtools")]
             active_drag_session: None,
+            #[cfg(feature = "devtools")]
             pending_drag_gesture: None,
             promise_reject_dispatch,
             next_internal_runtime_evaluate_call_id: 1,
+            #[cfg(feature = "devtools")]
             next_internal_frontend_inspector_call_id: -1,
             pending_internal_runtime_evaluates: HashMap::new(),
             indexed_db_manager: None,

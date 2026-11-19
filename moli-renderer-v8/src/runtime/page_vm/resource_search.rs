@@ -8,9 +8,10 @@ use moli_encoding::{
     decode_classic_script_source, decode_html_document_with_fallback, decode_text_for_legacy_web,
     encoding_from_response_headers,
 };
-use moli_page_types::SubresourceResourceType;
 #[cfg(feature = "devtools")]
-use moli_page_types::{SubresourceNetworkOutcome, SubresourceNetworkRecord};
+use moli_page_types::{
+    SubresourceNetworkOutcome, SubresourceNetworkRecord, SubresourceResourceType,
+};
 #[cfg(feature = "devtools")]
 use moli_web_mime::{
     effective_response_mime_essence, is_dom_parser_xml_mime, is_html_document_mime,
@@ -50,12 +51,14 @@ pub trait RendererResourceContentBody: Debug + Send + Sync {
     fn read_bytes(&self, materialize_limit: usize) -> Result<Vec<u8>>;
 }
 
+#[cfg(feature = "devtools")]
 enum SelectedResource {
     Text(String),
     Unavailable,
     Missing,
 }
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
 enum ResourceContentKind {
     MainDocument,

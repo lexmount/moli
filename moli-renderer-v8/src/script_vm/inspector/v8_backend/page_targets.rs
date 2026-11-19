@@ -4,14 +4,19 @@ use super::*;
 /// pause state and output route. A context group selects that Page's executor.
 #[derive(Clone, Default)]
 pub(super) struct RendererInspectorPageTargets {
+    #[cfg(feature = "devtools")]
     context_registry: DocumentInspectorContextRegistry,
     groups: Rc<RefCell<HashMap<i32, Weak<RendererInspectorSessionExecutorLocal>>>>,
+    #[cfg(feature = "devtools")]
     paused: Rc<RefCell<Option<Weak<RendererInspectorSessionExecutorLocal>>>>,
 }
 
 impl RendererInspectorPageTargets {
-    pub(super) fn new(context_registry: DocumentInspectorContextRegistry) -> Self {
+    pub(super) fn new(
+        #[cfg(feature = "devtools")] context_registry: DocumentInspectorContextRegistry,
+    ) -> Self {
         Self {
+            #[cfg(feature = "devtools")]
             context_registry,
             ..Default::default()
         }
@@ -78,11 +83,13 @@ impl RendererInspectorPageTargets {
     }
 }
 
+#[cfg(feature = "devtools")]
 pub(super) struct InspectorPagePauseGuard {
     targets: RendererInspectorPageTargets,
     previous: Option<Weak<RendererInspectorSessionExecutorLocal>>,
 }
 
+#[cfg(feature = "devtools")]
 impl Drop for InspectorPagePauseGuard {
     fn drop(&mut self) {
         *self.targets.paused.borrow_mut() = self.previous.take();

@@ -11,26 +11,25 @@ use moli_webapi::file_reader_sync;
 mod file_reading;
 mod install;
 
-#[cfg(test)]
-pub(crate) use data_transfer::drag_data_read_count_for_test;
+#[cfg(all(test, feature = "devtools"))]
+pub(crate) use data_transfer::drag::drag_data_read_count_for_test;
 
 pub(super) use data_transfer::data_transfer_constructor_callback;
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use data_transfer::drag::readonly_data_transfer_for_input;
 #[cfg(feature = "devtools")]
-pub(crate) use data_transfer::{
-    DragDataStoreMode, create_drag_data_transfer_view, create_native_drag_data_store,
-    native_set_drag_drop_effect, populate_native_drag_data_store, protect_native_drag_source_view,
-    read_string_drag_data,
-};
-pub(crate) use data_transfer::{
-    NativeDragDataStore, finish_drag_data_transfer_view, is_branded_data_transfer_object,
+pub(crate) use data_transfer::drag::{
+    NativeDragDataStore, create_drag_data_transfer_view, create_external_drag_data_store,
+    create_native_drag_data_store, finish_drag_data_transfer_view,
     native_data_transfer_drop_effect, native_data_transfer_effect_allowed,
-    native_data_transfer_file_count, native_data_transfer_files, native_data_transfer_get_data,
-    native_data_transfer_has_type, readonly_data_transfer_for_input,
+    native_data_transfer_file_count, native_data_transfer_files, native_data_transfer_has_type,
+    populate_native_drag_data_store, protect_native_drag_source_view, read_string_drag_data,
+    replace_drag_data_store_contents, update_drag_data_store_operations_mask,
 };
+pub(crate) use data_transfer::is_branded_data_transfer_object;
 #[cfg(feature = "devtools")]
 pub(crate) use data_transfer::{
-    create_external_drag_data_store, replace_drag_data_store_contents,
-    update_drag_data_store_operations_mask,
+    DragDataStoreMode, native_data_transfer_get_data, native_set_drag_drop_effect,
 };
 pub(crate) use data_transfer::{
     data_transfer_clear_data_callback, data_transfer_get_data_callback,

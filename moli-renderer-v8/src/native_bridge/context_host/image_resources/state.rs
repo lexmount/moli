@@ -344,7 +344,7 @@ impl ImageResourceStore {
         self.visual_generation.current()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(super) fn visual_generation_handle_for_test(&self) -> VisualResourceGeneration {
         self.visual_generation.clone()
     }

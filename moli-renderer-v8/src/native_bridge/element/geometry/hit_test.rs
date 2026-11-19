@@ -1,14 +1,12 @@
 use moli_layout::{
     FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutHit, LayoutPaintedSurfaceHit,
-    LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutTransform2D,
+    LayoutPoint, LayoutTransform2D,
 };
 
 #[cfg(test)]
 use moli_layout::LayoutScrollbarHit;
 
-use super::provider::{
-    observable_geometry_batch, observable_hit_test_all, provider_contract_error,
-};
+use super::provider::{observable_hit_test, observable_hit_test_all};
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
@@ -348,42 +346,6 @@ fn live_hit_in_frame(
             .is_connected(target)
             .then_some((hit, target))
     }))
-}
-
-/// Resolve the foremost painted hit and the viewport sampled by the same
-/// frozen layout pass. Single-point DOM APIs consume this query while
-/// penetrating-list APIs use `observable_hit_test_all`.
-pub(crate) fn observable_hit_test(
-    runtime: &PageScriptHost,
-    document: DomHandle,
-    point: LayoutPoint,
-    ignore_pointer_events_none: bool,
-) -> Result<
-    (
-        moli_layout::LayoutDocumentMetrics,
-        Option<LayoutHit<DomHandle>>,
-    ),
-    LayoutError,
-> {
-    let answers = observable_geometry_batch(
-        runtime,
-        document,
-        &LayoutQueryBatch::new(vec![
-            LayoutQuery::DocumentMetrics,
-            LayoutQuery::HitTest {
-                point,
-                ignore_pointer_events_none,
-            },
-        ]),
-    )?;
-    let mut answers = answers.answers.into_iter();
-    match (answers.next(), answers.next()) {
-        (
-            Some(LayoutQueryAnswer::DocumentMetrics(metrics)),
-            Some(LayoutQueryAnswer::HitTest(hit)),
-        ) => Ok((metrics, hit)),
-        _ => Err(provider_contract_error("hit test")),
-    }
 }
 
 fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Option<DomHandle> {

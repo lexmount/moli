@@ -137,7 +137,7 @@ fn assert_detach_during_pause(peer_debugger: bool) {
         )
         .unwrap();
     controller.join().expect("pause controller");
-    assert!(!inspector.sessions.borrow().contains_key("A"));
+    assert!(!inspector.frontend.sessions.borrow().contains_key("A"));
     assert!(
         messages
             .iter()

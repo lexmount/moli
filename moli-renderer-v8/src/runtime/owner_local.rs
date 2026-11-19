@@ -22,6 +22,7 @@ pub struct RendererAttachedPage {
     pub(super) page_context_cancel_tx: RendererPageContextCancelSender,
     pub(super) javascript_dialog_broker: RendererJavaScriptDialogBroker,
     pub(super) devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
+    #[cfg(feature = "devtools")]
     pub(super) script_execution_control:
         crate::script_execution_control::RendererScriptExecutionControl,
     pub(super) page_state: Arc<RendererPageState>,
@@ -73,6 +74,7 @@ impl RendererAttachedPage {
                 page_context_cancel_tx: self.page_context_cancel_tx,
                 javascript_dialog_broker: self.javascript_dialog_broker,
                 devtools_target: self.devtools_target,
+                #[cfg(feature = "devtools")]
                 script_execution_control: self.script_execution_control,
                 committed_document_post_response_continuation: self
                     .committed_document_post_response_continuation,
@@ -134,6 +136,7 @@ pub struct RendererPageHandle {
     page_context_cancel_tx: RendererPageContextCancelSender,
     javascript_dialog_broker: RendererJavaScriptDialogBroker,
     devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
+    #[cfg(feature = "devtools")]
     script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,

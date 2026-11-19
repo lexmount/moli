@@ -8,10 +8,11 @@ use crate::dom::forms::parse_non_negative_length_attribute;
 use crate::native_bridge::element::{
     TextEditInputType, construct_input_event, dispatch_beforeinput,
 };
+#[cfg(feature = "devtools")]
 use crate::util::{
-    utf16_next_scalar_boundary, utf16_previous_scalar_boundary, utf16_replace_units_range_lossy,
-    utf16_scalar_boundary_at_or_after, utf16_units, v8str,
+    utf16_next_scalar_boundary, utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after,
 };
+use crate::util::{utf16_replace_units_range_lossy, utf16_units, v8str};
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -251,31 +252,36 @@ fn replace_text_control_selection_with_events(
             let value_len = value_units.len() as u32;
             (value_len, value_len)
         });
-    let mut start = (start as usize).min(value_units.len());
-    let mut end = (end as usize).min(value_units.len()).max(start);
-    if matches!(
-        input_type,
-        TextEditInputType::DeleteContentBackward | TextEditInputType::DeleteContentForward
-    ) {
-        // Recompute against the live selection after beforeinput. In particular,
-        // never expose a temporary expanded deletion range to event listeners.
-        start = utf16_scalar_boundary_at_or_after(&value_units, start);
-        end = utf16_scalar_boundary_at_or_after(&value_units, end);
-        if start == end {
-            match input_type {
-                TextEditInputType::DeleteContentBackward => {
-                    start = utf16_previous_scalar_boundary(&value_units, start)
+    let start = (start as usize).min(value_units.len());
+    let end = (end as usize).min(value_units.len()).max(start);
+    #[cfg(feature = "devtools")]
+    let (start, end) = {
+        let (mut start, mut end) = (start, end);
+        if matches!(
+            input_type,
+            TextEditInputType::DeleteContentBackward | TextEditInputType::DeleteContentForward
+        ) {
+            // Recompute against the live selection after beforeinput. In particular,
+            // never expose a temporary expanded deletion range to event listeners.
+            start = utf16_scalar_boundary_at_or_after(&value_units, start);
+            end = utf16_scalar_boundary_at_or_after(&value_units, end);
+            if start == end {
+                match input_type {
+                    TextEditInputType::DeleteContentBackward => {
+                        start = utf16_previous_scalar_boundary(&value_units, start)
+                    }
+                    TextEditInputType::DeleteContentForward => {
+                        end = utf16_next_scalar_boundary(&value_units, end)
+                    }
+                    _ => unreachable!(),
                 }
-                TextEditInputType::DeleteContentForward => {
-                    end = utf16_next_scalar_boundary(&value_units, end)
-                }
-                _ => unreachable!(),
+            }
+            if start == end {
+                return false;
             }
         }
-        if start == end {
-            return false;
-        }
-    }
+        (start, end)
+    };
     let replacement_units = text_control_user_edit_replacement_units(
         runtime,
         handle,

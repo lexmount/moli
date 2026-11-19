@@ -351,6 +351,7 @@ impl ScriptVm {
         ScriptVmRendererDocumentIsolateOps { vm: self }
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn renderer_document_isolate_heap_usage(
         &mut self,
     ) -> Result<RendererRuntimeHeapUsage> {
@@ -392,6 +393,7 @@ impl ScriptVm {
             })
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn moli_memory_counters(&self) -> RendererMoliMemoryDiagnostics {
         let document = self.document_runtime.snapshot_document();
         let dom = moli_dom_memory_counters(&document);
@@ -457,6 +459,7 @@ impl ScriptVm {
         }
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn collect_renderer_document_isolate_garbage(&mut self) -> Result<()> {
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -559,12 +562,14 @@ impl ScriptVm {
 }
 
 impl ScriptVmRendererDocumentIsolateOps<'_> {
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn renderer_document_isolate_heap_usage(
         &mut self,
     ) -> Result<RendererRuntimeHeapUsage> {
         self.vm.renderer_document_isolate_heap_usage()
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn collect_renderer_document_isolate_garbage(&mut self) -> Result<()> {
         self.vm.collect_renderer_document_isolate_garbage()
     }
@@ -734,6 +739,7 @@ impl ScriptVm {
             })
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn inspector_v8_session_states(
         &self,
     ) -> Vec<(

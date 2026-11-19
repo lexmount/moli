@@ -209,6 +209,7 @@ impl ResourceLoadRegistry {
             browser_runtime,
             task_runner,
             lifecycle: Mutex::new(ResourceLoadLifecycle {
+                #[cfg(any(test, feature = "devtools"))]
                 auth_retry_budget: moli_fetch::AuthRetryBudget::default(),
                 cancel_handle,
                 consumer_cancel: None,
@@ -357,6 +358,7 @@ impl ResourceLoadRegistry {
 }
 
 struct ResourceLoadLifecycle {
+    #[cfg(any(test, feature = "devtools"))]
     auth_retry_budget: moli_fetch::AuthRetryBudget,
     cancel_handle: Option<FetchCancelHandle>,
     consumer_cancel: Option<Box<dyn FnOnce() + Send + 'static>>,
@@ -462,6 +464,7 @@ pub(crate) struct ResourceLoadLease {
 }
 
 impl ResourceLoadLease {
+    #[cfg(any(test, feature = "devtools"))]
     /// Lease clones and authentication continuations belong to the same request.
     pub(crate) fn try_restart_with_auth(&self) -> bool {
         self.registration

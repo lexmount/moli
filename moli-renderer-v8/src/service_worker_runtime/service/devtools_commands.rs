@@ -4,6 +4,7 @@ use super::*;
 impl ServiceWorkerRuntimeService {
     pub(crate) fn set_pause_new_workers_on_start_for_devtools(&self, pause: bool) {
         self.inner
+            .devtools
             .pause_new_workers_on_start_for_devtools
             .store(pause, Ordering::Relaxed);
         if !pause {
@@ -13,6 +14,7 @@ impl ServiceWorkerRuntimeService {
 
     pub(crate) fn pause_new_workers_on_start_for_devtools(&self) -> bool {
         self.inner
+            .devtools
             .pause_new_workers_on_start_for_devtools
             .load(Ordering::Relaxed)
     }
@@ -89,16 +91,6 @@ impl ServiceWorkerRuntimeService {
         } else {
             state.devtools_attached_versions.remove(&version_id);
         }
-    }
-
-    pub(super) fn version_should_pause_on_start_for_devtools_locked(
-        state: &ServiceWorkerRuntimeState,
-        version_id: ServiceWorkerVersionId,
-    ) -> bool {
-        state
-            .versions
-            .get(&version_id)
-            .is_some_and(|version| version.should_pause_on_start_for_devtools)
     }
 
     pub(crate) fn devtools_run_if_waiting_for_debugger(
@@ -211,12 +203,16 @@ impl ServiceWorkerRuntimeService {
 
     pub(crate) fn set_force_update_on_page_load_for_devtools(&self, force_update: bool) {
         self.inner
+            .devtools
             .force_update_on_page_load
             .store(force_update, Ordering::Relaxed);
     }
 
     pub(crate) fn force_update_on_page_load_for_devtools(&self) -> bool {
-        self.inner.force_update_on_page_load.load(Ordering::Relaxed)
+        self.inner
+            .devtools
+            .force_update_on_page_load
+            .load(Ordering::Relaxed)
     }
 
     pub(crate) fn devtools_force_update_registration_for_page_load(
@@ -229,6 +225,7 @@ impl ServiceWorkerRuntimeService {
         }
         let waiter_id = self
             .inner
+            .devtools
             .next_force_update_page_load_waiter_id
             .fetch_add(1, Ordering::Relaxed);
         let (waiter_tx, waiter_rx) = tokio::sync::oneshot::channel();

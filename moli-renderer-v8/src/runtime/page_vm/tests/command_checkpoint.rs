@@ -1,11 +1,11 @@
 use super::*;
 #[cfg(feature = "devtools")]
 use crate::RendererDevToolsPageCommand;
+#[cfg(feature = "devtools")]
 use crate::types::SubresourceInterceptionClasses;
-use crate::{
-    PendingSubresourceContinueOutcome, RendererPageCommand, RendererPageReply,
-    RendererSetDocumentContentResult, types::PendingSubresourceContinueEvent,
-};
+#[cfg(feature = "devtools")]
+use crate::{PendingSubresourceContinueOutcome, types::PendingSubresourceContinueEvent};
+use crate::{RendererPageCommand, RendererPageReply, RendererSetDocumentContentResult};
 
 #[test]
 fn passive_console_snapshot_does_not_checkpoint_the_page_agent() {

@@ -14,6 +14,7 @@ use super::{
     service::WeakSharedWorkerRuntimeService,
 };
 
+#[cfg(feature = "devtools")]
 pub(super) enum SharedWorkerRuntimeResponsePublicationState {
     Active,
     Closing(Vec<crate::runtime::RendererRuntimeInspectorResponsePublication>),
@@ -32,6 +33,7 @@ pub(super) struct RendererSharedWorkerHost {
     pub(super) clients: Mutex<HashMap<SharedWorkerClientId, RendererSharedWorkerClient>>,
     target_output: crate::runtime::RendererTurnOutputJournal,
     target_output_retired: AtomicBool,
+    #[cfg(feature = "devtools")]
     pub(super) runtime_response_publications: Mutex<SharedWorkerRuntimeResponsePublicationState>,
 }
 
@@ -68,6 +70,7 @@ impl RendererSharedWorkerHost {
             clients: Mutex::new(HashMap::new()),
             target_output,
             target_output_retired: AtomicBool::new(false),
+            #[cfg(feature = "devtools")]
             runtime_response_publications: Mutex::new(
                 SharedWorkerRuntimeResponsePublicationState::Active,
             ),

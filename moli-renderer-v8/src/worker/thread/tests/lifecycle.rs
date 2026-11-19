@@ -153,8 +153,9 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
         if let (Some(completion), Some(handled_console)) =
             (completion.as_ref(), handled_console.as_ref())

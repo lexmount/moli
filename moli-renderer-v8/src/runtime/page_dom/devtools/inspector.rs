@@ -137,8 +137,7 @@ impl PageVm {
             inspector_session_id: inspector_session_id.map(str::to_owned),
             protocol_configuration_command,
             recorder: recorder.clone(),
-            lifecycle_target:
-                PageVmRuntimeCommandLifecycleTarget::AwaitingExplicitDocumentReplacement,
+            lifecycle_document: None,
         });
         let dispatch_result = self
             .vm_mut()
