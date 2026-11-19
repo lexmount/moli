@@ -26,7 +26,7 @@ use crate::{
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     host::{DispatchStatus, HostTimerOwner, PopupWindowEventTarget, event_dispatch_status},
     native_bridge::{
-        OwnerDispatchScope, WindowTaskTarget,
+        NavigationHistorySerializedEntry, OwnerDispatchScope, WindowTaskTarget,
         document::set_document_associated_window,
         element::SpecialBrowsingContextTarget,
         helpers::{
@@ -202,6 +202,18 @@ enum PendingLightweightPopupHistory {
 }
 
 impl PendingLightweightPopupHistory {
+    fn page_swap_navigation(
+        &self,
+        final_url: &Url,
+        destination_origin: Option<String>,
+    ) -> crate::context_bootstrap::PageSwapNavigation {
+        crate::context_bootstrap::PageSwapNavigation::for_document(
+            self.entry_seed().and_then(|seed| seed.activation.as_ref()),
+            final_url,
+            destination_origin,
+        )
+    }
+
     fn entry_seed(&self) -> Option<&NavigationHistoryEntrySeed> {
         match self {
             Self::Initial => None,
@@ -1371,10 +1383,6 @@ impl PageScriptHost {
         .map(PendingLightweightPopupHistory::Navigation)
         .unwrap_or(PendingLightweightPopupHistory::Initial);
         let queue_synthetic_load = if moli_url::is_about_blank(&target_url) {
-            self.dispatch_lightweight_popup_document_unload(scope, popup_id);
-            if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
-                return Some(window);
-            }
             let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
                 scope,
                 opener,
@@ -1382,6 +1390,12 @@ impl PageScriptHost {
                 &target_url,
                 navigation_forces_opaque_origin,
             );
+            let page_swap =
+                history.page_swap_navigation(&target_url, Some(storage_scope.origin().to_owned()));
+            self.dispatch_lightweight_popup_document_unload(scope, popup_id, Some(&page_swap));
+            if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
+                return Some(window);
+            }
             navigation_state.reset_for_empty_document(target_url.clone());
             if !self.commit_lightweight_popup_document(
                 scope,
@@ -1847,6 +1861,7 @@ impl PageScriptHost {
         window: v8::Local<'s, v8::Object>,
         target_url: &Url,
         kind: crate::context_bootstrap::LocationNavigationKind,
+        destination: Option<&NavigationHistorySerializedEntry>,
     ) {
         let document_referrer = self
             .lightweight_popup_document_record(popup_id)
@@ -1858,7 +1873,9 @@ impl PageScriptHost {
             target_url.as_str(),
             &document_referrer,
         );
-        apply_local_window_location_navigation(scope, window, target_url, kind);
+        if let Some(destination) = destination {
+            apply_local_window_location_navigation(scope, window, target_url, kind, destination);
+        }
         sync_window_location_history_navigation_runtime_surface(scope, window);
     }
 
@@ -2117,15 +2134,24 @@ impl PageScriptHost {
             return false;
         }
         let document_owner = navigation_task.document_owner();
+        let history =
+            history_entry_seed_for_cross_document_location(scope, window, &target_url, kind)
+                .map(PendingLightweightPopupHistory::Navigation)
+                .unwrap_or(PendingLightweightPopupHistory::Initial);
         if moli_url::is_about_blank(&target_url) {
-            self.dispatch_lightweight_popup_document_unload(scope, popup_id);
+            let inherited_origin = self.window_access_origin_for_dispatch_scope(creator_scope);
+            let page_swap = history.page_swap_navigation(
+                &target_url,
+                inherited_origin
+                    .as_ref()
+                    .map(|origin| origin.serialized_origin()),
+            );
+            self.dispatch_lightweight_popup_document_unload(scope, popup_id, Some(&page_swap));
             if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
                 return false;
             }
             navigation_state.reset_for_empty_document(target_url.clone());
             navigation_state.secure_context_available = creator_is_secure_context;
-            let inherited_origin = self
-                .window_access_origin_for_dispatch_scope(self.entered_owner_dispatch_scope(scope));
             if !self.commit_lightweight_popup_document(
                 scope,
                 window,
@@ -2153,16 +2179,16 @@ impl PageScriptHost {
                 window,
                 &target_url,
                 kind,
+                history
+                    .entry_seed()
+                    .and_then(|seed| seed.activation.as_ref())
+                    .map(|activation| &activation.entry),
             );
             self.install_lightweight_popup_empty_document(scope, popup_id, window, target_url);
             self.queue_lightweight_popup_load_event(navigation_task);
             return true;
         }
 
-        let history =
-            history_entry_seed_for_cross_document_location(scope, window, &target_url, kind)
-                .map(PendingLightweightPopupHistory::Navigation)
-                .unwrap_or(PendingLightweightPopupHistory::Initial);
         if self
             .start_lightweight_popup_document_load_with_request(
                 navigation_task,
@@ -2251,7 +2277,11 @@ impl PageScriptHost {
             if matches!(history, PendingLightweightPopupHistory::Traversal(_)) {
                 finish_cross_document_navigation_for_window(scope, window, target_url.as_str());
             }
-            self.dispatch_lightweight_popup_document_unload(scope, popup_id);
+            let page_swap = history.page_swap_navigation(
+                &target_url,
+                self.window_document_origin(super::OwnerDispatchScope::LightweightPopup(popup_id)),
+            );
+            self.dispatch_lightweight_popup_document_unload(scope, popup_id, Some(&page_swap));
             if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
                 return false;
             }
@@ -3073,6 +3103,7 @@ impl PageScriptHost {
                         policy_container.response_content_security_policies.clone();
                 }
                 let loaded = LoadedChildDocument {
+                    cross_origin_redirect: false,
                     response_status: snapshot.response_status,
                     response_links: Default::default(),
                     final_url: snapshot.url,
@@ -3163,6 +3194,10 @@ impl PageScriptHost {
                 );
                 Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                     LoadedChildDocument {
+                        cross_origin_redirect: !moli_url::same_origin(&target_url, &head.final_url)
+                            || head.redirect_chain.iter().any(|redirect| {
+                                !moli_url::same_origin(&redirect.from_url, &redirect.to_url)
+                            }),
                         response_status: Some(head.status),
                         response_links: crate::response_links::DocumentResponseLinks::parse(
                             &head.final_url,
@@ -3324,15 +3359,6 @@ impl PageScriptHost {
                         pending.target_url.as_str(),
                     );
                 }
-                if self.dispatch_lightweight_popup_document_unload(scope, popup_id) {
-                    body_activity = PopupDocumentLoadBodyActivity::PageCodeOrEventDispatchAttempted;
-                }
-                if !self.lightweight_popup_navigation_attempt_is_current(task) {
-                    return PopupDocumentLoadApplication::Applied {
-                        body_activity,
-                        parser_completion: None,
-                    };
-                }
                 let mut loaded = *loaded;
                 let opener_sandbox = self
                     .lightweight_popup_record(popup_id)
@@ -3342,7 +3368,7 @@ impl PageScriptHost {
                     opener_sandbox,
                 );
                 let final_url = popup_document_final_url_with_request_fragment(
-                    loaded.final_url,
+                    loaded.final_url.clone(),
                     &pending.target_url,
                 );
                 let storage_scope = self.lightweight_popup_response_storage_scope(
@@ -3350,6 +3376,23 @@ impl PageScriptHost {
                     &loaded.policy_container.response_content_security_policies,
                     loaded.policy_container.sandbox.forces_opaque_origin,
                 );
+                let page_swap = pending.history.page_swap_navigation(
+                    &final_url,
+                    (!loaded.cross_origin_redirect).then(|| storage_scope.origin().to_owned()),
+                );
+                if self.dispatch_lightweight_popup_document_unload(
+                    scope,
+                    popup_id,
+                    Some(&page_swap),
+                ) {
+                    body_activity = PopupDocumentLoadBodyActivity::PageCodeOrEventDispatchAttempted;
+                }
+                if !self.lightweight_popup_navigation_attempt_is_current(task) {
+                    return PopupDocumentLoadApplication::Applied {
+                        body_activity,
+                        parser_completion: None,
+                    };
+                }
                 let committed_state = pending
                     .document_state
                     .clone()

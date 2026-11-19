@@ -77,6 +77,7 @@ fn loaded_popup_completion(
         target,
         Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
             LoadedChildDocument {
+                cross_origin_redirect: false,
                 response_status: None,
                 response_links: Default::default(),
                 final_url: Url::parse(final_url).expect("popup completion final URL"),

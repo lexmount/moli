@@ -90,7 +90,7 @@ impl ScriptVm {
                         NavigationCancellationReason::WindowClose,
                     );
                     unsafe { &mut *host_ptr }
-                        .dispatch_lightweight_popup_document_unload(scope, popup_id);
+                        .dispatch_lightweight_popup_document_unload(scope, popup_id, None);
                 });
             }
             assert!(

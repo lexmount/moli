@@ -6,9 +6,8 @@ use super::navigation_activation::{
 use super::navigation_entry::{
     cache_current_history_state, copy_navigation_entry_document_id, create_navigation_entry,
     history_entries, history_index, navigation_current_entry, navigation_current_entry_index,
-    navigation_entry_key_value, navigation_entry_url_value, new_navigation_entry_id,
-    new_navigation_entry_key, set_navigation_entry_document_id,
-    sync_navigation_current_entry_from_history_entry,
+    navigation_entry_key_value, new_navigation_entry_id, new_navigation_entry_key,
+    set_navigation_entry_document_id, sync_navigation_current_entry_from_history_entry,
 };
 use super::navigation_entry_state::{
     copy_navigation_entry_serialized_state, set_navigation_entry_state,

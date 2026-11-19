@@ -18,7 +18,7 @@ use crate::{
     content_security_policy::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
     },
-    context_bootstrap::construct_original_event,
+    context_bootstrap::{PageSwapNavigation, construct_original_event},
     document_runtime::{
         DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle, EventTargetHandle,
     },
@@ -733,7 +733,23 @@ impl PageScriptHost {
                 | ChildDocumentLoadOutcome::BlockedResponse(loaded),
             ) => {
                 let loaded = *loaded;
-                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle) {
+                let sandbox = self
+                    .child_browsing_context_sandbox_policy_from_owner(handle)
+                    .with_response_content_security_policy(loaded.policy_container.sandbox);
+                let final_url = child_document_final_url_with_request_fragment(
+                    loaded.final_url.clone(),
+                    &pending.target_url,
+                );
+                let page_swap = self.page_swap_navigation_for_child(
+                    handle,
+                    &final_url,
+                    creation_kind != DocumentCreationKind::Error
+                        && !sandbox.forces_opaque_origin
+                        && !loaded.cross_origin_redirect,
+                );
+                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(
+                    scope, handle, page_swap,
+                ) {
                     body_activity = ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
                 }
                 if !self.child_document_window_commit_preflight_is_current(
@@ -761,13 +777,6 @@ impl PageScriptHost {
                         body_activity,
                     };
                 }
-                let sandbox = self
-                    .child_browsing_context_sandbox_policy_from_owner(handle)
-                    .with_response_content_security_policy(loaded.policy_container.sandbox);
-                let final_url = child_document_final_url_with_request_fragment(
-                    loaded.final_url.clone(),
-                    &pending.target_url,
-                );
                 let permissions_policy = self
                     .child_browsing_context_permissions_policy_for_document(
                         handle,
@@ -822,7 +831,11 @@ impl PageScriptHost {
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)
             }
             Err(error) => {
-                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle) {
+                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(
+                    scope,
+                    handle,
+                    PageSwapNavigation::default(),
+                ) {
                     body_activity = ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
                 }
                 if !self.child_document_window_commit_preflight_is_current(
@@ -1794,6 +1807,10 @@ fn child_document_load_outcome_from_response(
     };
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
+            cross_origin_redirect: head
+                .redirect_chain
+                .iter()
+                .any(|redirect| !moli_url::same_origin(&redirect.from_url, &redirect.to_url)),
             response_status: Some(head.status),
             response_links: crate::response_links::DocumentResponseLinks::parse(
                 &head.final_url,
