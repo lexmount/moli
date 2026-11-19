@@ -12,7 +12,7 @@ pub(crate) use stream::{ControlledResourceStream, ControlledXhrCompletion};
 
 #[cfg(any(test, feature = "devtools"))]
 use moli_fetch::ResponseHead;
-use moli_fetch::{FetchCancelHandle, Request, Response};
+use moli_fetch::{FetchCancelHandle, NetworkObservationJournal, Request, Response};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -172,14 +172,10 @@ impl ControlledResourceLoad {
             .network_record
             .with_request_initiator_type(self.request_initiator_type);
         if completed.info.network_request_handle.is_some() {
-            // Redirects already crossed their own native request-pause boundary.
-            // Diagnostics retain the full chain; protocol sees only the terminal.
-            self.interception.record_subresource_network(
-                completed
-                    .network_record
-                    .clone()
-                    .with_redirect_chain(Vec::new()),
-            );
+            // Keep each hop's transport metadata. Protocol delivery skips
+            // redirect announcements already published at the native boundary.
+            self.interception
+                .record_subresource_network(completed.network_record.clone());
         }
         self.publish_completed();
         ControlledXhrCompletion::Buffered(Box::new(completed))
@@ -511,8 +507,12 @@ impl ControlledResourceLoad {
             }
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
-            let (response, is_synthetic, observed_request_headers) = match synthetic.take() {
-                Some(response) => (LoadedResponse::from_response(response), true, None),
+            let (response, is_synthetic, observations) = match synthetic.take() {
+                Some(response) => (
+                    LoadedResponse::from_response(response),
+                    true,
+                    NetworkObservationJournal::default(),
+                ),
                 None => {
                     if self.load.network_offline() {
                         return Err("Network emulation offline".into());
@@ -525,16 +525,19 @@ impl ControlledResourceLoad {
                         Some(&preflight_observer),
                     )
                     .await?;
-                    let (response, observation) = observed.into_parts();
-                    let headers = observation.map(|observation| observation.into_headers());
-                    (response, false, headers)
+                    let (response, observations) = observed.into_parts_with_observation_journal();
+                    (response, false, observations)
                 }
             };
             #[cfg(any(test, feature = "devtools"))]
             let mut is_synthetic = is_synthetic;
             if network_request_headers.is_none() {
-                network_request_headers = observed_request_headers;
+                network_request_headers = observations
+                    .final_request_observation()
+                    .map(|request| request.headers().to_vec());
             }
+            let network_response_extra_info =
+                super::response_hop::network_response_extra_info(&response.head, &observations);
             let mut response = response;
             if handle_auth_requests
                 && matches!(response.head.status, 401 | 407)
@@ -665,14 +668,14 @@ impl ControlledResourceLoad {
                 super::response_hop::advance_validated_subresource_response(
                     &mut self.request,
                     response.head.clone(),
-                    false,
+                    network_response_extra_info,
                     self.load.request_client().web_security_disabled(),
                 )?
             } else {
                 advance_subresource_response(
                     &mut self.request,
                     response.head.clone(),
-                    false,
+                    network_response_extra_info,
                     self.load.request_client().web_security_disabled(),
                 )?
             };
