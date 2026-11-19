@@ -869,24 +869,16 @@ fn spawn_parent_message_pump(
                         );
                     }
                     WorkerToParentMessage::Error(error) => {
-                        let (lineno, colno, event_kind, phase, source) = (
+                        service.enqueue_target_exception_message(
+                            version_id,
+                            source_run.clone(),
+                            error.message,
+                            error.filename,
                             error.lineno,
                             error.colno,
                             error.event_kind,
                             error.phase,
                             error.source,
-                        );
-                        let (message, filename) = error.into_text();
-                        service.enqueue_target_exception_message(
-                            version_id,
-                            source_run.clone(),
-                            message,
-                            filename,
-                            lineno,
-                            colno,
-                            event_kind,
-                            phase,
-                            source,
                         );
                     }
                     WorkerToParentMessage::Console(message) => {

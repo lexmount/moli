@@ -36,7 +36,7 @@ pub enum ExceptionOrigin {
     UnhandledRejection,
 }
 
-/// Result of the Web exception or unhandled rejection reporting algorithm.
+/// Result of a completed Web exception or unhandled rejection report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorReportOutcome {
@@ -44,8 +44,6 @@ pub enum ErrorReportOutcome {
     Canceled,
     /// Reporting reached the end of the chain with its default action allowed.
     Uncanceled,
-    /// The reporting chain could not complete, for example when its Window was retired.
-    Interrupted,
 }
 
 impl ErrorReportOutcome {
@@ -62,7 +60,7 @@ impl ErrorReportOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DiagnosticEvent {
-    /// A script exception or promise rejection with the result of its reporting chain.
+    /// A completed report of a script exception or unhandled Promise rejection.
     RuntimeException {
         source: DiagnosticSource,
         origin: ExceptionOrigin,
