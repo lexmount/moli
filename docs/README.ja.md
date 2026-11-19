@@ -87,9 +87,6 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/rele
 
 ## 動作例
 
-関連プロジェクトや連携ツール、デプロイ方法については、
-[Awesome Moli](https://github.com/lexmount/awesome-moli) をご覧ください。
-
 <p align="center">
   <a href="../assets/moli-game.jpg">
     <img
@@ -385,6 +382,7 @@ Moli のエージェント向けブラウザとしての対応範囲を検証す
   <img alt="lexmount/moli の Star 推移" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## ライセンス
+## Awesome Moli
 
-ファイルまたはディレクトリに別の記載がない限り、Moli は [Apache License 2.0](../LICENSE-APACHE) または [MIT License](../LICENSE-MIT) のいずれかを選択して利用できます。個別のライセンスが適用される第三者提供の構成要素やテスト用データについては、それぞれのライセンスと告知事項に従います。
+関連プロジェクトや連携ツール、デプロイ方法については、
+[Awesome Moli](https://github.com/lexmount/awesome-moli) をご覧ください。

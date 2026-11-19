@@ -88,9 +88,6 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/rele
 
 ## Demostración
 
-Descubre proyectos, integraciones y opciones de despliegue en
-[Awesome Moli](https://github.com/lexmount/awesome-moli).
-
 <p align="center">
   <a href="../assets/moli-game.jpg">
     <img
@@ -387,6 +384,7 @@ Generado cada hora a partir de la cronología de stars por [lexmount/moli-metric
   <img alt="Historial de stars de lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## Licencia
+## Awesome Moli
 
-Salvo que se indique lo contrario en un archivo o directorio concreto, Moli puede usarse, a elección de quien lo use, bajo la [Licencia Apache 2.0](../LICENSE-APACHE) o la [Licencia MIT](../LICENSE-MIT). Los componentes y fixtures de terceros con licencia propia siguen sujetos a sus respectivas licencias y avisos.
+Descubre proyectos, integraciones y opciones de despliegue en
+[Awesome Moli](https://github.com/lexmount/awesome-moli).
