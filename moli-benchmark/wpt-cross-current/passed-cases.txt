@@ -8872,6 +8872,11 @@ js/builtins/Object.prototype.preventExtensions.html
 js/builtins/Object.prototype.seal.html
 js/builtins/Promise-subclassing.html
 js/builtins/WeakMap.prototype-properties.html
+loading/preloader-css-import-no-quote.html
+loading/preloader-css-import-no-semicolon.html
+loading/preloader-css-import-no-space.html
+loading/preloader-css-import-single-quote.html
+loading/preloader-css-import.html
 loading/preloader-link-media.html
 loading/preloader-template.html
 magnetometer/Magnetometer_insecure_context.html

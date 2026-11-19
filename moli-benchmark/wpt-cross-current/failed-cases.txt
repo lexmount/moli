@@ -2452,11 +2452,6 @@ infrastructure/testharness/lone-surrogates.html
 infrastructure/wpt-metadata/prefs/gecko.html
 input-events/input-events-exec-command.html
 js-self-profiling/inline-script.html
-loading/preloader-css-import-no-quote.html
-loading/preloader-css-import-no-semicolon.html
-loading/preloader-css-import-no-space.html
-loading/preloader-css-import-single-quote.html
-loading/preloader-css-import.html
 longtask-timing/containerNames.html
 longtask-timing/containerTypes.html
 longtask-timing/longtask-attributes.html
