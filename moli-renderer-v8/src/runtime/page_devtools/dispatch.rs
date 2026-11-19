@@ -232,9 +232,10 @@ impl PageVm {
                 Ok(RendererPageReply::Unit)
             }
             RendererDevToolsPageCommand::ConnectRuntimeInspectorSession { inspector_session_id, connection } => {
-                anyhow::ensure!(connection.is_current(), "Inspector session connection was retired");
-                self.vm_mut().ensure_runtime_inspector_session(inspector_session_id.as_deref());
-                connection.connected();
+                anyhow::ensure!(
+                    self.vm_mut().ensure_runtime_inspector_session(inspector_session_id.as_deref(), Some(&connection)),
+                    "Inspector session connection was retired"
+                );
                 Ok(RendererPageReply::Unit)
             }
             RendererDevToolsPageCommand::SetSessionRuntimeBindingState { agent, inspector_session_id, session_runtime_bindings } => {

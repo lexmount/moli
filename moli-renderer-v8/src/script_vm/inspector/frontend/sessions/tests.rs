@@ -1,4 +1,5 @@
 use super::*;
+use crate::devtools::ingress::lane::RendererDevToolsSessionLaneKey;
 use crate::script_vm::inspector::agent_sessions::RendererInspectorSessions;
 
 fn connect(
@@ -173,6 +174,110 @@ fn debugger_pause_defaults_preserve_explicit_and_restored_settings() {
         false,
         "a client override before first enable must not be reset",
     );
+}
+
+#[test]
+fn explicit_connect_reuses_a_frontend_for_the_same_record() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
+    let agent = RendererDevToolsAgentToken::allocate();
+    let connection = RendererInspectorSessionConnection::new(
+        backend.handle(),
+        DocumentInspectorContextGroupId::next(),
+        agent,
+        None,
+    );
+    let target = backend.devtools_target();
+    let session = DevToolsSessionKey::Primary;
+    let lane = RendererDevToolsSessionLaneKey::new(agent, session.clone());
+    let connections = target.io_ref().session_connections();
+    let attempt = target
+        .begin_session_connection(agent, session.clone())
+        .unwrap();
+    let admission = connections.admission(&lane);
+    assert!(!admission.ready());
+
+    let mut frontend = RendererFrontendInspectorSessions::default();
+    let implicit = frontend.prepare_frontend(&mut backend, &connection, session.clone());
+    assert!(admission.ready());
+    assert!(frontend.ensure_frontend(&mut backend, &connection, session.clone(), Some(&attempt),));
+    assert!(Rc::ptr_eq(
+        &implicit.session,
+        &frontend.frontend_session_and_outbound(&session).unwrap().0,
+    ));
+    drop(implicit);
+
+    target.begin_session_detach(agent, &session);
+    let replacement = target
+        .begin_session_connection(agent, session.clone())
+        .unwrap();
+    assert!(!frontend.ensure_frontend(
+        &mut backend,
+        &connection,
+        session.clone(),
+        Some(&replacement),
+    ));
+    assert!(!connections.admission(&lane).ready());
+    assert!(frontend.remove_frontend(&session));
+    target.finish_session_detach(agent, &session);
+
+    assert!(frontend.ensure_frontend(&mut backend, &connection, session, Some(&replacement)));
+    assert!(connections.admission(&lane).ready());
+    assert!(!admission.accepts());
+}
+
+#[test]
+fn late_native_registration_cannot_publish_ready_for_the_replacement() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
+    let agent = RendererDevToolsAgentToken::allocate();
+    let connection = RendererInspectorSessionConnection::new(
+        backend.handle(),
+        DocumentInspectorContextGroupId::next(),
+        agent,
+        None,
+    );
+    let target = backend.devtools_target();
+    let session = DevToolsSessionKey::Primary;
+    let lane = RendererDevToolsSessionLaneKey::new(agent, session.clone());
+    let connections = target.io_ref().session_connections();
+    let old = target
+        .reserve_frontend_session_connection(agent, session.clone())
+        .unwrap();
+    target.begin_session_detach(agent, &session);
+    let replacement = target
+        .begin_session_connection(agent, session.clone())
+        .unwrap();
+    assert!(
+        target
+            .reserve_frontend_session_connection(agent, session.clone())
+            .is_none()
+    );
+
+    let (retired, ready) = connection.connect_frontend(
+        &mut backend,
+        &session,
+        connection.outbound(session.clone()),
+        None,
+        Some(old.record().clone()),
+    );
+    assert!(!ready);
+    assert!(!connections.admission(&lane).ready());
+    drop(retired);
+    target.finish_session_detach(agent, &session);
+
+    let mut frontend = RendererFrontendInspectorSessions::default();
+    frontend.reattach_frontend(
+        &mut backend,
+        &connection,
+        session,
+        &V8InspectorSessionState::from_bytes(Vec::new()),
+    );
+    assert!(connections.admission(&lane).ready());
+    drop(replacement);
+    assert!(connections.admission(&lane).ready());
 }
 
 #[test]

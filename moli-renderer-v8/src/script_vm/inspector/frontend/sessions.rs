@@ -5,10 +5,13 @@ use super::super::v8_backend::{
     RendererInspectorIsolateBackend, RendererInspectorIsolateBackendHandle,
     RendererInspectorSessionExecutorRegistration,
 };
+use crate::devtools::ingress::session::{
+    RendererInspectorSessionConnect, RendererInspectorSessionConnectionRecord,
+};
 use crate::protocol_types::RuntimeBindingRegistration;
 use crate::runtime::RendererTurnOutputJournal;
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::rc::Rc;
 
 #[derive(Clone, Copy)]
@@ -34,6 +37,7 @@ pub(in crate::script_vm::inspector) struct RendererFrontendInspectorSessions {
 
 struct RendererFrontendInspectorSession {
     native: RendererInspectorSession,
+    connection_record: Option<RendererInspectorSessionConnectionRecord>,
     replayed_runtime_bindings: Vec<RuntimeBindingRegistration>,
     _executor_registration: RendererInspectorSessionExecutorRegistration,
 }
@@ -98,10 +102,11 @@ impl RendererInspectorSessionConnection {
     fn connect_frontend(
         &self,
         backend: &mut RendererInspectorIsolateBackend,
-        session_key: DevToolsSessionKey,
+        session_key: &DevToolsSessionKey,
         outbound: InspectorOutbound,
         state: Option<&V8InspectorSessionState>,
-    ) -> RendererFrontendInspectorSession {
+        connection_record: Option<RendererInspectorSessionConnectionRecord>,
+    ) -> (RendererFrontendInspectorSession, bool) {
         let native = RendererInspectorSession::connect_native(
             backend,
             self.context_group_id,
@@ -115,15 +120,50 @@ impl RendererInspectorSessionConnection {
             &native.session,
             native.outbound.clone(),
         );
-        #[cfg(feature = "devtools")]
-        self.isolate_backend
-            .devtools_target()
-            .confirm_session_connection(self.agent_token, session_key);
-        RendererFrontendInspectorSession {
+        let session = RendererFrontendInspectorSession {
             native,
+            connection_record,
             replayed_runtime_bindings: Vec::new(),
             _executor_registration: executor_registration,
-        }
+        };
+        let ready = session
+            .connection_record
+            .as_ref()
+            .is_some_and(|record| self.publish_ready(record));
+        (session, ready)
+    }
+
+    fn connect_new_frontend(
+        &self,
+        backend: &mut RendererInspectorIsolateBackend,
+        session_key: &DevToolsSessionKey,
+        expected: Option<&RendererInspectorSessionConnect>,
+        state: Option<&V8InspectorSessionState>,
+    ) -> (RendererFrontendInspectorSession, bool) {
+        let implicit;
+        let attempt = match expected {
+            Some(expected) => Some(expected),
+            None => {
+                implicit = self
+                    .isolate_backend
+                    .devtools_target()
+                    .reserve_frontend_session_connection(self.agent_token, session_key.clone());
+                implicit.as_ref()
+            }
+        };
+        self.connect_frontend(
+            backend,
+            session_key,
+            self.outbound(session_key.clone()),
+            state,
+            attempt.map(|attempt| attempt.record().clone()),
+        )
+    }
+
+    fn publish_ready(&self, record: &RendererInspectorSessionConnectionRecord) -> bool {
+        self.isolate_backend
+            .devtools_target()
+            .publish_session_ready(record)
     }
 }
 
@@ -140,8 +180,9 @@ impl RendererFrontendInspectorSessions {
             .cloned()
             .unwrap_or_default();
         let session = self.sessions.entry(session_key.clone()).or_insert_with(|| {
-            let outbound = connection.outbound(session_key.clone());
-            connection.connect_frontend(backend, session_key.clone(), outbound, None)
+            connection
+                .connect_new_frontend(backend, &session_key, None, None)
+                .0
         });
         session
             .replayed_runtime_bindings
@@ -189,24 +230,28 @@ impl RendererFrontendInspectorSessions {
         session_key: DevToolsSessionKey,
         v8_state: &V8InspectorSessionState,
     ) {
-        let previous = self.sessions.remove(&session_key);
-        let (outbound, replayed_runtime_bindings) = match previous {
-            Some(previous) => {
-                let RendererFrontendInspectorSession {
-                    native: RendererInspectorSession { session, outbound },
-                    replayed_runtime_bindings,
-                    _executor_registration,
-                } = previous;
-                drop(session);
-                drop(_executor_registration);
-                (outbound, replayed_runtime_bindings)
+        match self.sessions.entry(session_key.clone()) {
+            Entry::Occupied(mut entry) => {
+                let previous = entry.get_mut();
+                // Keep the current route installed through registration of its
+                // replacement, and keep the same connection identity.
+                let (mut session, _) = connection.connect_frontend(
+                    backend,
+                    &session_key,
+                    previous.native.outbound.clone(),
+                    Some(v8_state),
+                    previous.connection_record.clone(),
+                );
+                session.replayed_runtime_bindings =
+                    std::mem::take(&mut previous.replayed_runtime_bindings);
+                entry.insert(session);
             }
-            None => (connection.outbound(session_key.clone()), Vec::new()),
-        };
-        let mut session =
-            connection.connect_frontend(backend, session_key.clone(), outbound, Some(v8_state));
-        session.replayed_runtime_bindings = replayed_runtime_bindings;
-        self.sessions.insert(session_key, session);
+            Entry::Vacant(entry) => {
+                let (session, _) =
+                    connection.connect_new_frontend(backend, &session_key, None, Some(v8_state));
+                entry.insert(session);
+            }
+        }
     }
 
     pub(in crate::script_vm::inspector) fn ensure_frontend(
@@ -214,11 +259,27 @@ impl RendererFrontendInspectorSessions {
         backend: &mut RendererInspectorIsolateBackend,
         connection: &RendererInspectorSessionConnection,
         session_key: DevToolsSessionKey,
-    ) {
-        self.sessions.entry(session_key.clone()).or_insert_with(|| {
-            let outbound = connection.outbound(session_key.clone());
-            connection.connect_frontend(backend, session_key.clone(), outbound, None)
-        });
+        expected: Option<&RendererInspectorSessionConnect>,
+    ) -> bool {
+        if expected
+            .is_some_and(|attempt| !attempt.is_current_for(connection.agent_token, &session_key))
+        {
+            return false;
+        }
+        match self.sessions.entry(session_key.clone()) {
+            Entry::Occupied(entry) => expected.is_none_or(|attempt| {
+                let session = entry.get();
+                session.connection_record.as_ref().is_some_and(|record| {
+                    record.same_connection(attempt.record()) && connection.publish_ready(record)
+                })
+            }),
+            Entry::Vacant(entry) => {
+                let (session, ready) =
+                    connection.connect_new_frontend(backend, &session_key, expected, None);
+                entry.insert(session);
+                expected.is_none() || ready
+            }
+        }
     }
 
     pub(in crate::script_vm::inspector) fn retain_replayed_runtime_bindings(

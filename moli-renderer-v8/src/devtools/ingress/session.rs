@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, collections::btree_map::Entry, sync::Arc};
 
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use parking_lot::Mutex;
@@ -7,12 +7,26 @@ use super::{
     io::RendererInspectorIoIngress, lane::RendererDevToolsSessionLaneKey,
     main::RendererInspectorMainIngress,
 };
+use crate::devtools::target::RendererDevToolsTargetHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConnectionState {
     Connecting,
+    // The native Inspector session and its executor/output route are registered.
     Connected,
     Failed,
+}
+
+#[derive(Clone)]
+pub(crate) struct RendererInspectorSessionConnectionRecord {
+    key: RendererDevToolsSessionLaneKey,
+    state: Arc<Mutex<ConnectionState>>,
+}
+
+impl RendererInspectorSessionConnectionRecord {
+    pub(crate) fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -46,23 +60,39 @@ struct Connections {
     sessions: BTreeMap<RendererDevToolsSessionLaneKey, Arc<Mutex<ConnectionState>>>,
 }
 
-impl RendererInspectorSessionConnections {
-    pub(crate) fn confirm_connected(
-        &self,
-        agent: RendererDevToolsAgentToken,
-        session: DevToolsSessionKey,
-    ) {
-        let mut inner = self.inner.lock();
-        if !inner.closed {
-            let state = inner
+impl Connections {
+    fn contains_record(&self, record: &RendererInspectorSessionConnectionRecord) -> bool {
+        !self.closed
+            && self
                 .sessions
-                .entry(RendererDevToolsSessionLaneKey::new(agent, session))
-                .or_insert_with(|| Arc::new(Mutex::new(ConnectionState::Connected)));
-            let mut state = state.lock();
-            if *state == ConnectionState::Connecting {
-                *state = ConnectionState::Connected;
+                .get(&record.key)
+                .is_some_and(|state| Arc::ptr_eq(state, &record.state))
+    }
+}
+
+impl RendererInspectorSessionConnections {
+    /// Accepts the captured live record and wakes both lanes on its first publication.
+    pub(crate) fn publish_ready(
+        &self,
+        record: &RendererInspectorSessionConnectionRecord,
+        main: &RendererInspectorMainIngress,
+        io: &RendererInspectorIoIngress,
+    ) -> bool {
+        {
+            let inner = self.inner.lock();
+            if !inner.contains_record(record) {
+                return false;
+            }
+            let mut state = record.state.lock();
+            match *state {
+                ConnectionState::Connecting => *state = ConnectionState::Connected,
+                ConnectionState::Connected => return true,
+                ConnectionState::Failed => return false,
             }
         }
+        main.notify_execution_opportunities();
+        io.notify_execution_opportunities();
+        true
     }
 
     pub(crate) fn contains(&self, key: &RendererDevToolsSessionLaneKey) -> bool {
@@ -81,32 +111,32 @@ impl RendererInspectorSessionConnections {
         })
     }
 
-    pub(crate) fn begin(
+    pub(crate) fn reserve(
         &self,
-        agent: RendererDevToolsAgentToken,
-        session: DevToolsSessionKey,
-        main: RendererInspectorMainIngress,
-        io: RendererInspectorIoIngress,
-    ) -> Option<RendererInspectorSessionConnect> {
-        let key = RendererDevToolsSessionLaneKey::new(agent, session);
+        key: RendererDevToolsSessionLaneKey,
+    ) -> Option<(RendererInspectorSessionConnectionRecord, bool)> {
         let mut inner = self.inner.lock();
-        if inner.sessions.contains_key(&key) {
+        if inner.closed {
             return None;
         }
-        let state = Arc::new(Mutex::new(ConnectionState::Connecting));
-        if inner.closed {
-            *state.lock() = ConnectionState::Failed;
-        } else {
-            inner.sessions.insert(key.clone(), state.clone());
-        }
-        Some(RendererInspectorSessionConnect {
-            connections: self.clone(),
-            key,
-            state,
-            main,
-            io,
-            completed: false,
-        })
+        let (state, created) = match inner.sessions.entry(key.clone()) {
+            Entry::Occupied(entry) => (entry.get().clone(), false),
+            Entry::Vacant(entry) => (
+                entry
+                    .insert(Arc::new(Mutex::new(ConnectionState::Connecting)))
+                    .clone(),
+                true,
+            ),
+        };
+        Some((
+            RendererInspectorSessionConnectionRecord { key, state },
+            created,
+        ))
+    }
+
+    fn is_current(&self, record: &RendererInspectorSessionConnectionRecord) -> bool {
+        let inner = self.inner.lock();
+        inner.contains_record(record) && *record.state.lock() != ConnectionState::Failed
     }
 
     pub(crate) fn detach(&self, agent: RendererDevToolsAgentToken, session: &DevToolsSessionKey) {
@@ -144,58 +174,40 @@ impl RendererInspectorSessionConnections {
 /// An abandoned operation rejects its queues instead of opening the IO lane.
 #[doc(hidden)]
 pub struct RendererInspectorSessionConnect {
-    connections: RendererInspectorSessionConnections,
-    key: RendererDevToolsSessionLaneKey,
-    state: Arc<Mutex<ConnectionState>>,
-    main: RendererInspectorMainIngress,
-    io: RendererInspectorIoIngress,
-    completed: bool,
+    target: RendererDevToolsTargetHandle,
+    record: RendererInspectorSessionConnectionRecord,
 }
 
 impl RendererInspectorSessionConnect {
-    pub(crate) fn is_current(&self) -> bool {
-        let inner = self.connections.inner.lock();
-        !inner.closed
-            && inner
-                .sessions
-                .get(&self.key)
-                .is_some_and(|state| Arc::ptr_eq(state, &self.state))
-            && *self.state.lock() != ConnectionState::Failed
+    pub(crate) fn new(
+        target: RendererDevToolsTargetHandle,
+        record: RendererInspectorSessionConnectionRecord,
+    ) -> Self {
+        Self { target, record }
     }
 
-    pub(crate) fn connected(mut self) {
-        // The Renderer owner has created the native session and its output
-        // route. Browser polling and Main binding replay are not dependencies.
-        let connected = {
-            let inner = self.connections.inner.lock();
-            !inner.closed
-                && inner.sessions.get(&self.key).is_some_and(|state| {
-                    if !Arc::ptr_eq(state, &self.state) {
-                        return false;
-                    }
-                    let mut state = state.lock();
-                    if *state == ConnectionState::Failed {
-                        return false;
-                    }
-                    *state = ConnectionState::Connected;
-                    true
-                })
-        };
-        self.completed = true;
-        if connected {
-            self.main.notify_execution_opportunities();
-            self.io.notify_execution_opportunities();
-        }
+    pub(crate) fn record(&self) -> &RendererInspectorSessionConnectionRecord {
+        &self.record
+    }
+
+    pub(crate) fn is_current_for(
+        &self,
+        agent: RendererDevToolsAgentToken,
+        session: &DevToolsSessionKey,
+    ) -> bool {
+        self.record.key == RendererDevToolsSessionLaneKey::new(agent, session.clone())
+            && self
+                .target
+                .io_ref()
+                .session_connections()
+                .is_current(&self.record)
     }
 }
 
 impl Drop for RendererInspectorSessionConnect {
     fn drop(&mut self) {
-        if self.completed {
-            return;
-        }
         let failed = {
-            let mut state = self.state.lock();
+            let mut state = self.record.state.lock();
             if *state == ConnectionState::Connecting {
                 *state = ConnectionState::Failed;
                 true
@@ -207,8 +219,8 @@ impl Drop for RendererInspectorSessionConnect {
             // Reject only commands carrying failed connection admissions. A
             // concurrent detach/reattach may already have reused this session
             // key, so cancellation must not create a key-wide detach barrier.
-            self.main.reject_failed_connections();
-            self.io.reject_failed_connections();
+            self.target.main_ref().reject_failed_connections();
+            self.target.io_ref().reject_failed_connections();
         }
     }
 }
@@ -235,19 +247,6 @@ mod tests {
         );
         let io = RendererInspectorIoIngress::new(pause.pause_loop_wake(), None);
         crate::devtools::target::RendererDevToolsTargetHandle::new(pause, main, io)
-    }
-
-    fn receivers() -> (
-        RendererInspectorSessionConnections,
-        RendererInspectorMainIngress,
-        RendererInspectorIoIngress,
-    ) {
-        let target = receiver_target();
-        (
-            target.io_ref().session_connections(),
-            target.main_ref().clone(),
-            target.io_ref().clone(),
-        )
     }
 
     fn queue_io(
@@ -289,21 +288,22 @@ mod tests {
         let connections = io.session_connections();
         let live_agent = RendererDevToolsAgentToken::allocate();
         let session = DevToolsSessionKey::Attached("same-session".into());
-        connections
-            .begin(live_agent, session.clone(), main.clone(), io.clone())
-            .unwrap()
-            .connected();
+        let connect = target
+            .begin_session_connection(live_agent, session.clone())
+            .unwrap();
+        assert!(target.publish_session_ready(connect.record()));
+        drop(connect);
         let live_main = queue_main(main, live_agent, "same-session");
         let live_io = queue_io(io, live_agent, "same-session");
         for _ in 0..4096 {
             let agent = RendererDevToolsAgentToken::allocate();
-            let stale = connections
-                .begin(agent, session.clone(), main.clone(), io.clone())
+            let stale = target
+                .begin_session_connection(agent, session.clone())
                 .unwrap();
             let retired_main = queue_main(main, agent, "same-session");
             let retired_io = queue_io(io, agent, "same-session");
             target.retire_agent_connections(agent);
-            assert!(!stale.is_current());
+            assert!(!stale.is_current_for(agent, &session));
             drop(stale);
             assert!(matches!(
                 retired_main.wait_for_completion().await,
@@ -336,20 +336,17 @@ mod tests {
 
     #[tokio::test]
     async fn connecting_a_session_preserves_work_admitted_before_its_initialization() {
-        let (connections, main, io) = receivers();
+        let target = receiver_target();
+        let main = target.main_ref();
+        let io = target.io_ref();
         let agent = RendererDevToolsAgentToken::allocate();
-        let earlier_main = queue_main(&main, agent, "existing");
-        let earlier_io = queue_io(&io, agent, "existing");
-        let connect = connections
-            .begin(
-                agent,
-                DevToolsSessionKey::Attached("existing".into()),
-                main.clone(),
-                io.clone(),
-            )
+        let earlier_main = queue_main(main, agent, "existing");
+        let earlier_io = queue_io(io, agent, "existing");
+        let connect = target
+            .begin_session_connection(agent, DevToolsSessionKey::Attached("existing".into()))
             .unwrap();
-        let later_main = queue_main(&main, agent, "existing");
-        let later_io = queue_io(&io, agent, "existing");
+        let later_main = queue_main(main, agent, "existing");
+        let later_io = queue_io(io, agent, "existing");
 
         // Native activation can already be in the Primary lane when Browser
         // attach installs its connection. Blocking that earlier work would
@@ -371,7 +368,8 @@ mod tests {
             Ok(RendererRuntimeInspectorIoCommandClaim::Dispatched)
         ));
 
-        connect.connected();
+        assert!(target.publish_session_ready(connect.record()));
+        drop(connect);
         let mut command = main.claim_for_owner().expect("later Main is now connected");
         main.first_dispatch_guard(&mut command).release();
         let mut command = io.claim_for_owner().expect("later IO is now connected");
@@ -385,21 +383,18 @@ mod tests {
 
     #[tokio::test]
     async fn native_connect_releases_io_before_main_configuration_or_browser_observation() {
-        let (connections, main, io) = receivers();
+        let target = receiver_target();
+        let main = target.main_ref();
+        let io = target.io_ref();
         let agent = RendererDevToolsAgentToken::allocate();
-        let connect = connections
-            .begin(
-                agent,
-                DevToolsSessionKey::Attached("new".into()),
-                main.clone(),
-                io.clone(),
-            )
+        let connect = target
+            .begin_session_connection(agent, DevToolsSessionKey::Attached("new".into()))
             .unwrap();
-        let pending_main = queue_main(&main, agent, "new");
-        let pending_io = queue_io(&io, agent, "new");
+        let pending_main = queue_main(main, agent, "new");
+        let pending_io = queue_io(io, agent, "new");
         assert!(main.claim_for_owner().is_none());
         assert!(io.claim_for_owner().is_none());
-        let peer = queue_io(&io, agent, "peer");
+        let peer = queue_io(io, agent, "peer");
         let mut command = io
             .claim_for_owner()
             .expect("a connecting session cannot hold another session's IO");
@@ -408,7 +403,8 @@ mod tests {
             peer.wait_for_first_dispatch().await,
             Ok(RendererRuntimeInspectorIoCommandClaim::Dispatched)
         ));
-        connect.connected();
+        assert!(target.publish_session_ready(connect.record()));
+        drop(connect);
         let configuration = main
             .claim_for_owner()
             .expect("Main may begin after native connect");
@@ -430,14 +426,17 @@ mod tests {
 
     #[tokio::test]
     async fn abandoned_connect_rejects_both_lanes_and_stale_attempt_cannot_open_replacement() {
-        let (connections, main, io) = receivers();
+        let target = receiver_target();
+        let main = target.main_ref();
+        let io = target.io_ref();
+        let connections = io.session_connections();
         let agent = RendererDevToolsAgentToken::allocate();
         let session = DevToolsSessionKey::Attached("named".into());
-        let connect = connections
-            .begin(agent, session.clone(), main.clone(), io.clone())
+        let connect = target
+            .begin_session_connection(agent, session.clone())
             .unwrap();
-        let queued_main = queue_main(&main, agent, "named");
-        let queued_io = queue_io(&io, agent, "named");
+        let queued_main = queue_main(main, agent, "named");
+        let queued_io = queue_io(io, agent, "named");
         drop(connect);
         assert!(matches!(
             queued_main.wait_for_completion().await,
@@ -448,26 +447,25 @@ mod tests {
             Ok(RendererRuntimeInspectorIoCommandClaim::Canceled(_))
         ));
         assert!(matches!(
-            queue_io(&io, agent, "named")
-                .wait_for_first_dispatch()
-                .await,
+            queue_io(io, agent, "named").wait_for_first_dispatch().await,
             Ok(RendererRuntimeInspectorIoCommandClaim::Canceled(_))
         ));
         connections.detach(agent, &session);
-        let old = connections
-            .begin(agent, session.clone(), main.clone(), io.clone())
+        let old = target
+            .begin_session_connection(agent, session.clone())
             .unwrap();
-        let old_main = queue_main(&main, agent, "named");
-        let old_io = queue_io(&io, agent, "named");
+        let old_main = queue_main(main, agent, "named");
+        let old_io = queue_io(io, agent, "named");
         let key = RendererDevToolsSessionLaneKey::new(agent, session.clone());
         let old_admission = connections.admission(&key);
         connections.detach(agent, &session);
-        let replacement = connections
-            .begin(agent, session.clone(), main.clone(), io.clone())
+        let replacement = target
+            .begin_session_connection(agent, session.clone())
             .unwrap();
-        let replacement_main = queue_main(&main, agent, "named");
-        let replacement_io = queue_io(&io, agent, "named");
-        old.connected();
+        let replacement_main = queue_main(main, agent, "named");
+        let replacement_io = queue_io(io, agent, "named");
+        assert!(!target.publish_session_ready(old.record()));
+        drop(old);
         // A failed attempt can reach cancellation cleanup after this session
         // ID has been reused. Only the old connection's queued work is rejected.
         main.reject_failed_connections();
@@ -484,7 +482,8 @@ mod tests {
             !connections.admission(&key).ready(),
             "old cancellation cannot unlock the replacement"
         );
-        replacement.connected();
+        assert!(target.publish_session_ready(replacement.record()));
+        drop(replacement);
         assert!(connections.admission(&key).ready());
         assert!(
             !old_admission.ready(),
@@ -509,11 +508,12 @@ mod tests {
 
     #[tokio::test]
     async fn frontend_revocation_preserves_only_admitted_internal_cleanup() {
-        let (_connections, main, _io) = receivers();
+        let target = receiver_target();
+        let main = target.main_ref();
         let agent = RendererDevToolsAgentToken::allocate();
         let session = DevToolsSessionKey::Attached("cleanup".into());
-        let frontend = queue_main(&main, agent, "cleanup");
-        let cleanup = queue_main(&main, agent, "cleanup");
+        let frontend = queue_main(main, agent, "cleanup");
+        let cleanup = queue_main(main, agent, "cleanup");
         cleanup.cleanup_control().retain();
         main.begin_session_detach(agent, &session);
         assert!(matches!(
@@ -525,7 +525,7 @@ mod tests {
             .expect("revocation must preserve internal cleanup authority");
         let (_, _, _, mut dispatch, reply) = main.prepare_owner_dispatch(command).into_parts();
         dispatch.release();
-        let replacement = queue_main(&main, agent, "cleanup");
+        let replacement = queue_main(main, agent, "cleanup");
         assert!(
             main.claim_for_owner().is_none(),
             "replacement frontend waits for native retirement"

@@ -37,7 +37,7 @@ impl ScriptVm {
         let inspector = &self.page_inspector;
         self.renderer_document_isolate
             .with_renderer_document_isolate_and_inspector_mut(|_, backend| {
-                inspector.ensure_frontend_session(backend, session.wire_session_id());
+                inspector.ensure_frontend_session(backend, session.wire_session_id(), None);
             });
         self._context_host
             .borrow_mut()
