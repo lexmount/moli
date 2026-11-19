@@ -3,8 +3,8 @@ mod body_methods;
 mod cors;
 mod materialize;
 mod metadata;
+pub(crate) use metadata::{FetchResponseDelivery, set_response_metadata};
 pub(in crate::network_host) use metadata::{RESPONSE_METADATA_SLOT, response_metadata_attribute};
-pub(crate) use metadata::{fetch_response_metadata, set_response_metadata};
 
 use super::headers::{
     HeadersGuard, build_headers_object_with_state, filter_headers_for_guard,

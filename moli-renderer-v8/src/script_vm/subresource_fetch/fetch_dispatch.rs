@@ -740,27 +740,6 @@ impl ScriptVm {
                         record_started,
                     );
                     let response_head = response.head();
-                    let mut metadata = crate::network_host::fetch_response_metadata(
-                        &pending.request_origin,
-                        &response_head,
-                        pending.request_mode,
-                        response_filter.as_ref(),
-                        pending.load.request_client().web_security_disabled(),
-                    );
-                    if opaque_response_blocked {
-                        metadata.response_type = crate::types::FetchResponseType::Opaque;
-                        metadata.timing_allow_passed = false;
-                    }
-                    if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
-                        let entry = fetch.resource_timing().completed(
-                            fetch.initial_request_url(&pending.info.url),
-                            &response_head,
-                            response.body_bytes().len(),
-                            &metadata,
-                            response_filter.as_ref(),
-                        );
-                        crate::context_bootstrap::record_resource_performance_entry(scope, entry);
-                    }
                     let mut observable_response = response;
                     if matches!(
                         pending.info.resource_type,
@@ -778,6 +757,23 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            let mut delivery = crate::network_host::FetchResponseDelivery::for_request(
+                                &pending.request_origin,
+                                &response_head,
+                                pending.request_mode,
+                                response_filter.as_ref(),
+                                pending.load.request_client().web_security_disabled(),
+                            );
+                            if opaque_response_blocked {
+                                delivery.block_opaque_response();
+                            }
+                            let entry = fetch.resource_timing().completed(
+                                fetch.initial_request_url(&pending.info.url),
+                                &response_head,
+                                observable_response.body_bytes().len(),
+                                &delivery,
+                            );
+                            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive completion is handled before V8 entry");
@@ -794,7 +790,7 @@ impl ScriptVm {
                                     &response_request_method,
                                     head,
                                     body,
-                                    &metadata,
+                                    delivery.metadata,
                                 );
                             if let Some(status_text) = response_status_text.as_deref() {
                                 crate::network_host::set_response_slot_string(

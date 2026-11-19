@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use super::super::fetch_surface::{
     RESPONSE_BODY_USED_SLOT, RESPONSE_INTERNAL_HEADERS_SLOT, RESPONSE_INTERNAL_STATUS_SLOT,
     RESPONSE_INTERNAL_STATUS_TEXT_SLOT, body_already_used, mark_response_object,
     response_slot_number,
 };
-use super::metadata::{response_metadata, set_response_metadata};
+use super::metadata::{
+    ResponseObjectMetadata, install_response_metadata, response_metadata, set_response_metadata,
+};
 use super::*;
 use crate::network_host::headers::headers_list;
 use crate::types::NetworkBodySourceId;
@@ -65,29 +69,6 @@ pub(crate) fn network_response_filter(
     .then(|| kind.into())
 }
 
-fn filtered_response_status(head: &moli_fetch::ResponseHead, filter: FetchResponseFilter) -> u16 {
-    if filter.is_readable() { head.status } else { 0 }
-}
-
-fn filtered_response_exposes_body(filter: FetchResponseFilter) -> bool {
-    filter.is_readable()
-}
-
-fn filtered_response_exposes_headers(filter: FetchResponseFilter) -> bool {
-    filter.is_readable()
-}
-
-fn filtered_response_status_text(
-    head: &moli_fetch::ResponseHead,
-    filter: FetchResponseFilter,
-) -> &str {
-    if filter.is_readable() {
-        head.status_text()
-    } else {
-        ""
-    }
-}
-
 pub(crate) fn build_fetch_response_object_for_request_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request_origin: impl Into<WebOrigin>,
@@ -118,7 +99,7 @@ pub(crate) fn build_fetch_response_object_from_body_source_for_request_mode<'s>(
         request.method,
         head,
         body,
-        &metadata,
+        Arc::new(metadata),
     )
 }
 
@@ -127,19 +108,19 @@ pub(crate) fn build_fetch_response_object_from_body_source_with_metadata<'s>(
     method: &str,
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
-    metadata: &FetchResponseMetadata,
+    metadata: Arc<FetchResponseMetadata>,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = metadata.response_type;
-    let obj = build_fetch_response_object_head(scope, &head, metadata, None);
+    let readable = metadata.response_type.is_readable();
+    let obj = build_fetch_response_object_head(scope, &head, metadata.into());
     let body_stream = if has_null_body(method, head.status) {
         None
-    } else if filtered_response_exposes_body(filter) {
+    } else if readable {
         network_body_stream_from_response_body(scope, obj, body)
     } else {
         set_filtered_response_internal_body_from_response_body(scope, obj, body);
         None
     };
-    finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream, filter)
+    finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream, readable)
 }
 
 #[cfg(test)]
@@ -156,7 +137,7 @@ pub(crate) fn build_fetch_response_object_from_stream_for_request_mode<'s>(
         request.method,
         head,
         body_source_id,
-        &metadata,
+        Arc::new(metadata),
     )
 }
 
@@ -165,16 +146,9 @@ pub(crate) fn build_fetch_response_object_from_stream_with_metadata<'s>(
     method: &str,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
-    metadata: &FetchResponseMetadata,
+    metadata: Arc<FetchResponseMetadata>,
 ) -> v8::Local<'s, v8::Object> {
-    build_fetch_response_object_from_stream_with_surface_url(
-        scope,
-        method,
-        head,
-        body_source_id,
-        None,
-        metadata,
-    )
+    build_streaming_fetch_response_object(scope, method, head, body_source_id, metadata.into())
 }
 
 pub(crate) fn build_navigation_preload_response_object_from_stream_with_metadata<'s>(
@@ -183,61 +157,49 @@ pub(crate) fn build_navigation_preload_response_object_from_stream_with_metadata
     method: &str,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
-    metadata: &FetchResponseMetadata,
+    metadata: Arc<FetchResponseMetadata>,
 ) -> v8::Local<'s, v8::Object> {
-    build_fetch_response_object_from_stream_with_surface_url(
-        scope,
-        method,
-        head,
-        body_source_id,
-        Some(request_url.as_str()),
-        metadata,
-    )
+    let metadata = ResponseObjectMetadata {
+        preload_redirect_url: (metadata.response_type == FetchResponseFilter::OpaqueRedirect)
+            .then(|| request_url.clone()),
+        response: metadata,
+    };
+    build_streaming_fetch_response_object(scope, method, head, body_source_id, metadata)
 }
 
-fn build_fetch_response_object_from_stream_with_surface_url<'s>(
+fn build_streaming_fetch_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     method: &str,
     head: moli_fetch::ResponseHead,
     body_source_id: NetworkBodySourceId,
-    filtered_surface_url: Option<&str>,
-    metadata: &FetchResponseMetadata,
+    metadata: ResponseObjectMetadata,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = metadata.response_type;
-    let filtered_surface_url = (filter == FetchResponseFilter::OpaqueRedirect)
-        .then_some(filtered_surface_url)
-        .flatten();
-    let obj = build_fetch_response_object_head(scope, &head, metadata, filtered_surface_url);
-    if has_null_body(method, head.status) {
-        // Fetch nulls the internal body, including for filtered responses. Do
-        // not register a body source: subsequent transport chunks and terminal
-        // events then have no stream to enqueue into or retain bytes for.
-        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None, filter);
-    }
-    if !filtered_response_exposes_body(filter) {
+    let readable = metadata.response.response_type.is_readable();
+    let obj = build_fetch_response_object_head(scope, &head, metadata);
+    let body_stream = if has_null_body(method, head.status) {
+        // Null internal bodies need no registration for later body chunks.
+        None
+    } else if readable {
+        Some(pending_network_body_stream(scope, obj, body_source_id))
+    } else {
         set_filtered_response_internal_body_from_pending_stream(scope, obj, body_source_id);
-        return finish_fetch_response_object_with_body_stream(scope, obj, &head, None, filter);
-    }
-    let stream = pending_network_body_stream(scope, obj, body_source_id);
-    finish_fetch_response_object_with_body_stream(scope, obj, &head, Some(stream), filter)
+        None
+    };
+    finish_fetch_response_object_with_body_stream(scope, obj, &head, body_stream, readable)
 }
 
 fn build_fetch_response_object_head<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     head: &moli_fetch::ResponseHead,
-    metadata: &FetchResponseMetadata,
-    filtered_surface_url: Option<&str>,
+    metadata: ResponseObjectMetadata,
 ) -> v8::Local<'s, v8::Object> {
-    let filter = metadata.response_type;
-    let status = filtered_response_status(head, filter);
+    let readable = metadata.response.response_type.is_readable();
+    let status = if readable { head.status } else { 0 };
     let obj = FetchResponseHeadDeclaration::new(status as f64, (200..300).contains(&status))
         .bind(scope)
         .expect("Fetch Response head declaration should bind");
-    set_response_metadata(scope, obj, metadata);
-    if let Some(url) = filtered_surface_url {
-        set_response_slot_string(scope, obj, RESPONSE_URL_SLOT, url);
-    }
-    if !filter.is_readable() {
+    install_response_metadata(scope, obj, metadata);
+    if !readable {
         set_response_slot_value(
             scope,
             obj,
@@ -272,9 +234,9 @@ fn finish_fetch_response_object_with_body_stream<'s>(
     obj: v8::Local<'s, v8::Object>,
     head: &moli_fetch::ResponseHead,
     body_stream: Option<v8::Local<'s, v8::Object>>,
-    filter: FetchResponseFilter,
+    readable: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let header_entries = if filtered_response_exposes_headers(filter) {
+    let header_entries = if readable {
         head.headers.as_slice()
     } else {
         &[][..]
@@ -287,19 +249,11 @@ fn finish_fetch_response_object_with_body_stream<'s>(
         build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
     set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
 
-    let body_value = if !filtered_response_exposes_body(filter) {
-        v8::null(scope).into()
-    } else if let Some(stream) = body_stream {
-        stream.into()
-    } else {
-        v8::null(scope).into()
-    };
-    FetchResponseBodyDeclaration::new(
-        filtered_response_status_text(head, filter).to_owned(),
-        body_value,
-    )
-    .initialize(scope, obj)
-    .expect("Fetch Response body declaration should initialize");
+    let status_text = if readable { head.status_text() } else { "" };
+    let body_value = body_stream.map_or_else(|| v8::null(scope).into(), Into::into);
+    FetchResponseBodyDeclaration::new(status_text.to_owned(), body_value)
+        .initialize(scope, obj)
+        .expect("Fetch Response body declaration should initialize");
     obj
 }
 
@@ -317,7 +271,7 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     let obj = FetchResponseHeadDeclaration::new(0.0, false)
         .bind(scope)
         .ok()?;
-    set_response_metadata(scope, obj, &metadata);
+    set_response_metadata(scope, obj, Arc::new(metadata));
     mark_response_object(scope, obj);
     let headers = filter_headers_for_guard(&[], HeadersGuard::Response);
     let headers_obj =

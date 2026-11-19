@@ -2805,7 +2805,7 @@ fn start_service_worker_navigation_preload_response_in_context(
         &started.request_method,
         head,
         started.body_source_id,
-        &started.response_head.metadata,
+        std::sync::Arc::new(started.response_head.metadata),
     );
     let resolver = v8::Local::new(scope, resolver);
     let _ = resolver.resolve(scope, response_object.into());
