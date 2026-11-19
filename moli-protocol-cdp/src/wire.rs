@@ -448,7 +448,7 @@ impl ParsedCdpCommand {
         self.renderer_access() != CdpRendererCommandAccess::OwnerIndependent
             || matches!(
                 self.method(),
-                "Page.enable" | "Page.getFrameTree" | "Page.getResourceTree" | "Page.navigate"
+                "Page.getFrameTree" | "Page.getResourceTree" | "Page.navigate"
             )
     }
 
@@ -761,7 +761,6 @@ mod tests {
             "DOM.getDocument",
             "CSS.getMatchedStylesForNode",
             "Performance.getMetrics",
-            "Page.enable",
             "Page.getFrameTree",
             "Page.getResourceTree",
             "Page.createIsolatedWorld",
@@ -784,6 +783,8 @@ mod tests {
     #[test]
     fn browser_prompt_close_and_cancellation_do_not_wait_for_initial_document_adoption() {
         for method in [
+            "Page.enable",
+            "Page.disable",
             "Page.handleJavaScriptDialog",
             "Page.close",
             "Target.closeTarget",

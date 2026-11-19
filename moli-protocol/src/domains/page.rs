@@ -175,6 +175,10 @@ pub(crate) struct PendingPageCommandDispatch {
 }
 
 enum PendingPageCommandKind {
+    Enable {
+        waiter: crate::conn::InitialDocumentPageBuildWaiter,
+        host: crate::conn::ProtocolPageHostScope,
+    },
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -240,6 +244,10 @@ pub(crate) struct CompletedPageCommandDispatch {
 }
 
 enum CompletedPageCommandKind {
+    Enable {
+        result: Result<()>,
+        host: crate::conn::ProtocolPageHostScope,
+    },
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -325,7 +333,8 @@ impl CompletedPageCommandKind {
             Self::SameDocumentNavigate(completed) => completed.renderer_output_predecessor(),
             Self::TraverseSameDocumentHistory(completed) => completed.renderer_output_predecessor(),
             Self::ChildFrameNavigate(completed) => completed.renderer_output_predecessor(),
-            Self::BringToFront { .. }
+            Self::Enable { .. }
+            | Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
@@ -358,6 +367,13 @@ impl PendingPageCommandDispatch {
     }
     pub async fn wait(self) -> CompletedPageCommandDispatch {
         let kind = match *self.kind {
+            PendingPageCommandKind::Enable { waiter, host } => {
+                let result = tokio::select! {
+                    result = waiter.wait() => result.map_err(anyhow::Error::msg),
+                    _ = host.wait_for_binding_retirement() => Err(crate::conn::NoDocumentLoaded.into()),
+                };
+                CompletedPageCommandKind::Enable { result, host }
+            }
             PendingPageCommandKind::BringToFront { route } => {
                 CompletedPageCommandKind::BringToFront { route }
             }
@@ -612,21 +628,31 @@ pub(crate) fn prepare_page_bring_to_front(
 }
 
 fn enable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    match apply_page_enable_subscription(conn, cmd) {
+        Ok(()) => CommandOutputPlan::success(),
+        Err(plan) => plan,
+    }
+}
+
+fn apply_page_enable_subscription(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> Result<(), CommandOutputPlan> {
     let params: EnablePageParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         Ok(None) => EnablePageParams::default(),
-        Err(error) => return CommandOutputPlan::error(-32602, error),
+        Err(error) => return Err(CommandOutputPlan::error(-32602, error)),
     };
     if !conn.set_page_domain_enabled_for_session_owner(cmd.session_id, true) {
-        return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
+        return Err(CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"));
     }
     if let Some(enabled) = params.enable_file_chooser_opened_event
         && !conn
             .set_page_file_chooser_opened_event_enabled_for_session_owner(cmd.session_id, enabled)
     {
-        return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
+        return Err(CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"));
     }
-    CommandOutputPlan::success()
+    Ok(())
 }
 
 fn disable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
@@ -1492,88 +1518,94 @@ fn try_start_page_enable_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> Option<PageCommandTaskStep> {
-    let params: EnablePageParams = match cmd.get_params() {
-        Ok(Some(params)) => params,
-        Ok(None) => EnablePageParams::default(),
-        Err(error) => {
-            return Some(PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32602, error,
-            )));
-        }
-    };
-    if !conn.set_page_domain_enabled_for_session_owner(cmd.session_id, true) {
-        return Some(PageCommandTaskStep::Complete(CommandOutputPlan::error(
-            -31998,
-            "BrowserContextNotLoaded",
-        )));
+    if let Err(plan) = apply_page_enable_subscription(conn, cmd) {
+        return Some(PageCommandTaskStep::Complete(plan));
     }
-    if let Some(enabled) = params.enable_file_chooser_opened_event
-        && !conn
-            .set_page_file_chooser_opened_event_enabled_for_session_owner(cmd.session_id, enabled)
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    if let Some(waiter) = conn
+        .runtime_session_owner_slot_for_owner(&owner)
+        .and_then(|slot| slot.initial_document_page_build_waiter())
     {
-        return Some(PageCommandTaskStep::Complete(CommandOutputPlan::error(
-            -31998,
-            "BrowserContextNotLoaded",
-        )));
+        let host = match crate::conn::ProtocolPageHostScope::capture(conn, &owner) {
+            Ok(host) => host,
+            Err(error) => {
+                return Some(PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000, error,
+                )));
+            }
+        };
+        return Some(PageCommandTaskStep::Pending(PendingPageCommandDispatch {
+            command_id: cmd.id,
+            owner_scope: owner,
+            kind: Box::new(PendingPageCommandKind::Enable { waiter, host }),
+        }));
     }
-    match conn.runtime_session_owner_slot(cmd.session_id) {
+    Some(start_page_enable_document_work(conn, cmd.id, &owner))
+}
+
+fn start_page_enable_document_work(
+    conn: &mut CdpConnection,
+    command_id: Option<u64>,
+    owner: &CommandOwnerScope,
+) -> PageCommandTaskStep {
+    match conn.runtime_session_owner_slot(owner.session_id()) {
         // The native Document can already be running while Page adoption waits
         // for its resources. Enabling notifications must not replace it with
         // another initial navigation.
         Some(slot) if slot.has_prepared_document_output() => {
-            Some(PageCommandTaskStep::Complete(CommandOutputPlan::success()))
+            PageCommandTaskStep::Complete(CommandOutputPlan::success())
         }
         Some(slot)
             if slot.has_loaded_page()
                 && conn.runtime_session_owner_can_start_initial_document_navigation(
-                    cmd.session_id,
+                    owner.session_id(),
                 ) =>
         {
-            let owner = CommandOwnerScope::capture(conn, cmd.session_id);
             let start = match navigation::start_initial_document_navigation_for_session_owner(
                 conn,
-                cmd.id,
-                &owner,
+                command_id,
+                owner,
                 json!({}),
             ) {
                 Ok(start) => start,
-                Err(plan) => return Some(PageCommandTaskStep::Complete(plan)),
+                Err(plan) => return PageCommandTaskStep::Complete(plan),
             };
-            Some(navigation::finish_started_navigation_command_for_parts(
+            navigation::finish_started_navigation_command_for_parts(
                 conn,
-                cmd.id,
-                owner,
+                command_id,
+                owner.clone(),
                 start,
                 &[],
-            ))
+            )
         }
         Some(slot) if slot.has_loaded_page() => {
-            Some(PageCommandTaskStep::Complete(CommandOutputPlan::success()))
+            PageCommandTaskStep::Complete(CommandOutputPlan::success())
         }
-        Some(_) if !conn.runtime_session_owner_target_is_initial_about_blank(cmd.session_id) => {
-            let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+        Some(_)
+            if !conn.runtime_session_owner_target_is_initial_about_blank(owner.session_id()) =>
+        {
             let start = match navigation::start_initial_document_navigation_for_session_owner(
                 conn,
-                cmd.id,
-                &owner,
+                command_id,
+                owner,
                 json!({}),
             ) {
                 Ok(start) => start,
-                Err(plan) => return Some(PageCommandTaskStep::Complete(plan)),
+                Err(plan) => return PageCommandTaskStep::Complete(plan),
             };
-            Some(navigation::finish_started_navigation_command_for_parts(
+            navigation::finish_started_navigation_command_for_parts(
                 conn,
-                cmd.id,
-                owner,
+                command_id,
+                owner.clone(),
                 start,
                 &[],
-            ))
+            )
         }
-        Some(_) => Some(PageCommandTaskStep::Complete(CommandOutputPlan::success())),
-        None if cmd.session_id.is_some() => Some(PageCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "TargetNotLoaded"),
-        )),
-        None => Some(PageCommandTaskStep::Complete(CommandOutputPlan::success())),
+        Some(_) => PageCommandTaskStep::Complete(CommandOutputPlan::success()),
+        None if owner.session_id().is_some() => {
+            PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "TargetNotLoaded"))
+        }
+        None => PageCommandTaskStep::Complete(CommandOutputPlan::success()),
     }
 }
 

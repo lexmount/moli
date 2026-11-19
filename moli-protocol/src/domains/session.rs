@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, ProtocolWorkflowDriver,
-    SessionDisposalPlan, SessionDisposalTarget,
+    BackgroundProtocolEvent, CdpConnection, ProtocolWorkflowDriver, SessionDisposalPlan,
+    SessionDisposalTarget,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -345,10 +345,7 @@ pub(crate) enum PreparedSessionHandlerDisposal {
         scripts: crate::conn::SessionScriptCleanup,
         events: Vec<BackgroundProtocolEvent>,
     },
-    PageUpdates {
-        owner: CommandOwnerScope,
-        updates: crate::conn::SessionPageUpdates,
-    },
+    PageUpdates(crate::conn::SessionPageUpdates),
 }
 
 impl PreparedSessionHandlerDisposal {
@@ -396,19 +393,15 @@ impl PreparedSessionHandlerDisposal {
                     scripts: conn.prepare_session_script_cleanup(session_id),
                 }
             }
-            DevToolsSessionDomainHandler::Emulation => Self::PageUpdates {
-                owner: CommandOwnerScope::capture(conn, Some(session_id)),
-                updates: super::emulation::prepare_page_session_disposal(conn, session_id)
+            DevToolsSessionDomainHandler::Emulation => Self::PageUpdates(
+                super::emulation::prepare_page_session_disposal(conn, session_id)
                     .retain_session_cleanup_authority(),
-            },
-            DevToolsSessionDomainHandler::Network => Self::PageUpdates {
-                owner: CommandOwnerScope::capture(conn, Some(session_id)),
-                updates: conn
-                    .start_clear_devtools_network_session_policy(session_id)
+            ),
+            DevToolsSessionDomainHandler::Network => Self::PageUpdates(
+                conn.start_clear_devtools_network_session_policy(session_id)
                     .retain_session_cleanup_authority(),
-            },
+            ),
             DevToolsSessionDomainHandler::PrimaryPageTargetState => {
-                let owner = CommandOwnerScope::capture(conn, Some(session_id));
                 let mut updates = crate::conn::SessionPageUpdates::default();
                 if let SessionDisposalTarget::PageTarget {
                     browser_context_id,
@@ -433,10 +426,7 @@ impl PreparedSessionHandlerDisposal {
                         );
                     }
                 }
-                Self::PageUpdates {
-                    owner,
-                    updates: updates.retain_session_cleanup_authority(),
-                }
+                Self::PageUpdates(updates.retain_session_cleanup_authority())
             }
         }
     }
@@ -485,11 +475,11 @@ impl PreparedSessionHandlerDisposal {
                     state.finish_session_script_cleanup(&identity, removed_scripts)
                 })
             }
-            Self::PageUpdates { owner, updates } => {
+            Self::PageUpdates(updates) => {
                 let completed = updates.wait().await;
                 let identity = identity.clone();
                 driver.with_state(move |state| {
-                    state.finish_session_page_updates(&identity, &owner, completed)
+                    state.finish_session_page_updates(&identity, completed)
                 })
             }
         }
@@ -499,7 +489,9 @@ impl PreparedSessionHandlerDisposal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, CommandDispatchContext, ParsedCdpCommand};
+    use crate::conn::{
+        BrowserContext, CommandDispatchContext, CommandOwnerScope, ParsedCdpCommand,
+    };
     use crate::testing::TestContext;
     use moli_page_types::DevToolsSessionKey;
     use serde_json::json;

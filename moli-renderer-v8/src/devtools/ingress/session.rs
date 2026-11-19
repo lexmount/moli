@@ -97,9 +97,7 @@ impl RendererInspectorSessionConnections {
         if inner.closed {
             *state.lock() = ConnectionState::Failed;
         } else {
-            if let Some(previous) = inner.sessions.insert(key.clone(), state.clone()) {
-                *previous.lock() = ConnectionState::Failed;
-            }
+            inner.sessions.insert(key.clone(), state.clone());
         }
         Some(RendererInspectorSessionConnect {
             connections: self.clone(),
