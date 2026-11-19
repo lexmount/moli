@@ -7,21 +7,10 @@ use crate::{
     util::{get_private_value, set_private_value},
     webidl,
 };
+use moli_webapi::css_declarations::options::PropertyDefinition;
 use style::stylist::RegisterCustomPropertyResult;
 
 const CSS_OWNER_DOCUMENT_HANDLE_SLOT: &str = "__moliCssOwnerDocumentHandle";
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PropertyDefinition")]
-struct PropertyDefinition {
-    #[webidl(required)]
-    name: String,
-    #[webidl(default = "*")]
-    syntax: String,
-    #[webidl(required)]
-    inherits: bool,
-    initial_value: Option<String>,
-}
 
 pub(super) fn css_register_property_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

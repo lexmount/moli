@@ -1,3 +1,5 @@
+use moli_webapi::dom_options::GetHtmlOptions;
+
 use std::collections::HashSet;
 
 use crate::{
@@ -6,7 +8,7 @@ use crate::{
     dom::native::{Element, Node},
     style_engine::{ComputedDisplayKind, ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind},
     util::v8_string,
-    web_api_interfaces, webidl,
+    webidl,
 };
 
 use super::super::node::set_text_content_in_reaction_scope;
@@ -24,15 +26,6 @@ use super::{
     styles::StyleObservation,
     trusted_types::{TrustedHtmlSink, trusted_html_sink_string},
 };
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "GetHTMLOptions")]
-struct GetHtmlOptions<'scope> {
-    #[webidl(name = "serializableShadowRoots", default = false)]
-    serializable_shadow_roots: bool,
-    #[webidl(name = "shadowRoots", sequence, interface = web_api_interfaces::ShadowRoot, default = Vec::new())]
-    shadow_roots: Vec<v8::Local<'scope, v8::Object>>,
-}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "getHTML")]

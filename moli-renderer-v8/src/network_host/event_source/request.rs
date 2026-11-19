@@ -18,27 +18,7 @@ use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, Request, RequestCacheMode, RequestCredentialsMode,
     RequestMode, RequestRedirectMode, should_request_be_blocked_due_to_bad_port,
 };
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventSource")]
-struct EventSourceConstructorArgs<'s> {
-    #[webidl(
-        required,
-        name = "url",
-        converter = "usv_string",
-        missing_message = "Failed to construct 'EventSource': 1 argument required, but only 0 present."
-    )]
-    url: String,
-    #[webidl(index = 1, converter = "raw")]
-    options: Option<v8::Local<'s, v8::Value>>,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "EventSourceInit")]
-struct EventSourceInit {
-    #[webidl(default = false)]
-    with_credentials: bool,
-}
+use moli_webapi::network_options::{EventSourceConstructorArgs, event_source_options};
 
 struct PreparedEventSourceRequest {
     frame_id: Option<String>,
@@ -128,26 +108,6 @@ pub(crate) fn event_source_constructor_callback<'s>(
         fail_event_source_connection(scope, event_source, EventSourceTerminalMode::Close);
     }
     rv.set(event_source.into());
-}
-
-fn event_source_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> Option<EventSourceInit> {
-    let Some(value) = value else {
-        return Some(EventSourceInit::default());
-    };
-    match webidl::parse_dictionary::<EventSourceInit>(
-        scope,
-        value,
-        webidl::Context::argument("EventSource", 2),
-    ) {
-        Ok(options) => Some(options.unwrap_or_default()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 pub(crate) fn start_event_source_request<'s>(

@@ -1,10 +1,14 @@
-use moli_webapi::events::dispatch_init::{
-    CommandEventInitDeclaration, FocusEventInitDeclaration, FormDataEventInitDeclaration,
-    InputEventInitDeclaration, InterestEventInitDeclaration, SimpleEventInitDeclaration,
-    SubmitEventInitDeclaration, ToggleEventInitDeclaration,
-};
 #[cfg(any(test, feature = "devtools"))]
 use moli_webapi::events::subclasses::construct_native_keyboard_event;
+pub(crate) use moli_webapi::events::subclasses::{
+    construct_native_command_event as construct_command_event,
+    construct_native_form_data_event as construct_form_data_event,
+    construct_native_interest_event as construct_interest_event,
+    construct_native_toggle_event as construct_toggle_event,
+};
+use moli_webapi::events::subclasses::{
+    construct_native_focus_event, construct_native_input_event, construct_native_submit_event,
+};
 #[cfg(feature = "devtools")]
 mod devtools;
 #[cfg(feature = "devtools")]
@@ -16,15 +20,12 @@ pub(crate) use devtools::{
     construct_pointer_event_with_related_target_and_modifiers, construct_wheel_event_for_target,
 };
 
-use crate::util::v8_string;
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
-use moli_webapi::events::init::EventInit;
 pub(crate) use moli_webapi::events::subclasses::InputEventCoordinates;
 #[cfg(any(test, feature = "devtools"))]
 use moli_webapi::events::subclasses::construct_native_mouse_event;
 use moli_webapi::events::subclasses::{MouseEventInit, construct_native_pointer_click};
-
-use super::construct_event;
+use moli_webapi::events::{construct_native_event, init::EventInit, state::mark_event_trusted};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::native_bridge::element) enum ClickEventSource {
@@ -385,13 +386,9 @@ pub(crate) fn construct_focus_event<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
     bubbles: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let init = FocusEventInitDeclaration::new(
-        bubbles,
-        related_target.unwrap_or_else(|| v8::null(scope).into()),
-    )
-    .bind(scope)
-    .ok()?;
-    construct_event(scope, "FocusEvent", event_type, init)
+    let event = construct_native_focus_event(scope, event_type, related_target, bubbles)?;
+    mark_event_trusted(scope, event);
+    Some(event)
 }
 
 pub(crate) fn construct_input_event<'s>(
@@ -425,25 +422,7 @@ fn construct_input_event_with_transfer<'s>(
     data: Option<&str>,
     data_transfer: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let input_type = v8_string(scope, input_type.as_str())?;
-    let data = match data {
-        Some(text) => v8_string(scope, text)?.into(),
-        None => v8::null(scope).into(),
-    };
-    let data_transfer = data_transfer
-        .map(|value| value.into())
-        .unwrap_or_else(|| v8::null(scope).into());
-    let init = InputEventInitDeclaration::new(
-        true,
-        event_type == "beforeinput",
-        true,
-        input_type,
-        data,
-        data_transfer,
-    )
-    .bind(scope)
-    .ok()?;
-    construct_event(scope, "InputEvent", event_type, init)
+    construct_native_input_event(scope, event_type, input_type.as_str(), data, data_transfer)
 }
 
 pub(crate) fn construct_simple_event<'s>(
@@ -453,10 +432,17 @@ pub(crate) fn construct_simple_event<'s>(
     cancelable: bool,
     composed: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let init = SimpleEventInitDeclaration::new(bubbles, cancelable, composed)
-        .bind(scope)
-        .ok()?;
-    construct_event(scope, "Event", event_type, init)
+    let event = construct_native_event(
+        scope,
+        event_type,
+        EventInit {
+            bubbles,
+            cancelable,
+            composed,
+        },
+    )?;
+    mark_event_trusted(scope, event);
+    Some(event)
 }
 
 pub(crate) fn construct_submit_event<'s>(
@@ -472,14 +458,7 @@ pub(crate) fn construct_submit_event<'s>(
         .wrap_handle(scope, runtime_ptr, target)?;
     let context = crate::native_bridge::node_relevant_context(scope, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
-    let init = SubmitEventInitDeclaration::new(
-        bubbles,
-        cancelable,
-        submitter.unwrap_or_else(|| v8::null(scope).into()),
-    )
-    .bind(scope)
-    .ok()?;
-    construct_event(scope, "SubmitEvent", "submit", init)
+    construct_native_submit_event(scope, submitter, bubbles, cancelable)
 }
 
 pub(crate) fn construct_simple_event_for_target<'s>(
@@ -497,56 +476,6 @@ pub(crate) fn construct_simple_event_for_target<'s>(
     let context = crate::native_bridge::node_relevant_context(scope, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_simple_event(scope, event_type, bubbles, cancelable, composed)
-}
-
-pub(crate) fn construct_form_data_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    form_data: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let init = FormDataEventInitDeclaration::new(form_data, true)
-        .bind(scope)
-        .ok()?;
-    construct_event(scope, "FormDataEvent", "formdata", init)
-}
-
-pub(crate) fn construct_command_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    command: &str,
-    source: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let command = v8_string(scope, command)?;
-    let init = CommandEventInitDeclaration::new(false, true, false, source, command)
-        .bind(scope)
-        .ok()?;
-    construct_event(scope, "CommandEvent", "command", init)
-}
-
-pub(crate) fn construct_toggle_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    old_state: &str,
-    new_state: &str,
-    cancelable: bool,
-    source: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let old_state = v8_string(scope, old_state)?;
-    let new_state = v8_string(scope, new_state)?;
-    let init =
-        ToggleEventInitDeclaration::new(false, cancelable, false, source, old_state, new_state)
-            .bind(scope)
-            .ok()?;
-    construct_event(scope, "ToggleEvent", event_type, init)
-}
-
-pub(crate) fn construct_interest_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    source: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let init = InterestEventInitDeclaration::new(false, false, false, source)
-        .bind(scope)
-        .ok()?;
-    construct_event(scope, "InterestEvent", event_type, init)
 }
 
 pub(in crate::native_bridge::element) fn construct_click_event<'s>(

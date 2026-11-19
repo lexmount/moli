@@ -45,20 +45,41 @@ pub fn event_constructor_callback<'s>(
     let Some(event_type) = init::event_type_argument(scope, &args, "Event") else {
         return;
     };
-    let Some((bubbles, cancelable, composed)) = init::read_event_init(scope, &args) else {
+    let Some(init) = init::parse_event_dictionary(scope, &args, "Event") else {
         return;
     };
+    if initialize_event_from_init(scope, args.this(), event_type, init).is_some() {
+        rv.set(args.this().into());
+    }
+}
+
+/// Build Event state in the selected realm. The dispatch owner sets trust.
+pub fn construct_native_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    init: EventInit,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event_type = moli_v8_util::v8_string(scope, event_type)?;
+    let wrapper = moli_v8_util::new_intrinsic_interface_instance(scope, "Event")?;
+    initialize_event_from_init(scope, wrapper, event_type, init)?;
+    Some(wrapper)
+}
+
+fn initialize_event_from_init<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    wrapper: v8::Local<'s, v8::Object>,
+    event_type: v8::Local<'s, v8::String>,
+    init: EventInit,
+) -> Option<()> {
     let event = new_event_state(scope);
-    initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
+    initialize_event_object_with_type(scope, event, event_type, init.bubbles, init.cancelable);
     define_event_property(
         scope,
         event,
         "composed",
-        v8::Boolean::new(scope, composed).into(),
+        v8::Boolean::new(scope, init.composed).into(),
     );
-    if initialize_event_wrapper(scope, args.this(), event).is_some() {
-        rv.set(args.this().into());
-    }
+    initialize_event_wrapper(scope, wrapper, event)
 }
 
 /// Materialize browser-created event state through the same intrinsic and

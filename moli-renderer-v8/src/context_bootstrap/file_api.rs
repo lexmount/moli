@@ -26,7 +26,6 @@ pub(crate) use data_transfer::drag::{
     populate_native_drag_data_store, protect_native_drag_source_view, read_string_drag_data,
     replace_drag_data_store_contents, update_drag_data_store_operations_mask,
 };
-pub(crate) use data_transfer::is_branded_data_transfer_object;
 #[cfg(feature = "devtools")]
 pub(crate) use data_transfer::{
     DragDataStoreMode, native_data_transfer_get_data, native_set_drag_drop_effect,

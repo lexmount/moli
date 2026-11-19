@@ -36,9 +36,9 @@ fn event_subclass_constructor_callback<'s>(
         return;
     };
     let init = match kind {
-        EventSubclassKind::InputEvent => {
-            parse_event_dictionary::<input::InputEventInit>(scope, &args, "InputEvent")
-        }
+        EventSubclassKind::InputEvent => parse_event_dictionary::<
+            moli_webapi::events::subclasses::InputEventInit,
+        >(scope, &args, "InputEvent"),
         _ => unreachable!("value event templates are constructed in moli-webapi"),
     };
     let Some(init) = init else {
@@ -49,8 +49,8 @@ fn event_subclass_constructor_callback<'s>(
         wrapper,
         kind,
         event_type,
-        init.event_flags(),
-        |scope, event| init.initialize(scope, event),
+        init.values.event_flags(),
+        |scope, event| input::initialize_input_event(scope, event, init),
     ) {
         rv.set(wrapper.into());
     }

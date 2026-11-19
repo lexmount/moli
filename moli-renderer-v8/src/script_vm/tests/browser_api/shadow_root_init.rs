@@ -43,6 +43,14 @@ fn shadow_root_init_converts_once_before_attaching_live_or_detached_roots() {
                 if (!(error instanceof TypeError) || invalidHost.shadowRoot !== null)
                     throw Error('invalid dictionary accepted');
             }
+            const invalidHost = owner.createElement('div');
+            let error;
+            try {
+                invalidHost.attachShadow({mode: 'open', customElementRegistry: {},
+                    get delegatesFocus() { throw sentinel; }});
+            } catch (caught) { error = caught; }
+            if (!(error instanceof TypeError) || invalidHost.shadowRoot !== null)
+                throw Error('registry validation must run before delegatesFocus');
         }
         return true;
     })()"#).unwrap(), "true");

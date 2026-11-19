@@ -1,3 +1,7 @@
+use moli_webapi::navigation_values::options::{
+    NavigationNavigateArgs, NavigationNavigateOptionsMembers,
+};
+
 use super::super::navigation_activation::{
     clear_navigation_transition, install_navigation_transition,
     navigation_transition_matches_resolver, reject_navigation_transition_committed,
@@ -24,25 +28,6 @@ use moli_webapi_declare::WebApiObject;
 
 const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT: &str =
     "__lmNavigateEventPrecommitTransitionResolver";
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "NavigationNavigateOptions")]
-struct NavigationNavigateOptionsMembers {
-    #[webidl(name = "history", converter = "enum", default = NavigationNavigateHistoryKind::Default)]
-    history: NavigationNavigateHistoryKind,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Navigation.navigate")]
-struct NavigationNavigateArgs {
-    #[webidl(
-        required,
-        name = "url",
-        converter = "usv_string",
-        missing_message = "Failed to execute 'navigate' on 'Navigation': 1 argument required, but only 0 present."
-    )]
-    url: String,
-}
 
 pub(in crate::context_bootstrap) fn navigation_entries_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

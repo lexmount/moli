@@ -1,3 +1,5 @@
+use moli_webapi::window_values::options::parse_start_view_transition_options;
+
 use super::{
     lifecycle::{
         active_view_transition, new_view_transition, reject_view_transition,
@@ -5,23 +7,7 @@ use super::{
     },
     *,
 };
-use crate::{
-    dom::native::Node, native_bridge::node_runtime_and_handle_from_object_or_detached, webidl,
-};
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ViewTransitionOptions")]
-struct ViewTransitionOptionsMembers {
-    #[webidl(sequence, legacy_nullish, default = Vec::new())]
-    types: Vec<String>,
-    #[webidl(nullable, converter = "callback_function")]
-    update: Option<webidl::WebIdlCallbackFunction>,
-}
-
-struct StartViewTransitionOptions {
-    callback: Option<webidl::WebIdlCallbackFunction>,
-    types: Vec<String>,
-}
+use crate::{dom::native::Node, native_bridge::node_runtime_and_handle_from_object_or_detached};
 
 pub(super) fn document_start_view_transition_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -82,59 +68,6 @@ pub(super) fn document_start_view_transition_callback<'s>(
         reject_view_transition(scope, transition, error);
     }
     rv.set(transition.into());
-}
-
-fn parse_start_view_transition_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<StartViewTransitionOptions> {
-    if args.length() == 0 || args.get(0).is_null_or_undefined() {
-        return Some(StartViewTransitionOptions {
-            callback: None,
-            types: Vec::new(),
-        });
-    }
-
-    let value = args.get(0);
-    if let Ok(callback) = v8::Local::<v8::Object>::try_from(value)
-        && callback.is_callable()
-    {
-        let callback = match webidl::convert::<webidl::WebIdlCallbackFunction>(
-            scope,
-            value,
-            webidl::Context::argument("Document.startViewTransition", 1),
-        ) {
-            Ok(callback) => callback,
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return None;
-            }
-        };
-        return Some(StartViewTransitionOptions {
-            callback: Some(callback),
-            types: Vec::new(),
-        });
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        throw_type_error(
-            scope,
-            "Failed to execute 'startViewTransition' on 'Document': Overload resolution failed.",
-        );
-        return None;
-    };
-
-    let options =
-        match webidl::parse_dictionary_object::<ViewTransitionOptionsMembers>(scope, options) {
-            Ok(options) => options,
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return None;
-            }
-        };
-    Some(StartViewTransitionOptions {
-        callback: options.update,
-        types: options.types,
-    })
 }
 
 pub(super) fn document_active_view_transition_getter<'s>(

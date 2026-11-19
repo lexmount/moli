@@ -47,8 +47,9 @@ use crate::event_listener_args::{
 };
 use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
-use moli_webapi::events::dispatch_init::DispatchedEventInitDeclaration;
+use moli_webapi::events::{construct_native_event, init::EventInit};
 pub(crate) use moli_webapi::idle_deadline::install_idle_deadline_template_bindings;
+use moli_webapi::window_values::options::{IdleRequestOptions, WindowPostMessageOptionsArgs};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -85,13 +86,6 @@ struct WindowRequestIdleCallbackArgs {
     options: IdleRequestOptions,
 }
 
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "Window.requestIdleCallback")]
-struct IdleRequestOptions {
-    #[webidl(converter = "unsigned_long")]
-    timeout: Option<u32>,
-}
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Window.cancelAnimationFrame")]
 struct WindowCancelAnimationFrameArgs {
@@ -104,31 +98,6 @@ struct WindowCancelAnimationFrameArgs {
 struct WindowCancelIdleCallbackArgs {
     #[webidl(required, converter = "unsigned_long")]
     handle: u32,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "Window.postMessage")]
-struct StructuredSerializeOptions<'s> {
-    #[webidl(sequence, converter = "raw", default = Vec::new())]
-    transfer: Vec<v8::Local<'s, v8::Object>>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "Window.postMessage")]
-struct WindowPostMessageOptions<'s> {
-    #[webidl(inherit)]
-    serialization: StructuredSerializeOptions<'s>,
-    #[webidl(name = "targetOrigin", converter = "usv_string", default = "/")]
-    target_origin: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Window.postMessage")]
-struct WindowPostMessageOptionsArgs<'s> {
-    #[webidl(required, converter = "raw")]
-    message: v8::Local<'s, v8::Value>,
-    #[webidl(dictionary)]
-    options: WindowPostMessageOptions<'s>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -1896,21 +1865,16 @@ pub(crate) fn dispatch_document_event_for_handle(
     event_type: &str,
 ) -> bool {
     let runtime = unsafe { &mut *host_ptr };
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return false;
-    };
-    let Some(event_type_str) = v8_string(scope, event_type) else {
-        return false;
-    };
     let (bubbles, cancelable) = super::host::host_event_defaults(event_type);
-    let init = DispatchedEventInitDeclaration::new(bubbles, cancelable)
-        .bind(scope)
-        .expect("window document event init declaration should bind");
-    let Some(event) = event_ctor.new_instance(scope, &[event_type_str.into(), init.into()]) else {
+    let Some(event) = construct_native_event(
+        scope,
+        event_type,
+        EventInit {
+            bubbles,
+            cancelable,
+            composed: false,
+        },
+    ) else {
         return false;
     };
     // A listener exception is reported by the public-dispatch boundary, but

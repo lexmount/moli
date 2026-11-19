@@ -104,3 +104,123 @@ impl<'s> PayloadEventInit<'s> {
         .expect("payload event state");
     }
 }
+
+pub fn construct_native_promise_rejection_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    promise: v8::Local<'s, v8::Promise>,
+    reason: Option<v8::Local<'s, v8::Value>>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // Keep the dispatch owners' existing behavior when the exposed
+    // PromiseRejectionEvent constructor is unavailable.
+    let global = scope.get_current_context().global(scope);
+    let name = moli_v8_util::v8str(scope, "PromiseRejectionEvent");
+    let constructor = global.get(scope, name.into())?;
+    if !constructor.is_function() {
+        return None;
+    }
+
+    let init = PromiseRejectionInit {
+        base: EventInit {
+            cancelable: event_type == "unhandledrejection",
+            ..EventInit::default()
+        },
+        promise,
+        reason: Some(reason.unwrap_or_else(|| v8::null(scope).into())),
+    };
+    construct_native_subclass(
+        scope,
+        EventSubclassKind::PromiseRejectionEvent,
+        event_type,
+        SubclassInit::Payload(PayloadEventInit::Promise(init)),
+    )
+}
+
+pub fn construct_native_submit_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    submitter: Option<v8::Local<'s, v8::Value>>,
+    bubbles: bool,
+    cancelable: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let submitter = nullable_native_event_interface(
+        scope,
+        submitter,
+        "SubmitEventInit",
+        "submitter",
+        webidl::InterfaceOptions {
+            name: "HTMLElement",
+            brand_check: web_api_interfaces::HTMLElement::is_instance,
+        },
+    )?;
+    let init = SubmitInit {
+        base: EventInit {
+            bubbles,
+            cancelable,
+            composed: false,
+        },
+        submitter,
+        agent_invoked: false,
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::SubmitEvent,
+        "submit",
+        SubclassInit::Payload(PayloadEventInit::Submit(init)),
+    )
+}
+
+pub fn construct_native_form_data_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    form_data: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let form_data = native_event_interface(
+        scope,
+        form_data.into(),
+        "FormDataEventInit",
+        "formData",
+        webidl::InterfaceOptions {
+            name: "FormData",
+            brand_check: web_api_interfaces::FormData::is_instance,
+        },
+    )?;
+    let init = FormDataInit {
+        base: EventInit {
+            bubbles: true,
+            ..EventInit::default()
+        },
+        form_data,
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::FormDataEvent,
+        "formdata",
+        SubclassInit::Payload(PayloadEventInit::FormData(init)),
+    )
+}
+
+pub fn construct_native_track_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    track: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let track = native_event_interface(
+        scope,
+        track.into(),
+        "TrackEventInit",
+        "track",
+        webidl::InterfaceOptions {
+            name: "TextTrack",
+            brand_check: web_api_interfaces::TextTrack::is_instance,
+        },
+    )?;
+    let init = TrackInit {
+        base: EventInit::default(),
+        track: Some(track),
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::TrackEvent,
+        event_type,
+        SubclassInit::Payload(PayloadEventInit::Track(init)),
+    )
+}

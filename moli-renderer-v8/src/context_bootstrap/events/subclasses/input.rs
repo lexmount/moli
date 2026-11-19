@@ -1,10 +1,8 @@
 use super::*;
-use crate::context_bootstrap::events::ui::UiEventInit;
-use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
 use crate::context_bootstrap::range;
-use crate::util::get_private_value;
-use crate::{web_api_interfaces, webidl};
-use webidl::WebIdlDictionarySerialize;
+use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
+use moli_webapi::events::subclasses::InputEventInit;
 
 const INPUT_EVENT_TARGET_RANGES_SLOT: &str = "__moliInputEventTargetRanges";
 
@@ -14,7 +12,7 @@ pub(crate) fn clear_input_event_target_ranges<'s>(
 ) {
     let event = event_backing(scope, event);
     if web_api_interfaces::InputEvent::is_instance(scope, event) {
-        crate::util::set_private_value(
+        set_private_value(
             scope,
             event,
             INPUT_EVENT_TARGET_RANGES_SLOT,
@@ -23,43 +21,25 @@ pub(crate) fn clear_input_event_target_ranges<'s>(
     }
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "InputEventInit", snapshot)]
-pub(super) struct InputEventInit<'s> {
-    #[webidl(inherit)]
-    ui: UiEventInit<'s>,
-    #[webidl(nullable, converter = "raw")]
-    data: Option<webidl::DomString16>,
-    #[webidl(nullable, interface = web_api_interfaces::DataTransfer, brand_check = is_branded_data_transfer_object)]
-    data_transfer: Option<v8::Local<'s, v8::Object>>,
-    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
-    input_type: webidl::DomString16,
-    #[webidl(default = false)]
-    is_composing: bool,
-    #[webidl(sequence, interface = web_api_interfaces::StaticRange, default = Vec::new())]
-    #[webidl(snapshot_slot = INPUT_EVENT_TARGET_RANGES_SLOT, snapshot_state_with = live_range_value)]
-    target_ranges: Vec<v8::Local<'s, v8::Object>>,
-}
-
-fn live_range_value<'s>(
+pub(super) fn initialize_input_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    range: &v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    range::live_range_from_static_range(scope, *range).map(Into::into)
-}
-
-impl<'s> InputEventInit<'s> {
-    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
-        self.ui.event_flags()
+    event: v8::Local<'s, v8::Object>,
+    init: InputEventInit<'s>,
+) -> bool {
+    if !init.values.initialize(scope, event) {
+        return false;
     }
-
-    pub(super) fn initialize(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        event: v8::Local<'s, v8::Object>,
-    ) -> bool {
-        self.initialize_snapshot(scope, event).is_some()
-    }
+    let ranges = init
+        .target_ranges
+        .into_iter()
+        .map(|range| range::live_range_from_static_range(scope, range).map(Into::into))
+        .collect::<Option<Vec<_>>>();
+    let Some(ranges) = ranges else {
+        return false;
+    };
+    let array = v8::Array::new_with_elements(scope, &ranges);
+    set_private_value(scope, event, INPUT_EVENT_TARGET_RANGES_SLOT, array.into());
+    true
 }
 
 pub(in crate::context_bootstrap) fn input_event_get_target_ranges_callback<'s>(

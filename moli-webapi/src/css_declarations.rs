@@ -1,5 +1,7 @@
 //! CSS declaration objects and their private declaration metadata.
 
+pub mod options;
+
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{get_private_value, set_private_value, v8_string};
 use moli_webapi_declare::{WebApiObject, serialize_v8_array};

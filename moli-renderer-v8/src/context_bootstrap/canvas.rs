@@ -1,11 +1,11 @@
+pub(crate) use moli_webapi::canvas_context_values::CanvasContextKind;
+
 use super::super::blob::build_blob_object;
 use super::super::native_bridge::element;
 use super::super::util::{throw_type_error, v8_string};
 use super::shared::global_constructor_object;
 use crate::web_api_interfaces;
-use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
-use std::str::FromStr;
 
 pub(crate) use moli_webapi::canvas_context_values::{
     CANVAS_CONTEXT_FILL_STYLE_SLOT, CANVAS_CONTEXT_FONT_SLOT, CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT,
@@ -80,52 +80,6 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
         setter = element::html_canvas_height_setter_callback
     )]
     height: (),
-}
-
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, webidl::WebIdlEnum,
-)]
-#[webidl(name = "CanvasContextId", parse_with = Self::parse)]
-#[strum(serialize_all = "lowercase")]
-pub(crate) enum CanvasContextKind {
-    #[strum(serialize = "2d")]
-    TwoD,
-    WebGl,
-    #[strum(serialize = "webgl2")]
-    WebGl2,
-}
-
-impl CanvasContextKind {
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        Self::from_str(value).ok()
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        self.into()
-    }
-}
-
-#[cfg(test)]
-mod canvas_context_kind_tests {
-    use super::CanvasContextKind;
-
-    #[test]
-    fn canvas_context_kind_parses_supported_context_ids() {
-        assert_eq!(
-            CanvasContextKind::parse("2d"),
-            Some(CanvasContextKind::TwoD)
-        );
-        assert_eq!(
-            CanvasContextKind::parse("webgl"),
-            Some(CanvasContextKind::WebGl)
-        );
-        assert_eq!(
-            CanvasContextKind::parse("webgl2"),
-            Some(CanvasContextKind::WebGl2)
-        );
-        assert_eq!(CanvasContextKind::parse("WebGL"), None);
-        assert_eq!(CanvasContextKind::parse("bitmaprenderer"), None);
-    }
 }
 
 mod backing_store;

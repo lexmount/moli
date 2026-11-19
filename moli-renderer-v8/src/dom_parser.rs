@@ -18,7 +18,7 @@ use super::{
 };
 
 pub(crate) const DOM_PARSER_FOREIGN_NODE_SLOT: &str = "__moliDomParserForeignNode";
-use moli_webapi::dom_parser_values::DOM_PARSER_CONSTRUCTION_REALM_SLOT;
+use moli_webapi::dom_parser_values::{DOM_PARSER_CONSTRUCTION_REALM_SLOT, DomParserSupportedType};
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
 const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
@@ -36,33 +36,6 @@ impl DetachedDocumentKind {
             Self::Document => "plain",
             Self::Html => "html",
             Self::Xml => "xml",
-        }
-    }
-}
-
-#[derive(Clone, Copy, webidl::WebIdlEnum)]
-#[webidl(name = "SupportedType")]
-enum DomParserSupportedType {
-    #[webidl(token = "text/html")]
-    Html,
-    #[webidl(token = "text/xml")]
-    TextXml,
-    #[webidl(token = "application/xml")]
-    ApplicationXml,
-    #[webidl(token = "application/xhtml+xml")]
-    ApplicationXhtmlXml,
-    #[webidl(token = "image/svg+xml")]
-    ImageSvgXml,
-}
-
-impl DomParserSupportedType {
-    fn as_mime(self) -> &'static str {
-        match self {
-            Self::Html => "text/html",
-            Self::TextXml => "text/xml",
-            Self::ApplicationXml => "application/xml",
-            Self::ApplicationXhtmlXml => "application/xhtml+xml",
-            Self::ImageSvgXml => "image/svg+xml",
         }
     }
 }

@@ -153,7 +153,7 @@ pub(crate) use css_state::{
 pub(in crate::native_bridge) use custom_element_options::validate_registry_association_for_document;
 pub(in crate::native_bridge::document) use custom_element_options::{
     CreateElementOptions, DocumentCreateElementArgs, DocumentCreateElementNsArgs,
-    parse_import_node_options,
+    flatten_create_element_options, initialize_non_html_element, parse_import_node_options,
 };
 pub(super) use detached_install::install_detached_bridge_methods;
 pub(in crate::native_bridge) use detached_install::{

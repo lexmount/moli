@@ -19,7 +19,8 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
         "<!doctype html><main>ready</main>",
     );
     vm.eval(r#"
-        globalThis.originalEventFactories = {MessageEvent, StorageEvent, ErrorEvent, PageTransitionEvent, KeyboardEvent};
+        globalThis.originalEventFactories = {Event, FocusEvent, InputEvent, MessageEvent, StorageEvent,
+            ErrorEvent, PageTransitionEvent, KeyboardEvent};
         for (const name of Object.keys(originalEventFactories)) {
             delete globalThis[name];
             Object.defineProperty(globalThis, name, {configurable: true, get() {throw new Error('public event constructor');}});
@@ -69,8 +70,26 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
             scope, "keydown", "A", "KeyA", false, true, false, true, true, 0,
         )
         .unwrap();
+        let base = crate::native_bridge::element::construct_simple_event(
+            scope, "change", true, false, false,
+        )
+        .unwrap();
+        let focus =
+            crate::native_bridge::element::construct_focus_event(scope, "focusin", None, true)
+                .unwrap();
+        let input = moli_webapi::events::subclasses::construct_native_input_event(
+            scope,
+            "beforeinput",
+            "insertText",
+            Some("A"),
+            None,
+        )
+        .unwrap();
         let global = scope.get_current_context().global(scope);
         for (name, interface, event) in [
+            ("nativeBaseFactory", "Event", base),
+            ("nativeFocusFactory", "FocusEvent", focus),
+            ("nativeInputFactory", "InputEvent", input),
             ("nativeMessageFactory", "MessageEvent", message),
             ("nativeStorageFactory", "StorageEvent", storage),
             ("nativeErrorFactory", "ErrorEvent", error),
@@ -100,6 +119,9 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
         delete Object.prototype.composed;
         delete Object.prototype.isComposing;
         for (const [event, Ctor] of [
+            [nativeBaseFactory, originalEventFactories.Event],
+            [nativeFocusFactory, originalEventFactories.FocusEvent],
+            [nativeInputFactory, originalEventFactories.InputEvent],
             [nativeMessageFactory, originalEventFactories.MessageEvent],
             [nativeStorageFactory, originalEventFactories.StorageEvent],
             [nativeErrorFactory, originalEventFactories.ErrorEvent],
@@ -108,7 +130,13 @@ fn native_value_event_factories_keep_renderer_templates_without_author_dictionar
         ]) {
             if (!(event instanceof Ctor) || !Number.isFinite(event.timeStamp)) return false;
         }
-        return nativeMessageFactory.data === 7 && nativeMessageFactory.lastEventId === '\ud800'
+        return nativeBaseFactory.type === 'change' && nativeBaseFactory.bubbles && nativeBaseFactory.isTrusted
+            && nativeFocusFactory.type === 'focusin' && nativeFocusFactory.relatedTarget === null
+            && nativeFocusFactory.composed && nativeFocusFactory.bubbles && nativeFocusFactory.isTrusted
+            && nativeInputFactory.isTrusted && nativeInputFactory.cancelable
+            && nativeInputFactory.inputType === 'insertText' && nativeInputFactory.data === 'A'
+            && nativeInputFactory.getTargetRanges().length === 0
+            && nativeMessageFactory.data === 7 && nativeMessageFactory.lastEventId === '\ud800'
             && Object.isFrozen(nativeMessageFactory.ports) && nativeMessageFactory.source === null
             && nativeStorageFactory.key === '\ud800' && nativeStorageFactory.newValue === '\udfff'
             && nativeErrorFactory.message === 'boom' && nativeErrorFactory.error === 9 && nativeErrorFactory.cancelable

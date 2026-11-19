@@ -21,6 +21,7 @@ pub mod iir;
 pub mod listener;
 pub mod media_element_source;
 pub mod node;
+pub mod offline_context_options;
 pub mod oscillator;
 pub mod param_nodes;
 pub mod periodic_wave;

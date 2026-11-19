@@ -38,7 +38,8 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
         rv.set_null();
         return;
     }
-    let Some(options) = parsed.options.flatten(scope, runtime_ptr, handle) else {
+    let Some(options) = flatten_create_element_options(parsed.options, scope, runtime_ptr, handle)
+    else {
         return;
     };
     if !is_html_document(runtime, handle) {
@@ -57,7 +58,7 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
             rv.set_null();
             return;
         };
-        options.initialize_non_html_element(runtime_ptr, created_handle);
+        initialize_non_html_element(&options, runtime_ptr, created_handle);
         unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, created_handle);
         set_wrapped_handle_or_null_for_receiver(
             scope,
@@ -111,7 +112,8 @@ pub(in crate::native_bridge) fn node_create_element_ns_callback<'s>(
     if !validate_create_element_ns_name(scope, namespace.as_deref(), &parsed.qualified_name) {
         return;
     }
-    let Some(options) = parsed.options.flatten(scope, runtime_ptr, handle) else {
+    let Some(options) = flatten_create_element_options(parsed.options, scope, runtime_ptr, handle)
+    else {
         return;
     };
     if namespace.as_deref() == Some(XHTML_NS) {
@@ -176,7 +178,7 @@ pub(in crate::native_bridge) fn node_create_element_ns_callback<'s>(
         rv.set_null();
         return;
     };
-    options.initialize_non_html_element(runtime_ptr, created_handle);
+    initialize_non_html_element(&options, runtime_ptr, created_handle);
     unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, created_handle);
     set_wrapped_handle_or_null_for_receiver(
         scope,

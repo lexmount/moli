@@ -1,5 +1,3 @@
-use crate::{context_bootstrap::mark_event_trusted, util::v8_string};
-
 mod constructors;
 mod dispatch;
 
@@ -29,27 +27,3 @@ pub(crate) use self::constructors::{
 pub(crate) use self::dispatch::{
     NodePublicEventDispatchOutcome, dispatch_beforeinput, dispatch_public_event,
 };
-
-fn event_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: &str,
-) -> Option<v8::Local<'s, v8::Function>> {
-    // Browser-generated events must not consult author-replaceable Window properties.
-    crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
-        scope, name,
-    )
-    .ok()
-}
-
-pub(in crate::native_bridge::element) fn construct_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    ctor_name: &str,
-    event_type: &str,
-    init: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let ctor = event_constructor(scope, ctor_name)?;
-    let event_type = v8_string(scope, event_type)?;
-    let event = ctor.new_instance(scope, &[event_type.into(), init.into()])?;
-    mark_event_trusted(scope, event);
-    Some(event)
-}

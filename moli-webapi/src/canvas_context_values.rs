@@ -8,6 +8,7 @@ use moli_canvas::{DEFAULT_FILL_STYLE, DEFAULT_FONT};
 use moli_v8_util::{set_private_value, throw_type_error};
 use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
+use std::str::FromStr;
 
 pub const CANVAS_BACKING_STORE_SLOT: &str = "__moliCanvasBackingStore";
 pub const OFFSCREEN_CANVAS_WIDTH_SLOT: &str = "__moliOffscreenCanvasWidth";
@@ -162,5 +163,72 @@ fn init_offscreen_canvas_object<'s>(
         .and_then(|len| new_uint8_clamped_array_from_bytes(scope, vec![0; len]))
     {
         set_private_value(scope, object, CANVAS_BACKING_STORE_SLOT, bytes.into());
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, webidl::WebIdlEnum,
+)]
+#[webidl(name = "CanvasContextId", parse_with = Self::parse)]
+#[strum(serialize_all = "lowercase")]
+pub enum CanvasContextKind {
+    #[strum(serialize = "2d")]
+    TwoD,
+    WebGl,
+    #[strum(serialize = "webgl2")]
+    WebGl2,
+}
+
+impl CanvasContextKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::from_str(value).ok()
+    }
+
+    pub fn label(self) -> &'static str {
+        self.into()
+    }
+}
+
+#[cfg(test)]
+mod canvas_context_kind_tests {
+    use super::CanvasContextKind;
+
+    #[test]
+    fn canvas_context_kind_parses_supported_context_ids() {
+        assert_eq!(
+            CanvasContextKind::parse("2d"),
+            Some(CanvasContextKind::TwoD)
+        );
+        assert_eq!(
+            CanvasContextKind::parse("webgl"),
+            Some(CanvasContextKind::WebGl)
+        );
+        assert_eq!(
+            CanvasContextKind::parse("webgl2"),
+            Some(CanvasContextKind::WebGl2)
+        );
+        assert_eq!(CanvasContextKind::parse("WebGL"), None);
+        assert_eq!(CanvasContextKind::parse("bitmaprenderer"), None);
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr, webidl::WebIdlEnum,
+)]
+#[webidl(name = "ImageSmoothingQuality", parse_with = Self::parse)]
+#[strum(serialize_all = "lowercase")]
+pub enum ImageSmoothingQuality {
+    Low,
+    Medium,
+    High,
+}
+
+impl ImageSmoothingQuality {
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::from_str(value).ok()
+    }
+
+    pub fn label(self) -> &'static str {
+        self.into()
     }
 }

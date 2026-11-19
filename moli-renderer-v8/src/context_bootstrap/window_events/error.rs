@@ -1,6 +1,6 @@
 use super::*;
 use crate::{document_runtime::DomHandle, exception_reporting::V8ExceptionReport};
-use moli_webapi::events::dispatch_init::ReportedErrorEventInitDeclaration;
+use moli_webapi::events::subclasses::error::construct_original_error_event;
 
 const BODY_ONERROR_RESOLUTION_GUARD_SLOT: &str = "__moliBodyOnerrorResolutionGuard";
 
@@ -222,32 +222,9 @@ pub(crate) fn dispatch_window_error_event<'s>(
     ensure_window_reflecting_body_onerror_handler(scope);
     let error_value = error_value.unwrap_or_else(|| v8::null(scope).into());
 
-    let message = v8_string(scope, message)
-        .map(|s| s.into())
-        .unwrap_or_else(|| v8::null(scope).into());
-    let filename = v8_string(scope, filename)
-        .map(|s| s.into())
-        .unwrap_or_else(|| v8::null(scope).into());
-    let init = ReportedErrorEventInitDeclaration::new(
-        true,
-        false,
-        message,
-        filename,
-        f64::from(lineno),
-        f64::from(colno),
-        error_value,
-    )
-    .bind(scope)
-    .expect("ErrorEvent init declaration should bind");
-
-    let event_type = v8str(scope, "error");
-    let event = super::super::exposed_interfaces::ensure_intrinsic_interface_constructor(
-        scope,
-        "ErrorEvent",
-    )
-    .ok()
-    .and_then(|ctor| ctor.new_instance(scope, &[event_type.into(), init.into()]));
-    let Some(event) = event else {
+    let Some(event) =
+        construct_original_error_event(scope, message, filename, lineno, colno, error_value)
+    else {
         return Ok(None);
     };
     mark_event_trusted(scope, event);

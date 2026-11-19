@@ -204,6 +204,86 @@ impl<'s> ValueEventInit<'s> {
     }
 }
 
+fn native_source_element<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    prefix: &'static str,
+) -> Option<Option<v8::Local<'s, v8::Object>>> {
+    nullable_native_event_interface(
+        scope,
+        Some(value),
+        prefix,
+        "source",
+        webidl::InterfaceOptions {
+            name: "Element",
+            brand_check: web_api_interfaces::Element::is_instance,
+        },
+    )
+}
+
+pub fn construct_native_command_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    command: &str,
+    source: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = CommandInit {
+        base: EventInit {
+            cancelable: true,
+            ..EventInit::default()
+        },
+        command: webidl::DomString16(command.encode_utf16().collect()),
+        source: native_source_element(scope, source, "CommandEventInit")?,
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::CommandEvent,
+        "command",
+        SubclassInit::Values(ValueEventInit::Command(init)),
+    )
+}
+
+pub fn construct_native_toggle_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    old_state: &str,
+    new_state: &str,
+    cancelable: bool,
+    source: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = ToggleInit {
+        base: EventInit {
+            cancelable,
+            ..EventInit::default()
+        },
+        old_state: webidl::DomString16(old_state.encode_utf16().collect()),
+        new_state: webidl::DomString16(new_state.encode_utf16().collect()),
+        source: native_source_element(scope, source, "ToggleEventInit")?,
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::ToggleEvent,
+        event_type,
+        SubclassInit::Values(ValueEventInit::Toggle(init)),
+    )
+}
+
+pub fn construct_native_interest_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    source: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let init = InterestInit {
+        base: EventInit::default(),
+        source: native_source_element(scope, source, "InterestEventInit")?,
+    };
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::InterestEvent,
+        event_type,
+        SubclassInit::Values(ValueEventInit::Interest(init)),
+    )
+}
+
 pub fn construct_original_page_transition_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

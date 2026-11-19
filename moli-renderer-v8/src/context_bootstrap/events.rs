@@ -48,13 +48,10 @@ pub(crate) fn construct_original_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let event_ctor =
-        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "Event").ok()?;
-    let event_type = v8_string(scope, event_type)?;
     let event = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let scope = try_catch.init();
-        event_ctor.new_instance(&scope, &[event_type.into()])
+        let mut scope = try_catch.init();
+        moli_webapi::events::construct_native_event(&mut scope, event_type, Default::default())
     }?;
     mark_event_trusted(scope, event);
     Some(event)

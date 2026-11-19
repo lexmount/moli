@@ -79,6 +79,7 @@ fn register_tool<'s>(
         webidl::parse_dictionary_object::<conversion::ToolDefinition>(scope, definition)?;
     let options = conversion::dictionary(scope, args, 1, "ModelContext.registerTool")?;
     let options = webidl::parse_dictionary_object::<conversion::RegisterOptions>(scope, options)?;
+    conversion::validate_signal(scope, options.signal)?;
     let target = args.this();
     let (host_ptr, document) = active_target(scope, target)?;
     let error = if unsafe { &*host_ptr }
@@ -351,6 +352,7 @@ fn execute_tool<'s>(
     receiver(scope, args)?;
     let reference = conversion::dictionary(scope, args, 0, "ModelContext.executeTool")?;
     let reference = webidl::parse_dictionary_object::<conversion::ToolReference>(scope, reference)?;
+    conversion::validate_reference_window(scope, reference.window)?;
     // IDL still converts every metadata member (including its author getters).
     // Invocation authority comes from the live registry, not caller metadata.
     let _metadata = (
@@ -371,6 +373,7 @@ fn execute_tool<'s>(
     };
     let options = conversion::dictionary(scope, args, 2, "ModelContext.executeTool")?;
     let options = webidl::parse_dictionary_object::<conversion::ExecuteOptions>(scope, options)?;
+    conversion::validate_signal(scope, options.signal)?;
     let (host_ptr, caller_document) = active_target(scope, args.this())?;
     let expected = match url::Url::parse(&reference.origin) {
         Ok(url) if matches!(url.origin(), url::Origin::Tuple(..)) => url.origin(),

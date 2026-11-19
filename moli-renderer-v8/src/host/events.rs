@@ -7,9 +7,8 @@ use crate::{
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
 };
-use moli_webapi::events::dispatch_init::{
-    DispatchedEventInitDeclaration, ReportedErrorEventInitDeclaration,
-};
+use moli_webapi::events::subclasses::error::construct_original_error_event;
+use moli_webapi::events::{construct_native_event, init::EventInit};
 use std::collections::HashSet;
 
 struct EventListenerEntry {
@@ -644,33 +643,21 @@ fn event_listener_error_event_from_report<'s>(
     global: v8::Local<'s, v8::Object>,
     report: &V8ExceptionReport,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = global.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let error_value = report
         .exception
         .as_ref()
         .map(|exception| v8::Local::new(scope, exception))
         .unwrap_or_else(|| v8::null(scope).into());
-
-    let message = v8_string(scope, &report.summary).unwrap_or_else(|| v8str(scope, ""));
-    let filename = v8_string(scope, report.source.as_deref().unwrap_or(""))
-        .unwrap_or_else(|| v8str(scope, ""));
-    let init = ReportedErrorEventInitDeclaration::new(
-        true,
-        false,
-        message.into(),
-        filename.into(),
-        report.line.unwrap_or(0) as f64,
-        report.column.unwrap_or(0) as f64,
+    construct_original_error_event(
+        scope,
+        &report.summary,
+        report.source.as_deref().unwrap_or(""),
+        report.line.unwrap_or(0) as u32,
+        report.column.unwrap_or(0) as u32,
         error_value,
     )
-    .bind(scope)
-    .ok()?;
-
-    global
-        .get(scope, v8str(scope, "ErrorEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .and_then(|constructor| {
-            constructor.new_instance(scope, &[v8str(scope, "error").into(), init.into()])
-        })
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2033,10 +2020,8 @@ pub(crate) fn create_host_event<'s>(
     bubbles: bool,
     cancelable: bool,
 ) -> std::result::Result<v8::Local<'s, v8::Object>, String> {
-    // The intrinsic constructor owns the complete Event initialization and
-    // prototype surface. Host dispatch only adds browser-controlled trust and
-    // target state; installing methods or accessors here would incorrectly
-    // turn prototype members into per-event own properties.
+    // The shared factory uses this realm's Event template. The dispatch owner
+    // supplies trust and target state.
     let event = construct_event_instance(scope, event_type, bubbles, cancelable)?;
     mark_event_trusted(scope, event);
     set_event_target(scope, event, target);
@@ -2052,19 +2037,18 @@ fn construct_event_instance<'s>(
     bubbles: bool,
     cancelable: bool,
 ) -> std::result::Result<v8::Local<'s, v8::Object>, String> {
-    let constructor =
-        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Event")
-            .map_err(|error| format!("failed to resolve intrinsic Event constructor: {error}"))?;
-    let init = DispatchedEventInitDeclaration::new(bubbles, cancelable)
-        .bind(scope)
-        .map_err(|error| format!("failed to build EventInit dictionary: {error}"))?;
-    let event_type = v8_string(scope, event_type)
-        .ok_or_else(|| format!("failed to allocate event type `{event_type}`"))?;
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let scope = try_catch.init();
-    constructor
-        .new_instance(&scope, &[event_type.into(), init.into()])
-        .ok_or_else(|| "intrinsic Event constructor failed for a host event".to_owned())
+    let mut scope = try_catch.init();
+    construct_native_event(
+        &mut scope,
+        event_type,
+        EventInit {
+            bubbles,
+            cancelable,
+            composed: false,
+        },
+    )
+    .ok_or_else(|| "failed to initialize a host Event".to_owned())
 }
 
 fn normalize_public_event_record<'s>(

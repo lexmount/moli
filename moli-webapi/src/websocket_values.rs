@@ -187,3 +187,26 @@ pub fn new_websocket_close_event<'s>(
         .ok()?;
     Some(event)
 }
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebSocketStream")]
+pub struct WebSocketStreamConstructorArgs<'s> {
+    #[webidl(
+        required,
+        name = "url",
+        converter = "usv_string",
+        missing_message = "Failed to construct 'WebSocketStream': 1 argument required, but only 0 present."
+    )]
+    pub url: String,
+    #[webidl(index = 1, dictionary)]
+    pub options: WebSocketStreamOptionsMembers<'s>,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "WebSocketStreamOptions")]
+pub struct WebSocketStreamOptionsMembers<'s> {
+    #[webidl(sequence, converter = "usv_string", default = Vec::new())]
+    pub protocols: Vec<String>,
+    #[webidl(interface = crate::interfaces::AbortSignal)]
+    pub signal: Option<v8::Local<'s, v8::Object>>,
+}

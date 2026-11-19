@@ -1,6 +1,7 @@
 use crate::custom_elements;
 use crate::dom::native::ShadowRootInit;
 use crate::webidl;
+use moli_webapi::dom_options::{ShadowRootInitMembers, ShadowRootMode, SlotAssignmentMode};
 
 use super::super::super::{
     document::{self, validate_registry_association_for_document},
@@ -8,55 +9,21 @@ use super::super::super::{
     set_wrapped_handle_or_null_for_receiver, throw_dom_exception,
 };
 
-#[derive(webidl::WebIdlEnum)]
-enum ShadowRootMode {
-    #[webidl(token = "open")]
-    Open,
-    #[webidl(token = "closed")]
-    Closed,
-}
+struct ShadowRootRegistry(custom_elements::CustomElementRegistryAssociation);
 
-#[derive(webidl::WebIdlEnum)]
-enum SlotAssignmentMode {
-    #[webidl(token = "named")]
-    Named,
-    #[webidl(token = "manual")]
-    Manual,
-}
+impl<'s> webidl::WebIdlConverter<'s> for ShadowRootRegistry {
+    type Options = ();
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ShadowRootInit")]
-struct ShadowRootInitMembers {
-    #[webidl(default = false)]
-    clonable: bool,
-    #[webidl(with = custom_element_registry_member)]
-    custom_element_registry: Option<custom_elements::CustomElementRegistryAssociation>,
-    #[webidl(default = false)]
-    delegates_focus: bool,
-    #[webidl(required, converter = "enum")]
-    mode: ShadowRootMode,
-    #[webidl(nullable)]
-    reference_target: Option<String>,
-    #[webidl(default = false)]
-    serializable: bool,
-    #[webidl(default = SlotAssignmentMode::Named, converter = "enum")]
-    slot_assignment: SlotAssignmentMode,
-}
-
-fn custom_element_registry_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    init: v8::Local<'s, v8::Object>,
-    _: &str,
-) -> Result<Option<custom_elements::CustomElementRegistryAssociation>, webidl::WebIdlError> {
-    let context = webidl::Context::member("ShadowRootInit", "customElementRegistry");
-    let Some(value) = webidl::property_result(scope, init, "customElementRegistry", context)?
-        .filter(|value| !value.is_undefined())
-    else {
-        return Ok(None);
-    };
-    custom_elements::registry_association_from_value(scope, value)
-        .map(Some)
-        .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "CustomElementRegistry"))
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        custom_elements::registry_association_from_value(scope, value)
+            .map(Self)
+            .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "CustomElementRegistry"))
+    }
 }
 
 pub(in crate::native_bridge) fn shadow_root_init_from_attach_shadow_value<'s>(
@@ -66,7 +33,7 @@ pub(in crate::native_bridge) fn shadow_root_init_from_attach_shadow_value<'s>(
     Option<custom_elements::CustomElementRegistryAssociation>,
     ShadowRootInit,
 )> {
-    let init = match webidl::convert::<webidl::Dictionary<ShadowRootInitMembers>>(
+    let init = match webidl::convert::<webidl::Dictionary<ShadowRootInitMembers<ShadowRootRegistry>>>(
         scope,
         value,
         webidl::Context::argument("Element.attachShadow", 1),
@@ -90,7 +57,10 @@ pub(in crate::native_bridge) fn shadow_root_init_from_attach_shadow_value<'s>(
         SlotAssignmentMode::Manual => "manual",
     });
     shadow_init.set_reference_target(init.reference_target);
-    Some((init.custom_element_registry, shadow_init))
+    Some((
+        init.custom_element_registry.map(|registry| registry.0),
+        shadow_init,
+    ))
 }
 
 pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(

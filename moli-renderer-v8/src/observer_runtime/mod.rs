@@ -2,6 +2,7 @@
 
 use moli_webapi::intersection_observer_entry::IntersectionObserverEntryDeclaration;
 pub(crate) use moli_webapi::intersection_observer_entry::intersection_observer_entry_constructor_callback;
+use moli_webapi::intersection_observer_entry::options::IntersectionObserverInitMembers;
 use moli_webapi::mutation_record::{MutationObserverInit, MutationObserverOptions};
 
 mod callback;
@@ -316,24 +317,6 @@ struct MutationObserverObserveArgs<'s> {
     target: v8::Local<'s, v8::Object>,
     #[webidl(dictionary, default = MutationObserverInit::default())]
     options: MutationObserverInit,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "IntersectionObserverInit")]
-struct IntersectionObserverInitMembers {
-    // The derive converts members in lexical order of their final JavaScript names.
-    #[webidl(default = 0)]
-    delay: i32,
-    #[webidl(with = intersection_observer_root_member)]
-    root: Option<NativeNodeId>,
-    #[webidl(default = "0px")]
-    root_margin: String,
-    #[webidl(default = "0px")]
-    scroll_margin: String,
-    #[webidl(with = intersection_observer_threshold_member)]
-    threshold: Vec<f64>,
-    #[webidl(default = false)]
-    track_visibility: bool,
 }
 
 impl Default for IntersectionObserverOptions {
@@ -1282,38 +1265,36 @@ enum IntersectionObserverOptionsError {
     Range(&'static str),
 }
 
-fn intersection_observer_root_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    member: &'static str,
-) -> Result<Option<NativeNodeId>, webidl::WebIdlError> {
-    let Some(value) = webidl::legacy_optional_member::<v8::Local<'s, v8::Value>>(
-        scope,
-        object,
-        member,
-        webidl::Context::member("IntersectionObserverInit", member),
-    )?
-    else {
-        return Ok(None);
-    };
-    let root = crate::native_bridge::branded_node_handle(
-        scope,
-        value,
-        web_api_interfaces::Node::DESCRIPTOR,
-    )
-    .ok_or_else(|| {
-        webidl::WebIdlError::custom_message(
-            "Failed to construct 'IntersectionObserver': root is not a Node.",
+struct IntersectionObserverRoot(NativeNodeId);
+
+impl<'s> webidl::WebIdlConverter<'s> for IntersectionObserverRoot {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        _: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        let root = crate::native_bridge::branded_node_handle(
+            scope,
+            value,
+            web_api_interfaces::Node::DESCRIPTOR,
         )
-    })?;
-    let valid = context_host_ptr_from_global_bridge(scope)
-        .is_some_and(|host_ptr| dom_access::is_intersection_root(host_ptr, root));
-    if !valid {
-        return Err(webidl::WebIdlError::custom_message(
-            "Failed to construct 'IntersectionObserver': root must be an Element or Document.",
-        ));
+        .ok_or_else(|| {
+            webidl::WebIdlError::custom_message(
+                "Failed to construct 'IntersectionObserver': root is not a Node.",
+            )
+        })?;
+        let valid = context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host_ptr| dom_access::is_intersection_root(host_ptr, root));
+        if !valid {
+            return Err(webidl::WebIdlError::custom_message(
+                "Failed to construct 'IntersectionObserver': root must be an Element or Document.",
+            ));
+        }
+        Ok(Self(root))
     }
-    Ok(Some(root))
 }
 
 fn parse_intersection_observer_options<'s>(
@@ -1323,7 +1304,9 @@ fn parse_intersection_observer_options<'s>(
     let Some(value) = value else {
         return Ok(IntersectionObserverOptions::default());
     };
-    let init = match webidl::parse_dictionary::<IntersectionObserverInitMembers>(
+    let init = match webidl::parse_dictionary::<
+        IntersectionObserverInitMembers<IntersectionObserverRoot>,
+    >(
         scope,
         value,
         webidl::Context::argument("IntersectionObserver", 2),
@@ -1334,7 +1317,7 @@ fn parse_intersection_observer_options<'s>(
     };
 
     let mut options = IntersectionObserverOptions {
-        root: init.root,
+        root: init.root.map(|root| root.0),
         ..IntersectionObserverOptions::default()
     };
 
@@ -1357,30 +1340,6 @@ fn parse_intersection_observer_options<'s>(
     }
 
     Ok(options)
-}
-
-fn intersection_observer_threshold_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    member: &'static str,
-) -> Result<Vec<f64>, webidl::WebIdlError> {
-    let context = webidl::Context::member("IntersectionObserverInit", member);
-    let Some(value) =
-        webidl::optional_member::<v8::Local<'s, v8::Value>>(scope, object, member, context)?
-    else {
-        return Ok(vec![0.0]);
-    };
-
-    // Convert the union at its dictionary position, reading @@iterator once.
-    if let Some(sequence) =
-        webidl::convert_optional_sequence::<webidl::Double>(scope, value, context, &())?
-    {
-        Ok(sequence.0.into_iter().map(|value| value.0).collect())
-    } else {
-        Ok(vec![
-            webidl::convert::<webidl::Double>(scope, value, context)?.0,
-        ])
-    }
 }
 
 fn normalize_intersection_thresholds(

@@ -6,6 +6,7 @@ use super::super::*;
 use crate::util::{get_private_value, set_private_value};
 use crate::v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction;
 use crate::{web_api_interfaces, webidl};
+use moli_webapi::navigator_options::{PlaybackState, PlaybackStateArgs, SetActionHandlerArgs};
 use moli_webapi::window_values::{
     MEDIA_SESSION_HANDLERS_SLOT as HANDLERS, MEDIA_SESSION_PLAYBACK_STATE_SLOT as PLAYBACK_STATE,
     MEDIA_SESSION_STATE_SLOT as STATE, new_media_session, new_media_session_state,
@@ -19,52 +20,6 @@ struct MediaSessionPrototypeDeclaration {
     set_action_handler: (),
     #[webapi(accessor_property, getter = playback_state, setter = set_playback_state)]
     playback_state: (),
-}
-
-#[derive(Clone, Copy, webidl::WebIdlEnum)]
-#[webidl(name = "MediaSessionAction")]
-enum MediaSessionAction {
-    Play,
-    Pause,
-    Seekbackward,
-    Seekforward,
-    Previoustrack,
-    Nexttrack,
-    Skipad,
-    Stop,
-    Seekto,
-    Togglemicrophone,
-    Togglecamera,
-    Togglescreenshare,
-    Hangup,
-    Previousslide,
-    Nextslide,
-    Enterpictureinpicture,
-    Voiceactivity,
-}
-
-#[derive(Clone, Copy, webidl::WebIdlEnum)]
-#[webidl(name = "MediaSessionPlaybackState")]
-enum PlaybackState {
-    None,
-    Paused,
-    Playing,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "MediaSession.setActionHandler")]
-struct SetActionHandlerArgs {
-    #[webidl(required, converter = "enum")]
-    action: MediaSessionAction,
-    #[webidl(required, nullable, converter = "callback_function")]
-    handler: Option<webidl::WebIdlCallbackFunction>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "MediaSession.playbackState")]
-struct PlaybackStateArgs {
-    #[webidl(required)]
-    value: String,
 }
 
 pub(super) fn build<'s>(

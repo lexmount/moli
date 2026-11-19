@@ -1,3 +1,7 @@
+use moli_webapi::navigation_values::options::{
+    NavigationFocusReset, NavigationInterceptOptionsMembers, NavigationScrollBehavior,
+};
+
 use super::*;
 use crate::context_bootstrap::navigation_activation::install_navigation_transition;
 use crate::context_bootstrap::navigation_events::{
@@ -44,38 +48,9 @@ const PRECOMMIT_CONTROLLER_EVENT_SLOT: &str = "__lmPrecommitControllerEvent";
 const PRECOMMIT_CONTROLLER_BACKING_SLOT: &str = "__moliPrecommitControllerBacking";
 const PRECOMMIT_CONTROLLER_ACTIVE_SLOT: &str = "__lmPrecommitControllerActive";
 
-#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
-#[webidl(name = "NavigationFocusReset", rename_all = "kebab-case")]
-enum NavigationFocusReset {
-    #[default]
-    AfterTransition,
-    Manual,
-}
-
-#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
-#[webidl(name = "NavigationScrollBehavior", rename_all = "kebab-case")]
-enum NavigationScrollBehavior {
-    #[default]
-    AfterTransition,
-    Manual,
-}
-
 /// The four members are declared in Web IDL lexicographic order. Conversion
 /// completes before `intercept()` mutates the NavigateEvent, so a getter or
 /// callback conversion failure cannot leave a partially intercepted event.
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "NavigateEvent.intercept")]
-struct NavigationInterceptOptionsMembers {
-    #[webidl(name = "focusReset", converter = "enum")]
-    focus_reset: Option<NavigationFocusReset>,
-    #[webidl(converter = "callback_function")]
-    handler: Option<webidl::WebIdlCallbackFunction>,
-    #[webidl(name = "precommitHandler", converter = "callback_function")]
-    precommit_handler: Option<webidl::WebIdlCallbackFunction>,
-    #[webidl(converter = "enum")]
-    scroll: Option<NavigationScrollBehavior>,
-}
-
 #[derive(WebApiObject)]
 #[webapi(prototype = "Object", interface = web_api_interfaces::NavigationPrecommitController)]
 struct PrecommitControllerDeclaration<'scope> {
