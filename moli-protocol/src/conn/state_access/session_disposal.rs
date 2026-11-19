@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use super::ProtocolWorkflowState;
 use crate::conn::{
-    BackgroundProtocolEvent, CommandOwnerScope, CompletedSessionPageUpdates,
-    CompletedSessionScriptCleanup, SessionPageUpdateResult,
+    BackgroundProtocolEvent, CompletedSessionPageUpdates, CompletedSessionScriptCleanup,
+    SessionPageUpdateResult,
 };
 use crate::domains::target::session_disposal::{
     FailedSessionPageRetirement, SessionDisposalIdentity,
@@ -181,7 +181,6 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn finish_session_page_updates(
         self,
         identity: &SessionDisposalIdentity,
-        _owner: &CommandOwnerScope,
         completed: CompletedSessionPageUpdates,
     ) -> SessionPageUpdateResult {
         let page = if identity.cleanup_binding_was_not_replaced(self.connection) {

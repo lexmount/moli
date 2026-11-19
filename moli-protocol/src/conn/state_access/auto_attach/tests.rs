@@ -41,10 +41,21 @@ async fn hold_renderer(
     moli_core::RendererNativeCommandResponseGuard,
     ReleaseOnDrop,
 ) {
+    hold_renderer_for_session(fixture, "SID-auto-owned").await
+}
+
+async fn hold_renderer_for_session(
+    fixture: &mut TestContext,
+    session: &str,
+) -> (
+    moli_core::page::PendingPageCommand,
+    moli_core::RendererNativeCommandResponseGuard,
+    ReleaseOnDrop,
+) {
     let (entered, waiting) = tokio::sync::oneshot::channel();
     let (release, held) = std::sync::mpsc::channel();
     let (pending, guard) = fixture.with_fixture(|conn| {
-        conn.loaded_page_mut_for_protocol_access(Some("SID-auto-owned"))
+        conn.loaded_page_mut_for_protocol_access(Some(session))
             .unwrap()
             .start_cdp_call(
                 1999,
@@ -68,6 +79,137 @@ async fn hold_renderer(
         .unwrap()
         .unwrap();
     (pending, guard, release)
+}
+
+#[tokio::test]
+async fn auto_attach_cascade_native_cleanup_does_not_block_an_independent_target() {
+    use crate::conn::CdpSessionRoute;
+    use moli_page_types::DevToolsSessionKey;
+
+    let (mut fixture, owner_session) = fixture().await;
+    let mut second = BrowserContext::new("BID-auto-second".into());
+    second.set_active_target_id("TID-auto-second");
+    second.attach_active_session("SID-auto-second");
+    fixture.with_fixture(|conn| conn.insert_browser_context(second));
+    fixture
+        .install_navigation_fixture_for_session_owner("about:blank", Some("SID-auto-second"))
+        .await;
+    // Leave both targets without an external Primary session so ordinary
+    // auto-attach reuses the native Primary lane on the next attachment.
+    for (id, session) in [(1930, "SID-auto-owned"), (1931, "SID-auto-second")] {
+        fixture
+            .process_async(json!({
+                "id":id,"method":"Target.detachFromTarget","params":{"sessionId":session},
+            }))
+            .await;
+        assert_eq!(fixture.take_response_by_id(id)["result"], json!({}));
+    }
+    fixture
+        .wait_for_direct_command_work_completion_for_test("initial session retirements")
+        .await;
+    let auto_attach = |id, enabled| {
+        json!({
+            "id":id,"sessionId":owner_session,"method":"Target.setAutoAttach",
+            "params":{"autoAttach":enabled,"waitForDebuggerOnStart":false,"flatten":true,
+                "filter": if enabled { json!([{"type":"page"},{"exclude":true}]) } else { json!([]) }},
+        })
+    };
+    fixture.process_async(auto_attach(1932, true)).await;
+    assert_eq!(fixture.take_response_by_id(1932)["result"], json!({}));
+    let old_sessions = fixture.with_fixture(|conn| {
+        let sessions = conn.auto_attached_session_cascade_for_owner(Some(&owner_session));
+        assert_eq!(sessions.len(), 2);
+        sessions
+            .into_iter()
+            .map(|session| {
+                let Some(CdpSessionRoute::PageTarget {
+                    target_id,
+                    session_key,
+                    ..
+                }) = conn.session_route(Some(&session))
+                else {
+                    panic!("page attachment");
+                };
+                assert_eq!(session_key, DevToolsSessionKey::Primary);
+                (session, target_id)
+            })
+            .collect::<Vec<_>>()
+    });
+    // Hold whichever target is first in the actual cascade. The test does
+    // not rely on target enumeration or generated session-ID ordering.
+    let (busy_session, _) = &old_sessions[0];
+    let (_, idle_target) = &old_sessions[1];
+    fixture
+        .process_async(json!({
+            "id":1933,"sessionId":busy_session,"method":"Page.addScriptToEvaluateOnNewDocument",
+            "params":{"source":"globalThis.retiredPreload = true"},
+        }))
+        .await;
+    assert!(fixture.take_response_by_id(1933)["result"]["identifier"].is_string());
+    fixture.take_all();
+    let (gate, guard, release) = hold_renderer_for_session(&mut fixture, busy_session).await;
+    fixture.process_async(auto_attach(1934, false)).await;
+    assert_eq!(fixture.take_response_by_id(1934)["result"], json!({}));
+    let detached = fixture.take_all();
+    assert_eq!(
+        detached
+            .iter()
+            .filter(|message| message["method"] == "Target.detachedFromTarget")
+            .map(|message| message["params"]["sessionId"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        old_sessions
+            .iter()
+            .map(|(session, _)| session.clone())
+            .collect::<Vec<_>>(),
+        "Browser events retain cascade order while native work runs independently"
+    );
+    fixture.process_async(auto_attach(1935, true)).await;
+    assert_eq!(fixture.take_response_by_id(1935)["result"], json!({}));
+    let attached = fixture.take_all();
+    let idle_session = attached
+        .iter()
+        .find(|message| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["targetId"] == *idle_target
+        })
+        .unwrap()["params"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(idle_session, old_sessions[1].0);
+    fixture.with_fixture(|conn| {
+        assert!(matches!(
+            conn.session_route(Some(&idle_session)),
+            Some(CdpSessionRoute::PageTarget {
+                session_key: DevToolsSessionKey::Primary,
+                ..
+            })
+        ));
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.process_async(json!({
+            "id":1936,"sessionId":idle_session,"method":"Runtime.evaluate",
+            "params":{"expression":"21 * 2","returnByValue":true},
+        })),
+    )
+    .await
+    .expect("the idle target must reconnect before the busy target's cleanup can run");
+    assert_eq!(
+        fixture.take_response_by_id(1936)["result"]["result"]["value"],
+        42
+    );
+    drop(release);
+    gate.wait().await.unwrap();
+    drop(guard);
+    fixture
+        .wait_for_direct_command_work_completion_for_test("independent native retirements")
+        .await;
+    fixture.with_fixture(|conn| {
+        for (session, _) in old_sessions {
+            assert!(conn.session_route(Some(&session)).is_none());
+        }
+    });
 }
 
 fn start(

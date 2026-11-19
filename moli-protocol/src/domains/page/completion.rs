@@ -19,6 +19,18 @@ pub(crate) fn complete_finite(
         command_context.set_renderer_output_predecessor(predecessor);
     }
     let plan = match *completed.kind {
+        CompletedPageCommandKind::Enable { result, host } => {
+            if result.is_err() || !host.can_start_operation(conn) {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    "Target initial document is unavailable",
+                ));
+            }
+            // The Browser subscription was applied when the command arrived.
+            // Only Page-dependent work may resume after adoption; a later
+            // disable or enable must keep its newer subscription state.
+            return start_page_enable_document_work(conn, command_id, &owner_scope);
+        }
         CompletedPageCommandKind::AppendContextPreloadScript {
             identifier,
             completed,

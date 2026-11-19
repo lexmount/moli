@@ -221,11 +221,13 @@ impl TargetDetachment {
             TargetDetachmentOutput { sessions }
                 .finish(conn, &mut CommandDispatchContext::default()),
         );
-        let access = conn.protocol_state_access();
-        let workflow = crate::conn::PreparedCommandWorkflow::new(move |context| async move {
-            let mut driver = ProtocolWorkflowDriver::new(access);
-            let mut output = CommandOutputPlan::default();
-            for (identity, disposal) in native {
+        // Each retirement owns its native barrier. A busy target must not
+        // delay another target's finalizer or its successor session.
+        for (identity, disposal) in native {
+            let access = conn.protocol_state_access();
+            let workflow = crate::conn::PreparedCommandWorkflow::new(move |context| async move {
+                let mut driver = ProtocolWorkflowDriver::new(access);
+                let mut output = CommandOutputPlan::default();
                 let mut background = Vec::new();
                 let mut protocol = Vec::new();
                 if let Err(error) = disposal
@@ -236,10 +238,10 @@ impl TargetDetachment {
                 }
                 output.extend_background_events(background);
                 output.extend_background_events(protocol);
-            }
-            context.complete(output)
-        });
-        crate::conn::PendingProtocolSchedulerWork::publish_workflow(conn, workflow, None);
+                context.complete(output)
+            });
+            crate::conn::PendingProtocolSchedulerWork::publish_workflow(conn, workflow, None);
+        }
         prefix
     }
 
