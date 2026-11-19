@@ -117,8 +117,11 @@ jobs:
       - name: Check clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # The target cfg adds -Dwarnings alongside the repository's linker flags.
       - name: Check renderer tests without DevTools
-        run: cargo check --locked -p moli-renderer-v8 --no-default-features --tests
+        run: >-
+          cargo check --locked -p moli-renderer-v8 --no-default-features --tests
+          --config 'target."cfg(all())".rustflags=["-Dwarnings"]'
 
       - name: Check standalone DevTools contracts and run runtime smoke
         env:
