@@ -738,6 +738,7 @@ content-security-policy/unsafe-hashes/style_attribute_allowed.html
 content-security-policy/unsafe-hashes/style_attribute_denied_missing_unsafe_hashes.html
 content-security-policy/unsafe-hashes/style_attribute_denied_wrong_hash.html
 content-security-policy/wasm-unsafe-eval/postMessage-wasm-module.html
+content-security-policy/worker-src/service-worker-src-child-fallback-blocked.https.sub.html
 content-security-policy/worker-src/service-worker-src-child-fallback.https.sub.html
 content-security-policy/worker-src/service-worker-src-default-fallback.https.sub.html
 content-security-policy/worker-src/service-worker-src-script-fallback.https.sub.html
@@ -7306,6 +7307,7 @@ html/semantics/popovers/invoker-show-crash.html
 html/semantics/popovers/popover-active-document.html
 html/semantics/popovers/popover-auto-reentrant-crash.html
 html/semantics/popovers/popover-beforetoggle-opening-event.html
+html/semantics/popovers/popover-events.html
 html/semantics/popovers/popover-focus-blur-crash.html
 html/semantics/popovers/popover-focus-previous-crash.html
 html/semantics/popovers/popover-hint-crash.html
@@ -8346,6 +8348,7 @@ navigation-api/navigate-event/navigate-window-open.html
 navigation-api/navigate-event/navigatesuccess-cross-document.html
 navigation-api/navigate-event/navigatesuccess-same-document.html
 navigation-api/navigate-event/navigation-back-same-document-preventDefault.html
+navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-navigates-top-and-same-doc-child-and-cross-doc-child.html
 navigation-api/navigate-event/navigation-traverseTo-same-document-preventDefault-multiple-windows.html
 navigation-api/navigate-event/navigation-traverseTo-top-cancels-cross-document-child.html
@@ -8967,6 +8970,7 @@ service-workers/service-worker/iso-latin1-header.https.html
 service-workers/service-worker/mime-sniffing.https.html
 service-workers/service-worker/multi-globals/url-parsing.https.html
 service-workers/service-worker/navigation-preload/empty-preload-response-body.https.html
+service-workers/service-worker/navigation-preload/get-state.https.html
 service-workers/service-worker/navigation-preload/navigationPreload.https.html
 service-workers/service-worker/navigation-preload/samesite-iframe.https.html
 service-workers/service-worker/onactivate-script-error.https.html
@@ -9557,9 +9561,9 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
+trusted-types/trusted-types-navigation.html?01-05
 trusted-types/trusted-types-navigation.html?06-10
 trusted-types/trusted-types-navigation.html?16-20
-trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html

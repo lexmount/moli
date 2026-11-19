@@ -51,7 +51,6 @@ content-security-policy/webrtc/webrtc-allowed-explicit.html
 content-security-policy/webrtc/webrtc-allowed-nopolicy.html
 content-security-policy/webrtc/webrtc-blocked-explicit.html
 content-security-policy/webrtc/webrtc-blocked-unknown.html
-content-security-policy/worker-src/service-worker-src-child-fallback-blocked.https.sub.html
 cookiestore/serviceworker_cookieStore_subscriptions_reset.https.html
 css/css-animations/parsing/keyframe-selectors.html
 css/css-animations/stability/animation-event-destroy-renderer.html?animationiteration
@@ -2866,6 +2865,7 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
@@ -2926,7 +2926,6 @@ html/semantics/popovers/button-type-popovertarget.html
 html/semantics/popovers/imperative-invokers.html
 html/semantics/popovers/input-type-popovertarget.html
 html/semantics/popovers/popover-anchor-multicol-display.html
-html/semantics/popovers/popover-events.html
 html/semantics/popovers/popover-move-documents.html
 html/semantics/popovers/popover-nested-in-button.html
 html/semantics/popovers/popover-overlay.html
@@ -3068,7 +3067,6 @@ navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
-navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
 navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
@@ -3198,7 +3196,6 @@ service-workers/service-worker/import-scripts-updated-flag.https.html
 service-workers/service-worker/local-url-inherit-controller.https.html
 service-workers/service-worker/multipart-image.https.html
 service-workers/service-worker/navigate-window.https.html
-service-workers/service-worker/navigation-preload/get-state.https.html
 service-workers/service-worker/navigation-redirect-resolution.https.html
 service-workers/service-worker/navigation-timing-sizes.https.html
 service-workers/service-worker/navigation-timing.https.html
