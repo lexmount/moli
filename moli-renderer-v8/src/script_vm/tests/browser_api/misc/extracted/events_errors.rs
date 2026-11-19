@@ -381,7 +381,7 @@ async fn showing_popover_focuses_autofocus_descendant_before_toggle_event() {
     );
 }
 #[tokio::test]
-async fn removing_open_popover_dispatches_forced_close_events() {
+async fn removing_open_popover_preserves_queued_opening_event() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm("https://popover-removal-events.test/");
 
@@ -414,22 +414,11 @@ async fn removing_open_popover_dispatches_forced_close_events() {
 
     assert_eq!(before, "true");
 
-    assert!(!vm.has_ready_timeout());
-    assert!(
-        vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
-        )
-        .await
-        .expect("initial popover show toggle task should run")
-    );
-
     let removed = vm
         .eval(
             r#"
             (() => {
               const popover = document.querySelector("[popover]");
-              globalThis.__lmPopoverRemovalEvents.length = 0;
               popover.remove();
               return [
                 globalThis.__lmPopoverRemovalEvents.join("|"),
@@ -440,7 +429,7 @@ async fn removing_open_popover_dispatches_forced_close_events() {
         )
         .expect("popover removal should evaluate");
 
-    assert_eq!(removed, "beforetoggle:open->closed:false;false");
+    assert_eq!(removed, "beforetoggle:closed->open:true;false");
 
     assert!(!vm.has_ready_timeout());
     assert!(
@@ -449,7 +438,15 @@ async fn removing_open_popover_dispatches_forced_close_events() {
             &loader,
         )
         .await
-        .expect("queued popover removal toggle task should run")
+        .expect("queued popover opening task should survive removal")
+    );
+    assert!(
+        !vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("removal should not queue another toggle task")
     );
 
     let after = vm
@@ -462,7 +459,7 @@ async fn removing_open_popover_dispatches_forced_close_events() {
 
     assert_eq!(
         after,
-        "beforetoggle:open->closed:false|toggle:open->closed:false"
+        "beforetoggle:closed->open:true|toggle:closed->open:false"
     );
 }
 #[tokio::test]
