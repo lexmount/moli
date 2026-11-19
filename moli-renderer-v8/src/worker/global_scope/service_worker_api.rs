@@ -669,7 +669,7 @@ pub(super) fn service_worker_periodic_sync_manager_unregister_callback<'s>(
     );
 }
 
-use crate::service_worker_api_values::service_worker_periodic_sync_options;
+use moli_webapi::worker_options::service_worker::service_worker_periodic_sync_options;
 
 fn service_worker_background_sync_permission_state(state: &WorkerGlobalState) -> String {
     if !state.secure_context {
@@ -859,7 +859,7 @@ fn service_worker_navigation_preload_manager_scope_from_this<'s>(
     Url::parse(&scope_string).ok()
 }
 
-use crate::service_worker_api_values::service_worker_navigation_preload_header_value;
+use moli_webapi::worker_options::service_worker::service_worker_navigation_preload_header_value;
 
 fn service_worker_navigation_preload_valid_header_value(value: &str) -> bool {
     value
@@ -1068,20 +1068,12 @@ pub(super) fn build_service_worker_push_subscription_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     snapshot: &ServiceWorkerPushSubscriptionSnapshot,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let options = moli_webapi::push_values::new_subscription_options(
+    moli_webapi::push_values::new_subscription(
         scope,
+        &snapshot.endpoint,
         snapshot.user_visible_only,
-        v8::null(scope).into(),
-    )?;
-    ServiceWorkerPushSubscriptionDeclaration {
-        endpoint: snapshot.endpoint.clone(),
-        expiration_time: v8::null(scope).into(),
-        options,
-        unsubscribe: (),
-        to_json: (),
-    }
-    .bind(scope)
-    .ok()
+        service_worker_push_subscription_unsubscribe_callback,
+    )
 }
 
 pub(super) fn service_worker_push_subscription_unsubscribe_callback<'s>(
@@ -1129,22 +1121,6 @@ pub(super) fn service_worker_push_subscription_unsubscribe_callback<'s>(
             version_id,
         },
     ));
-}
-
-pub(super) fn service_worker_push_subscription_to_json_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let object = ObjectLiteralDeclaration::bind(scope);
-    for name in ["endpoint", "expirationTime", "options"] {
-        let value = args
-            .this()
-            .get(scope, v8str(scope, name).into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        object.set_string_property(scope, name, value);
-    }
-    rv.set(object.into_value());
 }
 
 pub(super) fn service_worker_skip_waiting_callback<'s>(
@@ -2050,29 +2026,6 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
         length = 0
     )]
     get_state: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PushSubscription)]
-struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
-    #[webapi(data_property, readonly)]
-    endpoint: String,
-
-    #[webapi(data_property = "expirationTime", readonly)]
-    expiration_time: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, readonly)]
-    options: v8::Local<'scope, v8::Object>,
-
-    #[webapi(method, callback = service_worker_push_subscription_unsubscribe_callback, length = 0)]
-    unsubscribe: (),
-
-    #[webapi(
-        method = "toJSON",
-        callback = service_worker_push_subscription_to_json_callback,
-        length = 0
-    )]
-    to_json: (),
 }
 
 #[derive(WebApiObject)]

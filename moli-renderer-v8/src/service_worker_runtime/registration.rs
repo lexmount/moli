@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+pub(crate) use moli_webapi::worker_options::service_worker::ServiceWorkerUpdateViaCache;
 use url::Url;
 
 use super::{
@@ -8,37 +9,6 @@ use super::{
 };
 
 pub(crate) const DEFAULT_NAVIGATION_PRELOAD_HEADER_VALUE: &str = "true";
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, crate::webidl::WebIdlEnum)]
-#[webidl(
-    name = "ServiceWorkerUpdateViaCache",
-    parse_with = Self::parse_webidl_token
-)]
-pub(crate) enum ServiceWorkerUpdateViaCache {
-    #[default]
-    Imports,
-    All,
-    None,
-}
-
-impl ServiceWorkerUpdateViaCache {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Imports => "imports",
-            Self::All => "all",
-            Self::None => "none",
-        }
-    }
-
-    pub(crate) fn parse_webidl_token(value: &str) -> Option<Self> {
-        match value {
-            "imports" => Some(Self::Imports),
-            "all" => Some(Self::All),
-            "none" => Some(Self::None),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ServiceWorkerNavigationPreloadState {
