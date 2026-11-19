@@ -3,8 +3,9 @@ use super::super::range_algorithms::{range_delete_contents, range_insert_node_at
 use super::{selection_dispatch_change, selection_set_collapsed};
 use crate::context_bootstrap::{live_ranges_character_data_edit, selection_value_for_window};
 use crate::document_runtime::DomHandle;
-use crate::dom::native::{DomStringValue, NodeType};
+use crate::dom::native::{ContentEditableState, DomHost, DomStringValue, Node, NodeType};
 use crate::native_bridge::PageScriptHost;
+use crate::native_bridge::document::XHTML_NS;
 use crate::util::node_wrapper_from_handle;
 
 pub(crate) fn replace_editable_selection_text(
@@ -12,7 +13,7 @@ pub(crate) fn replace_editable_selection_text(
     runtime_ptr: *mut PageScriptHost,
     document: DomHandle,
     replacement: &str,
-    insertion_point_is_editable: impl FnOnce(&PageScriptHost, DomHandle) -> bool,
+    insertion_point_is_editable: impl Fn(&PageScriptHost, DomHandle) -> bool,
 ) -> Option<bool> {
     let runtime = unsafe { &*runtime_ptr };
     let snapshot = runtime.document_editing_selection(document)?;
@@ -39,14 +40,20 @@ pub(crate) fn replace_editable_selection_text(
     let window = scope.get_current_context().global(scope);
     let selection = selection_value_for_window(scope, window)?;
 
-    let (caret, offset) = if start.container == end.container && is_text(runtime, start.container) {
-        replace_text_span(
-            scope,
-            runtime_ptr,
-            start.container,
-            start.offset..end.offset,
-            &units,
-        )?
+    let text_span = if start.container == end.container && is_text(runtime, start.container) {
+        Some((start.container, start.offset..end.offset))
+    } else if !units.is_empty() && !order.is_eq() {
+        let first = text_boundary(dom, start.container, start.offset, RangeBoundarySide::Start);
+        let last = text_boundary(dom, end.container, end.offset, RangeBoundarySide::End);
+        first.zip(last).and_then(|((first, from), (last, to))| {
+            (first == last && from < to && insertion_point_is_editable(runtime, first))
+                .then_some((first, from..to))
+        })
+    } else {
+        None
+    };
+    let (caret, offset) = if let Some((text, offsets)) = text_span {
+        replace_text_span(scope, runtime_ptr, text, offsets, &units)?
     } else {
         let document_object = node_wrapper_from_handle(scope, document)?;
         let start_node = node_wrapper_from_handle(scope, start.container)?;
@@ -119,6 +126,87 @@ fn adjacent_text_insertion_point(
         .utf16_units()
         .len();
     Some((previous, length as u32))
+}
+
+// A boundary just outside inline formatting can select the same text as
+// a boundary within it. Reuse the text node when both boundaries select a
+// single span so replacing that text preserves its inline formatting.
+fn text_boundary(
+    dom: &DomHost,
+    mut node: DomHandle,
+    mut offset: u32,
+    side: RangeBoundarySide,
+) -> Option<(DomHandle, u32)> {
+    let forward = matches!(side, RangeBoundarySide::Start);
+    loop {
+        let current = dom.node(node)?;
+        if matches!(current.node_type(), NodeType::Text | NodeType::CDataSection) {
+            let length = current.character_data_value()?.utf16_units().len() as u32;
+            if (forward && offset < length) || (!forward && offset != 0) {
+                return Some((node, offset));
+            }
+        } else {
+            let index = if forward {
+                Some(offset)
+            } else {
+                offset.checked_sub(1)
+            };
+            if let Some(child) = index.and_then(|index| dom.child_handles(node).nth(index as usize))
+            {
+                let candidate = dom.node(child)?;
+                if !is_inline_formatting(candidate)
+                    && !matches!(
+                        candidate.node_type(),
+                        NodeType::Text | NodeType::CDataSection
+                    )
+                {
+                    return None;
+                }
+                node = child;
+                offset = if forward {
+                    0
+                } else if let Some(data) = candidate.character_data_value() {
+                    data.utf16_units().len() as u32
+                } else {
+                    dom.child_handles(node).count() as u32
+                };
+                continue;
+            }
+            if !is_inline_formatting(current) {
+                return None;
+            }
+        }
+        let parent = current.parent_node_id()?;
+        let index = dom.child_index(parent, node)? as u32;
+        node = parent;
+        offset = index + u32::from(forward);
+    }
+}
+
+fn is_inline_formatting(node: &Node) -> bool {
+    node.as_element().is_some_and(|element| {
+        element.namespace() == XHTML_NS
+            && element.content_editable_state() == ContentEditableState::Inherit
+            && !element.has_attribute("inert")
+            && matches!(
+                element.local_name(),
+                "b" | "big"
+                    | "code"
+                    | "em"
+                    | "font"
+                    | "i"
+                    | "mark"
+                    | "s"
+                    | "small"
+                    | "span"
+                    | "strike"
+                    | "strong"
+                    | "sub"
+                    | "sup"
+                    | "tt"
+                    | "u"
+            )
+    })
 }
 
 fn replace_text_span(
