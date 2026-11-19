@@ -3658,6 +3658,7 @@ dependencies = [
  "moli-page-types",
  "moli-time",
  "moli-web-mime",
+ "parking_lot",
  "tokio",
  "url",
 ]

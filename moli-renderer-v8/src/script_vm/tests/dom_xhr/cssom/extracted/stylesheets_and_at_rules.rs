@@ -96,6 +96,7 @@ fn linked_stylesheet_resource_parse_is_shared_but_owner_mutation_is_copy_on_writ
             stylesheet_url.clone(),
             stylesheet_url.clone(),
             true,
+            None,
         )
         .expect("connected link should prepare a resource source");
     {
@@ -215,6 +216,7 @@ fn linked_stylesheet_response_replacement_detaches_the_previous_live_wrapper() {
                 stylesheet_url.clone(),
                 stylesheet_url.clone(),
                 true,
+                None,
             )
             .expect("connected link should prepare replacement resource");
         vm._context_host.borrow_mut().install_linked_stylesheet(

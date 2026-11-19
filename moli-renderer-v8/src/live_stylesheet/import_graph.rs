@@ -2,22 +2,11 @@ use super::*;
 
 impl LiveStylesheet {
     pub(crate) fn top_level_import_state(&self) -> (bool, Vec<url::Url>) {
-        let edges = self.import_edges.borrow();
-        let has_import_rules = !edges.is_empty();
-        let mut urls = Vec::new();
-        let guard = self.stylesheet.shared_lock.read();
-        for edge in edges.iter() {
-            if edge.state == LiveStylesheetImportState::Refused {
-                continue;
-            }
-            let Some(url) = edge.rule.read_with(&guard).url.url() else {
-                continue;
-            };
-            if !urls.iter().any(|existing| existing == url.as_ref()) {
-                urls.push(url.as_ref().clone());
-            }
+        if self.import_edges.borrow().is_empty() {
+            return (false, Vec::new());
         }
-        (has_import_rules, urls)
+        let imports = moli_css_parse::stylesheet_imports_from_native_with_stylo(&self.stylesheet);
+        (imports.has_import_rules, imports.urls)
     }
 
     pub(crate) fn pending_import_requests(&self) -> Vec<LiveStylesheetImportRequest> {
@@ -107,15 +96,11 @@ impl LiveStylesheet {
 
     fn native_top_level_import_rules(&self) -> Vec<ServoArc<Locked<ImportRule>>> {
         let guard = self.stylesheet.shared_lock.read();
-        self.stylesheet
-            .contents(&guard)
-            .rules(&guard)
-            .iter()
-            .filter_map(|rule| match rule {
-                CssRule::Import(rule) => Some(rule.clone()),
-                _ => None,
-            })
-            .collect()
+        moli_css_parse::native_stylesheet_import_rules(
+            self.stylesheet.contents(&guard).rules(&guard),
+        )
+        .map(|(_, rule)| rule.clone())
+        .collect()
     }
 
     fn allocate_import_edge_id(&self) -> StylesheetImportEdgeId {

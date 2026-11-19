@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 pub(super) mod adopted;
-pub(super) mod imports;
 pub(super) mod inline;
 pub(super) mod linked;
 mod shared_cache;

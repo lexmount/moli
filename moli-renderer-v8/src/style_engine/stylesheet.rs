@@ -137,8 +137,17 @@ pub(super) fn install_active_stylesheet(
 pub(super) fn style_source_metadata_for_css_text(
     css_text: &str,
     base_url: &url::Url,
-) -> StyleSourceMetadata {
-    style_source_metadata_for_css_text_with_origin(css_text, base_url, Origin::Author)
+) -> (StyleSourceMetadata, Vec<url::Url>) {
+    let stylesheet = moli_css_parse::parse_detached_author_stylesheet_with_stylo(
+        css_text,
+        base_url,
+        QuirksMode::NoQuirks,
+    );
+    let imports = moli_css_parse::stylesheet_imports_from_native_with_stylo(&stylesheet);
+    (
+        style_source_metadata_for_stylesheet(&stylesheet),
+        imports.urls,
+    )
 }
 
 pub(in crate::style_engine) fn style_source_metadata_for_stylesheet(
@@ -352,34 +361,15 @@ fn style_source_metadata_for_css_text_with_origin(
     origin: Origin,
 ) -> StyleSourceMetadata {
     let shared_lock = SharedRwLock::new();
-    let stylesheet = DocumentStyleSheet::new(ServoArc::new(parse_stylesheet(
+    let stylesheet = ServoArc::new(parse_stylesheet(
         &shared_lock,
         base_url,
         css_text,
         origin,
         QuirksMode::NoQuirks,
         "",
-    )));
-    let guard = shared_lock.read();
-    let stylist = new_stylist_with_viewport(
-        StyleViewport::default(),
-        StyloStyleEnvironment::default(),
-        QuirksMode::NoQuirks,
-    );
-    let mut cascade_data = CascadeData::new();
-    if cascade_data
-        .add_stylesheet_for_moli_source_metadata(
-            stylist.device(),
-            QuirksMode::NoQuirks,
-            &stylesheet,
-            0,
-            &guard,
-        )
-        .is_err()
-    {
-        return StyleSourceMetadata::default();
-    }
-    style_source_metadata_from_cascade_data(&cascade_data)
+    ));
+    style_source_metadata_for_stylesheet(&stylesheet)
 }
 
 fn style_source_metadata_from_cascade_data(cascade_data: &CascadeData) -> StyleSourceMetadata {

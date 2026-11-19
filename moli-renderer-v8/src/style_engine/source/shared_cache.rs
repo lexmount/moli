@@ -1,6 +1,7 @@
 use std::{
+    hash::{Hash, Hasher},
     mem::size_of,
-    sync::{Arc, LazyLock, Weak},
+    sync::{Arc, LazyLock, OnceLock, Weak},
 };
 
 use indexmap::IndexMap;
@@ -9,7 +10,7 @@ use moli_selector::StyloSourceDependencySummary;
 use parking_lot::Mutex;
 
 use super::super::{source_key::StyleSourceKey, stylesheet::style_source_metadata_for_css_text};
-use super::store::{StyleSourceMetadata, StylesheetFontFaceDescriptor};
+use super::store::StylesheetFontFaceDescriptor;
 
 const RETAINED_BYTES_LIMIT: usize = 64 * 1024;
 
@@ -24,18 +25,20 @@ struct SharedStyleSourceCacheKey {
     base_url_len: usize,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 pub(super) struct SharedStyleSourceContents {
     css_text: Arc<str>,
     base_url: Arc<url::Url>,
-    source_metadata: SharedStyleSourceMetadata,
+    css_fingerprint: [u8; 32],
+    // Live owner sheets have their own parsed rule trees. Text-only callers
+    // share one fallback parse for selector dependencies and import discovery.
+    metadata: OnceLock<SharedStyleSourceMetadata>,
+    font_faces: OnceLock<Arc<[StylesheetFontFaceDescriptor]>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 struct SharedStyleSourceMetadata {
-    css_fingerprint: [u8; 32],
     source_dependency_summary: Arc<StyloSourceDependencySummary>,
-    font_faces: Arc<[StylesheetFontFaceDescriptor]>,
     import_urls: Arc<[url::Url]>,
 }
 
@@ -55,22 +58,40 @@ pub(super) fn shared_style_source_contents(
         return cached;
     }
 
-    let css_text = Arc::<str>::from(css_text);
-    let metadata = style_source_metadata_for_css_text(&css_text, &base_url);
-    let source = Arc::new(SharedStyleSourceContents {
-        source_metadata: SharedStyleSourceMetadata::from_metadata(
-            &css_text,
-            &base_url,
-            key.css_fingerprint,
-            metadata,
-        ),
-        css_text,
-        base_url: Arc::new(base_url),
-    });
+    let source = Arc::new(SharedStyleSourceContents::new(
+        css_text.into(),
+        base_url,
+        key.css_fingerprint,
+    ));
     CACHE.lock().insert_or_get(key, source)
 }
 
+impl PartialEq for SharedStyleSourceContents {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches_input(other.css_text(), other.base_url())
+    }
+}
+
+impl Eq for SharedStyleSourceContents {}
+
+impl Hash for SharedStyleSourceContents {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.css_fingerprint.hash(state);
+        self.base_url.hash(state);
+    }
+}
+
 impl SharedStyleSourceContents {
+    fn new(css_text: Arc<str>, base_url: url::Url, css_fingerprint: [u8; 32]) -> Self {
+        Self {
+            css_text,
+            base_url: Arc::new(base_url),
+            css_fingerprint,
+            metadata: OnceLock::new(),
+            font_faces: OnceLock::new(),
+        }
+    }
+
     pub(super) fn css_text(&self) -> &str {
         self.css_text.as_ref()
     }
@@ -88,51 +109,44 @@ impl SharedStyleSourceContents {
     }
 
     pub(super) fn css_fingerprint(&self) -> [u8; 32] {
-        self.source_metadata.css_fingerprint
+        self.css_fingerprint
     }
 
     pub(super) fn source_dependency_summary(&self) -> Arc<StyloSourceDependencySummary> {
-        Arc::clone(&self.source_metadata.source_dependency_summary)
+        Arc::clone(&self.metadata().source_dependency_summary)
     }
 
     pub(super) fn font_faces(&self) -> Arc<[StylesheetFontFaceDescriptor]> {
-        Arc::clone(&self.source_metadata.font_faces)
+        Arc::clone(self.font_faces.get_or_init(|| {
+            crate::css_style::parse_css_font_faces(self.css_text())
+                .into_iter()
+                .map(|face| StylesheetFontFaceDescriptor::new(face.family, face.source))
+                .collect::<Vec<_>>()
+                .into()
+        }))
     }
 
     pub(super) fn import_urls(&self) -> &[url::Url] {
-        self.source_metadata.import_urls.as_ref()
+        self.metadata().import_urls.as_ref()
     }
 
     pub(super) fn import_urls_handle(&self) -> Arc<[url::Url]> {
-        Arc::clone(&self.source_metadata.import_urls)
+        Arc::clone(&self.metadata().import_urls)
     }
 
     fn matches_input(&self, css_text: &str, base_url: &url::Url) -> bool {
         self.css_text.as_ref() == css_text && self.base_url.as_ref() == base_url
     }
-}
 
-impl SharedStyleSourceMetadata {
-    fn from_metadata(
-        css_text: &str,
-        base_url: &url::Url,
-        css_fingerprint: [u8; 32],
-        metadata: StyleSourceMetadata,
-    ) -> Self {
-        Self {
-            css_fingerprint,
-            source_dependency_summary: Arc::new(metadata.dependency_summary),
-            font_faces: crate::css_style::parse_css_font_faces(css_text)
-                .into_iter()
-                .map(|face| StylesheetFontFaceDescriptor::new(face.family, face.source))
-                .collect::<Vec<_>>()
-                .into(),
-            import_urls: super::imports::stylesheet_top_level_import_urls(
-                css_text, base_url, false,
-            )
-            .unwrap_or_default()
-            .into(),
-        }
+    fn metadata(&self) -> &SharedStyleSourceMetadata {
+        self.metadata.get_or_init(|| {
+            let (metadata, imports) =
+                style_source_metadata_for_css_text(self.css_text(), self.base_url());
+            SharedStyleSourceMetadata {
+                source_dependency_summary: Arc::new(metadata.dependency_summary),
+                import_urls: imports.into(),
+            }
+        })
     }
 }
 
@@ -259,18 +273,11 @@ mod tests {
     ) {
         let base_url = url::Url::parse(base_url).expect("valid test base URL");
         let key = SharedStyleSourceCacheKey::new(css_text, &base_url);
-        let css_text = Arc::<str>::from(css_text);
-        let metadata = style_source_metadata_for_css_text(&css_text, &base_url);
-        let source = Arc::new(SharedStyleSourceContents {
-            source_metadata: SharedStyleSourceMetadata::from_metadata(
-                &css_text,
-                &base_url,
-                key.css_fingerprint,
-                metadata,
-            ),
-            css_text,
-            base_url: Arc::new(base_url.clone()),
-        });
+        let source = Arc::new(SharedStyleSourceContents::new(
+            css_text.into(),
+            base_url.clone(),
+            key.css_fingerprint,
+        ));
         (key, source, base_url)
     }
 
@@ -282,6 +289,9 @@ mod tests {
         let weak_source = Arc::downgrade(&source);
 
         let retained = cache.insert_or_get(key, source);
+        assert!(retained.metadata.get().is_none());
+        assert!(retained.font_faces().is_empty());
+        assert!(retained.metadata.get().is_none());
         assert_eq!(cache.entries.len(), 1);
         assert_eq!(cache.retained_bytes, ENTRY_RETAINED_BYTES);
         drop(retained);

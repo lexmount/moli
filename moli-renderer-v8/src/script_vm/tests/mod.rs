@@ -947,6 +947,7 @@ fn install_linked_stylesheet_for_test(
             source.base_url().clone(),
             source.sheet_url().clone(),
             source.origin_clean(),
+            None,
         )
         .expect("linked stylesheet test resource should be admitted");
     vm._context_host.borrow_mut().install_linked_stylesheet(

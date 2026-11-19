@@ -1,8 +1,7 @@
 //! Fetching and readiness classification for stylesheet import graphs.
 //!
-//! This module has no owner lifecycle. It produces one immutable graph result;
-//! linked and inline stylesheet code decide separately where that result may be
-//! installed.
+//! This module produces the network result and detached parses. Linked and
+//! inline stylesheet code decide where to install the graph and take its parses.
 
 use super::*;
 use crate::live_stylesheet::import_url_identity;
@@ -10,6 +9,7 @@ use crate::stylesheet_blocking::{StylesheetFetchOptions, StylesheetFetcher};
 use futures_util::future::{BoxFuture, join_all};
 use moli_encoding::decode_text_for_legacy_web;
 use moli_web_mime::{data_url_body_and_mime_type, mime_charset};
+use style::context::QuirksMode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::document_runtime) enum DataStylesheetImportReadiness {
@@ -58,7 +58,8 @@ impl ConnectedNetworkStyleImportGraph {
 
     fn response_imports(
         &mut self,
-        result: &crate::stylesheet_blocking::StylesheetImportNetworkResult,
+        result: &mut crate::stylesheet_blocking::StylesheetImportNetworkResult,
+        quirks_mode: QuirksMode,
     ) -> Vec<Url> {
         let request_identity = import_url_identity(result.request_url());
         self.requested_identities.insert(request_identity.clone());
@@ -66,21 +67,23 @@ impl ConnectedNetworkStyleImportGraph {
             return Vec::new();
         };
         let response_identity = import_url_identity(&response.final_url);
-        crate::style_engine::stylesheet_top_level_import_urls(
+        let stylesheet = moli_css_parse::parse_detached_author_stylesheet_with_stylo(
             response.body_text(),
             &response.final_url,
-            false,
-        )
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|url| {
-            let identity = import_url_identity(url);
-            // The response cannot import itself through either URL. Its final
-            // URL is not a globally admitted request: a sibling importing it
-            // must still pass Fetch and its own request-time CSP check.
-            identity != request_identity && identity != response_identity
-        })
-        .collect()
+            quirks_mode,
+        );
+        let imports = moli_css_parse::stylesheet_imports_from_native_with_stylo(&stylesheet).urls;
+        result.set_parsed_stylesheet(stylesheet);
+        imports
+            .into_iter()
+            .filter(|url| {
+                let identity = import_url_identity(url);
+                // The response cannot import itself through either URL. Its final
+                // URL is not a globally admitted request: a sibling importing it
+                // must still pass Fetch and its own request-time CSP check.
+                identity != request_identity && identity != response_identity
+            })
+            .collect()
     }
 
     fn take_pending(&mut self) -> Vec<Url> {
@@ -143,9 +146,11 @@ fn fetch_stylesheet_import_graph(
     async move {
         pending_results.extend(join_all(initial_requests).await);
         while !pending_results.is_empty() {
-            for result in std::mem::take(&mut pending_results) {
+            for mut result in std::mem::take(&mut pending_results) {
                 successful &= result.terminal().is_ready();
-                match readiness(import_graph.response_imports(&result)) {
+                let imports =
+                    import_graph.response_imports(&mut result, stylesheet_fetcher.quirks_mode());
+                match readiness(imports) {
                     ConnectedStyleImportReadiness::Ready(nested_successful) => {
                         successful &= nested_successful;
                     }
@@ -253,15 +258,19 @@ pub(in crate::document_runtime) fn data_stylesheet_import_readiness(
     // enforcement belongs to the network stylesheet response validator and
     // must not be reused for this local-scheme path.
     let css_text = decode_text_for_legacy_web(&body, mime_charset(&mime_type).as_deref());
-    let Ok(urls) =
-        crate::style_engine::stylesheet_top_level_import_urls(&css_text, stylesheet_url, true)
-    else {
+    let stylesheet = moli_css_parse::parse_detached_author_stylesheet_with_stylo(
+        &css_text,
+        stylesheet_url,
+        QuirksMode::NoQuirks,
+    );
+    let imports = moli_css_parse::stylesheet_imports_from_native_with_stylo(&stylesheet);
+    if imports.has_invalid_url {
         return DataStylesheetImportReadiness::Failed;
-    };
-    if urls.is_empty() {
+    }
+    if imports.urls.is_empty() {
         DataStylesheetImportReadiness::NoImports
     } else {
-        DataStylesheetImportReadiness::Imports(urls)
+        DataStylesheetImportReadiness::Imports(imports.urls)
     }
 }
 
@@ -374,7 +383,7 @@ mod tests {
         graph.extend([alias.clone(), branch.clone()]);
         assert_eq!(graph.take_pending(), [alias.clone(), branch.clone()]);
 
-        let redirected = StylesheetImportNetworkResult::new(
+        let mut redirected = StylesheetImportNetworkResult::new(
             alias,
             0.0,
             StylesheetFetchTerminal::ready(
@@ -387,9 +396,13 @@ mod tests {
                 true,
             ),
         );
-        assert!(graph.response_imports(&redirected).is_empty());
+        assert!(
+            graph
+                .response_imports(&mut redirected, QuirksMode::NoQuirks)
+                .is_empty()
+        );
 
-        let sibling = StylesheetImportNetworkResult::new(
+        let mut sibling = StylesheetImportNetworkResult::new(
             branch.clone(),
             0.0,
             StylesheetFetchTerminal::ready(
@@ -402,7 +415,7 @@ mod tests {
                 true,
             ),
         );
-        let imports = graph.response_imports(&sibling);
+        let imports = graph.response_imports(&mut sibling, QuirksMode::NoQuirks);
         graph.extend(imports);
         assert_eq!(graph.take_pending(), [direct]);
         graph.extend([Url::parse("https://example.test/real.css#duplicate").unwrap()]);
@@ -411,7 +424,7 @@ mod tests {
 
     #[test]
     fn root_import_cycles_match_both_request_and_response_urls() {
-        let root = crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+        let mut root = crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
             Url::parse("https://example.test/root.css").unwrap(),
             0.0,
             crate::stylesheet_blocking::StylesheetFetchTerminal::ready(
@@ -430,7 +443,7 @@ mod tests {
             ),
         );
         let mut graph = ConnectedNetworkStyleImportGraph::new(Some(&root));
-        let imports = graph.response_imports(&root);
+        let imports = graph.response_imports(&mut root, QuirksMode::NoQuirks);
         assert_eq!(
             imports,
             [Url::parse("https://example.test/leaf.css").unwrap()]

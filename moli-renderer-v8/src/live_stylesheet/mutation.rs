@@ -1111,7 +1111,7 @@ impl LiveStylesheet {
         rule_text: &str,
         index: usize,
     ) -> Result<CssRule, CssRuleInsertError> {
-        let import_loader = LiveStylesheetImportPlaceholderLoader;
+        let import_loader = StylesheetImportPlaceholderLoader;
         let loader = matches!(self.allow_import_rules, AllowImportRules::Yes)
             .then_some(&import_loader as &dyn StylesheetLoader);
         let guard = self.stylesheet.shared_lock.read();

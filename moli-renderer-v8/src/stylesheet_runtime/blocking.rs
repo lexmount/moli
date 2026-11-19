@@ -424,6 +424,7 @@ impl DocumentRuntime {
                     blocking_operation: result.blocking_operation,
                     source_operation: None,
                     import_roots: Vec::new(),
+                    parsed_stylesheet: None,
                     document_url: result.document_url,
                     request_url: result.request_url,
                     source_owners: result

@@ -197,6 +197,7 @@ impl DocumentRuntime {
                     stylesheet_base_url.clone(),
                     request_url.clone(),
                     terminal.origin_clean().unwrap_or(false),
+                    None,
                 )
             };
             if let Some(prepared) = prepared.as_ref() {

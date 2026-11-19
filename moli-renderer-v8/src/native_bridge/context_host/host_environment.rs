@@ -147,6 +147,7 @@ impl PageScriptHost {
         document: DomHandle,
         css_text: &str,
         base_url: url::Url,
+        parsed_stylesheet: Option<&moli_stylesheet_blocking::StylesheetImportParsedResponse>,
     ) -> crate::live_stylesheet::LiveStylesheetRef {
         let quirks_mode = self
             .dom_host()
@@ -160,6 +161,7 @@ impl PageScriptHost {
                 base_url,
                 quirks_mode,
                 self.style_engine.author_shared_lock(),
+                parsed_stylesheet,
             )
     }
 
@@ -200,10 +202,15 @@ impl PageScriptHost {
         base_url: url::Url,
         sheet_url: url::Url,
         origin_clean: bool,
+        parsed_stylesheet: Option<&moli_stylesheet_blocking::StylesheetImportParsedResponse>,
     ) -> Option<crate::document_runtime::PreparedLinkedStylesheetResource> {
         let document = self.dom_host().owner_document_handle(owner)?;
-        let template =
-            self.create_linked_live_stylesheet_template(document, css_text, base_url.clone());
+        let template = self.create_linked_live_stylesheet_template(
+            document,
+            css_text,
+            base_url,
+            parsed_stylesheet,
+        );
         let (has_import_rules, import_urls) = template.top_level_import_state();
         if !has_import_rules {
             template.share_initial_contents();

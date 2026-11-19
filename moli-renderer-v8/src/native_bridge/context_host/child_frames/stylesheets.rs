@@ -46,6 +46,13 @@ impl PageScriptHost {
                         client_id,
                     }),
                 )
+                .with_quirks_mode(
+                    self.child_browsing_context_document_handle(child_handle)
+                        .and_then(|document| self.dom_host().node(document))
+                        .and_then(crate::dom::native::Node::as_document)
+                        .map(|document| document.quirks_mode())
+                        .unwrap_or(style::context::QuirksMode::NoQuirks),
+                )
                 .with_interception(interception.clone(), frame_id.clone())
             });
         let mut accepted = 0;
@@ -422,6 +429,7 @@ impl PageScriptHost {
                     base_url.clone(),
                     result.request_url().clone(),
                     terminal.origin_clean().unwrap_or(false),
+                    result.parsed_stylesheet(),
                 ) else {
                     continue;
                 };

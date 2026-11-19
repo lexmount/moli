@@ -2472,6 +2472,7 @@ impl ScriptVm {
             crate::document_runtime::ConnectedStyleImportRoot,
             Vec<crate::live_stylesheet::LiveStylesheetImportResponse>,
         )> = Vec::new();
+        let mut parsed_responses = Vec::new();
         let mut host = self._context_host.borrow_mut();
         for network_result in results {
             let crate::document_runtime::ConnectedLoadNetworkResult {
@@ -2481,6 +2482,7 @@ impl ScriptVm {
                 blocking_operation: _,
                 source_operation: _,
                 import_roots,
+                parsed_stylesheet,
                 document_url,
                 request_url,
                 source_owners,
@@ -2489,6 +2491,7 @@ impl ScriptVm {
                 origin_clean,
                 result,
             } = network_result;
+            parsed_responses.extend(parsed_stylesheet.iter().cloned());
             let is_import_graph_result = !import_roots.is_empty();
             let import_roots = import_roots
                 .into_iter()
@@ -2538,6 +2541,7 @@ impl ScriptVm {
                         request_url: request_url.clone(),
                         response_url: stylesheet_base_url.clone(),
                         css_text: stylesheet_text.clone(),
+                        parsed_stylesheet: parsed_stylesheet.clone(),
                         successful: validated_response.is_some(),
                         origin_clean,
                     };
@@ -2564,6 +2568,7 @@ impl ScriptVm {
                             stylesheet_base_url.clone(),
                             request_url.clone(),
                             origin_clean,
+                            parsed_stylesheet.as_ref(),
                         ) else {
                             continue;
                         };
@@ -2615,6 +2620,11 @@ impl ScriptVm {
         }
         for (root, responses) in import_graph_results {
             let _ = host.install_and_refresh_live_stylesheet_import_graph(root, &responses);
+        }
+        // Roots filtered by revision or generation still leave a completed
+        // network record. Only this installation batch needs its native parse.
+        for parsed in parsed_responses {
+            parsed.discard();
         }
         for blocking_import_graph in blocking_import_graphs {
             let (source, roots, graph) = blocking_import_graph.into_parts();

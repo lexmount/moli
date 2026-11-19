@@ -122,7 +122,6 @@ pub(crate) use registered_properties::{
 #[cfg(test)]
 use scope::style_source_scope_for_mutation_effects;
 pub(crate) use source::adopted::AdoptedStyleSheetInstallation;
-pub(crate) use source::imports::stylesheet_top_level_import_urls;
 pub(crate) use source::inline::InlineStyleCspState;
 pub(crate) use source::store::{
     OwnerStyleSheetSource, StylesheetFontFaceDescriptor, StyloStylesheetSource,
@@ -1185,7 +1184,7 @@ fn stylo_source_metadata_for_css_text(
     css_text: &str,
     base_url: &url::Url,
 ) -> source::store::StyleSourceMetadata {
-    stylesheet::style_source_metadata_for_css_text(css_text, base_url)
+    stylesheet::style_source_metadata_for_css_text(css_text, base_url).0
 }
 
 fn retain_owner_documents_except_document(

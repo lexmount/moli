@@ -6,7 +6,7 @@ use std::{
     sync::{Arc as StdArc, Weak as StdWeak, atomic::AtomicBool},
 };
 
-use cssparser::{Parser, SourceLocation, Token};
+use cssparser::{Parser, Token};
 use parking_lot::Mutex;
 use selectors::SelectorList;
 use style::stylesheets::keyframes_rule::{Keyframe, KeyframeSelectors, KeyframesRule};
@@ -27,19 +27,21 @@ use style::{
         font_feature_values_rule::{
             FFVDeclaration, FontFeatureValuesRule, PairValues, SingleValue, VectorValues,
         },
-        import_rule::{ImportLayer, ImportRule, ImportSheet, ImportSupportsCondition},
+        import_rule::{ImportRule, ImportSheet},
     },
-    values::{CssUrl, KeyframesName, computed::font::FamilyName},
+    values::{KeyframesName, computed::font::FamilyName},
 };
 use style_traits::{CssStringWriter, ParsingMode, ToCss};
 
 use moli_crypto::Sha256Context;
 use moli_css_parse::{
     CssContainerConditionView, CssRuleInsertError, CssRuleSnapshot,
-    css_rule_snapshot_from_native_with_stylo, keyframe_rule_snapshot_from_native_with_stylo,
-    parse_font_face_cssom_rule_with_stylo_context, parse_page_selectors_with_stylo_context,
+    StylesheetImportPlaceholderLoader, css_rule_snapshot_from_native_with_stylo,
+    keyframe_rule_snapshot_from_native_with_stylo, parse_font_face_cssom_rule_with_stylo_context,
+    parse_page_selectors_with_stylo_context,
     refresh_native_stylesheet_namespaces_after_cssom_mutation,
 };
+use moli_stylesheet_blocking::StylesheetImportParsedResponse;
 
 /// Exact mutation history is an optimization, not a correctness cache. A
 /// consumer older than this window detects the generation gap and performs a
@@ -777,67 +779,6 @@ fn parse_keyframe_selectors(selector_text: &str) -> Result<KeyframeSelectors, Cs
         .map_err(|_| CssRuleInsertError::Syntax)
 }
 
-struct LiveStylesheetImportPlaceholderLoader;
-
-impl StylesheetLoader for LiveStylesheetImportPlaceholderLoader {
-    fn request_stylesheet(
-        &self,
-        url: CssUrl,
-        location: SourceLocation,
-        lock: &SharedRwLock,
-        media: ServoArc<Locked<MediaList>>,
-        supports: Option<ImportSupportsCondition>,
-        layer: ImportLayer,
-    ) -> ServoArc<Locked<ImportRule>> {
-        // Parsing owns rule identity only. DocumentRuntime remains the sole
-        // owner of import admission, network scheduling, cancellation and
-        // terminal events until it installs the real child stylesheet.
-        if supports
-            .as_ref()
-            .is_some_and(|condition| !condition.enabled)
-            || url.url().is_none()
-        {
-            return ServoArc::new(lock.wrap(ImportRule {
-                url,
-                stylesheet: ImportSheet::new_refused(),
-                supports,
-                layer,
-                source_location: location,
-            }));
-        }
-
-        let base_url = url
-            .url()
-            .expect("resolved import URL was checked above")
-            .as_ref()
-            .clone();
-        let contents = StylesheetContents::from_str(
-            "",
-            UrlExtraData::from(base_url),
-            Origin::Author,
-            lock,
-            None,
-            None,
-            QuirksMode::NoQuirks,
-            AllowImportRules::No,
-            None,
-        );
-        let stylesheet = ServoArc::new(Stylesheet {
-            contents: lock.wrap(contents),
-            shared_lock: lock.clone(),
-            media,
-            disabled: AtomicBool::new(false),
-        });
-        ServoArc::new(lock.wrap(ImportRule {
-            url,
-            stylesheet: ImportSheet::new(stylesheet),
-            supports,
-            layer,
-            source_location: location,
-        }))
-    }
-}
-
 fn parse_live_stylesheet(
     css_text: &str,
     base_url: &url::Url,
@@ -846,7 +787,7 @@ fn parse_live_stylesheet(
     quirks_mode: QuirksMode,
     allow_import_rules: AllowImportRules,
 ) -> Stylesheet {
-    let import_loader = LiveStylesheetImportPlaceholderLoader;
+    let import_loader = StylesheetImportPlaceholderLoader;
     let stylesheet_loader = match allow_import_rules {
         AllowImportRules::Yes => Some(&import_loader as &dyn StylesheetLoader),
         AllowImportRules::No => None,
@@ -913,6 +854,7 @@ pub(crate) struct LiveStylesheetImportResponse {
     pub(crate) request_url: url::Url,
     pub(crate) response_url: url::Url,
     pub(crate) css_text: String,
+    pub(crate) parsed_stylesheet: Option<StylesheetImportParsedResponse>,
     pub(crate) successful: bool,
     pub(crate) origin_clean: bool,
 }
@@ -1212,6 +1154,18 @@ impl FontFaceProjectionKey {
 }
 
 impl LiveStylesheet {
+    fn take_matching_parsed_stylesheet(
+        parsed_stylesheet: Option<&StylesheetImportParsedResponse>,
+        base_url: &url::Url,
+        quirks_mode: QuirksMode,
+    ) -> Option<moli_css_parse::CssNativeStylesheet> {
+        parsed_stylesheet?.take_if(|sheet| {
+            let guard = sheet.shared_lock.read();
+            let contents = sheet.contents(&guard);
+            contents.quirks_mode == quirks_mode && contents.url_data.as_str() == base_url.as_str()
+        })
+    }
+
     fn parse(
         id: StylesheetId,
         css_text: &str,
@@ -1219,9 +1173,8 @@ impl LiveStylesheet {
         quirks_mode: QuirksMode,
         allow_import_rules: AllowImportRules,
         shared_lock: SharedRwLock,
+        parsed_stylesheet: Option<&StylesheetImportParsedResponse>,
     ) -> Self {
-        #[cfg(test)]
-        LIVE_STYLESHEET_PARSE_COUNT.with(|count| count.set(count.get() + 1));
         let media = ServoArc::new(shared_lock.wrap(MediaList::empty()));
         Self::parse_with_media(
             id,
@@ -1232,6 +1185,7 @@ impl LiveStylesheet {
             shared_lock,
             media,
             LiveStylesheetRuntimeStateKind::Cascade,
+            parsed_stylesheet,
         )
     }
 
@@ -1244,18 +1198,36 @@ impl LiveStylesheet {
         shared_lock: SharedRwLock,
         media: ServoArc<Locked<MediaList>>,
         runtime_state_kind: LiveStylesheetRuntimeStateKind,
+        parsed_stylesheet: Option<&StylesheetImportParsedResponse>,
     ) -> Self {
-        let stylesheet = ServoArc::new(parse_live_stylesheet(
-            css_text,
-            &base_url,
-            media,
-            shared_lock,
-            quirks_mode,
-            allow_import_rules,
-        ));
+        let parsed =
+            Self::take_matching_parsed_stylesheet(parsed_stylesheet, &base_url, quirks_mode);
+        let stylesheet = if let Some(parsed) = parsed {
+            let contents = moli_css_parse::clone_detached_stylesheet_contents_with_stylo(
+                &parsed,
+                &shared_lock,
+            );
+            Stylesheet {
+                contents: shared_lock.wrap(contents),
+                shared_lock,
+                media,
+                disabled: AtomicBool::new(false),
+            }
+        } else {
+            #[cfg(test)]
+            LIVE_STYLESHEET_PARSE_COUNT.with(|count| count.set(count.get() + 1));
+            parse_live_stylesheet(
+                css_text,
+                &base_url,
+                media,
+                shared_lock,
+                quirks_mode,
+                allow_import_rules,
+            )
+        };
         Self::from_stylesheet(
             id,
-            stylesheet,
+            ServoArc::new(stylesheet),
             base_url,
             quirks_mode,
             allow_import_rules,
@@ -1268,8 +1240,14 @@ impl LiveStylesheet {
         id: StylesheetId,
         shared_lock: SharedRwLock,
         shared_contents: StdArc<SharedStylesheetContents>,
+        media: ServoArc<Locked<MediaList>>,
+        runtime_state_kind: LiveStylesheetRuntimeStateKind,
     ) -> Self {
-        let media = ServoArc::new(shared_lock.wrap(MediaList::empty()));
+        // The retained contents belong to this PageScriptHost's author lock.
+        {
+            let guard = shared_lock.read();
+            let _ = shared_contents.contents.rules(&guard);
+        }
         let stylesheet = ServoArc::new(Stylesheet {
             contents: shared_lock.wrap(shared_contents.contents.clone()),
             shared_lock,
@@ -1282,7 +1260,7 @@ impl LiveStylesheet {
             shared_contents.base_url.clone(),
             shared_contents.quirks_mode,
             shared_contents.allow_import_rules,
-            LiveStylesheetRuntimeStateKind::Cascade,
+            runtime_state_kind,
             Some(shared_contents),
         )
     }
@@ -1330,9 +1308,11 @@ impl LiveStylesheet {
     }
 
     fn initial_contents_can_be_shared(&self) -> bool {
+        if !self.import_edges.borrow().is_empty() {
+            return false;
+        }
         let guard = self.stylesheet.shared_lock.read();
-        let rules = self.stylesheet.contents(&guard).rules(&guard);
-        !(rules.is_empty() || rules.iter().any(|rule| matches!(rule, CssRule::Import(_))))
+        !self.stylesheet.contents(&guard).rules(&guard).is_empty()
     }
 
     pub(crate) fn share_initial_contents(&self) -> StdArc<SharedStylesheetContents> {
