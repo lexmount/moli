@@ -116,4 +116,29 @@ test(function () {
     "target-bubble",
   ]);
 }, "stopPropagation from an at-target event handler keeps later target listeners and skips ancestors");
+
+test(function () {
+  const target = document.createElement("button");
+  const calls = [];
+
+  target.addEventListener("click", function () {
+    calls.push("earlier-listener");
+    target.onclick = function (event) {
+      calls.push("replacement-handler");
+      event.stopImmediatePropagation();
+    };
+  });
+  target.onclick = function () {
+    calls.push("initial-handler");
+  };
+  target.addEventListener("click", function () {
+    calls.push("later-listener");
+  });
+  target.addEventListener("click", function () {
+    calls.push("capture");
+  }, { capture: true });
+
+  target.dispatchEvent(new Event("click"));
+  assert_array_equals(calls, ["capture", "earlier-listener", "replacement-handler"]);
+}, "A replaced native handler keeps its listener slot and can stop later listeners");
 </script>

@@ -320,7 +320,7 @@ struct CanvasRenderingContext2dTemplateDeclaration {
 
     #[webapi(
         method = "createImageData",
-        length = 2,
+        length = 1,
         callback = canvas_context_create_image_data_callback
     )]
     create_image_data: (),
