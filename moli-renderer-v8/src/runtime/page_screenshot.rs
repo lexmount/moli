@@ -77,7 +77,6 @@ struct RendererVisualState {
 }
 
 impl RendererVisualStateToken {
-    #[cfg(feature = "devtools")]
     pub(crate) fn new(
         document: RendererDocumentLifecycleIdentity,
         dom_generation: u64,
@@ -103,7 +102,6 @@ impl RendererVisualStateToken {
         }))
     }
 
-    #[cfg(feature = "devtools")]
     fn has_same_resource_generation(&self, other: &Self) -> bool {
         self.0.resource_generation == other.0.resource_generation
     }
@@ -172,6 +170,18 @@ pub struct RendererCapturedScreenshot {
     pub bytes: Arc<[u8]>,
 }
 
+// Retain at most one modest encoded viewport image per PageVm.
+const MAX_CACHED_VIEWPORT_SCREENSHOT_BYTES: usize = 2 * 1024 * 1024;
+
+pub(super) struct CachedViewportScreenshot {
+    request: RendererCaptureScreenshotRequest,
+    surface: ViewportSurface,
+    visual_state: RendererVisualStateToken,
+    layout_publication: u64,
+    css_images_enabled: bool,
+    image: RendererCapturedScreenshot,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererCaptureScreenshotReply {
     Captured(RendererCapturedScreenshot),
@@ -210,23 +220,74 @@ impl RendererCaptureScreenshotRequest {
 }
 
 impl PageVm {
-    /// Captures an explicit screenshot. These demands always execute a fresh
-    /// paint pass and never carry screencast state.
+    /// Captures an explicit screenshot or reuses the last unchanged viewport
+    /// capture with the same published layout and encoding parameters.
     pub(super) fn capture_screenshot(
         &mut self,
         request: RendererCaptureScreenshotRequest,
     ) -> anyhow::Result<RendererCaptureScreenshotReply> {
         self.flush_page_action_window(moli_action_window::ActionBarrier::Screenshot)?;
-        let paint_capture = request
-            .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
-        self.capture_image(
+        let surface = self.document_settings.viewport_surface.unwrap_or_default();
+        let paint_capture = request.paint_capture_request(surface)?;
+        let cacheable = self.layout_configuration.policy.uses_real_layout()
+            && matches!(request.region, RendererScreenshotRegion::Viewport);
+        let css_images_enabled = cacheable && self.vm().css_images_enabled_for_layout();
+        let visual_state = |page: &Self| {
+            page.vm().visual_state_token(
+                page.document_lifecycle.identity(),
+                PaintViewport::new(
+                    surface.inner_width,
+                    surface.inner_height,
+                    surface.device_pixel_ratio as f32,
+                ),
+                request.base_background_color,
+            )
+        };
+        let before = cacheable.then(|| visual_state(self));
+        if let Some(before) = before.as_ref()
+            && let Some(cached) = self.cached_viewport_screenshot.as_ref()
+            && cached.surface == surface
+            && cached.request == request
+            && cached.css_images_enabled == css_images_enabled
+            && &cached.visual_state == before
+            && let Some((document, layout_publication)) = self.vm().current_layout_publication()
+            && layout_publication == cached.layout_publication
+        {
+            let image = cached.image.clone();
+            self.vm_mut().queue_post_layout_observable_work(document);
+            return Ok(RendererCaptureScreenshotReply::Captured(image));
+        }
+
+        self.cached_viewport_screenshot = None;
+        let outcome = self.capture_image(
             request.format,
             request.quality,
             request.optimize_for_speed,
             paint_capture,
             moli_layout::LayoutFlushReason::Screenshot,
-        )
-        .map(RendererImageCaptureOutcome::into_screenshot_reply)
+        )?;
+        if let Some(before) = before
+            && let RendererImageCaptureOutcome::Captured(image) = &outcome
+            && image.bytes.len() <= MAX_CACHED_VIEWPORT_SCREENSHOT_BYTES
+            && let Some((_, layout_publication)) = self.vm().current_layout_publication()
+        {
+            let after = visual_state(self);
+            // Resource decoders may publish a newer generation during paint.
+            // Turning on image fetches can also make layout discoveries eligible.
+            if before.has_same_resource_generation(&after)
+                && self.vm().css_images_enabled_for_layout() == css_images_enabled
+            {
+                self.cached_viewport_screenshot = Some(CachedViewportScreenshot {
+                    request,
+                    surface,
+                    visual_state: after,
+                    layout_publication,
+                    css_images_enabled,
+                    image: image.clone(),
+                });
+            }
+        }
+        Ok(outcome.into_screenshot_reply())
     }
 
     /// Polls one screencast subscription. Only this request accepts a known

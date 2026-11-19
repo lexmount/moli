@@ -556,10 +556,74 @@ context.fillRect(0, 0, 40, 100);
             page_vm.vm().layout_pass_observability_for_test().1,
             passes_before_screenshot + 1,
         );
+
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(repeated) =
+            page_vm.capture_screenshot(crate::runtime::RendererCaptureScreenshotRequest::viewport_png())?
+        else {
+            panic!("a repeated explicit screenshot must still return image data");
+        };
+        assert!(std::sync::Arc::ptr_eq(&screenshot.bytes, &repeated.bytes));
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_before_screenshot + 1,
+        );
+
+        page_vm.vm_mut().eval(
+            "(() => { const c = document.getElementById('surface').getContext('2d'); c.fillStyle='#00ff00'; c.fillRect(0,0,40,100); })()",
+        )?;
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(repainted) =
+            page_vm.capture_screenshot(crate::runtime::RendererCaptureScreenshotRequest::viewport_png())?
+        else {
+            panic!("changed backing store must capture a new image");
+        };
+        assert_eq!(
+            &moli_image::decode_png(&repainted.bytes)?.rgba[0..4],
+            [0, 255, 0, 255],
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_before_screenshot + 2,
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await
     .expect("screencast visual generations fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn repeated_screenshot_admits_css_images_after_fetch_enables() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/screenshot-css-image-policy.html")?,
+        );
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 40,
+            inner_height: 30,
+            device_pixel_ratio: 1.0,
+            ..Default::default()
+        }))?;
+        let image = "data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA";
+        page_vm.vm_mut().eval(&format!(
+            "document.body.innerHTML = '<div style=\"width:20px;height:20px;background-image:url({image})\"></div>'"
+        ))?;
+
+        let request = crate::runtime::RendererCaptureScreenshotRequest::viewport_png();
+        page_vm.capture_screenshot(request.clone())?;
+        assert!(page_vm.vm().css_image_resource_observability_for_test().4.is_empty());
+
+        page_vm
+            .main_document_resource_loader()
+            .request_client()
+            .set_image_fetch_enabled(true);
+        page_vm.capture_screenshot(request)?;
+        assert_eq!(page_vm.vm().css_image_resource_observability_for_test().4, [image]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("CSS image admission after enabling fetches");
 }
 
 #[cfg(feature = "devtools")]

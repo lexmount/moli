@@ -186,7 +186,6 @@ impl ScriptVm {
         .map_err(anyhow::Error::new)
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn visual_state_token(
         &self,
         document: crate::runtime::RendererDocumentLifecycleIdentity,
@@ -196,6 +195,10 @@ impl ScriptVm {
         self._context_host
             .borrow()
             .visual_state_token(document, viewport, base_background_color)
+    }
+
+    pub(crate) fn current_layout_publication(&self) -> Option<(DomHandle, u64)> {
+        self._context_host.borrow().current_layout_publication()
     }
 
     #[cfg(all(test, feature = "devtools"))]
@@ -263,18 +266,22 @@ impl ScriptVm {
             Err(error) => (Err(error), Vec::new()),
         };
         self.start_css_images_discovered_by_layout(css_images);
-        if publishes_layout
-            && matches!(&result, Ok(Some(_)))
-            && let Err(error) = self.with_current_main_world_scope(|scope, runtime_ptr| {
-                crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
-                crate::native_bridge::element::queue_revealed_lazy_image_loads(
-                    scope,
-                    runtime_ptr,
-                    document,
-                );
-                Ok(())
-            })
-        {
+        if publishes_layout && matches!(&result, Ok(Some(_))) {
+            self.queue_post_layout_observable_work(document);
+        }
+        result
+    }
+
+    pub(crate) fn queue_post_layout_observable_work(&mut self, document: DomHandle) {
+        if let Err(error) = self.with_current_main_world_scope(|scope, runtime_ptr| {
+            crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+            crate::native_bridge::element::queue_revealed_lazy_image_loads(
+                scope,
+                runtime_ptr,
+                document,
+            );
+            Ok(())
+        }) {
             // Observers require an existing realm, and image resource admission
             // initializes its realm before layout. Painting a native document
             // alone must not create one. Keep a failed admission non-fatal to
@@ -282,7 +289,6 @@ impl ScriptVm {
             // sampled geometry.
             tracing::warn!(?error, "failed to queue post-layout observable work");
         }
-        result
     }
 
     #[cfg(test)]
@@ -345,22 +351,21 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn start_css_images_discovered_by_layout(
-        &mut self,
-        references: Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
-    ) {
-        if references.is_empty() {
-            return;
-        }
-        let image_fetch_enabled = self
-            .document_runtime
+    pub(crate) fn css_images_enabled_for_layout(&self) -> bool {
+        self.document_runtime
             .current_document_resource_loader()
             .is_some_and(|loader| {
                 loader
                     .request_client()
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
-            });
-        if !image_fetch_enabled {
+            })
+    }
+
+    pub(super) fn start_css_images_discovered_by_layout(
+        &mut self,
+        references: Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
+    ) {
+        if references.is_empty() || !self.css_images_enabled_for_layout() {
             return;
         }
         let mut seen = std::collections::HashSet::new();

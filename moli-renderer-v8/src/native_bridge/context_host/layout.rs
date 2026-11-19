@@ -115,7 +115,6 @@ impl PageScriptHost {
             .visual_state_generation()
     }
 
-    #[cfg(feature = "devtools")]
     pub(crate) fn visual_state_token(
         &self,
         document: crate::runtime::RendererDocumentLifecycleIdentity,
@@ -132,6 +131,14 @@ impl PageScriptHost {
             viewport,
             base_background_color,
         )
+    }
+
+    pub(crate) fn current_layout_publication(&self) -> Option<(DomHandle, u64)> {
+        let document = self.document_handle();
+        self.document_layout_state
+            .borrow()
+            .latest_layout(document)
+            .map(|_| (document, self.layout_snapshot_cache_publishes.get()))
     }
 
     pub(crate) fn layout_document_for_source(&self, source: DomHandle) -> Option<DomHandle> {
