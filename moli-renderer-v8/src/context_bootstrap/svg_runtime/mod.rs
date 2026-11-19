@@ -18,6 +18,10 @@ use moli_svg::{
     SvgLength, SvgLengthUnit, SvgMatrixComponents, SvgTransform, SvgTransformKind,
 };
 use moli_webapi::svg_values::constants::*;
+use moli_webapi::svg_values::matrix::{
+    SvgMatrixArg, build_svg_matrix, cloned_svg_matrix_value_or_throw, install_svg_matrix_bindings,
+    svg_matrix_components,
+};
 use moli_webapi::svg_values::{
     SVG_ANGLE_READ_ONLY_SLOT, SVG_ANGLE_UNIT_TYPE_SLOT, SVG_ANGLE_VALUE_AS_STRING_SLOT,
     SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT, SVG_ANGLE_VALUE_SLOT,
@@ -134,12 +138,6 @@ const SVG_TRANSFORM_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str =
 const SVG_TRANSFORM_TYPE_SLOT: &str = "__moliSvgTransformType";
 const SVG_TRANSFORM_ANGLE_SLOT: &str = "__moliSvgTransformAngle";
 const SVG_TRANSFORM_MATRIX_SLOT: &str = "__moliSvgTransformMatrix";
-const SVG_MATRIX_A_SLOT: &str = "__moliSvgMatrixA";
-const SVG_MATRIX_B_SLOT: &str = "__moliSvgMatrixB";
-const SVG_MATRIX_C_SLOT: &str = "__moliSvgMatrixC";
-const SVG_MATRIX_D_SLOT: &str = "__moliSvgMatrixD";
-const SVG_MATRIX_E_SLOT: &str = "__moliSvgMatrixE";
-const SVG_MATRIX_F_SLOT: &str = "__moliSvgMatrixF";
 const SVG_TEXT_CONTENT_TEXT_LENGTH_SLOT: &str = "__moliSvgTextContentTextLength";
 const SVG_TEXT_CONTENT_LENGTH_ADJUST_SLOT: &str = "__moliSvgTextContentLengthAdjust";
 const SVG_TEXT_POSITIONING_X_SLOT: &str = "__moliSvgTextPositioningX";
@@ -233,13 +231,6 @@ struct SvgListItemIndexArgs<'s> {
 }
 
 #[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "SVG matrix")]
-struct SvgMatrixArg<'s> {
-    #[webidl(required)]
-    matrix: v8::Local<'s, v8::Value>,
-}
-
-#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVG transform translate")]
 struct SvgTransformTranslateArgs {
     #[webidl(required, converter = "float")]
@@ -273,47 +264,6 @@ struct SvgTransformRotateArgs {
 struct SvgTransformSkewArgs {
     #[webidl(required, converter = "float")]
     angle: f32,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "SVG angle")]
-struct SvgAngleArg {
-    #[webidl(required, converter = "double")]
-    angle: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "SVG matrix translate")]
-struct SvgMatrixTranslateArgs {
-    #[webidl(required, converter = "double")]
-    x: f64,
-    #[webidl(required, converter = "double")]
-    y: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "SVG matrix scale")]
-struct SvgMatrixScaleArg {
-    #[webidl(required, converter = "double")]
-    scale_factor: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "SVG matrix scaleNonUniform")]
-struct SvgMatrixScaleNonUniformArgs {
-    #[webidl(required, converter = "double")]
-    scale_factor_x: f64,
-    #[webidl(required, converter = "double")]
-    scale_factor_y: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "SVG matrix rotateFromVector")]
-struct SvgMatrixRotateFromVectorArgs {
-    #[webidl(required, converter = "double")]
-    x: f64,
-    #[webidl(required, converter = "double")]
-    y: f64,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -1197,7 +1147,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         }
         "SVGTransformList" => bindings::install_svg_transform_list_bindings(scope, template),
         "SVGTransform" => bindings::install_svg_transform_bindings(scope, template),
-        "SVGMatrix" => bindings::install_svg_matrix_bindings(scope, template),
+        "SVGMatrix" => install_svg_matrix_bindings(scope, template),
         "SVGGraphicsElement" => bindings::install_svg_graphics_element_bindings(scope, template),
         "SVGGeometryElement" => bindings::install_svg_geometry_element_bindings(scope, template),
         "SVGTextContentElement" => {

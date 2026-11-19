@@ -14,53 +14,6 @@ pub(super) use moli_webapi::svg_values::{
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::SVGMatrix, own_to_string_tag = "SVGMatrix")]
-struct SvgMatrixObjectDeclaration {
-    #[webapi(slot = SVG_MATRIX_A_SLOT)]
-    a: f64,
-    #[webapi(slot = SVG_MATRIX_B_SLOT)]
-    b: f64,
-    #[webapi(slot = SVG_MATRIX_C_SLOT)]
-    c: f64,
-    #[webapi(slot = SVG_MATRIX_D_SLOT)]
-    d: f64,
-    #[webapi(slot = SVG_MATRIX_E_SLOT)]
-    e: f64,
-    #[webapi(slot = SVG_MATRIX_F_SLOT)]
-    f: f64,
-    #[webapi(method, callback = svg_matrix_multiply_callback, length = 1)]
-    multiply: (),
-    #[webapi(method, callback = svg_matrix_inverse_callback, length = 0)]
-    inverse: (),
-    #[webapi(method, callback = svg_matrix_translate_callback, length = 2)]
-    translate: (),
-    #[webapi(method, callback = svg_matrix_scale_callback, length = 1)]
-    scale: (),
-    #[webapi(
-        method,
-        callback = svg_matrix_scale_non_uniform_callback,
-        length = 2
-    )]
-    scale_non_uniform: (),
-    #[webapi(method, callback = svg_matrix_rotate_callback, length = 1)]
-    rotate: (),
-    #[webapi(
-        method,
-        callback = svg_matrix_rotate_from_vector_callback,
-        length = 2
-    )]
-    rotate_from_vector: (),
-    #[webapi(method, callback = svg_matrix_flip_x_callback, length = 0)]
-    flip_x: (),
-    #[webapi(method, callback = svg_matrix_flip_y_callback, length = 0)]
-    flip_y: (),
-    #[webapi(method, callback = svg_matrix_skew_x_callback, length = 1)]
-    skew_x: (),
-    #[webapi(method, callback = svg_matrix_skew_y_callback, length = 1)]
-    skew_y: (),
-}
-
-#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SVGLengthList, own_to_string_tag = "SVGLengthList")]
 struct SvgLengthListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_LENGTH_LIST_ITEMS_SLOT)]
@@ -976,22 +929,6 @@ pub(super) fn build_svg_transform<'s>(
     .expect("SVGTransform declaration should bind")
 }
 
-pub(super) fn build_svg_matrix<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    components: SvgMatrixComponents,
-) -> v8::Local<'s, v8::Object> {
-    SvgMatrixObjectDeclaration::new(
-        components.a,
-        components.b,
-        components.c,
-        components.d,
-        components.e,
-        components.f,
-    )
-    .bind(scope)
-    .expect("SVGMatrix declaration should bind")
-}
-
 pub(super) fn build_svg_animated_length_for_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -1676,29 +1613,6 @@ pub(super) fn svg_list_item_or_throw<'s>(
     }
 }
 
-pub(super) fn svg_matrix_value_or_throw<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Local::<v8::Object>::try_from(value).ok();
-    if let Some(object) = object
-        && web_api_interfaces::SVGMatrix::is_instance(scope, object)
-    {
-        return Some(object);
-    }
-    webidl::throw_type_error(scope, "Argument 1 can not be converted to SVGMatrix");
-    None
-}
-
-pub(super) fn cloned_svg_matrix_value_or_throw<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let matrix = svg_matrix_value_or_throw(scope, value)?;
-    let components = svg_matrix_components(scope, matrix);
-    Some(build_svg_matrix(scope, components))
-}
-
 pub(super) fn svg_value_list_item_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -2352,20 +2266,6 @@ pub(super) fn svg_number_slot<'s>(
     get_private_value(scope, object, slot).and_then(|value| value.number_value(scope))
 }
 
-pub(super) fn svg_matrix_components<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> SvgMatrixComponents {
-    SvgMatrixComponents {
-        a: svg_number_slot(scope, object, SVG_MATRIX_A_SLOT).unwrap_or(1.0),
-        b: svg_number_slot(scope, object, SVG_MATRIX_B_SLOT).unwrap_or(0.0),
-        c: svg_number_slot(scope, object, SVG_MATRIX_C_SLOT).unwrap_or(0.0),
-        d: svg_number_slot(scope, object, SVG_MATRIX_D_SLOT).unwrap_or(1.0),
-        e: svg_number_slot(scope, object, SVG_MATRIX_E_SLOT).unwrap_or(0.0),
-        f: svg_number_slot(scope, object, SVG_MATRIX_F_SLOT).unwrap_or(0.0),
-    }
-}
-
 pub(super) fn svg_transform_matrix_components<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transform: v8::Local<'s, v8::Object>,
@@ -2374,25 +2274,6 @@ pub(super) fn svg_transform_matrix_components<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .map(|matrix| svg_matrix_components(scope, matrix))
         .unwrap_or_else(SvgMatrixComponents::identity)
-}
-
-pub(super) fn svg_matrix_slot(name: &str) -> Option<&'static str> {
-    match name {
-        "a" => Some(SVG_MATRIX_A_SLOT),
-        "b" => Some(SVG_MATRIX_B_SLOT),
-        "c" => Some(SVG_MATRIX_C_SLOT),
-        "d" => Some(SVG_MATRIX_D_SLOT),
-        "e" => Some(SVG_MATRIX_E_SLOT),
-        "f" => Some(SVG_MATRIX_F_SLOT),
-        _ => None,
-    }
-}
-
-pub(super) fn svg_matrix_default(slot: &str) -> f64 {
-    match slot {
-        SVG_MATRIX_A_SLOT | SVG_MATRIX_D_SLOT => 1.0,
-        _ => 0.0,
-    }
 }
 
 pub(super) fn svg_animated_length_attribute_slot(name: &str) -> &'static str {
