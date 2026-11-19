@@ -7,10 +7,7 @@ use crate::{
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::{PageOwnerTurnOutcome, RendererDocumentToken},
     types::{DedicatedWorkerId, SubresourcePolicyContext},
-    worker::{
-        WorkerErrorPhase, WorkerErrorSource, WorkerParentErrorEventKind, WorkerScriptKind,
-        WorkerScriptSource,
-    },
+    worker::{WorkerErrorPhase, WorkerParentErrorEventKind, WorkerScriptKind, WorkerScriptSource},
 };
 
 use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskReadySignal};
@@ -70,8 +67,6 @@ pub(crate) enum RendererDedicatedWorkerMessageEvent {
         colno: u32,
         event_kind: WorkerParentErrorEventKind,
         phase: WorkerErrorPhase,
-        source: WorkerErrorSource,
-        diagnostic: Option<Box<crate::diagnostics::PendingWorkerException>>,
     },
 }
 

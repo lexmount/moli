@@ -261,22 +261,15 @@ fn initial_navigation_request(request: Request) -> Request {
 }
 
 impl Browser {
-    /// Subscribe to diagnostics from this Browser's Pages and Workers.
+    /// Subscribe to future diagnostics from this Browser's Pages and Workers.
     ///
-    /// The subscription receives future events. Producers continue when a
-    /// receiver lags. Drop the subscription to stop receiving diagnostics.
-    pub fn subscribe_diagnostics(&self) -> crate::DiagnosticsSubscription {
+    /// Returns `None` while this Browser already has an open subscription.
+    /// Close or drop the receiver before subscribing again. Consume events
+    /// regularly to limit the memory used by the unbounded queue.
+    pub fn subscribe_diagnostics(&self) -> Option<crate::DiagnosticsSubscription> {
         self.js_runtime
             .browser_context_runtime()
             .subscribe_diagnostics()
-    }
-
-    /// Subscribe to script load failures and runtime exceptions whose reporting was not canceled.
-    /// Exceptions that propagate to a DedicatedWorker's owners are published after that dispatch.
-    pub fn subscribe_runtime_failures(&self) -> crate::DiagnosticsSubscription {
-        self.js_runtime
-            .browser_context_runtime()
-            .subscribe_runtime_failures()
     }
 
     fn resource_request_client(&self) -> ResourceRequestClient {

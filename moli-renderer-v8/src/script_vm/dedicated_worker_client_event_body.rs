@@ -7,10 +7,17 @@
 
 use anyhow::Result;
 
-use super::ScriptVm;
+use super::{
+    ScriptVm,
+    dedicated_worker_error_dispatch::{
+        DedicatedWorkerError, dispatch_error_and_maybe_propagate, dispatch_script_load_failure,
+    },
+};
 use crate::{
+    context_bootstrap::{dispatch_worker_event, worker_has_message_delivery_listener},
     page_task_queue::{RendererDedicatedWorkerClientEvent, RendererDedicatedWorkerMessageEvent},
     runtime::AuthorizedCurrentPageDedicatedWorkerClientEvent,
+    worker::WorkerToParentMessage,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,12 +139,10 @@ impl ScriptVm {
                         .authorized_dedicated_worker_dispatch_target(
                             scope,
                             worker_id,
-                        owner.execution_context(),
-                    );
-                    let Some((dispatch_scope, context, worker)) = target else {
-                        return Ok(
-                            DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared,
+                            owner.execution_context(),
                         );
+                    let Some((dispatch_scope, context, worker)) = target else {
+                        return Ok(DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared);
                     };
                     let scope = &mut v8::ContextScope::new(scope, context);
                     let target = AuthorizedWorkerWrapperTarget {
@@ -151,7 +156,7 @@ impl ScriptVm {
                             error_message,
                             ..
                         } => {
-                            super::dedicated_worker_error_dispatch::dispatch_script_load_failure(
+                            dispatch_script_load_failure(
                                 scope,
                                 target.wrapper,
                                 &error_message,
@@ -163,82 +168,44 @@ impl ScriptVm {
                             context_host.borrow_mut().forget_worker(worker_id);
                             true
                         }
-                        RendererDedicatedWorkerClientEvent::Message(message) => {
-                            let parent_message = match message {
-                                RendererDedicatedWorkerMessageEvent::Message(payload) => {
-                                    crate::worker::WorkerToParentMessage::Post(*payload)
-                                }
-                                RendererDedicatedWorkerMessageEvent::Error {
-                                    message,
-                                    filename,
-                                    lineno,
-                                    colno,
-                                    event_kind,
-                                    phase,
-                                    source,
-                                    diagnostic,
-                                } => crate::worker::WorkerToParentMessage::Error {
-                                    message,
-                                    filename,
-                                    lineno,
-                                    colno,
-                                    event_kind,
-                                    phase,
-                                    source,
-                                    diagnostic,
-                                },
-                            };
-                            let has_message_listener = matches!(
-                                parent_message,
-                                crate::worker::WorkerToParentMessage::Post(_)
-                            ) && crate::context_bootstrap::worker_has_message_delivery_listener(
-                                scope,
-                                target.wrapper,
-                            );
-                            match parent_message {
-                                crate::worker::WorkerToParentMessage::Post(_) => {
-                                    let _ = crate::context_bootstrap::dispatch_worker_event(
-                                        scope,
-                                        target.wrapper,
-                                        &parent_message,
-                                    );
-                                    has_message_listener
-                                }
-                                crate::worker::WorkerToParentMessage::Error {
-                                    message,
-                                    filename,
-                                    lineno,
-                                    colno,
-                                    event_kind,
-                                    phase,
-                                    diagnostic,
-                                    ..
-                                } => {
-                                    if let Err(error) = super::dedicated_worker_error_dispatch::dispatch_error_and_maybe_propagate(
-                                        scope,
-                                        host_ptr,
-                                        target.wrapper,
-                                        super::dedicated_worker_error_dispatch::DedicatedWorkerError {
-                                            message: &message,
-                                            filename: &filename,
-                                            lineno,
-                                            colno,
-                                            event_kind,
-                                            phase,
-                                            diagnostic,
-                                        },
-                                    )
-                                    {
-                                        target.owner.restore(scope, previous_owner_context);
-                                        return Err(error);
-                                    }
-                                    true
-                                }
-                                _ => unreachable!(
-                                    "DedicatedWorker client-event payload admitted a bridge message"
-                                ),
+                        RendererDedicatedWorkerClientEvent::Message(message) => match message {
+                            RendererDedicatedWorkerMessageEvent::Message(payload) => {
+                                let has_message_listener =
+                                    worker_has_message_delivery_listener(scope, target.wrapper);
+                                let _ = dispatch_worker_event(
+                                    scope,
+                                    target.wrapper,
+                                    &WorkerToParentMessage::Post(*payload),
+                                );
+                                has_message_listener
                             }
-                        }
+                            RendererDedicatedWorkerMessageEvent::Error {
+                                message,
+                                filename,
+                                lineno,
+                                colno,
+                                event_kind,
+                                phase,
+                            } => {
+                                if let Err(error) = dispatch_error_and_maybe_propagate(
+                                    scope,
+                                    host_ptr,
+                                    target.wrapper,
+                                    DedicatedWorkerError {
+                                        message: &message,
+                                        filename: &filename,
+                                        lineno,
+                                        colno,
+                                        event_kind,
+                                        phase,
+                                    },
+                                ) {
+                                    target.owner.restore(scope, previous_owner_context);
+                                    return Err(error);
+                                }
+                                true
+                            }
+                        },
                         RendererDedicatedWorkerClientEvent::ScriptLoaded { .. }
                         | RendererDedicatedWorkerClientEvent::ClientSourceDrained => {
                             unreachable!(

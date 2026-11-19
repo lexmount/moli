@@ -5,9 +5,7 @@ use crate::page_task_queue::{
     RendererDedicatedWorkerClientEventKind, RendererDedicatedWorkerMessageEvent,
 };
 use crate::runtime::PageTaskCompletion;
-use crate::worker::{
-    WorkerErrorPhase, WorkerErrorSource, WorkerParentErrorEventKind, WorkerRuntimeEvent,
-};
+use crate::worker::{WorkerErrorPhase, WorkerParentErrorEventKind, WorkerRuntimeEvent};
 
 fn current_single_child_document_owner(
     page_vm: &PageVm,
@@ -249,8 +247,6 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
                     colno: 1,
                     event_kind: WorkerParentErrorEventKind::Event,
                     phase: WorkerErrorPhase::Bootstrap,
-                    source: WorkerErrorSource::InitialScriptEvaluation,
-                    diagnostic: None,
                 },
             ))
             .expect("bootstrap Worker error should enter its typed source");
@@ -280,8 +276,6 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
                     colno: 3,
                     event_kind: WorkerParentErrorEventKind::ErrorEvent,
                     phase: WorkerErrorPhase::Runtime,
-                    source: WorkerErrorSource::Runtime,
-                    diagnostic: None,
                 },
             ))
             .expect("runtime Worker error should enter its typed source");
@@ -370,8 +364,6 @@ globalThis.__bootstrapEventWorker = new Worker("data:text/javascript,onmessage =
                     colno: 5,
                     event_kind: WorkerParentErrorEventKind::Event,
                     phase: WorkerErrorPhase::Bootstrap,
-                    source: WorkerErrorSource::InitialScriptEvaluation,
-                    diagnostic: None,
                 },
             ))
             .expect("bootstrap error should enter the typed Worker source");

@@ -20,7 +20,6 @@ use crate::context_bootstrap::{
     mark_event_trusted, runtime_message_allowed_for_current_target, set_event_internal_flag,
     structured_deserialize_value_for_message_event,
 };
-use crate::diagnostics::PendingWorkerException;
 use crate::exception_reporting::{V8ExceptionReport, log_unhandled_promise_rejection};
 use crate::network_host::{
     MaterializedResponseBody, MaterializedResponseHead,
@@ -656,10 +655,9 @@ pub(super) fn report_exception_to_parent(
     event_kind: WorkerParentErrorEventKind,
     phase: WorkerErrorPhase,
     source: WorkerErrorSource,
-    diagnostic: Option<Box<PendingWorkerException>>,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
 ) {
-    let message = WorkerToParentMessage::Error {
+    let _ = parent_tx.send(WorkerToParentMessage::Error {
         message: report.summary.clone(),
         filename: report
             .source
@@ -670,16 +668,7 @@ pub(super) fn report_exception_to_parent(
         event_kind,
         phase,
         source,
-        diagnostic,
-    };
-    if let Err(error) = parent_tx.send(message)
-        && let WorkerToParentMessage::Error {
-            diagnostic: Some(diagnostic),
-            ..
-        } = error.0
-    {
-        diagnostic.finish(false);
-    }
+    });
 }
 
 fn worker_exception_source_override<'s>(
@@ -3529,37 +3518,32 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
 ) -> bool {
     apply_worker_exception_location_overrides(scope, &mut report, exception);
     let handled = dispatch_worker_error_event(scope, global, &report, exception, script_url);
-    let diagnostic = get_worker_state(scope).and_then(|state| {
-        state
-            .borrow()
-            .worker_context_runtime
-            .report_worker_exception(handled, |source| {
-                let stack = if handled {
-                    None
-                } else {
-                    exception.and_then(|value| {
-                        crate::exception_reporting::captured_exception_stack(scope, value)
-                    })
-                };
-                crate::DiagnosticEvent::runtime_exception(
-                    source,
-                    crate::ExceptionOrigin::UncaughtException,
-                    &report.summary,
-                    report.source.as_deref().unwrap_or(script_url),
-                    (
-                        report
-                            .line
-                            .and_then(|line| u32::try_from(line).ok())
-                            .unwrap_or(0),
-                        report
-                            .column
-                            .and_then(|column| u32::try_from(column).ok())
-                            .unwrap_or(0),
-                    ),
-                    stack.as_deref(),
-                    handled,
-                )
+    with_worker_diagnostic(scope, |scope, source| {
+        let stack = if handled {
+            None
+        } else {
+            exception.and_then(|value| {
+                crate::exception_reporting::captured_exception_stack(scope, value)
             })
+        };
+        crate::DiagnosticEvent::runtime_exception(
+            source,
+            crate::ExceptionOrigin::UncaughtException,
+            &report.summary,
+            report.source.as_deref().unwrap_or(script_url),
+            (
+                report
+                    .line
+                    .and_then(|line| u32::try_from(line).ok())
+                    .unwrap_or(0),
+                report
+                    .column
+                    .and_then(|column| u32::try_from(column).ok())
+                    .unwrap_or(0),
+            ),
+            stack.as_deref(),
+            handled,
+        )
     });
     if !handled {
         report_exception_to_parent(
@@ -3568,7 +3552,6 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
             parent_event_kind,
             parent_phase,
             source,
-            diagnostic,
             parent_tx,
         );
     }
