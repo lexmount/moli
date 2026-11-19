@@ -95,6 +95,41 @@ struct WebGlViewportArgs {
     height: i32,
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebGLRenderingContext.deleteBuffer")]
+struct WebGlDeleteBufferArgs<'s> {
+    #[webidl(required, nullable, interface = web_api_interfaces::WebGLBuffer)]
+    _buffer: Option<v8::Local<'s, v8::Object>>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebGLRenderingContext.uniform3f")]
+struct WebGlUniform3fArgs<'s> {
+    #[webidl(required, nullable, interface = web_api_interfaces::WebGLUniformLocation)]
+    _location: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(required, converter = "unrestricted_float")]
+    _x: f32,
+    #[webidl(required, converter = "unrestricted_float")]
+    _y: f32,
+    #[webidl(required, converter = "unrestricted_float")]
+    _z: f32,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebGLRenderingContext.uniform4f")]
+struct WebGlUniform4fArgs<'s> {
+    #[webidl(required, nullable, interface = web_api_interfaces::WebGLUniformLocation)]
+    _location: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(required, converter = "unrestricted_float")]
+    _x: f32,
+    #[webidl(required, converter = "unrestricted_float")]
+    _y: f32,
+    #[webidl(required, converter = "unrestricted_float")]
+    _z: f32,
+    #[webidl(required, converter = "unrestricted_float")]
+    _w: f32,
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct WebGlContextStateDeclaration<'s> {
@@ -547,6 +582,15 @@ pub fn webgl_create_buffer_callback(
     rv.set(value.into());
 }
 
+fn webgl_delete_buffer_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    // The compatibility layer returns buffer handles without allocating GPU resources.
+    webidl::parse_args::<WebGlDeleteBufferArgs>(scope, &args);
+}
+
 pub fn webgl_create_framebuffer_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
@@ -735,6 +779,24 @@ pub fn webgl_noop_callback(
     _args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+}
+
+// These bindings perform WebIDL conversion so author scripts can run against
+// the compatibility context, which does not execute a shader pipeline.
+fn webgl_uniform3f_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    webidl::parse_args::<WebGlUniform3fArgs>(scope, &args);
+}
+
+fn webgl_uniform4f_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    webidl::parse_args::<WebGlUniform4fArgs>(scope, &args);
 }
 
 pub fn webgl_get_context_attributes_callback(
@@ -1063,6 +1125,9 @@ struct WebGlRenderingContextTemplateMethodsDeclaration {
     #[webapi(method = "createBuffer", length = 0, callback = webgl_create_buffer_callback)]
     create_buffer: (),
 
+    #[webapi(method = "deleteBuffer", length = 1, callback = webgl_delete_buffer_callback)]
+    delete_buffer: (),
+
     #[webapi(method = "bindBuffer", length = 2, callback = webgl_noop_callback)]
     bind_buffer: (),
 
@@ -1126,6 +1191,12 @@ struct WebGlRenderingContextTemplateMethodsDeclaration {
 
     #[webapi(method = "uniform2f", length = 3, callback = webgl_noop_callback)]
     uniform2f: (),
+
+    #[webapi(method = "uniform3f", length = 4, callback = webgl_uniform3f_callback)]
+    uniform3f: (),
+
+    #[webapi(method = "uniform4f", length = 5, callback = webgl_uniform4f_callback)]
+    uniform4f: (),
 
     #[webapi(method = "uniform1f", length = 2, callback = webgl_noop_callback)]
     uniform1f: (),

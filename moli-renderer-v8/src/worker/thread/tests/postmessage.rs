@@ -2406,6 +2406,34 @@ async fn worker_offscreen_canvas_exposes_webgl_identity_consistently() {
 }
 
 #[tokio::test]
+async fn worker_offscreen_canvas_path2d_paints_pixels() {
+    ensure_v8();
+    let mut worker = spawn_worker(
+        r#"
+        const path = new Path2D();
+        path.moveTo(2,4);
+        path.lineTo(10,4);
+        const ctx = new OffscreenCanvas(12,12).getContext('2d');
+        ctx.lineWidth = 2;
+        ctx.stroke(path);
+        postMessage([
+            path instanceof Path2D,
+            ctx.getImageData(6,4,1,1).data[3],
+            ctx.getImageData(6,8,1,1).data[3]
+        ]);
+        close();
+        "#
+        .into(),
+        "test://worker_offscreen_canvas_path2d".into(),
+    );
+    let message = timeout(TIMEOUT, worker.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(message), "[true,255,0]");
+}
+
+#[tokio::test]
 async fn shared_worker_message_port_handler_can_reply_with_performance_now() {
     ensure_v8();
     let (port_wake_tx, mut port_wake_rx) = tokio::sync::mpsc::unbounded_channel();

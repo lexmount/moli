@@ -1,4 +1,4 @@
-//! Canvas 2D current-path geometry, owned by the context's native state.
+//! Path geometry shared by Canvas 2D contexts and detached Path2D objects.
 
 use moli_layout::{
     LayoutPoint, LayoutRect, LayoutTransform2D, PaintPath, PaintPathElement, PaintRect,
@@ -34,6 +34,35 @@ impl Default for Canvas2dPathState {
 const TWO_PI: f64 = std::f64::consts::TAU;
 
 impl Canvas2dPathState {
+    pub(super) fn from_svg(data: &str) -> Self {
+        let mut path = Self::default();
+        for element in moli_svg::parse_path_data(data) {
+            match element {
+                kurbo::PathEl::MoveTo(p) => path.move_to(p.x, p.y),
+                kurbo::PathEl::LineTo(p) => path.line_to(p.x, p.y),
+                kurbo::PathEl::QuadTo(a, p) => path.quadratic_curve_to(a.x, a.y, p.x, p.y),
+                kurbo::PathEl::CurveTo(a, b, p) => {
+                    path.bezier_curve_to(a.x, a.y, b.x, b.y, p.x, p.y);
+                }
+                kurbo::PathEl::ClosePath => path.close_path(),
+            }
+        }
+        if path.has_subpath {
+            path.move_to(path.current.0, path.current.1);
+        }
+        path
+    }
+
+    pub(super) fn add_path(&mut self, path: &Self, transform: [f64; 6]) {
+        if path.is_empty() || !transform.into_iter().all(f64::is_finite) {
+            return;
+        }
+        let transform = kurbo::Affine::new(transform);
+        self.elements.extend(path.transformed_elements(transform));
+        let end = transform * kurbo::Point::from(path.current);
+        self.move_to(end.x, end.y);
+    }
+
     pub(super) fn begin_path(&mut self) {
         self.elements.clear();
         self.current = (0.0, 0.0);
@@ -299,27 +328,29 @@ impl Canvas2dPathState {
     /// back to that space and let the painter transform the resulting stroke,
     /// so anisotropic line widths, joins and dashes change without moving it.
     pub(super) fn stroke_path(&self) -> Option<PaintPath> {
-        let inverse = self.inverse_transform()?;
-        let map = |p: LayoutPoint| {
-            let p = inverse * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
-            point(p.x, p.y)
-        };
-        let elements = self
-            .elements
-            .iter()
-            .map(|element| match *element {
-                PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
-                PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
-                PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
-                PaintPathElement::CubicTo(a, b, p) => {
-                    PaintPathElement::CubicTo(map(a), map(b), map(p))
-                }
-                PaintPathElement::Close => PaintPathElement::Close,
-            })
-            .collect::<Vec<_>>();
+        let elements: Vec<_> = self
+            .transformed_elements(self.inverse_transform()?)
+            .collect();
         Some(PaintPath {
             bounds: path_bounds(&elements),
             elements,
+        })
+    }
+
+    fn transformed_elements(
+        &self,
+        transform: kurbo::Affine,
+    ) -> impl Iterator<Item = PaintPathElement> + '_ {
+        let map = move |p: LayoutPoint| {
+            let p = transform * kurbo::Point::new(f64::from(p.x), f64::from(p.y));
+            point(p.x, p.y)
+        };
+        self.elements.iter().map(move |element| match *element {
+            PaintPathElement::MoveTo(p) => PaintPathElement::MoveTo(map(p)),
+            PaintPathElement::LineTo(p) => PaintPathElement::LineTo(map(p)),
+            PaintPathElement::QuadTo(a, p) => PaintPathElement::QuadTo(map(a), map(p)),
+            PaintPathElement::CubicTo(a, b, p) => PaintPathElement::CubicTo(map(a), map(b), map(p)),
+            PaintPathElement::Close => PaintPathElement::Close,
         })
     }
 
