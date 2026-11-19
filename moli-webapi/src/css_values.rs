@@ -1,6 +1,8 @@
 use crate::interfaces as web_api_interfaces;
 use cssparser::{Parser, Token};
-use moli_v8_util::{get_private_value, set_private_value, throw_type_error, v8_string};
+use moli_v8_util::{
+    get_private_object, get_private_value, set_private_value, throw_type_error, v8_string,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_webidl as webidl;
 
@@ -36,6 +38,15 @@ struct CssUnitValueObjectDeclaration {
     value: f64,
     #[webapi(slot = CSS_UNIT_VALUE_UNIT_SLOT)]
     unit: String,
+}
+
+const STYLE_PROPERTY_MAP_STYLE_SLOT: &str = "__moliStylePropertyMapStyle";
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::StylePropertyMapReadOnly)]
+struct ComputedStylePropertyMapDeclaration<'s> {
+    #[webapi(slot = STYLE_PROPERTY_MAP_STYLE_SLOT)]
+    style: v8::Local<'s, v8::Object>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -83,6 +94,22 @@ struct CssUnitValueConstructorArgs {
 struct CssKeywordValueConstructorArgs {
     #[webidl(required)]
     keyword: String,
+}
+
+pub fn new_style_property_map_read_only<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    ComputedStylePropertyMapDeclaration::new(style)
+        .bind(scope)
+        .expect("computed StylePropertyMap declaration should bind")
+}
+
+pub fn style_property_map_style<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    map: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_private_object(scope, map, STYLE_PROPERTY_MAP_STYLE_SLOT)
 }
 
 pub fn install_typed_value_template_bindings<'s>(

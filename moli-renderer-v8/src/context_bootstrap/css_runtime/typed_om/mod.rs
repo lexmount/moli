@@ -5,7 +5,7 @@ use crate::{
     util::{get_private_object, set_private_value, throw_type_error, v8_string},
     webidl, window_host,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 mod map;
 use moli_webapi::css_values as values;

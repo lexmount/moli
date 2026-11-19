@@ -22,8 +22,8 @@ use super::{
         webkit_transform_origin_compat_value_is_supported,
     },
     util::{
-        call_script_visible_function, get_private_value, serialize_v8_array, set_private_value,
-        throw_type_error, v8_string,
+        call_script_visible_function, get_private_value, set_private_value, throw_type_error,
+        v8_string,
     },
     webidl,
 };
@@ -31,11 +31,17 @@ use crate::native_bridge::element::{
     cssom_text_decoration_line_value_is_compat, serialize_animation_range_shorthand,
     serialize_animation_shorthand_from_longhands, serialize_transition_shorthand_from_longhands,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+pub(crate) use moli_webapi::css_declarations::{
+    build_lightweight_css_font_face_descriptors, build_lightweight_css_page_descriptors,
+    build_lightweight_css_style_declaration,
+};
+use moli_webapi::css_declarations::{
+    is_lightweight_style_object, set_style_interface, store_style_names, style_interface,
+    style_names,
+};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
-const STYLE_NAMES_SLOT: &str = "__moliStyleNames";
 const STYLE_INDEXED_LENGTH_SLOT: &str = "__moliStyleIndexedLength";
-const STYLE_INTERFACE_SLOT: &str = "__moliStyleInterface";
 const STYLE_CHANGE_CALLBACK_SLOT: &str = "__moliStyleChangeCallback";
 const STYLE_STYLO_DECLARATION_BLOCK_SLOT: &str = "__moliStyleStyloDeclarationBlock";
 const STYLE_STYLO_DECLARATION_BLOCK_ID_SLOT: &str = "__moliStyleStyloDeclarationBlockId";
@@ -143,42 +149,6 @@ pub(crate) fn set_lightweight_css_style_stylo_declaration_block_id<'s>(
     );
     set_stylo_declaration_block_id(scope, style, id);
     true
-}
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::CSSStyleProperties,
-    own_to_string_tag = "CSSStyleProperties"
-)]
-struct LightweightCssStylePropertiesDeclaration<'scope> {
-    #[webapi(slot = STYLE_INTERFACE_SLOT)]
-    interface: &'static str,
-    #[webapi(slot = STYLE_NAMES_SLOT)]
-    names: v8::Local<'scope, v8::Array>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::CSSFontFaceDescriptors,
-    own_to_string_tag = "CSSFontFaceDescriptors"
-)]
-struct LightweightCssFontFaceDescriptorsDeclaration<'scope> {
-    #[webapi(slot = STYLE_INTERFACE_SLOT)]
-    interface: &'static str,
-    #[webapi(slot = STYLE_NAMES_SLOT)]
-    names: v8::Local<'scope, v8::Array>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::CSSPageDescriptors,
-    own_to_string_tag = "CSSPageDescriptors"
-)]
-struct LightweightCssPageDescriptorsDeclaration<'scope> {
-    #[webapi(slot = STYLE_INTERFACE_SLOT)]
-    interface: &'static str,
-    #[webapi(slot = STYLE_NAMES_SLOT)]
-    names: v8::Local<'scope, v8::Array>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -761,12 +731,6 @@ fn all_shorthand_applies_to(property: &str) -> bool {
 
 use crate::css_style::css_wide_keyword;
 
-pub(crate) fn build_lightweight_css_style_declaration<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    build_lightweight_css_style_declaration_with_interface(scope, "CSSStyleProperties", true)
-}
-
 pub(crate) fn build_lightweight_css_rule_style_declaration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
@@ -782,46 +746,6 @@ pub(crate) fn build_lightweight_css_keyframe_style_declaration<'s>(
     set_style_interface(scope, style, "CSSKeyframeProperties");
     set_style_uses_stylo_declaration_block(scope, style);
     style
-}
-
-pub(crate) fn build_lightweight_css_font_face_descriptors<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    build_lightweight_css_style_declaration_with_interface(scope, "CSSFontFaceDescriptors", true)
-}
-
-pub(crate) fn build_lightweight_css_page_descriptors<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    build_lightweight_css_style_declaration_with_interface(scope, "CSSPageDescriptors", false)
-}
-
-fn build_lightweight_css_style_declaration_with_interface<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    interface_name: &str,
-    _install_standard_properties: bool,
-) -> v8::Local<'s, v8::Object> {
-    let names = v8::Array::new(scope, 0);
-    match interface_name {
-        "CSSFontFaceDescriptors" => LightweightCssFontFaceDescriptorsDeclaration {
-            interface: "CSSFontFaceDescriptors",
-            names,
-        }
-        .bind(scope)
-        .expect("CSSFontFaceDescriptors declaration should bind"),
-        "CSSPageDescriptors" => LightweightCssPageDescriptorsDeclaration {
-            interface: "CSSPageDescriptors",
-            names,
-        }
-        .bind(scope)
-        .expect("CSSPageDescriptors declaration should bind"),
-        _ => LightweightCssStylePropertiesDeclaration {
-            interface: "CSSStyleProperties",
-            names,
-        }
-        .bind(scope)
-        .expect("CSSStyleProperties declaration should bind"),
-    }
 }
 
 pub(crate) fn install_css_style_declaration_template_bindings<'s>(
@@ -1123,17 +1047,6 @@ fn install_descriptor_prototype_template_properties<'s>(
     }
 }
 
-fn set_style_interface(
-    scope: &mut v8::PinScope<'_, '_>,
-    style: v8::Local<'_, v8::Object>,
-    interface_name: &str,
-) {
-    let Some(interface_name) = v8_string(scope, interface_name) else {
-        return;
-    };
-    set_style_private_value(scope, style, STYLE_INTERFACE_SLOT, interface_name.into());
-}
-
 fn set_style_uses_stylo_declaration_block<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
@@ -1284,52 +1197,12 @@ fn lightweight_style_receiver<'s>(
     }
 }
 
-fn is_lightweight_style_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    style: v8::Local<'s, v8::Object>,
-) -> bool {
-    style_private_value(scope, style, STYLE_NAMES_SLOT).is_some()
-}
-
 fn is_css_style_declaration_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
 ) -> bool {
     is_lightweight_style_object(scope, style)
         || crate::native_bridge::element::is_live_style_declaration_object(scope, style)
-}
-
-fn style_interface<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    style: v8::Local<'s, v8::Object>,
-) -> String {
-    style_private_value(scope, style, STYLE_INTERFACE_SLOT)
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default()
-}
-
-fn style_names<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    style: v8::Local<'s, v8::Object>,
-) -> Vec<String> {
-    let Some(value) = style_private_value(scope, style, STYLE_NAMES_SLOT) else {
-        return Vec::new();
-    };
-    let Ok(array) = v8::Local::<v8::Array>::try_from(value) else {
-        return Vec::new();
-    };
-    let mut names = Vec::new();
-    for index in 0..array.length() {
-        let Some(value) = array.get_index(scope, index) else {
-            continue;
-        };
-        let Some(value) = value.to_string(scope) else {
-            continue;
-        };
-        names.push(value.to_rust_string_lossy(scope));
-    }
-    names
 }
 
 fn style_property_names<'s>(
@@ -1350,8 +1223,7 @@ fn set_style_names<'s>(
     style: v8::Local<'s, v8::Object>,
     names: &[String],
 ) {
-    let array = serialize_v8_array(scope, names).unwrap_or_else(|| v8::Array::new(scope, 0));
-    set_style_private_value(scope, style, STYLE_NAMES_SLOT, array.into());
+    store_style_names(scope, style, names);
     let indexed_names = style_property_names(scope, style);
     sync_style_indexed_properties(scope, style, &indexed_names);
 }
