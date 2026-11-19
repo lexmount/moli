@@ -392,6 +392,7 @@ interfaces! {
     Option;
     OscillatorNode: AudioScheduledSourceNode;
     PageRevealEvent: Event;
+    PageSwapEvent: Event;
     PageTransitionEvent: Event;
     Path2D;
     PaymentResponse: EventTarget;

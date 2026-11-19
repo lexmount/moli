@@ -276,6 +276,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::PageRevealEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PageRevealEvent)
         }
+        ConstructorKind::PageSwapEvent => {
+            build_event_subclass_template(scope, EventSubclassKind::PageSwapEvent)
+        }
         ConstructorKind::PageTransitionEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PageTransitionEvent)
         }
