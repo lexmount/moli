@@ -8,6 +8,7 @@ mod fonts;
 mod grouping_rules;
 mod rule_interfaces;
 mod rule_tree_scaling;
+mod shorthand_integrity;
 mod style_rule_mutations;
 mod stylesheets_and_at_rules;
 mod typed_values;
