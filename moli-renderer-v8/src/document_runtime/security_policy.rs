@@ -1619,7 +1619,6 @@ impl DocumentRuntime {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn inline_style_element_csp_check(
         &self,
         source: &str,

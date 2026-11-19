@@ -67,6 +67,34 @@ impl DocumentRuntime {
         ))
     }
 
+    pub(crate) fn preload_inline_style_import(
+        &mut self,
+        request_url: url::Url,
+        options: StylesheetFetchOptions,
+        request_resource_type: moli_fetch::RequestResourceType,
+    ) {
+        if self.author_styles_disabled() {
+            return;
+        }
+        let document_url = self.document_url().clone();
+        let csp = self.stylesheet_fetch_csp_context_for_document(
+            Some(self.document_handle()),
+            &document_url,
+            self.document_policy_container(),
+            None,
+        );
+        let fetcher = self
+            .speculative_stylesheet_fetcher(request_resource_type, true)
+            .with_request_initiator_type(crate::types::SubresourceRequestInitiatorType::Css)
+            .with_csp_context(csp);
+        self.stylesheet_lifecycle.fetches.preload_stylesheet(
+            &fetcher,
+            document_url,
+            request_url,
+            options,
+        );
+    }
+
     #[cfg(test)]
     pub(crate) fn has_blocking_stylesheet_fetch_for_test(
         &self,
@@ -446,11 +474,10 @@ impl DocumentRuntime {
                 ConnectedLoadNetworkResult {
                     network_observed: result.terminal.network_was_observed(),
                     resource_timing: None,
-                    resource_timing_initiator_type: if result.blocking_operation.is_some() {
-                        "css"
-                    } else {
-                        "link"
-                    },
+                    resource_timing_initiator_type: result
+                        .fetch
+                        .as_ref()
+                        .map_or("css", StylesheetFetch::resource_timing_initiator_type),
                     import_options: None,
                     consumed_preload_error: result.terminal.is_consumed_preload_error(),
                     document_owner,

@@ -232,7 +232,7 @@ fn start_resource_preload(
     .with_subframe_context(frame_id.is_some());
     let Some(producer) = resource_loader
         .request_client()
-        .register_document_response_preload(&request)
+        .register_document_preload_if_absent(&request)
     else {
         return Ok(());
     };
