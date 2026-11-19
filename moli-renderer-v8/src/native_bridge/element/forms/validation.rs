@@ -1,4 +1,3 @@
-use crate::web_api_interfaces;
 use v8::RegExpCreationFlags;
 
 use crate::custom_elements::is_form_associated_custom_element_handle;
@@ -12,7 +11,7 @@ use moli_dom::forms::{
     text_control_suffers_too_long as form_text_control_suffers_too_long,
     text_control_suffers_too_short as form_text_control_suffers_too_short,
 };
-use moli_webapi_declare::WebApiObject;
+use moli_webapi::validity_state::ValidityStateDeclaration;
 
 use super::super::{
     element_internals_validation_message_for_target_handle,
@@ -28,22 +27,6 @@ struct SetCustomValidityArgs {
 }
 
 type ControlValidity = FormControlValidity;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
-struct ValidityStateDeclaration {
-    value_missing: bool,
-    type_mismatch: bool,
-    pattern_mismatch: bool,
-    too_long: bool,
-    too_short: bool,
-    range_underflow: bool,
-    range_overflow: bool,
-    step_mismatch: bool,
-    bad_input: bool,
-    custom_error: bool,
-    valid: bool,
-}
 
 pub(in crate::native_bridge) fn form_validate_for_submission(
     scope: &mut v8::PinScope<'_, '_>,

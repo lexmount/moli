@@ -20,6 +20,10 @@ use crate::{
 };
 use dom::ElementState as StyloElementState;
 use moli_dom::forms::FormControlValidity;
+use moli_webapi::validity_state::{
+    ValidityStateDeclaration, ValidityStateFlagsUpdateDeclaration,
+    ValidityStateValidUpdateDeclaration,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::super::super::{
@@ -428,43 +432,6 @@ struct ElementInternalsFormPrototypeDeclaration {
     validation_message: (),
     #[webapi(accessor_property, getter = element_internals_labels_getter_callback)]
     labels: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
-struct ValidityStateDeclaration {
-    value_missing: bool,
-    type_mismatch: bool,
-    pattern_mismatch: bool,
-    too_long: bool,
-    too_short: bool,
-    range_underflow: bool,
-    range_overflow: bool,
-    step_mismatch: bool,
-    bad_input: bool,
-    custom_error: bool,
-    valid: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
-struct ValidityStateFlagsUpdateDeclaration {
-    value_missing: bool,
-    type_mismatch: bool,
-    pattern_mismatch: bool,
-    too_long: bool,
-    too_short: bool,
-    range_underflow: bool,
-    range_overflow: bool,
-    step_mismatch: bool,
-    bad_input: bool,
-    custom_error: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
-struct ValidityStateValidUpdateDeclaration {
-    valid: bool,
 }
 
 #[derive(WebApiObject)]

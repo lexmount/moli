@@ -4,17 +4,11 @@ use crate::webidl_iterator::{
     SnapshotWebIdlIteratorKind, invoke_webidl_collection_for_each_callback,
     new_snapshot_webidl_iterator, prepare_webidl_collection_for_each_callback,
 };
+use moli_webapi::css_values::{
+    new_style_property_map_read_only, style_property_map_style as map_style_object,
+};
 
 const ELEMENT_COMPUTED_STYLE_MAP_SLOT: &str = "__moliElementComputedStyleMap";
-const STYLE_PROPERTY_MAP_STYLE_SLOT: &str = "__moliStylePropertyMapStyle";
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::StylePropertyMapReadOnly)]
-struct ComputedStylePropertyMapDeclaration<'s> {
-    #[webapi(slot = STYLE_PROPERTY_MAP_STYLE_SLOT)]
-    style: v8::Local<'s, v8::Object>,
-}
-
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ElementComputedStyleMapPrototypeDeclaration {
@@ -110,9 +104,7 @@ fn element_computed_style_map_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let map = ComputedStylePropertyMapDeclaration::new(style)
-        .bind(scope)
-        .expect("computed StylePropertyMap declaration should bind");
+    let map = new_style_property_map_read_only(scope, style);
     set_private_value(
         scope,
         args.this(),
@@ -292,13 +284,6 @@ fn map_style_and_property<'s>(
         None
     })?;
     Some((style, property))
-}
-
-fn map_style_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    map: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_object(scope, map, STYLE_PROPERTY_MAP_STYLE_SLOT)
 }
 
 fn canonical_map_property_name(property: &str) -> Option<String> {

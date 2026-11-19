@@ -1,13 +1,7 @@
 use super::*;
 use crate::web_api_interfaces;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-
-#[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::CSSFontFeatureValuesMap)]
-struct CssFontFeatureValuesMapObjectDeclaration<'s> {
-    #[webapi(slot = CSS_FONT_FEATURE_VALUES_MAP_BACKING_SLOT)]
-    backing: v8::Local<'s, v8::Map>,
-}
+pub(crate) use moli_webapi::css_stylesheet::css_font_feature_values_map_backing;
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CSSFontFeatureValuesMap, enumerable)]
@@ -202,16 +196,5 @@ pub(crate) fn new_css_font_feature_values_map<'s>(
     backing: v8::Local<'s, v8::Map>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let prototype = ensure_intrinsic_interface_prototype(scope, "CSSFontFeatureValuesMap").ok()?;
-    let map = CssFontFeatureValuesMapObjectDeclaration::new(backing)
-        .bind(scope)
-        .ok()?;
-    (map.set_prototype(scope, prototype.into()) == Some(true)).then_some(map)
-}
-
-pub(crate) fn css_font_feature_values_map_backing<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    map: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Map>> {
-    get_private_value(scope, map, CSS_FONT_FEATURE_VALUES_MAP_BACKING_SLOT)
-        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+    moli_webapi::css_stylesheet::new_css_font_feature_values_map(scope, backing, prototype)
 }
