@@ -500,6 +500,7 @@ impl ScriptVm {
         let selector_before = self.document_runtime.selector_debug_snapshot();
         let started = Instant::now();
         debug!(url = %script.url, "execute_prepared_script_once executing source");
+        #[cfg(any(test, feature = "devtools"))]
         self.script_execution_memory.record(script, source.len());
         Self::reset_dom_binding_trace_window();
         let dom_binding_source_started =

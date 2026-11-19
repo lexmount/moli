@@ -62,6 +62,7 @@ pub(crate) struct EventListenerRegistration {
     passive: bool,
 }
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Debug)]
 pub(crate) struct EventListenerInspectorSnapshot {
     pub(crate) registration_id: u64,

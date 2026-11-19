@@ -5,10 +5,9 @@ use super::v8_backend::{RendererInspectorIsolateBackend, RendererInspectorIsolat
 use crate::protocol_types::RuntimeBindingRegistration;
 use crate::runtime::RendererTurnOutputJournal;
 use moli_page_types::RendererDevToolsAgentToken;
-use std::{
-    cell::RefCell,
-    rc::{Rc, Weak},
-};
+#[cfg(feature = "devtools")]
+use std::rc::Weak;
+use std::{cell::RefCell, rc::Rc};
 
 #[cfg(feature = "devtools")]
 #[path = "frontend/agent.rs"]
@@ -53,12 +52,14 @@ impl Drop for RendererDevToolsAgentState {
 
 #[derive(Clone)]
 pub(crate) struct RendererDomDebuggerPauseScheduler {
+    #[cfg(feature = "devtools")]
     state: Weak<RefCell<RendererDevToolsAgentState>>,
 }
 
 /// Weak capability to wrap a native API exception in an existing frontend's
 /// V8 session. The owning renderer agent retains all RemoteObject authority.
 #[derive(Clone)]
+#[cfg(feature = "devtools")]
 pub(crate) struct RendererInspectorObjectWrapper {
     state: Weak<RefCell<RendererDevToolsAgentState>>,
 }
@@ -116,6 +117,7 @@ impl RendererDevToolsAgent {
 
     pub(super) fn dom_debugger_pause_scheduler(&self) -> RendererDomDebuggerPauseScheduler {
         RendererDomDebuggerPauseScheduler {
+            #[cfg(feature = "devtools")]
             state: Rc::downgrade(&self.state),
         }
     }
@@ -164,6 +166,7 @@ impl RendererDevToolsAgent {
         self.state.borrow().sessions.deactivate_all();
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn session_count(&self) -> usize {
         self.state.borrow().sessions.frontend_len()
     }
@@ -173,7 +176,7 @@ impl RendererDevToolsAgent {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 impl RendererDevToolsAgent {
     pub(super) fn is_same_agent(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.state, &other.state)

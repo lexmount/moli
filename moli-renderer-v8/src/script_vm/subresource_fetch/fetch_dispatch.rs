@@ -925,7 +925,7 @@ impl ScriptVm {
                         PendingSubresourceContinuation::Beacon
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
-                        | PendingSubresourceContinuation::WebSocket(_)
+                        | PendingSubresourceContinuation::WebSocket(..)
                         | PendingSubresourceContinuation::ChildDocument(_) => {}
                     }
                     trace_async_subresource_stage(
@@ -1051,7 +1051,7 @@ impl ScriptVm {
                         PendingSubresourceContinuation::Beacon
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
-                        | PendingSubresourceContinuation::WebSocket(_)
+                        | PendingSubresourceContinuation::WebSocket(..)
                         | PendingSubresourceContinuation::ChildDocument(_) => {}
                     }
                     trace_async_subresource_stage(

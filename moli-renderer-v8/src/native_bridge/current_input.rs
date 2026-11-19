@@ -1,6 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
-
-use super::PageScriptHost;
+#[cfg(feature = "devtools")]
+mod scope;
+#[cfg(feature = "devtools")]
+pub(crate) use scope::CurrentInputEventScope;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InputModifiers(u8);
@@ -32,14 +33,20 @@ impl InputModifiers {
     }
 }
 
+#[cfg(any(test, feature = "devtools"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CurrentInputEventKind {
-    MouseUp { button: i32 },
+    MouseUp {
+        button: i32,
+    },
     Mouse,
+    #[cfg(feature = "devtools")]
     EnterKey,
+    #[cfg(feature = "devtools")]
     Other,
 }
 
+#[cfg(any(test, feature = "devtools"))]
 /// The native default-action context of the real platform input currently
 /// being handled. DOM events are deliberately not stored here: synthetic events may
 /// describe modifiers, but cannot manufacture the corresponding user intent.
@@ -49,6 +56,7 @@ pub(crate) struct CurrentInputEvent {
     modifiers: InputModifiers,
 }
 
+#[cfg(any(test, feature = "devtools"))]
 impl CurrentInputEvent {
     pub(crate) fn mouse(event_name: &str, button: i32, modifiers: u8) -> Self {
         Self {
@@ -76,12 +84,24 @@ impl CurrentInputEvent {
     pub(crate) fn navigation_policy(self) -> InputNavigationPolicy {
         let button = match self.kind {
             CurrentInputEventKind::MouseUp { button } => button,
+            #[cfg(feature = "devtools")]
             CurrentInputEventKind::EnterKey => 0,
-            CurrentInputEventKind::Mouse | CurrentInputEventKind::Other => {
-                return InputNavigationPolicy::Current;
-            }
+            CurrentInputEventKind::Mouse => return InputNavigationPolicy::Current,
+            #[cfg(feature = "devtools")]
+            CurrentInputEventKind::Other => return InputNavigationPolicy::Current,
         };
         navigation_policy_from_modifiers(button, self.modifiers)
+    }
+}
+
+#[cfg(not(any(test, feature = "devtools")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CurrentInputEvent {}
+
+#[cfg(not(any(test, feature = "devtools")))]
+impl CurrentInputEvent {
+    pub(crate) fn navigation_policy(self) -> InputNavigationPolicy {
+        match self {}
     }
 }
 
@@ -144,45 +164,6 @@ fn navigation_policy_from_modifiers(
         InputNavigationPolicy::NewWindow
     } else {
         InputNavigationPolicy::Download
-    }
-}
-
-/// Restores the ambient real input automatically across early returns,
-/// nested input dispatch, and unwinding.
-#[must_use = "dropping the scope immediately would discard the current input event"]
-pub(crate) struct CurrentInputEventScope {
-    context_host: Rc<RefCell<PageScriptHost>>,
-    previous: Option<CurrentInputEvent>,
-    installed: CurrentInputEvent,
-}
-
-impl CurrentInputEventScope {
-    pub(crate) fn enter(
-        context_host: Rc<RefCell<PageScriptHost>>,
-        event: CurrentInputEvent,
-    ) -> Self {
-        let previous = context_host
-            .borrow_mut()
-            .replace_current_input_event(Some(event));
-        Self {
-            context_host,
-            previous,
-            installed: event,
-        }
-    }
-}
-
-impl Drop for CurrentInputEventScope {
-    fn drop(&mut self) {
-        let replaced = self
-            .context_host
-            .borrow_mut()
-            .replace_current_input_event(self.previous);
-        assert_eq!(
-            replaced,
-            Some(self.installed),
-            "the current input event must remain scoped to its real input dispatch"
-        );
     }
 }
 

@@ -6,8 +6,6 @@ use crate::{
 use anyhow::Result;
 use moli_action_window::ActionBarrier;
 use std::time::Instant;
-#[derive(Default)]
-pub(super) struct RendererPageActionWindow;
 impl PageVm {
     pub(in crate::runtime) fn next_action_window_deadline(&self) -> Option<Instant> {
         None
@@ -30,6 +28,7 @@ impl PageVm {
     ) -> Result<()> {
         Ok(())
     }
+    #[cfg(test)]
     pub(in crate::runtime) fn apply_selected_page_action_window_turn(
         &mut self,
         _deadline: Instant,

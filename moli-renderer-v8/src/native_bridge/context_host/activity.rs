@@ -160,6 +160,7 @@ impl PageScriptHost {
         self.output_journal.clone()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn publish_worker_runtime_inspector_response(
         &self,
         publication: crate::runtime::RendererRuntimeInspectorResponsePublication,

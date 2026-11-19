@@ -727,6 +727,7 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn test_queued_launch(
         service: &ServiceWorkerRuntimeServiceOwner,
         registration_id: ServiceWorkerRegistrationId,
@@ -1650,12 +1651,6 @@ impl ServiceWorkerRuntimeService {
         _version: ServiceWorkerVersionId,
         _script: &Url,
         _scope: &Url,
-    ) -> bool {
-        false
-    }
-    pub(super) fn version_should_pause_on_start_for_devtools_locked(
-        _state: &ServiceWorkerRuntimeState,
-        _version: ServiceWorkerVersionId,
     ) -> bool {
         false
     }

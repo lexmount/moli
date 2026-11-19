@@ -10,7 +10,9 @@ use result::BufferedXhrResponse;
 pub(crate) use result::{XhrLoadResult, start_buffered_xhr};
 pub(crate) use stream::{ControlledResourceStream, ControlledXhrCompletion};
 
-use moli_fetch::{FetchCancelHandle, Request, Response, ResponseHead};
+#[cfg(any(test, feature = "devtools"))]
+use moli_fetch::ResponseHead;
+use moli_fetch::{FetchCancelHandle, Request, Response};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -367,6 +369,7 @@ impl ControlledResourceLoad {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     fn synthetic_response(
         &self,
         status: u16,
@@ -422,7 +425,6 @@ impl ControlledResourceLoad {
                         .cloned()
                         .map(Into::into),
                 );
-                announce_request = false;
             }
             if self.interception.worker_control_closed() {
                 if self.load.disposition()
@@ -466,7 +468,9 @@ impl ControlledResourceLoad {
                         intercept_response = response;
                         handle_auth_requests = auth;
                     }
+                    #[cfg(any(test, feature = "devtools"))]
                     D::Fail(error) => return Err(error),
+                    #[cfg(any(test, feature = "devtools"))]
                     D::Fulfill {
                         request_overrides,
                         status,
@@ -503,7 +507,7 @@ impl ControlledResourceLoad {
             }
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
-            let (response, mut is_synthetic, observed_request_headers) = match synthetic.take() {
+            let (response, is_synthetic, observed_request_headers) = match synthetic.take() {
                 Some(response) => (LoadedResponse::from_response(response), true, None),
                 None => {
                     if self.load.network_offline() {
@@ -522,6 +526,8 @@ impl ControlledResourceLoad {
                     (response, false, headers)
                 }
             };
+            #[cfg(any(test, feature = "devtools"))]
+            let mut is_synthetic = is_synthetic;
             if network_request_headers.is_none() {
                 network_request_headers = observed_request_headers;
             }
@@ -559,15 +565,18 @@ impl ControlledResourceLoad {
                     return Err("network authentication output owner is closed".into());
                 }
                 match self.decision(rx, InterceptionPhase::Auth).await? {
+                    #[cfg(any(test, feature = "devtools"))]
                     D::Auth(auth) => {
                         if !self.load.try_restart_with_auth() {
                             return Err(moli_fetch::AuthRetryBudget::ERROR_TEXT.into());
                         }
                         self.request = self.request.clone().with_auth(auth.into());
+                        announce_request = false;
                         next_request_pause = false;
                         continue;
                     }
                     D::CancelAuth => {}
+                    #[cfg(any(test, feature = "devtools"))]
                     D::Fail(error) => return Err(error),
                     _ => unreachable!("auth pause accepts only auth decisions"),
                 }
@@ -609,6 +618,7 @@ impl ControlledResourceLoad {
                             response.head.headers = headers;
                         }
                     }
+                    #[cfg(any(test, feature = "devtools"))]
                     D::Fulfill {
                         request_overrides: _,
                         status,
@@ -621,6 +631,7 @@ impl ControlledResourceLoad {
                         self.response_filter = None;
                         is_synthetic = true;
                     }
+                    #[cfg(any(test, feature = "devtools"))]
                     D::Fail(error) => return Err(error),
                     _ => unreachable!("response pause accepts only response decisions"),
                 }

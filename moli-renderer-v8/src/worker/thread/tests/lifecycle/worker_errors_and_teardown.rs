@@ -1202,8 +1202,9 @@ async fn worker_error_report_ignores_throwing_accessors() {
         | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
         | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
         | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-        | WorkerToParentMessage::RuntimeInspectorResponse(_)
         | WorkerToParentMessage::SharedWorkerClosed => panic!("expected worker error"),
+        #[cfg(feature = "devtools")]
+        WorkerToParentMessage::RuntimeInspectorResponse(_) => panic!("expected worker error"),
     }
 }
 

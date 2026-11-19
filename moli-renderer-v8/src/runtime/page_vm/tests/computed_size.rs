@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "devtools")]
 mod capture;
 mod chromium;
 mod lifecycle;

@@ -13,6 +13,7 @@ use crate::{
 };
 
 use super::host::RendererSharedWorkerHost;
+#[cfg(feature = "devtools")]
 use super::host::SharedWorkerRuntimeResponsePublicationState;
 
 impl RendererSharedWorkerHost {
@@ -40,6 +41,7 @@ impl RendererSharedWorkerHost {
     }
 
     pub(super) fn publish_destroyed_target_event(self: &Arc<Self>) {
+        #[cfg(feature = "devtools")]
         self.begin_runtime_response_retirement();
         if !self.claim_target_output_retirement() {
             return;
@@ -47,82 +49,18 @@ impl RendererSharedWorkerHost {
         self.publish_target_event(RendererSharedWorkerTargetEvent::Destroyed {
             instance_id: self.instance_id(),
         });
+        #[cfg(feature = "devtools")]
         self.finish_runtime_response_retirement();
         self.finish_target_output_retirement();
     }
 
     pub(super) fn retire_target_output_without_destroyed(&self) {
+        #[cfg(feature = "devtools")]
         self.begin_runtime_response_retirement();
         if self.claim_target_output_retirement() {
+            #[cfg(feature = "devtools")]
             self.finish_runtime_response_retirement();
             self.finish_target_output_retirement();
-        }
-    }
-
-    /// Stops direct response publication before target retirement begins.
-    ///
-    /// SharedWorker Inspector responses and lifecycle records originate on
-    /// different threads but enter the host through one worker-parent FIFO.
-    /// Once that FIFO observes `SharedWorkerClosed`, responses must wait for
-    /// the terminal worker-stream cursor. Otherwise a V8
-    /// "execution context destroyed" reply can overtake target detachment,
-    /// whereas Chromium closes the target/session and rejects the outstanding
-    /// command as `Target closed`.
-    pub(super) fn begin_runtime_response_retirement(&self) {
-        let mut state = self.runtime_response_publications.lock();
-        if matches!(*state, SharedWorkerRuntimeResponsePublicationState::Active) {
-            *state = SharedWorkerRuntimeResponsePublicationState::Closing(Vec::new());
-        }
-    }
-
-    pub(super) fn publish_runtime_inspector_response(
-        &self,
-        publication: crate::runtime::RendererRuntimeInspectorResponsePublication,
-    ) {
-        let mut state = self.runtime_response_publications.lock();
-        match &mut *state {
-            SharedWorkerRuntimeResponsePublicationState::Active => {
-                let target_output = self.target_output();
-                let predecessor = target_output
-                    .last_published_cursor()
-                    .map(|cursor| target_output.declare_fence(cursor));
-                let _ = publication.commit(predecessor);
-            }
-            SharedWorkerRuntimeResponsePublicationState::Closing(pending) => {
-                pending.push(publication);
-            }
-            SharedWorkerRuntimeResponsePublicationState::Retired {
-                terminal_predecessor,
-            } => {
-                let _ = publication.commit(terminal_predecessor.clone());
-            }
-        }
-    }
-
-    fn finish_runtime_response_retirement(&self) {
-        let target_output = self.target_output();
-        let predecessor = target_output
-            .last_published_cursor()
-            .map(|cursor| target_output.declare_fence(cursor));
-        let pending = {
-            let mut state = self.runtime_response_publications.lock();
-            match std::mem::replace(
-                &mut *state,
-                SharedWorkerRuntimeResponsePublicationState::Retired {
-                    terminal_predecessor: predecessor.clone(),
-                },
-            ) {
-                SharedWorkerRuntimeResponsePublicationState::Closing(pending) => pending,
-                SharedWorkerRuntimeResponsePublicationState::Active => {
-                    panic!("SharedWorker response retirement must begin before it finishes")
-                }
-                SharedWorkerRuntimeResponsePublicationState::Retired { .. } => {
-                    panic!("SharedWorker response retirement finished twice")
-                }
-            }
-        };
-        for publication in pending {
-            let _ = publication.commit(predecessor.clone());
         }
     }
 
@@ -248,6 +186,76 @@ impl RendererSharedWorkerHost {
         } else {
             self.target_output()
                 .retire(crate::runtime::RendererOutputStreamCloseReason::ResidenceRetired);
+        }
+    }
+}
+
+#[cfg(feature = "devtools")]
+impl RendererSharedWorkerHost {
+    /// Stops direct response publication before target retirement begins.
+    ///
+    /// SharedWorker Inspector responses and lifecycle records originate on
+    /// different threads but enter the host through one worker-parent FIFO.
+    /// Once that FIFO observes `SharedWorkerClosed`, responses must wait for
+    /// the terminal worker-stream cursor. Otherwise a V8
+    /// "execution context destroyed" reply can overtake target detachment,
+    /// whereas Chromium closes the target/session and rejects the outstanding
+    /// command as `Target closed`.
+    pub(super) fn begin_runtime_response_retirement(&self) {
+        let mut state = self.runtime_response_publications.lock();
+        if matches!(*state, SharedWorkerRuntimeResponsePublicationState::Active) {
+            *state = SharedWorkerRuntimeResponsePublicationState::Closing(Vec::new());
+        }
+    }
+
+    pub(super) fn publish_runtime_inspector_response(
+        &self,
+        publication: crate::runtime::RendererRuntimeInspectorResponsePublication,
+    ) {
+        let mut state = self.runtime_response_publications.lock();
+        match &mut *state {
+            SharedWorkerRuntimeResponsePublicationState::Active => {
+                let target_output = self.target_output();
+                let predecessor = target_output
+                    .last_published_cursor()
+                    .map(|cursor| target_output.declare_fence(cursor));
+                let _ = publication.commit(predecessor);
+            }
+            SharedWorkerRuntimeResponsePublicationState::Closing(pending) => {
+                pending.push(publication);
+            }
+            SharedWorkerRuntimeResponsePublicationState::Retired {
+                terminal_predecessor,
+            } => {
+                let _ = publication.commit(terminal_predecessor.clone());
+            }
+        }
+    }
+
+    fn finish_runtime_response_retirement(&self) {
+        let target_output = self.target_output();
+        let predecessor = target_output
+            .last_published_cursor()
+            .map(|cursor| target_output.declare_fence(cursor));
+        let pending = {
+            let mut state = self.runtime_response_publications.lock();
+            match std::mem::replace(
+                &mut *state,
+                SharedWorkerRuntimeResponsePublicationState::Retired {
+                    terminal_predecessor: predecessor.clone(),
+                },
+            ) {
+                SharedWorkerRuntimeResponsePublicationState::Closing(pending) => pending,
+                SharedWorkerRuntimeResponsePublicationState::Active => {
+                    panic!("SharedWorker response retirement must begin before it finishes")
+                }
+                SharedWorkerRuntimeResponsePublicationState::Retired { .. } => {
+                    panic!("SharedWorker response retirement finished twice")
+                }
+            }
+        };
+        for publication in pending {
+            let _ = publication.commit(predecessor.clone());
         }
     }
 }

@@ -1,5 +1,6 @@
 use super::super::*;
 use super::child_frame_nodes::child_frame_document_contains_live_handle;
+use crate::runtime::page_generated_dom::user_agent_shadow_node_snapshot;
 use crate::runtime::page_surface::{
     RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
 };
@@ -7,6 +8,7 @@ use crate::runtime::page_surface::{
     RendererDocumentFrontendNodeIdsResolution, RendererDocumentNodeReference,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
 };
+use moli_page_types::{DocumentNodeInspectorIdentity, DocumentNodeObjectSnapshot};
 
 impl PageVm {
     pub(crate) fn document_node_snapshot_for_object_id(

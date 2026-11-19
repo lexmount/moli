@@ -35,7 +35,7 @@ pub use transport::{
     RendererOutputTransportReceiver, RendererOutputTransportSendError,
     RendererOutputTransportSender, renderer_output_transport_channel,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 pub(in crate::runtime) use transport::{
     RendererOutputTransportTestLimits, renderer_output_transport_channel_with_test_limits,
 };
@@ -45,6 +45,7 @@ pub(crate) use turn_journal::RendererTurnOutputJournal;
 enum RendererOutputPublicationAdmission {
     Observation,
     EssentialOwnerProgress,
+    #[cfg(feature = "devtools")]
     EssentialTerminalResponse,
 }
 
@@ -96,6 +97,7 @@ impl RendererOutputPublication {
         self
     }
 
+    #[cfg(feature = "devtools")]
     /// Protects the one terminal response owned by a DevTools session from
     /// ordinary observation backpressure. The response remains a protocol
     /// observation semantically, but command completion depends on admitting

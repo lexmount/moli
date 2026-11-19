@@ -1,5 +1,12 @@
+use super::loop_state::RendererInspectorPausePhase;
 use super::*;
-use crate::runtime::RendererInspectorCommandRoute;
+use crate::runtime::{
+    RendererInspectorCommandRoute, RendererRuntimeCommandCausalIdentity,
+    RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
+};
+use moli_inspector_json::InspectorJson;
+use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
+use serde_json::json;
 
 fn io_ingress(
     bridge: &RendererInspectorPauseBridge,
@@ -183,6 +190,7 @@ fn step_transition_keeps_the_exact_command_cause_through_repause() {
             .shared
             .state
             .lock()
+            .frontend
             .pending_command_transition
             .is_none()
     );
@@ -309,6 +317,7 @@ fn failed_step_command_does_not_own_a_later_resume_transition() {
             .shared
             .state
             .lock()
+            .frontend
             .pending_command_transition
             .is_none()
     );
@@ -354,7 +363,15 @@ fn staged_pause_preface_is_claimed_at_paused_boundary() {
         .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
         .collect::<Vec<_>>();
     assert_eq!(values, vec![preface]);
-    assert!(bridge.shared.state.lock().pending_prefaces.is_empty());
+    assert!(
+        bridge
+            .shared
+            .state
+            .lock()
+            .frontend
+            .pending_prefaces
+            .is_empty()
+    );
 }
 
 #[test]
@@ -368,9 +385,20 @@ fn staged_pause_preface_is_discarded_when_no_pause_occurs() {
             "params": {"parentId": 1, "nodes": []}
         }))])
         .expect("configured page should accept a pause preface");
-    assert_eq!(bridge.shared.state.lock().pending_prefaces.len(), 1);
+    assert_eq!(
+        bridge.shared.state.lock().frontend.pending_prefaces.len(),
+        1
+    );
     drop(guard);
-    assert!(bridge.shared.state.lock().pending_prefaces.is_empty());
+    assert!(
+        bridge
+            .shared
+            .state
+            .lock()
+            .frontend
+            .pending_prefaces
+            .is_empty()
+    );
 }
 
 #[test]
@@ -398,7 +426,7 @@ fn resumed_after_pause_loop_exit_stays_on_pause_bridge() {
     );
     bridge.leave_pause();
     assert_eq!(
-        bridge.shared.state.lock().phase,
+        bridge.shared.state.lock().frontend.phase,
         RendererInspectorPausePhase::Running
     );
 
@@ -414,6 +442,7 @@ fn resumed_after_pause_loop_exit_stays_on_pause_bridge() {
             .shared
             .state
             .lock()
+            .frontend
             .paused_sessions_awaiting_resumed
             .is_empty()
     );
@@ -512,7 +541,7 @@ fn page_detach_does_not_close_target_persistent_bridge_or_new_page_route() {
     assert!(bridge.detach_page(first_page_id));
     {
         let state = bridge.shared.state.lock();
-        assert_eq!(state.phase, RendererInspectorPausePhase::Running);
+        assert_eq!(state.frontend.phase, RendererInspectorPausePhase::Running);
         assert!(!state.target_closed);
         assert!(state.route.is_none());
     }
@@ -554,7 +583,7 @@ fn quit_requested_while_entering_survives_nested_loop_entry() {
     assert!(io_ingress.wait_and_claim_for_pause(&bridge).is_none());
     bridge.leave_pause();
     assert_eq!(
-        bridge.shared.state.lock().phase,
+        bridge.shared.state.lock().frontend.phase,
         RendererInspectorPausePhase::Running
     );
 }
@@ -571,7 +600,7 @@ fn session_detach_arm_prevents_a_new_pause_before_owner_dispatch() {
     );
     assert_eq!(bridge.enter_pause(), None);
     assert_eq!(
-        bridge.shared.state.lock().phase,
+        bridge.shared.state.lock().frontend.phase,
         RendererInspectorPausePhase::Running
     );
 
@@ -591,7 +620,7 @@ fn detached_page_cannot_enter_a_new_pause() {
     );
     assert_eq!(bridge.enter_pause(), None);
     assert_eq!(
-        bridge.shared.state.lock().phase,
+        bridge.shared.state.lock().frontend.phase,
         RendererInspectorPausePhase::Running
     );
 }

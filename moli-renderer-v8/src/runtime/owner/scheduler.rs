@@ -385,6 +385,7 @@ impl RendererOwnerHandle {
                     pending_phase_one_admission_after_restore_on_bound_owner_local_store(token);
                 self.signal_pending_phase_one_admission(token, admission);
             }
+            #[cfg(feature = "devtools")]
             RendererOwnerWake::RuntimeInspectorResponsePublication { token, publication } => {
                 let renderer_output_predecessor =
                     renderer_output_fence_for_tail_on_bound_owner_local_store(token);

@@ -381,3 +381,33 @@ impl PageVm {
         true
     }
 }
+
+impl PageVm {
+    pub(in crate::runtime) fn renderer_backend_node_id_for_inspector_node(
+        &mut self,
+        host: DomHandle,
+        inspector_identity: moli_page_types::DocumentNodeInspectorIdentity,
+    ) -> Option<u32> {
+        let document_id = self.vm().document_id_for_live_node_handle(host)?;
+        Some(self.dom_agent_state.backend_node_id_for_inspector_node(
+            document_id,
+            host,
+            inspector_identity,
+        ))
+    }
+
+    pub(super) fn current_dom_agent_document_id(&self) -> Option<DocumentId> {
+        self.vm()
+            .current_main_document_task_owner()
+            .map(|owner| owner.document_id)
+            .or_else(|| {
+                let document_handle = self
+                    .vm()
+                    .document_runtime
+                    .dom_host()
+                    .dom()
+                    .document_node_id();
+                self.vm().document_id_for_live_node_handle(document_handle)
+            })
+    }
+}

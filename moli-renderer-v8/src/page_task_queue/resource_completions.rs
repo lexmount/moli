@@ -5,9 +5,11 @@ use crate::page_resource_completion::{
     MainRuntimeModuleGraphFetchCompletion, RendererPageResourceCompletion,
     RendererPageResourceCompletionSender, RendererResourceCompletionRouteClosed,
 };
+#[cfg(feature = "devtools")]
+use crate::runtime::RendererRuntimeInspectorResponsePublication;
 use crate::runtime::{
     RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererOwnerRuntimeActivitySource,
-    RendererPageToken, RendererRuntimeInspectorResponsePublication,
+    RendererPageToken,
 };
 use crate::types::{
     AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
@@ -56,6 +58,7 @@ pub(crate) enum RendererOwnerWake {
         token: RendererPageToken,
         vm_creation_id: u64,
     },
+    #[cfg(feature = "devtools")]
     /// A concrete late Inspector response that became ready inside a Page
     /// owner turn. It is committed only after that turn has published all
     /// protocol-visible output, and never schedules or executes Page work.
@@ -101,6 +104,7 @@ impl RendererOwnerWake {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn runtime_inspector_response_publication(
         token: RendererPageToken,
         publication: RendererRuntimeInspectorResponsePublication,
@@ -128,10 +132,11 @@ impl RendererOwnerWake {
     #[cfg(test)]
     pub(crate) fn page_id(&self) -> crate::PageId {
         match self {
+            #[cfg(feature = "devtools")]
+            Self::RuntimeInspectorResponsePublication { token, .. } => token.page_id(),
             Self::Page { token, .. }
             | Self::PostResponseDocumentLifecycle { token, .. }
             | Self::CommittedDocumentParserUnblocked { token, .. }
-            | Self::RuntimeInspectorResponsePublication { token, .. }
             | Self::TopLevelNavigationHandoff { token, .. }
             | Self::ReplacementDocumentViewSettled { token, .. } => token.page_id(),
         }
@@ -147,6 +152,7 @@ impl RendererOwnerWake {
             Self::CommittedDocumentParserUnblocked { .. } => panic!(
                 "a committed-Document parser release is an owner continuation gate, not a Page source wake"
             ),
+            #[cfg(feature = "devtools")]
             Self::RuntimeInspectorResponsePublication { .. } => {
                 panic!("a concrete Runtime response publication is not a Page scheduling wake")
             }
@@ -306,6 +312,7 @@ impl RendererOwnerWakeSender {
             ))
             .is_ok()
     }
+    #[cfg(feature = "devtools")]
     pub(crate) fn defer_runtime_inspector_response_publication(
         &self,
         publication: RendererRuntimeInspectorResponsePublication,

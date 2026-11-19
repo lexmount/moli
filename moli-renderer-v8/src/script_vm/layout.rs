@@ -198,7 +198,7 @@ impl ScriptVm {
             .visual_state_token(document, viewport, base_background_color)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn visual_resource_generation_handle_for_test(
         &self,
     ) -> crate::native_bridge::visual_resource_generation::VisualResourceGeneration {
@@ -497,6 +497,7 @@ impl ScriptVm {
         )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn marker_pseudo_element_is_generated_for_document_snapshot(
         &self,
         handle: DomHandle,

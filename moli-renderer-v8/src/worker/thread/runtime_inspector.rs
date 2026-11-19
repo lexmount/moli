@@ -6,7 +6,9 @@ use anyhow::Result;
 use moli_inspector_json::InspectorJson;
 #[cfg(feature = "devtools")]
 use moli_protocol_cdp_defs::LocalCdpEvent;
-use std::cell::{Cell, OnceCell, RefCell, UnsafeCell};
+#[cfg(feature = "devtools")]
+use std::cell::OnceCell;
+use std::cell::{Cell, RefCell, UnsafeCell};
 #[cfg(feature = "devtools")]
 use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
@@ -37,6 +39,7 @@ use tokio::sync::mpsc;
 use super::dispatch::perform_worker_microtask_checkpoint_and_report_pending_promise_rejections;
 
 const WORKER_INSPECTOR_CONTEXT_GROUP_ID: i32 = 1;
+#[cfg(feature = "devtools")]
 const DEFAULT_WORKER_INSPECTOR_SESSION_KEY: &str = "";
 
 #[cfg(all(test, feature = "devtools"))]
@@ -459,27 +462,32 @@ impl std::ops::Deref for WorkerInspectorSession {
 
 pub(super) struct WorkerRuntimeInspector {
     #[cfg(feature = "devtools")]
+    frontend: WorkerInspectorFrontend,
+    inspector: v8::inspector::V8Inspector,
+    default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
+    default_execution_context_id: Cell<Option<i64>>,
+}
+
+#[cfg(feature = "devtools")]
+struct WorkerInspectorFrontend {
     debugger_enabled: bool,
-    #[cfg(feature = "devtools")]
     sessions: RefCell<HashMap<String, Rc<WorkerInspectorSession>>>,
     navigator_emulation: Rc<RefCell<moli_page_types::NavigatorEmulationSessions>>,
     identity: OnceCell<WorkerIdentity>,
-    inspector: v8::inspector::V8Inspector,
-    #[cfg(feature = "devtools")]
     outbound: WorkerInspectorOutbound,
-    default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
-    default_execution_context_id: Cell<Option<i64>>,
     task_runner: WorkerInspectorTaskRunner,
     parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     shared_worker: bool,
 }
 
+#[cfg(feature = "devtools")]
 struct WorkerIdentity {
     client: crate::network::ResourceRequestClient,
     inherited: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
 }
 
 struct WorkerInspectorExecutor {
+    #[cfg(feature = "devtools")]
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
     inspector: Weak<WorkerRuntimeInspector>,
     task_runner: WorkerInspectorTaskRunner,
@@ -534,6 +542,8 @@ impl WorkerRuntimeInspector {
         shared_worker: bool,
         _debugger_enabled: bool,
     ) -> Rc<Self> {
+        #[cfg(not(feature = "devtools"))]
+        let _ = (parent_tx, shared_worker);
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let default_context = Rc::new(RefCell::new(None));
         let navigator_emulation = Rc::new(RefCell::new(
@@ -542,6 +552,7 @@ impl WorkerRuntimeInspector {
         isolate.set_slot(navigator_emulation.clone());
         Rc::new_cyclic(|weak_inspector| {
             let executor = Rc::new(WorkerInspectorExecutor {
+                #[cfg(feature = "devtools")]
                 isolate: UnsafeCell::new(isolate_ptr),
                 inspector: weak_inspector.clone(),
                 task_runner: task_runner.clone(),
@@ -556,29 +567,29 @@ impl WorkerRuntimeInspector {
                 )));
             Self {
                 #[cfg(feature = "devtools")]
-                debugger_enabled: _debugger_enabled,
+                frontend: WorkerInspectorFrontend {
+                    debugger_enabled: _debugger_enabled,
+                    sessions: RefCell::new(HashMap::new()),
+                    navigator_emulation,
+                    identity: OnceCell::new(),
+                    outbound: WorkerInspectorOutbound::default(),
+                    task_runner,
+                    parent_tx,
+                    shared_worker,
+                },
                 inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
-                #[cfg(feature = "devtools")]
-                sessions: RefCell::new(HashMap::new()),
-                navigator_emulation,
-                identity: OnceCell::new(),
-                #[cfg(feature = "devtools")]
-                outbound: WorkerInspectorOutbound::default(),
                 default_context,
                 default_execution_context_id: Cell::new(None),
-                task_runner,
-                parent_tx,
-                shared_worker,
             }
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     fn new_for_test(isolate: &mut v8::Isolate) -> Rc<Self> {
         Self::new_for_test_with_debugger(isolate, false)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     fn new_for_test_with_debugger(isolate: &mut v8::Isolate, debugger_enabled: bool) -> Rc<Self> {
         let (wake_tx, _wake_rx) = mpsc::unbounded_channel();
         let (parent_tx, _parent_rx) = mpsc::unbounded_channel();
@@ -611,10 +622,12 @@ impl WorkerRuntimeInspector {
         self.inspector.context_destroyed(context);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn bind_request_client(&self, client: crate::network::ResourceRequestClient) {
         let inherited = client.page_network_policy().browser_identity_override();
         assert!(
-            self.identity
+            self.frontend
+                .identity
                 .set(WorkerIdentity { client, inherited })
                 .is_ok(),
             "Worker identity must be bound once"
@@ -623,7 +636,7 @@ impl WorkerRuntimeInspector {
 
     #[cfg(feature = "devtools")]
     fn update_user_agent_override(&self) {
-        let Some(worker) = self.identity.get() else {
+        let Some(worker) = self.frontend.identity.get() else {
             return;
         };
         let client = &worker.client;
@@ -632,6 +645,7 @@ impl WorkerRuntimeInspector {
             .as_deref()
             .unwrap_or_else(|| client.browser_identity());
         let identity = self
+            .frontend
             .navigator_emulation
             .borrow()
             .effective_user_agent_override()
@@ -654,7 +668,11 @@ impl WorkerRuntimeInspector {
     #[cfg(test)]
     #[cfg(feature = "devtools")]
     pub(super) fn detach_session(&self, inspector_session_id: Option<&str>) {
-        if let Ok(lifetime) = self.task_runner.retire_lifetime(inspector_session_id) {
+        if let Ok(lifetime) = self
+            .frontend
+            .task_runner
+            .retire_lifetime(inspector_session_id)
+        {
             self.detach_session_incarnation(inspector_session_id, &lifetime);
         }
     }
@@ -666,7 +684,7 @@ impl WorkerRuntimeInspector {
         lifetime: &WorkerInspectorSessionLifetime,
     ) {
         let key = worker_inspector_session_key(id);
-        let mut sessions = self.sessions.borrow_mut();
+        let mut sessions = self.frontend.sessions.borrow_mut();
         if sessions
             .get(&key)
             .is_some_and(|session| session.retirement.lifetime.matches(lifetime))
@@ -677,12 +695,13 @@ impl WorkerRuntimeInspector {
             // no remaining agent accepts it, preserving other frontends'
             // pause ownership. Never resume/terminate the whole Worker here.
             session.stop();
-            self.outbound
+            self.frontend
+                .outbound
                 .0
                 .borrow_mut()
                 .pending_response_callbacks
                 .retain(|(session, _), _| session != &key);
-            self.navigator_emulation.borrow_mut().remove(
+            self.frontend.navigator_emulation.borrow_mut().remove(
                 &id.map(|id| moli_page_types::DevToolsSessionKey::Attached(id.to_owned()))
                     .unwrap_or(moli_page_types::DevToolsSessionKey::Primary),
             );
@@ -692,7 +711,7 @@ impl WorkerRuntimeInspector {
             // final Inspector roots; frontend detachment must not wait on it.
             drop(session);
         } else if !lifetime.native_was_created() {
-            self.task_runner.complete_retirement(id, lifetime);
+            self.frontend.task_runner.complete_retirement(id, lifetime);
         }
         lifetime.complete_detachment(Ok(()));
     }
@@ -701,6 +720,7 @@ impl WorkerRuntimeInspector {
     #[cfg(feature = "devtools")]
     pub(super) fn attach_session(&self, inspector_session_id: Option<&str>) {
         let lifetime = self
+            .frontend
             .task_runner
             .attach_lifetime(inspector_session_id)
             .unwrap();
@@ -750,7 +770,10 @@ impl WorkerRuntimeInspector {
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let lifetime = self.task_runner.session_lifetime(inspector_session_id)?;
+        let lifetime = self
+            .frontend
+            .task_runner
+            .session_lifetime(inspector_session_id)?;
         self.dispatch_protocol_message_for_incarnation(
             inspector_session_id,
             raw_json,
@@ -769,10 +792,14 @@ impl WorkerRuntimeInspector {
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let session_key = worker_inspector_session_key(inspector_session_id);
         anyhow::ensure!(lifetime.is_active(), WorkerInspectorError::Detached);
-        let dispatch_scope = self.outbound.push_dispatch_scope(&session_key, None);
+        let dispatch_scope = self
+            .frontend
+            .outbound
+            .push_dispatch_scope(&session_key, None);
         let session = self.ensure_session(&session_key, lifetime);
         if let Some(callback) = deferred_response {
-            self.outbound
+            self.frontend
+                .outbound
                 .register_response_callback(&session_key, callback);
         }
         if let Some(response) = self.dispatch_emulation(inspector_session_id, raw_json) {
@@ -780,7 +807,8 @@ impl WorkerRuntimeInspector {
                 .as_i64()
                 .and_then(|id| i32::try_from(id).ok())
             {
-                self.outbound
+                self.frontend
+                    .outbound
                     .push_response_value(&session_key, call_id, response);
             }
         } else {
@@ -788,7 +816,7 @@ impl WorkerRuntimeInspector {
                 &session,
                 raw_json,
                 &WorkerInspectorSessionOutput {
-                    outbound: &self.outbound,
+                    outbound: &self.frontend.outbound,
                     session_key: &session_key,
                 },
             )?;
@@ -816,7 +844,8 @@ impl WorkerRuntimeInspector {
                 if let Err(message) = value.validate() {
                     return invalid(message);
                 }
-                self.navigator_emulation
+                self.frontend
+                    .navigator_emulation
                     .borrow_mut()
                     .set_user_agent_override(&key, value);
                 self.update_user_agent_override();
@@ -829,7 +858,8 @@ impl WorkerRuntimeInspector {
                 let Some(value) = value else {
                     return invalid("HardwareConcurrency must be a positive int32");
                 };
-                self.navigator_emulation
+                self.frontend
+                    .navigator_emulation
                     .borrow_mut()
                     .session_mut(&key)
                     .hardware_concurrency = Some(value);
@@ -838,7 +868,8 @@ impl WorkerRuntimeInspector {
                 let Some(enabled) = command["params"]["enabled"].as_bool() else {
                     return invalid("InvalidParams");
                 };
-                self.navigator_emulation
+                self.frontend
+                    .navigator_emulation
                     .borrow_mut()
                     .set_automation(&key, enabled);
             }
@@ -847,7 +878,8 @@ impl WorkerRuntimeInspector {
                 if !value.is_null() && !value.is_boolean() {
                     return invalid("InvalidParams");
                 }
-                self.navigator_emulation
+                self.frontend
+                    .navigator_emulation
                     .borrow_mut()
                     .session_mut(&key)
                     .data_saver = value.as_bool();
@@ -863,7 +895,7 @@ impl WorkerRuntimeInspector {
         // if that wake is selected before the environment fallback message.
         #[cfg(feature = "devtools")]
         if !matches!(task, WorkerInspectorTask::EnvironmentInvalidation(_))
-            && let Some(invalidation) = self.task_runner.claim_environment_invalidation()
+            && let Some(invalidation) = self.frontend.task_runner.claim_environment_invalidation()
         {
             invalidation.notify_isolate(isolate);
         }
@@ -880,11 +912,11 @@ impl WorkerRuntimeInspector {
                 response_tx,
             }) => {
                 let deferred_response = deferred_response.map(|response| {
-                    if self.shared_worker
+                    if self.frontend.shared_worker
                         || response.response_delivery()
                             == moli_page_types::RendererInspectorResponseDelivery::SessionSink
                     {
-                        response.defer_publication_to_worker_parent(self.parent_tx.clone())
+                        response.defer_publication_to_worker_parent(self.frontend.parent_tx.clone())
                     } else {
                         response
                     }
@@ -900,7 +932,7 @@ impl WorkerRuntimeInspector {
                 if result.is_ok()
                     && worker_runtime_protocol_message_is_run_if_waiting_for_debugger(&raw_json)
                 {
-                    self.task_runner.request_resume();
+                    self.frontend.task_runner.request_resume();
                 }
                 let _ = response_tx.send(result);
             }
@@ -925,7 +957,7 @@ impl WorkerRuntimeInspector {
             }
             #[cfg(feature = "devtools")]
             WorkerInspectorTask::Devtools(crate::worker::inspector_task_runner::WorkerInspectorProtocolTask::RunIfWaitingForDebugger) => {
-                self.task_runner.request_resume();
+                self.frontend.task_runner.request_resume();
             }
         }
         self.forward_pending_messages();
@@ -933,7 +965,7 @@ impl WorkerRuntimeInspector {
 
     #[cfg(feature = "devtools")]
     pub(super) fn take_pending_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
-        let batches = self.outbound.take_all();
+        let batches = self.frontend.outbound.take_all();
         for batch in &batches {
             self.record_execution_context_state(&batch.messages);
         }
@@ -945,7 +977,7 @@ impl WorkerRuntimeInspector {
 
     #[cfg(feature = "devtools")]
     pub(super) fn worker_script_loaded_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
-        let sessions = self.sessions.borrow();
+        let sessions = self.frontend.sessions.borrow();
         let mut session_keys = sessions.keys().collect::<Vec<_>>();
         session_keys.sort_unstable();
         session_keys
@@ -968,7 +1000,7 @@ impl WorkerRuntimeInspector {
         session_key: &str,
         lifetime: &WorkerInspectorSessionLifetime,
     ) -> Rc<WorkerInspectorSession> {
-        let existing = self.sessions.borrow().get(session_key).cloned();
+        let existing = self.frontend.sessions.borrow().get(session_key).cloned();
         if let Some(session) = existing {
             if session.retirement.lifetime.matches(lifetime) {
                 return session;
@@ -984,24 +1016,25 @@ impl WorkerRuntimeInspector {
         let session = self.inspector.connect(
             WORKER_INSPECTOR_CONTEXT_GROUP_ID,
             v8::inspector::Channel::new(Box::new(WorkerInspectorChannel {
-                outbound: self.outbound.clone(),
+                outbound: self.frontend.outbound.clone(),
                 session_key: session_key.to_owned(),
                 lifetime: lifetime.clone(),
             })),
             v8::inspector::StringView::from(&b"{}"[..]),
             v8::inspector::V8InspectorClientTrustLevel::FullyTrusted,
         );
-        session.set_skip_all_pauses(!self.debugger_enabled);
+        session.set_skip_all_pauses(!self.frontend.debugger_enabled);
         lifetime.mark_native_created();
         let session = Rc::new(WorkerInspectorSession {
             native: session,
             retirement: WorkerInspectorSessionRetirement {
                 lifetime: lifetime.clone(),
-                task_runner: self.task_runner.clone(),
+                task_runner: self.frontend.task_runner.clone(),
                 session_key: session_key.to_owned(),
             },
         });
-        self.sessions
+        self.frontend
+            .sessions
             .borrow_mut()
             .insert(session_key.to_owned(), session.clone());
         session
@@ -1042,6 +1075,7 @@ impl WorkerRuntimeInspector {
         let messages = self.take_pending_messages();
         if !messages.is_empty() {
             let _ = self
+                .frontend
                 .parent_tx
                 .send(WorkerToParentMessage::RuntimeInspectorMessages(messages));
         }
@@ -1049,7 +1083,7 @@ impl WorkerRuntimeInspector {
 
     #[cfg(feature = "devtools")]
     fn forward_active_dispatch_messages(&self) {
-        let batches = self.outbound.take_active_dispatch_notifications();
+        let batches = self.frontend.outbound.take_active_dispatch_notifications();
         for batch in &batches {
             self.record_execution_context_state(&batch.messages);
         }
@@ -1059,6 +1093,7 @@ impl WorkerRuntimeInspector {
             .collect::<Vec<_>>();
         if !messages.is_empty() {
             let _ = self
+                .frontend
                 .parent_tx
                 .send(WorkerToParentMessage::RuntimeInspectorMessages(messages));
         }
@@ -1397,7 +1432,11 @@ mod tests {
                     &inspector
                         .ensure_session(
                             key,
-                            &inspector.task_runner.session_lifetime(Some(key)).unwrap(),
+                            &inspector
+                                .frontend
+                                .task_runner
+                                .session_lifetime(Some(key))
+                                .unwrap(),
                         )
                         .state(),
                 )
@@ -1429,7 +1468,14 @@ mod tests {
                 .expect("worker Debugger.enable");
             let state = v8::crdtp::cbor_to_json(
                 &inspector
-                    .ensure_session("", &inspector.task_runner.session_lifetime(None).unwrap())
+                    .ensure_session(
+                        "",
+                        &inspector
+                            .frontend
+                            .task_runner
+                            .session_lifetime(None)
+                            .unwrap(),
+                    )
                     .state(),
             )
             .expect("worker state");
@@ -1857,18 +1903,25 @@ mod tests {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
-        let initial_sessions = inspector.task_runner.session_count();
+        let initial_sessions = inspector.frontend.task_runner.session_count();
         for index in 0..4096 {
             let id = format!("churn-{index}");
             inspector.attach_session(Some(&id));
-            let lifetime = inspector.task_runner.session_lifetime(Some(&id)).unwrap();
+            let lifetime = inspector
+                .frontend
+                .task_runner
+                .session_lifetime(Some(&id))
+                .unwrap();
             let mut retired = lifetime.retirement();
             inspector.detach_session(Some(&id));
             retired.try_recv().unwrap().unwrap();
             assert!(!lifetime.is_active());
         }
-        assert!(inspector.sessions.borrow().is_empty());
-        assert_eq!(inspector.task_runner.session_count(), initial_sessions);
+        assert!(inspector.frontend.sessions.borrow().is_empty());
+        assert_eq!(
+            inspector.frontend.task_runner.session_count(),
+            initial_sessions
+        );
     }
 
     #[test]
@@ -1898,7 +1951,7 @@ mod tests {
         let mut isolate = v8::Isolate::new(Default::default());
         let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
         inspector.attach_session(Some("A"));
-        let initial_sessions = inspector.task_runner.session_count();
+        let initial_sessions = inspector.frontend.task_runner.session_count();
         let (id, weak) = {
             let scope = pin!(v8::HandleScope::new(&mut isolate));
             let scope = &mut scope.init();
@@ -1914,7 +1967,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_owned();
-            let session = inspector.sessions.borrow()["A"].clone();
+            let session = inspector.frontend.sessions.borrow()["A"].clone();
             let (value, _, _) = session
                 .unwrap_object(scope, v8::inspector::StringView::from(id.as_bytes()))
                 .unwrap();
@@ -1923,11 +1976,18 @@ mod tests {
                 v8::Weak::new(scope, value.try_cast::<v8::Object>().unwrap()),
             )
         };
-        let held = inspector.sessions.borrow()["A"].clone();
-        let lifetime = inspector.task_runner.retire_lifetime(Some("A")).unwrap();
+        let held = inspector.frontend.sessions.borrow()["A"].clone();
+        let lifetime = inspector
+            .frontend
+            .task_runner
+            .retire_lifetime(Some("A"))
+            .unwrap();
         let mut receipt = lifetime.retirement();
         inspector.detach_session_incarnation(Some("A"), &lifetime);
-        assert_eq!(inspector.task_runner.session_count(), initial_sessions);
+        assert_eq!(
+            inspector.frontend.task_runner.session_count(),
+            initial_sessions
+        );
         isolate.clear_kept_objects();
         isolate.low_memory_notification();
         assert!(!weak.is_empty());
@@ -1936,7 +1996,10 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
         drop(held);
-        assert_eq!(inspector.task_runner.session_count(), initial_sessions - 1);
+        assert_eq!(
+            inspector.frontend.task_runner.session_count(),
+            initial_sessions - 1
+        );
         receipt
             .try_recv()
             .expect("the native destructor settles the receipt")
@@ -1964,7 +2027,7 @@ mod tests {
         let scope = &mut v8::ContextScope::new(scope, context);
         let (tx, mut old_reply) = tokio::sync::oneshot::channel();
         inspector.dispatch_protocol_message_with_optional_deferred_response(scope, Some("A"), r#"{"id":99,"method":"Runtime.evaluate","params":{"expression":"new Promise(resolve => globalThis.resolveOld = resolve)","awaitPromise":true}}"#, Some(RendererRuntimeInspectorResponseSender::new(99, tx))).unwrap();
-        let old_session = inspector.sessions.borrow()["A"].clone();
+        let old_session = inspector.frontend.sessions.borrow()["A"].clone();
         inspector.detach_session(Some("A"));
         assert!(matches!(
             old_reply.try_recv(),

@@ -49,6 +49,7 @@ impl RendererBackendNodeRegistry {
         self.id_for_key(key)
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn id_for_inspector_node(
         &mut self,
         document_id: DocumentId,

@@ -37,10 +37,12 @@ use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 use crate::network::ResourceRequestClient;
 
 pub(crate) use self::async_fetch::{
-    collect_image_response_into_parkable,
-    fetch_browser_subresource_with_preflight_and_network_metadata,
-    fetch_browser_subresource_with_preflight_headers, fetch_intercepted_window_hop,
+    collect_image_response_into_parkable, fetch_browser_subresource_with_preflight_headers,
     spawn_async_subresource_fetch,
+};
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use self::async_fetch::{
+    fetch_browser_subresource_with_preflight_and_network_metadata, fetch_intercepted_window_hop,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;

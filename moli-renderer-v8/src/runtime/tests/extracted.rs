@@ -10,6 +10,7 @@ mod navigation_streaming;
 mod owner_lifecycle;
 mod page_lifecycle_isolation;
 mod runtime_scripts;
+#[cfg(feature = "devtools")]
 mod scoped_runtime_contexts;
 mod visual_output;
 mod worker_storage_isolation;

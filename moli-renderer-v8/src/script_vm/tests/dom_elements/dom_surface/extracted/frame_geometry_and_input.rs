@@ -543,6 +543,7 @@ fn iframe_scrolling_changes_apply_at_the_next_layout_publication() {
     assert_eq!(vm.eval(query).unwrap(), "100");
 }
 
+#[cfg(feature = "devtools")]
 fn iframe_scrolling_policy_test_vm(
     scrolling: &str,
     scrollbar_width: &str,

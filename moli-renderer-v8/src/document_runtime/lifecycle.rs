@@ -236,6 +236,7 @@ impl DocumentRuntime {
             )
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn take_pending_devtools_dom_mutations(
         &mut self,
     ) -> Vec<super::devtools_mutations::DevToolsDomMutationFact> {

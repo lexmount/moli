@@ -3415,6 +3415,7 @@ fn child_context_weak_for_test(
     .expect("child context should still be reachable")
 }
 
+#[cfg(feature = "devtools")]
 fn collect_isolate_garbage_for_test(vm: &StandaloneScriptVmHarness) {
     let isolate = vm.renderer_document_isolate.clone();
     for _ in 0..5 {
@@ -3424,6 +3425,7 @@ fn collect_isolate_garbage_for_test(vm: &StandaloneScriptVmHarness) {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn context_weak_was_collected_for_test(
     vm: &mut StandaloneScriptVmHarness,
     weak: &v8::Weak<v8::Context>,

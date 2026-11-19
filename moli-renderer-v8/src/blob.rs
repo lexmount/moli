@@ -5,8 +5,7 @@ use moli_webapi::blob::{BlobReadMode, BlobRuntime, blob_id_from_object};
 pub(super) use moli_webapi::blob::{
     blob_constructor_callback, blob_data_from_object, blob_mime_type_from_object,
     blob_size_from_object, build_blob_object, build_blob_object_from_data,
-    build_blob_object_unpublished, init_blob_object, install_blob_template_bindings,
-    is_blob_object,
+    build_blob_object_unpublished, install_blob_template_bindings, is_blob_object,
 };
 use std::sync::{Arc, OnceLock};
 

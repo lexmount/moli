@@ -28,6 +28,16 @@ fn same_registration_options_fast_path_snapshot(
 }
 
 impl ServiceWorkerRuntimeService {
+    pub(super) fn version_should_pause_on_start_for_devtools_locked(
+        state: &ServiceWorkerRuntimeState,
+        version_id: ServiceWorkerVersionId,
+    ) -> bool {
+        state
+            .versions
+            .get(&version_id)
+            .is_some_and(|version| version.should_pause_on_start_for_devtools)
+    }
+
     fn record_force_update_page_load_devtools_message_locked(
         &self,
         state: &mut ServiceWorkerRuntimeState,

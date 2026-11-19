@@ -1,6 +1,7 @@
 use super::*;
 
 mod eval;
+#[cfg(feature = "devtools")]
 mod rebind;
 mod seeds;
 mod url_alias;
@@ -31,6 +32,7 @@ fn child_surface_state(vm: &mut ScriptVm, execution_context_id: i64) -> (bool, b
     .expect("child Window lazy-surface diagnostics")
 }
 
+#[cfg(feature = "devtools")]
 fn isolated_surface_state(vm: &mut ScriptVm, execution_context_id: i64) -> (bool, bool, bool) {
     let context_ptr = vm
         .page_isolated_world_contexts

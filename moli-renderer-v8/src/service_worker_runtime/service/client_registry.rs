@@ -564,6 +564,7 @@ impl ServiceWorkerRuntimeService {
         true
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn controlled_window_client_urls_for_version_for_devtools(
         &self,
         registration_id: ServiceWorkerRegistrationId,
@@ -589,6 +590,7 @@ impl ServiceWorkerRuntimeService {
         urls
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn controlled_window_client_ids_for_version_for_devtools(
         &self,
         registration_id: ServiceWorkerRegistrationId,

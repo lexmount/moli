@@ -838,6 +838,7 @@ impl RendererIsolateHandle {
         holder.unregister_platform();
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn renderer_document_isolate_inspector_default_context_registry_count(
         &self,
     ) -> usize {

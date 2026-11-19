@@ -21,7 +21,7 @@ enum InspectorSessionError {
 const STACK_CAPTURE_CALL_ID: i32 = -1;
 const DEFAULT_RUNTIME_STACK_CAPTURE_DEPTH: i32 = 10;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 pub(crate) mod tests;
 
 /// Adapts the owner's response routing without changing its notification stream.

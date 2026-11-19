@@ -167,7 +167,10 @@ impl ScriptVm {
             })
         })
     }
+}
 
+#[cfg(feature = "devtools")]
+impl ScriptVm {
     pub(crate) fn receive_synthetic_websocket_text(&self, socket_id: u64, data: String) -> bool {
         self._context_host
             .borrow()

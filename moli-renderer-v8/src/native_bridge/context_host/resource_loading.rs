@@ -1261,6 +1261,8 @@ impl PageScriptHost {
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
+        #[cfg(not(any(test, feature = "devtools")))]
+        let _ = client_id;
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         debug_assert_eq!(
@@ -1284,7 +1286,10 @@ impl PageScriptHost {
                 request_mode: moli_fetch::RequestMode::NoCors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::CspReport { client_id },
+                continuation: PendingSubresourceContinuation::CspReport {
+                    #[cfg(any(test, feature = "devtools"))]
+                    client_id,
+                },
                 deferred_request_started: false,
             },
         );
@@ -1341,6 +1346,8 @@ impl PageScriptHost {
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
+        #[cfg(not(any(test, feature = "devtools")))]
+        let _ = client_id;
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         debug_assert_eq!(
@@ -1364,7 +1371,10 @@ impl PageScriptHost {
                 request_mode: moli_fetch::RequestMode::NoCors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::CspReport { client_id },
+                continuation: PendingSubresourceContinuation::CspReport {
+                    #[cfg(any(test, feature = "devtools"))]
+                    client_id,
+                },
                 deferred_request_started: false,
             },
         );
@@ -1424,6 +1434,8 @@ impl PageScriptHost {
         connection: PendingWebSocketConnection,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
+        #[cfg(not(any(test, feature = "devtools")))]
+        let _ = connection;
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
         let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
@@ -1446,7 +1458,10 @@ impl PageScriptHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key: None,
                 policy_context: Default::default(),
-                continuation: PendingSubresourceContinuation::WebSocket(connection),
+                continuation: PendingSubresourceContinuation::WebSocket(
+                    #[cfg(any(test, feature = "devtools"))]
+                    connection,
+                ),
                 deferred_request_started: false,
             },
         );
@@ -1643,6 +1658,7 @@ impl PageScriptHost {
         self.restore_pending_subresource_fetch(pending);
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn record_running_subresource_fetch(&mut self, state: RunningSubresourceFetchState) {
         self.running_subresource_fetches
             .insert(state.pending.info.internal_id, state);
@@ -2756,6 +2772,7 @@ impl PageScriptHost {
         self.note_subresource_activity();
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn take_pending_subresource_response(
         &mut self,
         internal_id: u64,
@@ -2763,6 +2780,7 @@ impl PageScriptHost {
         self.pending_subresource_responses.remove(&internal_id)
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn take_pending_websocket_response(
         &mut self,
         internal_id: u64,
@@ -2770,6 +2788,7 @@ impl PageScriptHost {
         self.pending_websocket_responses.remove(&internal_id)
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn take_pending_subresource_auth(
         &mut self,
         internal_id: u64,
@@ -2777,6 +2796,7 @@ impl PageScriptHost {
         self.pending_subresource_auths.remove(&internal_id)
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn begin_active_subresource_request(&mut self) {
         self.active_subresource_requests += 1;
         self.note_subresource_activity();

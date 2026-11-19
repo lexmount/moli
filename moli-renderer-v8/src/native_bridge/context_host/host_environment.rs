@@ -1,5 +1,6 @@
 use crate::content_security_policy::ContentSecurityPolicy;
 
+#[cfg(feature = "devtools")]
 use std::collections::HashSet;
 
 use super::{
@@ -12,7 +13,6 @@ use crate::{
     dom::native::{
         DocumentReadyState, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, Node,
     },
-    native_bridge::element::label_control_handle,
     network::context::DocumentResourceLoader,
     style_engine::{
         AdoptedStyleSheetInstallation, CssCustomPropertyRegistration,
@@ -26,10 +26,13 @@ use crate::{
         context_bootstrap::{
             SharedStorageBucketStore, SharedWebStorageStore, WeakIndexedDbManager,
         },
-        types::{SubresourceInterceptionClasses, SubresourceResourceType},
+        types::SubresourceResourceType,
     },
 };
 use dom::ElementState as StyloElementState;
+
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::label_control_handle;
 
 fn push_unique_handle(handles: &mut Vec<DomHandle>, handle: DomHandle) {
     if !handles.contains(&handle) {
@@ -37,6 +40,7 @@ fn push_unique_handle(handles: &mut Vec<DomHandle>, handle: DomHandle) {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn hover_chain_for_input_hit(runtime: &PageScriptHost, hit: Option<DomHandle>) -> Vec<DomHandle> {
     let mut hovered = Vec::new();
     let mut visited = HashSet::new();
@@ -816,6 +820,7 @@ impl PageScriptHost {
         self.protocol_user_gesture_activation_depth > 0
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn replace_current_input_event(
         &mut self,
         event: Option<crate::native_bridge::CurrentInputEvent>,
@@ -1897,7 +1902,7 @@ impl PageScriptHost {
             )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn stylo_computed_style_property_reads_for_test(&self) -> u64 {
         self.stylo_computed_style_property_reads.get()
     }
@@ -2047,6 +2052,7 @@ impl PageScriptHost {
             );
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn set_hovered_element_for_input(&mut self, hit: Option<DomHandle>) -> bool {
         let next = hover_chain_for_input_hit(self, hit);
         let previous = self.dom_host().hovered_element_handles();
@@ -2756,7 +2762,7 @@ impl PageScriptHost {
     #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn set_fetch_subresource_interception(
         &mut self,
-        classes: SubresourceInterceptionClasses,
+        classes: crate::types::SubresourceInterceptionClasses,
     ) {
         self.page_network_policy
             .set_subresource_interception(classes);

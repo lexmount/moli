@@ -357,9 +357,10 @@ pub use service_worker_runtime::{
     new_shared_service_worker_resource_store,
 };
 pub use shared_worker_runtime::RendererSharedWorkerRuntimeDiagnostics;
+#[cfg(any(test, feature = "devtools"))]
+pub(crate) use types::SubresourceAuthCredentials;
 pub(crate) use types::{
-    DocumentStartScript, PendingSubresourceContinueOutcome, SubresourceAuthCredentials,
-    SubresourceInterceptionClasses,
+    DocumentStartScript, PendingSubresourceContinueOutcome, SubresourceInterceptionClasses,
 };
 #[allow(unused_imports)]
 pub use types::{ScriptKind, ScriptMode, ScriptRunOutcome, ScriptSourceKind};

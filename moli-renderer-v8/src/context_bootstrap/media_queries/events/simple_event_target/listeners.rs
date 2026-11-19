@@ -96,6 +96,7 @@ pub(crate) struct SimpleObjectEventListenerSnapshot<'s> {
     pub(crate) handler_slot: Option<String>,
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) struct SimpleObjectEventListenerInspectorSnapshot<'s> {
     pub(crate) event_type: String,
     pub(crate) original: v8::Local<'s, v8::Value>,

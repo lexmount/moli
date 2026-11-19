@@ -387,6 +387,7 @@ fn runtime_inspector_message_transport_charge_bytes(
     message.renderer_transport_charge_bytes_with(json_charge, string_charge)
 }
 
+#[cfg(feature = "devtools")]
 fn dom_mutation_transport_charge_bytes(event: &crate::runtime::RendererDomMutationEvent) -> usize {
     match event {
         crate::runtime::RendererDomMutationEvent::AttributeModified { name, value, .. } => {

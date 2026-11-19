@@ -333,3 +333,39 @@ pub(super) fn provider_contract_error(answer: &str) -> LayoutError {
         format!("returned a mismatched {answer} answer"),
     )
 }
+
+/// Resolve the foremost painted hit and the viewport sampled by the same
+/// frozen layout pass. Single-point DOM APIs consume this query while
+/// penetrating-list APIs use `observable_hit_test_all`.
+pub(crate) fn observable_hit_test(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+) -> Result<
+    (
+        moli_layout::LayoutDocumentMetrics,
+        Option<LayoutHit<DomHandle>>,
+    ),
+    LayoutError,
+> {
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        &LayoutQueryBatch::new(vec![
+            LayoutQuery::DocumentMetrics,
+            LayoutQuery::HitTest {
+                point,
+                ignore_pointer_events_none,
+            },
+        ]),
+    )?;
+    let mut answers = answers.answers.into_iter();
+    match (answers.next(), answers.next()) {
+        (
+            Some(LayoutQueryAnswer::DocumentMetrics(metrics)),
+            Some(LayoutQueryAnswer::HitTest(hit)),
+        ) => Ok((metrics, hit)),
+        _ => Err(provider_contract_error("hit test")),
+    }
+}

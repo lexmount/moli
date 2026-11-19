@@ -19,6 +19,7 @@ impl PageVm {
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         match task {
+            #[cfg(any(test, feature = "devtools"))]
             RendererPageSchedulerTask::ActionWindow { deadline } => {
                 self.apply_selected_page_action_window_turn(deadline)
             }

@@ -2920,6 +2920,7 @@ pub(crate) struct RendererRuntimeInspectorSessionResponseSettlement {
 }
 
 impl RendererRuntimeInspectorSessionResponseSettlement {
+    #[cfg(feature = "devtools")]
     fn new(predecessor: RendererOutputFence, response_succeeded: bool) -> Self {
         Self {
             predecessor,
@@ -3059,6 +3060,7 @@ pub(crate) struct RendererRuntimeCommandOutputSettlement {
 }
 
 impl RendererRuntimeCommandOutputSettlement {
+    #[cfg(feature = "devtools")]
     fn adapter_reply(output: RendererRuntimeCommandOutput) -> Self {
         Self {
             output,
@@ -3074,6 +3076,7 @@ impl RendererRuntimeCommandOutputSettlement {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn append(&mut self, other: Self) {
         self.output.append(other.output);
         if let Some(session_response) = other.session_response {
@@ -3094,6 +3097,7 @@ impl RendererRuntimeCommandOutputSettlement {
         self.output.set_v8_state_update(state);
     }
 
+    #[cfg(feature = "devtools")]
     fn into_adapter_reply_output(self) -> RendererRuntimeCommandOutput {
         assert!(
             self.session_response.is_none(),
@@ -3152,6 +3156,7 @@ impl RendererRuntimeCommandOutputRecorder {
         self.0.borrow().causal_identity.call_id() == call_id
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn call_id(&self) -> i32 {
         self.0.borrow().causal_identity.call_id()
     }
@@ -3198,6 +3203,7 @@ impl RendererRuntimeCommandOutputRecorder {
         state.response = Some((sender, message));
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finish(self) -> RendererRuntimeCommandOutput {
         self.finish_settlement_with_response_override(None)
             .into_adapter_reply_output()
@@ -3216,6 +3222,7 @@ impl RendererRuntimeCommandOutputRecorder {
         self.finish_settlement_with_response_override(Some(message))
     }
 
+    #[cfg(feature = "devtools")]
     fn finish_settlement_with_response_override(
         self,
         error_message: Option<String>,
@@ -3569,6 +3576,7 @@ impl RendererRuntimeInspectorResponseSender {
         self.call_id
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn response_delivery(&self) -> moli_page_types::RendererInspectorResponseDelivery {
         match self.destination {
             RendererRuntimeInspectorResponseDestination::AdapterReply(_) => {
@@ -3589,6 +3597,7 @@ impl RendererRuntimeInspectorResponseSender {
         self.destination.take_session_response_settlement_receiver()
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
         self.attachment_id
     }
@@ -3716,6 +3725,7 @@ impl RendererRuntimeInspectorResponseSender {
         }
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn finalize_output(
         self,
         mut output: RendererRuntimeCommandOutput,
@@ -3758,12 +3768,15 @@ impl RendererRuntimeInspectorResponseSender {
 #[cfg(test)]
 mod renderer_runtime_inspector_response_channel_tests {
     use super::*;
+    #[cfg(feature = "devtools")]
     use crate::page_task_queue::RendererOwnerWake;
     #[cfg(feature = "devtools")]
     use crate::page_task_queue::RendererOwnerWakeSender;
+    #[cfg(feature = "devtools")]
     use crate::runtime::protocol_output::{
         RendererOutputTransportTestLimits, renderer_output_transport_channel_with_test_limits,
     };
+    #[cfg(feature = "devtools")]
     use tokio::sync::oneshot::error::TryRecvError;
 
     fn output(call_id: i32) -> RendererRuntimeCommandOutput {
@@ -3775,6 +3788,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn output_with_by_value_payload(
         call_id: i32,
         payload_bytes: usize,
@@ -3792,6 +3806,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         )
     }
 
+    #[cfg(feature = "devtools")]
     fn observation_publication(
         stream: RendererOutputStreamIdentity,
         sequence: u64,

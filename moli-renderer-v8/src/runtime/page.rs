@@ -265,7 +265,7 @@ impl JsRuntime {
             .install_command_dispatch_gate_for_testing()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn publish_next_command_output_before_owner_settlement_for_testing(&self) {
         self.inner
             .renderer_owner

@@ -1,6 +1,7 @@
 mod click;
 mod default_action;
 mod targets;
+#[cfg(feature = "devtools")]
 mod text_input;
 
 #[cfg(feature = "devtools")]

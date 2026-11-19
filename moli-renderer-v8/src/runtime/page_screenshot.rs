@@ -77,6 +77,7 @@ struct RendererVisualState {
 }
 
 impl RendererVisualStateToken {
+    #[cfg(feature = "devtools")]
     pub(crate) fn new(
         document: RendererDocumentLifecycleIdentity,
         dom_generation: u64,
@@ -507,6 +508,7 @@ fn finite_f32(label: &str, value: f64) -> anyhow::Result<f32> {
 enum ViewportCapture {
     /// Screenshots restore the emulated DPR, regardless of the preview scale.
     Surface,
+    #[cfg(feature = "devtools")]
     /// Screencasts capture the actual widget, including the preview scale.
     Widget,
 }
@@ -527,6 +529,7 @@ fn paint_viewport_region(
                 f64::from(surface.inner_height) * ratio,
             )
         }
+        #[cfg(feature = "devtools")]
         ViewportCapture::Widget => (view.scale, f64::from(view.width), f64::from(view.height)),
     };
     let (transform, scroll_scale) = if let Some(viewport) = view.viewport {

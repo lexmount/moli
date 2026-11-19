@@ -433,7 +433,7 @@ fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
         let mut pending = host
             .take_pending_subresource_auth(internal_id)
             .expect("pending auth state");
-        pending.intercept_response = true;
+        pending.response.intercept_response = true;
         host.record_pending_subresource_auth(pending);
     }
 

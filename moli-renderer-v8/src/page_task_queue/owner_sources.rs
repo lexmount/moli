@@ -246,9 +246,8 @@ pub(crate) enum RendererPageTimerSelection {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageReadyDescriptor {
-    ActionWindow {
-        deadline: Instant,
-    },
+    #[cfg(any(test, feature = "devtools"))]
+    ActionWindow { deadline: Instant },
     DomManipulation {
         ready: RendererPageTaskReadyMetadata,
         owner: RendererPageDomManipulationOwner,
@@ -399,7 +398,9 @@ impl RendererPageReadyDescriptor {
             | Self::ModulepreloadStart { ready }
             | Self::Networking { ready, .. }
             | Self::WebSocket { ready, .. } => Some(ready),
-            Self::ActionWindow { .. } | Self::Timer { .. } => None,
+            #[cfg(any(test, feature = "devtools"))]
+            Self::ActionWindow { .. } => None,
+            Self::Timer { .. } => None,
         }
     }
 
@@ -450,6 +451,7 @@ impl RendererPageReadyDescriptor {
             Self::Networking { .. } | Self::WebSocket { .. } => {
                 RendererPageTaskSourceKind::Networking
             }
+            #[cfg(any(test, feature = "devtools"))]
             Self::ActionWindow { .. } => RendererPageTaskSourceKind::ActionWindow,
             Self::Timer { .. } => RendererPageTaskSourceKind::Timer,
         }
@@ -485,7 +487,9 @@ impl RendererPageReadyDescriptor {
             | Self::ModulepreloadStart { ready }
             | Self::Networking { ready, .. }
             | Self::WebSocket { ready, .. } => ready.ready_at,
-            Self::ActionWindow { deadline } | Self::Timer { deadline, .. } => deadline,
+            #[cfg(any(test, feature = "devtools"))]
+            Self::ActionWindow { deadline } => deadline,
+            Self::Timer { deadline, .. } => deadline,
         }
     }
 
@@ -570,6 +574,7 @@ impl RendererPageTaskSourceKind {
 /// into an async executor.
 #[derive(Debug)]
 pub(crate) enum RendererPageSchedulerTask {
+    #[cfg(any(test, feature = "devtools"))]
     ActionWindow {
         deadline: Instant,
     },
@@ -1173,6 +1178,7 @@ impl RendererPageOwnedTaskSources {
         descriptor: RendererPageReadyDescriptor,
     ) -> RendererPageSchedulerTask {
         match descriptor {
+            #[cfg(any(test, feature = "devtools"))]
             RendererPageReadyDescriptor::ActionWindow { deadline } => {
                 RendererPageSchedulerTask::ActionWindow { deadline }
             }

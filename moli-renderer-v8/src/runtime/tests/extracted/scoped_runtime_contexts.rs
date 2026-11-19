@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_rejects_cross_page_runtime_object_ids() {
     let runtime = JsRuntime::initialize();
@@ -251,7 +250,6 @@ async fn per_page_isolate_policy_rejects_cross_page_runtime_object_ids() {
         .await
         .expect("second runtime-object page should close");
 }
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_context_id_to_page() {
     let runtime = JsRuntime::initialize();
@@ -420,7 +418,6 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_context_id
         .await
         .expect("second runtime-context page should close");
 }
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_default_context_id_to_page() {
     let runtime = JsRuntime::initialize();
@@ -574,7 +571,6 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_default_co
         .await
         .expect("second default runtime-context page should close");
 }
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_scopes_same_numeric_runtime_evaluate_child_context_id_to_page() {
     let runtime = JsRuntime::initialize();
@@ -752,7 +748,6 @@ crate::RendererDocumentOptions { ..Default::default() },
         .await
         .expect("second child runtime-context page should close");
 }
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_keeps_release_object_group_page_local() {
     let runtime = JsRuntime::initialize();
@@ -910,7 +905,6 @@ async fn per_page_isolate_policy_keeps_release_object_group_page_local() {
         .await
         .expect("second release-group page should close");
 }
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_scopes_runtime_bindings_to_page_worlds() {
     let runtime = JsRuntime::initialize();
@@ -1053,7 +1047,6 @@ async fn per_page_isolate_policy_scopes_runtime_bindings_to_page_worlds() {
         .await
         .expect("second runtime-binding page should close");
 }
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_scopes_same_numeric_runtime_binding_context_id_to_page() {
     let runtime = JsRuntime::initialize();
@@ -1247,7 +1240,6 @@ async fn per_page_isolate_policy_scopes_same_numeric_runtime_binding_context_id_
         .await
         .expect("second binding-context page should close");
 }
-#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_keeps_remove_binding_page_local() {
     let runtime = JsRuntime::initialize();

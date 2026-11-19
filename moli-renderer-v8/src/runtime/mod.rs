@@ -1,3 +1,4 @@
+#[cfg(feature = "devtools")]
 pub(crate) use moli_command_types::InspectorPauseEffect as RendererInspectorPauseCommandEffect;
 #[cfg(debug_assertions)]
 use std::thread::ThreadId;
@@ -88,6 +89,7 @@ pub(crate) mod page_dom;
 #[cfg(feature = "devtools")]
 mod page_dom_snapshot;
 mod page_entry_residence;
+#[cfg(feature = "devtools")]
 mod page_generated_dom;
 mod page_geometry;
 mod page_network;

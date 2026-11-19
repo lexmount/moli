@@ -78,8 +78,9 @@ impl PageVm {
         descriptor: RendererPageReadyDescriptor,
     ) -> bool {
         match descriptor {
-            RendererPageReadyDescriptor::ActionWindow { .. }
-            | RendererPageReadyDescriptor::DomManipulation { .. }
+            #[cfg(any(test, feature = "devtools"))]
+            RendererPageReadyDescriptor::ActionWindow { .. } => true,
+            RendererPageReadyDescriptor::DomManipulation { .. }
             | RendererPageReadyDescriptor::UserInteraction { .. }
             | RendererPageReadyDescriptor::FileReading { .. }
             | RendererPageReadyDescriptor::MiscPlatformApi { .. }

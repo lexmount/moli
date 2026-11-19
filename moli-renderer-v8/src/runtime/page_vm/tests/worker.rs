@@ -1,6 +1,7 @@
 use super::*;
 use crate::{RendererOutputItem, RendererOwnerAction};
 
+#[cfg(feature = "devtools")]
 const SHARED_WORKER_CONSOLE_MESSAGE: &str = "log: shared-console console-probe 7";
 
 const SHARED_WORKER_CONNECTION_COUNT_SOURCE: &str = r#"
@@ -1657,6 +1658,7 @@ fn shared_worker_probe_messages(page_vm: &mut PageVm) -> anyhow::Result<String> 
         .eval("globalThis.__sharedWorkerMessages.join('|')")
 }
 
+#[cfg(feature = "devtools")]
 fn shared_worker_console_entry(
     snapshot: &crate::runtime::RendererPageDiagnosticsSnapshot,
 ) -> Option<&crate::runtime::RuntimeConsoleMessageSnapshot> {
@@ -1674,6 +1676,7 @@ fn shared_worker_console_entry(
         })
 }
 
+#[cfg(feature = "devtools")]
 fn has_console_probe_created_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
     events.iter().any(|event| {
         matches!(
@@ -1685,6 +1688,7 @@ fn has_console_probe_created_event(events: &[RendererSharedWorkerTargetEvent]) -
     })
 }
 
+#[cfg(feature = "devtools")]
 fn has_console_probe_target_console_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
     events.iter().any(|event| {
         matches!(
@@ -1695,6 +1699,7 @@ fn has_console_probe_target_console_event(events: &[RendererSharedWorkerTargetEv
     })
 }
 
+#[cfg(feature = "devtools")]
 async fn drain_until_shared_worker_console_activity(
     page_vm: &mut PageVm,
     output_rx: &mut crate::runtime::RendererOutputTransportReceiver,

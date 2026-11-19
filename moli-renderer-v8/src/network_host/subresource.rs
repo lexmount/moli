@@ -203,6 +203,7 @@ pub(crate) struct SubresourceRequestDispatch {
 struct ServiceWorkerSubresourceDispatchError;
 
 impl SubresourceRequestDispatch {
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn with_request(&self, request: Request) -> Self {
         Self {
             request,

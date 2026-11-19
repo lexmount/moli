@@ -123,6 +123,7 @@ impl DocumentInspectorContextRegistry {
             .is_some_and(|context| context.registration_id == registration_id)
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn len(&self) -> usize {
         self.0.borrow().len()
     }

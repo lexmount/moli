@@ -115,6 +115,7 @@ impl ScriptVm {
             WorkerRuntimeEvent::SharedWorkerMessage { message, .. } => {
                 self.apply_shared_worker_host_bridge_record_body(*message)
             }
+            #[cfg(feature = "devtools")]
             WorkerRuntimeEvent::Message {
                 message,
                 worker_id: _,
@@ -276,8 +277,9 @@ impl ScriptVm {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerClosed
-            | WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
+            | WorkerToParentMessage::SharedWorkerClosed => {}
+            #[cfg(feature = "devtools")]
+            WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
         Ok(())
     }

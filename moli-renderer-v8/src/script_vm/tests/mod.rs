@@ -428,22 +428,24 @@ fn register_pending_window_fetch_for_test(
             PendingWindowFetchTestStage::Auth => {
                 host.record_pending_subresource_auth(crate::types::PendingSubresourceAuthState {
                     pending,
-                    request_url: url.clone(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new().into(),
-                    request_body: None,
-                    intercept_response: false,
-                    initial_network_request_headers: None,
-                    encoded: None,
-                    response_status_text: None,
-                    skip_fetch_security_validation: false,
-                    response_filter: None,
-                    response: crate::types::NavigationResponse::from_text_body(
-                        url.clone(),
-                        401,
-                        Vec::new(),
-                        "auth required".to_owned(),
-                    ),
+                    response: crate::types::PendingSubresourceAuthResponse {
+                        request_url: url.clone(),
+                        request_method: "GET".to_owned(),
+                        request_headers: Vec::new().into(),
+                        request_body: None,
+                        intercept_response: false,
+                        initial_network_request_headers: None,
+                        encoded: None,
+                        response_status_text: None,
+                        skip_fetch_security_validation: false,
+                        response_filter: None,
+                        response: crate::types::NavigationResponse::from_text_body(
+                            url.clone(),
+                            401,
+                            Vec::new(),
+                            "auth required".to_owned(),
+                        ),
+                    },
                 });
             }
             PendingWindowFetchTestStage::Response => {
@@ -454,16 +456,18 @@ fn register_pending_window_fetch_for_test(
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new().into(),
                         request_body: None,
-                        encoded: None,
-                        response_status_text: None,
-                        skip_fetch_security_validation: false,
-                        response_filter: None,
                         response: crate::types::NavigationResponse::from_text_body(
                             url.clone(),
                             200,
                             Vec::new(),
                             "pending response".to_owned(),
                         ),
+                        details: crate::types::PendingSubresourceResponseDetails {
+                            encoded: None,
+                            response_status_text: None,
+                            skip_fetch_security_validation: false,
+                            response_filter: None,
+                        },
                     },
                 );
             }
@@ -2140,6 +2144,7 @@ fn eval_probe_fixture_output(url: &str, markup: &str) -> serde_json::Value {
     serde_json::from_str(&output).expect("fixture output should be valid json")
 }
 
+#[cfg(feature = "devtools")]
 fn force_gc_and_report_inspector_policy_for_test(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
@@ -2249,6 +2254,7 @@ mod dom_xhr;
 
 mod svg_length_list_native_receivers;
 
+#[cfg(feature = "devtools")]
 mod element_click;
 mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk_shell;

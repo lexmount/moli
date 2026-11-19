@@ -6,3 +6,4 @@ mod input;
 mod inspector;
 mod nodes;
 mod publication;
+mod snapshots;

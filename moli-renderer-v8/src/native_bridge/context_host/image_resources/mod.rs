@@ -104,7 +104,7 @@ impl super::PageScriptHost {
         self.image_resources.visual_generation()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn visual_resource_generation_handle_for_test(
         &self,
     ) -> super::visual_resource_generation::VisualResourceGeneration {

@@ -1,114 +1,6 @@
 use super::*;
 
 impl ScriptVm {
-    pub(super) fn spawn_running_resource_request(
-        &mut self,
-        dispatch: crate::network_host::SubresourceRequestDispatch,
-        state: RunningSubresourceFetchState,
-        cancel_handle: moli_fetch::FetchCancelHandle,
-    ) {
-        let internal_id = state.pending.info.internal_id;
-        let loader = state.pending.load.request_client();
-        let task_runner = state.pending.load.task_runner();
-        let network_context = crate::types::AsyncSubresourceNetworkContext {
-            frame_id: state.pending.info.frame_id.clone(),
-            document_url: state.pending.info.document_url.clone(),
-            request_origin: state.pending.request_origin.clone(),
-            resource_type: state.pending.info.resource_type,
-            policy_context: state.pending.policy_context,
-        };
-        let cookie_report = state.pending.info.request_cookie_report.clone();
-        let mut host = self._context_host.borrow_mut();
-        host.begin_active_subresource_request();
-        host.record_running_subresource_fetch(state);
-        dispatch.dispatch(
-            &host,
-            internal_id,
-            loader,
-            task_runner,
-            network_context,
-            cookie_report,
-            cancel_handle,
-        );
-    }
-
-    pub(in crate::script_vm) fn spawn_running_subresource_fetch(
-        &mut self,
-        request_client: ResourceRequestClient,
-        request: moli_fetch::Request,
-        mut state: RunningSubresourceFetchState,
-        cancel_handle: Option<moli_fetch::FetchCancelHandle>,
-    ) {
-        let intercepted_window = state
-            .pending
-            .continuation
-            .window_fetch()
-            .is_some_and(|fetch| fetch.intercepted_request.is_some());
-        if intercepted_window {
-            state.pending.update_request_snapshot(request.clone());
-        }
-        let response = async move {
-            let result = if intercepted_window {
-                crate::network_host::fetch_intercepted_window_hop(
-                    request_client,
-                    request,
-                    cancel_handle,
-                )
-                .await
-            } else {
-                crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
-                    request_client,
-                    request,
-                    cancel_handle,
-                )
-                .await
-            };
-            result.map(|observed| {
-                let (response, request_observation) = observed.into_parts();
-                crate::protocol_types::NavigationResponse::from(response)
-                    .with_network_request_headers(
-                        request_observation.map(|observation| observation.into_headers()),
-                    )
-            })
-        };
-        self.spawn_running_subresource_response(state, response);
-    }
-
-    pub(super) fn spawn_running_subresource_response<
-        R: Into<AsyncSubresourceFetchResult> + Send + 'static,
-    >(
-        &mut self,
-        state: RunningSubresourceFetchState,
-        response: impl std::future::Future<Output = R> + Send + 'static,
-    ) {
-        let task_runner = state.pending.load.task_runner();
-        let internal_id = state.pending.info.internal_id;
-        let request_url = state.request_url.clone();
-        let request_method = state.request_method.clone();
-        let request_headers = state.request_headers.clone();
-        let request_body = state.request_body.clone();
-        let completion_tx = self._context_host.borrow().resource_completion_sender();
-        {
-            let mut host = self._context_host.borrow_mut();
-            host.begin_active_subresource_request();
-            host.record_running_subresource_fetch(state);
-        }
-        task_runner.spawn(async move {
-            let result = response.await;
-            let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id,
-                request_url,
-                request_method,
-                request_headers,
-                request_body,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text: None,
-                result: result.into(),
-            });
-        });
-    }
     pub(super) fn complete_running_subresource_fetch_body(
         &mut self,
         mut running: RunningSubresourceFetchState,
@@ -213,22 +105,25 @@ impl ScriptVm {
                         .borrow_mut()
                         .record_pending_subresource_auth(PendingSubresourceAuthState {
                             pending,
-                            request_url,
-                            request_method,
-                            request_headers,
-                            request_body,
-                            intercept_response,
-                            initial_network_request_headers: initial_auth_network_request_headers
-                                .or_else(|| {
-                                    response
-                                        .network_request_headers()
-                                        .map(|headers| headers.to_vec())
-                                }),
-                            response,
-                            encoded,
-                            response_status_text,
-                            skip_fetch_security_validation,
-                            response_filter,
+                            #[cfg(any(test, feature = "devtools"))]
+                            response: PendingSubresourceAuthResponse {
+                                request_url,
+                                request_method,
+                                request_headers,
+                                request_body,
+                                intercept_response,
+                                initial_network_request_headers:
+                                    initial_auth_network_request_headers.or_else(|| {
+                                        response
+                                            .network_request_headers()
+                                            .map(|headers| headers.to_vec())
+                                    }),
+                                response,
+                                encoded,
+                                response_status_text,
+                                skip_fetch_security_validation,
+                                response_filter,
+                            },
                         });
                     self._context_host
                         .borrow_mut()
@@ -274,10 +169,13 @@ impl ScriptVm {
                             request_headers,
                             request_body,
                             response,
-                            encoded,
-                            response_status_text,
-                            skip_fetch_security_validation,
-                            response_filter,
+                            #[cfg(any(test, feature = "devtools"))]
+                            details: PendingSubresourceResponseDetails {
+                                encoded,
+                                response_status_text,
+                                skip_fetch_security_validation,
+                                response_filter,
+                            },
                         });
                     self._context_host
                         .borrow_mut()
@@ -882,7 +780,7 @@ impl ScriptVm {
                     }
                     PendingSubresourceContinuation::Beacon
                     | PendingSubresourceContinuation::CspReport { .. }
-                    | PendingSubresourceContinuation::WebSocket(_)
+                    | PendingSubresourceContinuation::WebSocket(..)
                     | PendingSubresourceContinuation::ChildDocument(_) => {}
                 }
                 defer_subresource_owner_async_scope(
@@ -1163,7 +1061,7 @@ impl ScriptVm {
                 PendingSubresourceContinuation::Beacon
                 | PendingSubresourceContinuation::CspReport { .. }
                 | PendingSubresourceContinuation::Xhr { .. }
-                | PendingSubresourceContinuation::WebSocket(_)
+                | PendingSubresourceContinuation::WebSocket(..)
                 | PendingSubresourceContinuation::ChildDocument(_) => {}
             }
 

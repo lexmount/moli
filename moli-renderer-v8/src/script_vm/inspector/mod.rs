@@ -5,15 +5,17 @@ mod context_registry;
 mod document_backend;
 #[cfg(feature = "devtools")]
 mod frontend;
+#[cfg(feature = "devtools")]
 mod input_state;
 mod outbound;
 mod remote_objects;
 mod v8_backend;
 
 use self::agent::RendererDevToolsAgent;
+#[cfg(feature = "devtools")]
+pub(crate) use self::agent::RendererInspectorObjectWrapper;
 pub(crate) use self::agent::{
     RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause,
-    RendererInspectorObjectWrapper,
 };
 #[cfg(not(feature = "devtools"))]
 pub(super) use self::agent_sessions::PageInspectorSessionTarget;
@@ -42,7 +44,7 @@ pub(crate) use self::v8_backend::{
     RendererInspectorIsolateBackendHandle, dispatch_inspector_io_owner_wake,
 };
 use crate::devtools::target::RendererDevToolsTargetHandle;
-#[cfg(test)]
+#[cfg(all(test, feature = "devtools"))]
 use crate::runtime::RendererRuntimeCommandOutputRecorder;
 use crate::{
     frame_owner_model::FrameRealmId,
@@ -272,6 +274,7 @@ impl DocumentInspectorBinding {
             .sum::<usize>()
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn session_count_for_diagnostics(&self) -> usize {
         self.agent.session_count()
     }
@@ -280,14 +283,17 @@ impl DocumentInspectorBinding {
         self.agent.token()
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn registry_owner_for_diagnostics(&self) -> &'static str {
         "renderer-devtools-agent"
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn registry_lifetime_scope_for_diagnostics(&self) -> &'static str {
         "local-root-agent"
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn context_group_id_for_diagnostics(&self) -> i32 {
         self.agent.context_group_id().get()
     }
@@ -314,6 +320,7 @@ impl DocumentInspectorBinding {
         self.context_registrations.destroy_all();
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(super) fn context_registration_count_for_diagnostics(&self) -> usize {
         self.context_registrations.len()
     }

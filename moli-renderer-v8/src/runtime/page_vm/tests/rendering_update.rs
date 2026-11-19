@@ -16,6 +16,7 @@ use crate::page_task_queue::{
 };
 use crate::script_vm::MainDocumentLifecycleBody;
 
+#[cfg(feature = "devtools")]
 fn viewport_screencast_request(
     known_visual_state: Option<crate::runtime::RendererVisualStateToken>,
 ) -> crate::runtime::RendererCaptureScreencastFrameRequest {

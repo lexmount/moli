@@ -377,6 +377,7 @@ impl ServiceWorkerPendingMainScriptUpdateCheck {
         self.deferred_load_params = Some(load_params);
     }
 
+    #[cfg(feature = "devtools")]
     pub(super) fn take_deferred_load_params(
         &mut self,
     ) -> Option<ServiceWorkerScriptUpdateCheckParams> {
@@ -551,7 +552,7 @@ impl ServiceWorkerJobCoordinator {
             .unwrap_or_default()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(super) fn queued_register_job_options(
         &self,
         key: &ServiceWorkerRegistrationKey,

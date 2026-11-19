@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(feature = "devtools")]
 use crate::runtime::{
     RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
 };

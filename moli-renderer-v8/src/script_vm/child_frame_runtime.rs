@@ -356,6 +356,7 @@ impl ScriptVm {
             .child_browsing_context_owner_node_id_by_frame_id(frame_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn child_browsing_context_frame_id_by_owner_node_id(
         &self,
         owner_node_id: crate::dom::NodeId,
@@ -365,6 +366,7 @@ impl ScriptVm {
             .child_browsing_context_frame_id_by_owner_node_id(owner_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn child_browsing_context_is_same_origin_with_top(
         &self,
         owner_node_id: crate::dom::NodeId,
@@ -374,6 +376,7 @@ impl ScriptVm {
             .child_browsing_context_is_same_origin_with_top(owner_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn child_browsing_context_has_opaque_origin(
         &self,
         owner_node_id: crate::dom::NodeId,
@@ -383,6 +386,7 @@ impl ScriptVm {
             .child_browsing_context_has_opaque_origin(owner_node_id)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn child_browsing_context_current_url(
         &self,
         owner_node_id: crate::dom::NodeId,
@@ -411,6 +415,7 @@ impl ScriptVm {
         host.child_browsing_context_document_handle(child_handle)
     }
 
+    #[cfg(feature = "devtools")]
     pub(crate) fn live_child_document_handles_in_snapshot_order(
         &self,
     ) -> Vec<(String, crate::dom::NodeId, crate::dom::NodeId)> {

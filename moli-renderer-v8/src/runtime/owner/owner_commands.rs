@@ -487,7 +487,7 @@ impl RendererOwnerHandle {
         (entered_rx, release_tx)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn publish_next_command_output_before_settlement_for_testing(&self) {
         assert!(
             !self

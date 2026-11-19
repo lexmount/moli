@@ -2,6 +2,7 @@ use super::*;
 
 mod child_list;
 
+#[cfg(feature = "devtools")]
 fn inspector_active_child_window_scope_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,

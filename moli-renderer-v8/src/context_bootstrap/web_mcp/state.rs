@@ -6,11 +6,12 @@ use moli_page_types::DevToolsSessionKey;
 
 use crate::{
     document_runtime::DomHandle, frame_owner_model::FrameDocumentNavigationLoadBinding,
-    native_bridge::WindowDocumentOwner, script_vm::RendererInspectorObjectWrapper,
-    window_webidl_callback::WindowWebIdlCallbackFunction,
+    native_bridge::WindowDocumentOwner, window_webidl_callback::WindowWebIdlCallbackFunction,
 };
 
 use super::conversion::ToolAnnotations;
+#[cfg(feature = "devtools")]
+use crate::script_vm::RendererInspectorObjectWrapper;
 
 #[derive(Default)]
 pub(crate) struct ModelContextStore {
@@ -20,6 +21,7 @@ pub(crate) struct ModelContextStore {
     pub(super) deliveries: HashMap<u64, PendingDelivery>,
     pub(super) retired_deliveries: Vec<PendingDelivery>,
     pub(super) enabled_sessions: BTreeSet<DevToolsSessionKey>,
+    #[cfg(feature = "devtools")]
     pub(super) object_wrapper: Option<RendererInspectorObjectWrapper>,
     pub(super) retired_resolvers: Vec<v8::Global<v8::PromiseResolver>>,
     pub(super) retired_aborts: Vec<AbortRegistration>,

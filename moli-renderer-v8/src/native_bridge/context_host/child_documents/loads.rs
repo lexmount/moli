@@ -6,6 +6,8 @@ use super::{
 };
 #[cfg(test)]
 use crate::referrer_policy::response_referrer_policy_from_headers;
+#[cfg(any(test, feature = "devtools"))]
+use crate::types::PendingSubresourceContinueEvent;
 #[cfg(test)]
 use crate::types::SubresourceInterceptionClasses;
 use crate::{
@@ -21,8 +23,8 @@ use crate::{
     },
     types::{
         ChildDocumentDownload, ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution,
-        ChildDocumentLoadOutcome, LoadedChildDocument, PendingSubresourceContinueEvent,
-        PendingSubresourceFetchInfo, SubresourceResourceType, SubresourceResponseBody,
+        ChildDocumentLoadOutcome, LoadedChildDocument, PendingSubresourceFetchInfo,
+        SubresourceResourceType, SubresourceResponseBody,
     },
 };
 
@@ -930,6 +932,7 @@ impl PageScriptHost {
         ))
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn fail_child_document_fetch(
         &mut self,
         internal_id: u64,
@@ -942,6 +945,7 @@ impl PageScriptHost {
         );
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn fulfill_child_document_fetch(
         &mut self,
         internal_id: u64,
@@ -1077,6 +1081,7 @@ impl ChildDocumentFetch {
         }
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn apply_request_override(
         &mut self,
         redirect_headers: Option<moli_fetch::RequestHeaders>,
@@ -1106,6 +1111,7 @@ impl ChildDocumentFetch {
         }
     }
 
+    #[cfg(any(test, feature = "devtools"))]
     pub(crate) fn set_auth(
         &mut self,
         auth: crate::SubresourceAuthCredentials,

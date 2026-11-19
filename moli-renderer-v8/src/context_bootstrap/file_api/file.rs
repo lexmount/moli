@@ -5,8 +5,7 @@ use moli_time::unix_epoch_millis;
 pub(crate) use moli_webapi::file::{
     bind_file_world_wrapper, build_file_object_unpublished, file_clone_metadata,
     file_constructor_callback, file_last_modified_from_object, file_name_from_object,
-    file_object_with_metadata, file_relative_path_from_object, install_file_template_bindings,
-    set_file_relative_path,
+    file_relative_path_from_object, install_file_template_bindings, set_file_relative_path,
 };
 
 pub(crate) fn build_file_object<'s>(

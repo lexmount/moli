@@ -10,7 +10,7 @@ use crate::{
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
     RendererDocumentTerminationReason, RendererLifecycleStartReason, RendererPageReply,
-    RendererPageState, RendererRuntimeInspectorMessage,
+    RendererPageState,
     page_task_queue::PostParseLifecycleWork,
     runtime::document_lifecycle_turn::DocumentLifecycleNavigationTiming,
     script_vm::{
@@ -20,8 +20,9 @@ use crate::{
         MainDocumentLifecycleTargetRejection,
     },
 };
-use serde_json::Value;
 use std::sync::Arc;
+#[cfg(feature = "devtools")]
+use {crate::RendererRuntimeInspectorMessage, serde_json::Value};
 
 #[cfg(feature = "devtools")]
 #[test]

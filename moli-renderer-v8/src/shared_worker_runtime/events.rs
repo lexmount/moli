@@ -52,9 +52,11 @@ impl RendererSharedWorkerHost {
                 );
             }
             WorkerToParentMessage::SharedWorkerClosed => {
+                #[cfg(feature = "devtools")]
                 self.begin_runtime_response_retirement();
                 self.notify_worker_closed();
             }
+            #[cfg(feature = "devtools")]
             WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
                 self.publish_runtime_inspector_response(publication);
             }

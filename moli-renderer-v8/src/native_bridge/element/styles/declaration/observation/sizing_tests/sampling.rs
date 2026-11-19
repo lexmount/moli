@@ -2,6 +2,7 @@
 //! create the first sample, including when Grid is read first in a batch.
 
 use super::*;
+#[cfg(feature = "devtools")]
 use std::collections::BTreeMap;
 
 const GRID: &str = r#"<div id=target class=sized style="display:grid;grid-template-columns:30px 1fr;grid-template-rows:20px 1fr"></div>"#;

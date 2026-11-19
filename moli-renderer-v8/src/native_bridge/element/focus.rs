@@ -470,6 +470,7 @@ pub(crate) fn update_focus(
     );
 }
 
+#[cfg(feature = "devtools")]
 /// Drop keeps its own insertion range; focusing must not replace it with the
 /// caret that keyboard editing would initialize at the host's beginning.
 pub(crate) fn update_focus_preserving_selection(
@@ -1355,6 +1356,7 @@ pub(crate) fn focus_element(
     }
 }
 
+#[cfg(feature = "devtools")]
 /// Performs the focus default action associated with an uncanceled mouse down.
 ///
 /// Blink dispatches `pointerdown`/`mousedown` before it changes focus. It then
@@ -1397,6 +1399,7 @@ pub(crate) fn perform_mouse_focus_default_action(
     update_focus(scope, runtime_ptr, None);
 }
 
+#[cfg(feature = "devtools")]
 fn flat_tree_parent(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
         return Some(slot);

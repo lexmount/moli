@@ -2020,6 +2020,8 @@ impl RendererOwnerLocalStore {
                 mut creation_diagnostics,
                 creation_artifacts,
             )| {
+                #[cfg(not(feature = "devtools"))]
+                let _ = script_execution_control;
                 creation_diagnostics.renderer_output_predecessor = renderer_output_fence;
                 RendererFinalizedPageCreation {
                     attached_page: RendererAttachedPage {
@@ -2029,6 +2031,7 @@ impl RendererOwnerLocalStore {
                         page_context_cancel_tx,
                         javascript_dialog_broker,
                         devtools_target,
+                        #[cfg(feature = "devtools")]
                         script_execution_control,
                         page_state,
                         creation_diagnostics,
