@@ -8,8 +8,9 @@
 //! dispatcher still submits the ordinary completion after this body returns.
 
 use crate::{
-    diagnostics::{ErrorReportOutcome, PendingExceptionReport},
+    diagnostics::ErrorReportOutcome,
     native_bridge::{PageScriptHost, WindowExecutionContextIdentity},
+    worker::{WorkerErrorPhase, WorkerErrorReport},
 };
 use anyhow::Result;
 
@@ -32,30 +33,20 @@ pub(super) fn dispatch_script_load_failure<'s>(
     );
 }
 
-pub(super) struct DedicatedWorkerError<'a> {
-    pub(super) message: &'a str,
-    pub(super) filename: &'a str,
-    pub(super) lineno: u32,
-    pub(super) colno: u32,
-    pub(super) event_kind: crate::worker::WorkerParentErrorEventKind,
-    pub(super) phase: crate::worker::WorkerErrorPhase,
-}
-
 pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
     owner_window: WindowExecutionContextIdentity,
     worker: Option<v8::Local<'s, v8::Object>>,
-    error: DedicatedWorkerError<'_>,
-    pending_report: Option<Box<PendingExceptionReport>>,
+    mut error: WorkerErrorReport,
 ) -> Result<()> {
     let unhandled = if let Some(worker) = worker {
         let worker_error = v8::null(scope).into();
         let Some(unhandled) = crate::context_bootstrap::dispatch_worker_error_event_with_kind(
             scope,
             worker,
-            error.message,
-            error.filename,
+            &error.message,
+            &error.filename,
             error.lineno,
             error.colno,
             worker_error,
@@ -70,24 +61,24 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     // A failure while creating the worker's initial script only fires an
     // `error` event at the Worker object. Runtime script errors additionally
     // propagate to the owning Window when that Worker event is not canceled.
-    if unhandled && error.phase == crate::worker::WorkerErrorPhase::Runtime {
-        // The Worker listener may have retired its Window. Dropping the
-        // pending report records the interruption.
+    if unhandled && error.phase == WorkerErrorPhase::Runtime {
+        // The Worker listener may have retired its Window. Dropping the report
+        // records the interruption.
         if !unsafe { &*host_ptr }.window_execution_context_identity_is_current(owner_window) {
             return Ok(());
         }
         let event = crate::context_bootstrap::dispatch_window_error_event(
             scope,
             host_ptr,
-            error.message,
-            error.filename,
+            &error.message,
+            &error.filename,
             error.lineno,
             error.colno,
             None,
         )
         .map_err(anyhow::Error::msg)?;
-        if let Some(report) = pending_report {
-            let outcome = event.map_or(ErrorReportOutcome::Interrupted, |event| {
+        error.complete(|| {
+            event.map_or(ErrorReportOutcome::Interrupted, |event| {
                 ErrorReportOutcome::from_default_prevented(
                     crate::context_bootstrap::event_bool_attribute(
                         scope,
@@ -95,11 +86,10 @@ pub(super) fn dispatch_error_and_maybe_propagate<'s>(
                         "defaultPrevented",
                     ),
                 )
-            });
-            report.complete(outcome);
-        }
-    } else if let Some(report) = pending_report {
-        report.complete(ErrorReportOutcome::from_default_prevented(!unhandled));
+            })
+        });
+    } else {
+        error.complete(|| ErrorReportOutcome::from_default_prevented(!unhandled));
     }
     Ok(())
 }

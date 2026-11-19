@@ -129,7 +129,9 @@ async fn worker_static_module_specifiers_fail_before_fetching_including_service_
                 };
                 let mut handle = spawn_test_worker_with_options(options);
                 match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
-                    WorkerToParentMessage::Error { message, phase, .. } => {
+                    WorkerToParentMessage::Error(WorkerErrorReport {
+                        ref message, phase, ..
+                    }) => {
                         assert!(
                             message.contains("Failed to resolve module specifier"),
                             "{message}"

@@ -595,7 +595,7 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_) => {}
             WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. } => {}
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::SubresourceNetwork(_)
@@ -695,7 +695,7 @@ async fn service_worker_clients_claim_waits_for_runtime_result() {
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_) => {}
             WorkerToParentMessage::ServiceWorkerSkipWaiting { .. } => {}
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::SubresourceNetwork(_)
@@ -935,7 +935,7 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerFetchCompleted(_)
@@ -1150,7 +1150,7 @@ async fn assert_service_worker_base_client_query_shape(
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::Console(_)
@@ -1296,7 +1296,7 @@ self.addEventListener("message", event => {
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -1435,7 +1435,7 @@ self.addEventListener("message", event => {
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)

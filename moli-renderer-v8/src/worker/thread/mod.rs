@@ -23,7 +23,7 @@ use crate::content_security_policy::{
     ContentSecurityPolicyDisposition, ContentSecurityPolicyReportingEndpoints,
 };
 use crate::context_bootstrap::flush_one_pending_file_reading_task;
-use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exception_report};
+use crate::exception_reporting::build_event_handler_exception_report;
 #[cfg(test)]
 use crate::network::ResourceRequestClientOwner;
 use crate::network::{
@@ -62,7 +62,7 @@ use dispatch::{
     finish_service_worker_navigation_preload_stream, fire_timer_callback,
     install_worker_promise_rejection_dispatch,
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections,
-    report_exception_to_parent, start_service_worker_navigation_preload_response,
+    start_service_worker_navigation_preload_response,
 };
 use isolate::WorkerIsolateState;
 use moli_fetch::RequestCredentialsMode;
@@ -87,6 +87,8 @@ use super::global_scope::{
     drain_worker_xhr_completion, install_worker_global_scope,
     prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
+#[cfg(test)]
+use super::handle::WorkerErrorReport;
 use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess, WorkerControlHandle,
     WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType, WorkerHandle, WorkerMessage,
@@ -2109,7 +2111,7 @@ async fn worker_main(
                 WorkerLoopWake::Message(Some(WorkerMessage::NestedWorkerEvent { message, .. }))
                     if matches!(
                         message.as_ref(),
-                        WorkerToParentMessage::Error { phase: WorkerErrorPhase::Runtime, .. }
+                        WorkerToParentMessage::Error(WorkerErrorReport { phase: WorkerErrorPhase::Runtime, .. })
                     )
             )
             && let Some((selected, resume)) = nested_error_selection_gate.take()
@@ -2818,50 +2820,26 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 let result = dispatch_nested_worker_event(scope, &state, worker_id, *message);
-                if let Some(error) = result.unhandled_error {
+                if let Some(mut error) = result.unhandled_error {
                     let global = ctx.global(scope);
-                    let report = V8ExceptionReport {
-                        summary: error.message,
-                        source: Some(error.filename),
-                        line: Some(error.lineno as usize),
-                        column: Some(error.colno as usize),
-                        source_line: None,
-                        stack: None,
-                        callback_context: None,
-                        exception: None,
-                    };
                     // Propagation to the owner's global uses omitError: the
                     // child exception cannot cross the worker agent boundary.
                     let omitted_error = v8::null(scope).into();
-                    let handled = dispatch_worker_error_event(
-                        scope,
-                        global,
-                        &report,
-                        Some(omitted_error),
-                        &script_url,
-                    );
-                    let pending_report = error.pending_report.and_then(|report| {
-                        if !handled
-                            && matches!(
-                                state.borrow().global_kind,
-                                WorkerGlobalKind::Dedicated { .. }
-                            )
-                        {
-                            return Some(report);
-                        }
-                        report.complete(crate::ErrorReportOutcome::from_default_prevented(handled));
-                        None
-                    });
+                    let handled =
+                        dispatch_worker_error_event(scope, global, &error, Some(omitted_error));
+                    if handled
+                        || !matches!(
+                            state.borrow().global_kind,
+                            WorkerGlobalKind::Dedicated { .. }
+                        )
+                    {
+                        error.complete(|| {
+                            crate::ErrorReportOutcome::from_default_prevented(handled)
+                        });
+                    }
                     if !handled {
-                        report_exception_to_parent(
-                            &report,
-                            &script_url,
-                            error.event_kind,
-                            WorkerErrorPhase::Runtime,
-                            WorkerErrorSource::Runtime,
-                            pending_report,
-                            &parent_tx,
-                        );
+                        error.source = WorkerErrorSource::Runtime;
+                        let _ = parent_tx.send(WorkerToParentMessage::Error(error));
                     }
                 }
                 if result.dispatched {

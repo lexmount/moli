@@ -117,7 +117,7 @@ async fn worker_static_source_import_rejects_javascript_without_evaluating_it() 
         )
         .await;
     match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             assert!(message.contains("WebAssembly"), "{message}")
         }
         other => panic!("expected source-phase rejection before execution, got {other:?}"),
@@ -403,7 +403,7 @@ async fn service_worker_source_import_records_the_actual_wasm_resource_kind() {
                 resource: loaded, ..
             } => resource = Some(loaded),
             WorkerToParentMessage::ServiceWorkerSkipWaiting { .. } => ready = true,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected bootstrap error: {message}")
             }
             _ => {}

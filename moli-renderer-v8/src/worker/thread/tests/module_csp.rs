@@ -226,7 +226,9 @@ async fn worker_module_csp_redirects_block_network_hops_and_report_intermediate_
                     let result = timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap();
                     if static_import {
                         match result {
-                            WorkerToParentMessage::Error { message, .. } => assert!(
+                            WorkerToParentMessage::Error(WorkerErrorReport {
+                                ref message, ..
+                            }) => assert!(
                                 message.contains("Content Security Policy")
                                     && !message.contains("SECRET-redirect")
                                     && !message.contains("/middle"),
@@ -437,7 +439,7 @@ async fn worker_synthetic_module_static_imports_use_outside_connect_csp() {
                 .expect("worker closed");
             if blocked {
                 match result {
-                    WorkerToParentMessage::Error { message, .. } => {
+                    WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                         assert!(
                             message.contains("Content Security Policy"),
                             "{module_type}: {message}"

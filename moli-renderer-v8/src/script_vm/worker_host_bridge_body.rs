@@ -239,13 +239,13 @@ impl ScriptVm {
                 context_host.borrow_mut().record_subresource_network(record);
             }
 
-            WorkerToParentMessage::Post(_) | WorkerToParentMessage::Error { .. }
+            WorkerToParentMessage::Post(_) | WorkerToParentMessage::Error(_)
                 if owner == WorkerHostRecordOwner::Dedicated =>
             {
                 bail!("client-facing DedicatedWorker event entered the host-bridge source");
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::Error { .. }
+            | WorkerToParentMessage::Error(_)
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)

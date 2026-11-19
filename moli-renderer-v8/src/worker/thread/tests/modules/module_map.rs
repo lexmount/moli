@@ -419,7 +419,7 @@ async fn worker_close_releases_pending_module_rejection_handles() {
         .expect("closed worker should exit")
     {
         match message {
-            WorkerToParentMessage::Post(_) | WorkerToParentMessage::Error { .. } => {
+            WorkerToParentMessage::Post(_) | WorkerToParentMessage::Error(_) => {
                 panic!("unexpected script activity during module retirement: {message:?}")
             }
             _ => {}

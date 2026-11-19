@@ -104,11 +104,20 @@ impl DiagnosticEvent {
         message: &str,
         filename: &str,
         location: (u32, u32),
-        stack: Option<&str>,
+        stack: Option<String>,
         outcome: ErrorReportOutcome,
     ) -> Self {
-        RuntimeExceptionSnapshot::new(source, origin, message, filename, location, stack)
-            .into_event(outcome)
+        let (lineno, colno) = location;
+        Self::RuntimeException {
+            source,
+            origin,
+            message: bounded(message, TEXT_MAX_BYTES),
+            filename: bounded(filename, TEXT_MAX_BYTES),
+            lineno,
+            colno,
+            stack: stack.map(bound_stack),
+            outcome,
+        }
     }
 
     pub(crate) fn script_load_failure(
@@ -126,52 +135,16 @@ impl DiagnosticEvent {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct RuntimeExceptionSnapshot {
-    source: DiagnosticSource,
-    origin: ExceptionOrigin,
-    message: String,
-    filename: String,
-    location: (u32, u32),
-    stack: Option<String>,
-}
-
-impl RuntimeExceptionSnapshot {
-    pub(crate) fn new(
-        source: DiagnosticSource,
-        origin: ExceptionOrigin,
-        message: &str,
-        filename: &str,
-        location: (u32, u32),
-        stack: Option<&str>,
-    ) -> Self {
-        Self {
-            source,
-            origin,
-            message: bounded(message, TEXT_MAX_BYTES),
-            filename: bounded(filename, TEXT_MAX_BYTES),
-            location,
-            stack: stack.map(|stack| bounded(stack, STACK_MAX_BYTES)),
-        }
-    }
-
-    fn into_event(self, outcome: ErrorReportOutcome) -> DiagnosticEvent {
-        let (lineno, colno) = self.location;
-        DiagnosticEvent::RuntimeException {
-            source: self.source,
-            origin: self.origin,
-            message: self.message,
-            filename: self.filename,
-            lineno,
-            colno,
-            stack: self.stack,
-            outcome,
-        }
-    }
-}
-
 fn bounded(value: &str, max_bytes: usize) -> String {
     value[..value.floor_char_boundary(max_bytes)].to_owned()
+}
+
+fn bound_stack(mut stack: String) -> String {
+    stack.truncate(stack.floor_char_boundary(STACK_MAX_BYTES));
+    if stack.capacity() > STACK_MAX_BYTES {
+        stack.shrink_to_fit();
+    }
+    stack
 }
 
 type DiagnosticSender = mpsc::UnboundedSender<DiagnosticEvent>;
@@ -198,14 +171,16 @@ impl DiagnosticEmitter {
         }
     }
 
-    pub(crate) fn prepare_exception_report(
+    pub(crate) fn prepare_worker_exception(
         &self,
-        build: impl FnOnce() -> Option<RuntimeExceptionSnapshot>,
-    ) -> Option<PendingExceptionReport> {
+        source: DiagnosticSource,
+        capture_stack: impl FnOnce() -> Option<String>,
+    ) -> Option<WorkerExceptionDiagnostic> {
         let sender = self.active_sender()?;
-        Some(PendingExceptionReport {
+        Some(WorkerExceptionDiagnostic {
             sender,
-            snapshot: Some(build()?),
+            source,
+            stack: capture_stack().map(bound_stack),
         })
     }
 
@@ -219,28 +194,33 @@ impl DiagnosticEmitter {
     }
 }
 
-/// An exception report transferred with a DedicatedWorker's existing error task.
+/// The subscription and source-isolate details needed by a Worker error report.
 #[derive(Debug)]
-pub(crate) struct PendingExceptionReport {
+pub(crate) struct WorkerExceptionDiagnostic {
     sender: DiagnosticSender,
-    snapshot: Option<RuntimeExceptionSnapshot>,
+    source: DiagnosticSource,
+    stack: Option<String>,
 }
 
-impl PendingExceptionReport {
-    pub(crate) fn complete(mut self, outcome: ErrorReportOutcome) {
-        self.publish(outcome);
-    }
-
-    fn publish(&mut self, outcome: ErrorReportOutcome) {
-        if let Some(snapshot) = self.snapshot.take() {
-            let _ = self.sender.send(snapshot.into_event(outcome));
+impl WorkerExceptionDiagnostic {
+    pub(crate) fn publish(
+        self,
+        message: &str,
+        filename: &str,
+        location: (u32, u32),
+        outcome: impl FnOnce() -> ErrorReportOutcome,
+    ) {
+        if !self.sender.is_closed() {
+            let _ = self.sender.send(DiagnosticEvent::runtime_exception(
+                self.source,
+                ExceptionOrigin::UncaughtException,
+                message,
+                filename,
+                location,
+                self.stack,
+                outcome(),
+            ));
         }
-    }
-}
-
-impl Drop for PendingExceptionReport {
-    fn drop(&mut self) {
-        self.publish(ErrorReportOutcome::Interrupted);
     }
 }
 
@@ -255,7 +235,10 @@ mod tests {
         diagnostics.emit(|| panic!("no receiver"));
         assert!(
             diagnostics
-                .prepare_exception_report(|| panic!("no receiver"))
+                .prepare_worker_exception(
+                    DiagnosticSource::DedicatedWorker { instance_id: 2 },
+                    || { panic!("no receiver") }
+                )
                 .is_none()
         );
 
@@ -270,44 +253,6 @@ mod tests {
         drop(replacement);
         diagnostics.emit(|| panic!("the receiver was dropped"));
         assert!(diagnostics.subscribe().is_some());
-    }
-
-    #[test]
-    fn pending_exception_publishes_once_when_completed_or_interrupted() {
-        let diagnostics = DiagnosticEmitter::default();
-        let mut receiver = diagnostics.subscribe().expect("first subscription");
-        for expected in [
-            ErrorReportOutcome::Canceled,
-            ErrorReportOutcome::Interrupted,
-        ] {
-            let report = diagnostics
-                .prepare_exception_report(|| {
-                    Some(RuntimeExceptionSnapshot::new(
-                        DiagnosticSource::DedicatedWorker { instance_id: 2 },
-                        ExceptionOrigin::UncaughtException,
-                        "worker exception",
-                        "worker.js",
-                        (1, 1),
-                        None,
-                    ))
-                })
-                .expect("pending report");
-            assert_eq!(receiver.try_recv(), Err(mpsc::error::TryRecvError::Empty));
-            if expected == ErrorReportOutcome::Interrupted {
-                drop(report);
-            } else {
-                report.complete(expected);
-            }
-            assert!(matches!(
-                receiver.try_recv(),
-                Ok(DiagnosticEvent::RuntimeException {
-                    source: DiagnosticSource::DedicatedWorker { instance_id: 2 },
-                    outcome,
-                    ..
-                }) if outcome == expected
-            ));
-            assert_eq!(receiver.try_recv(), Err(mpsc::error::TryRecvError::Empty));
-        }
     }
 
     #[test]

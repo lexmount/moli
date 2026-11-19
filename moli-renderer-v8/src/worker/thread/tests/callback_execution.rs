@@ -164,7 +164,10 @@ async fn worker_performance_observer_unhandled_exception_is_reported_to_parent()
         .await
         .expect("PerformanceObserver parent error timed out")
         .expect("worker closed before reporting unhandled error");
-    let WorkerToParentMessage::Error { message, phase, .. } = message else {
+    let WorkerToParentMessage::Error(WorkerErrorReport {
+        ref message, phase, ..
+    }) = message
+    else {
         panic!("expected worker error report, received {message:?}");
     };
     assert!(message.contains("unhandled-performance-observer-error"));

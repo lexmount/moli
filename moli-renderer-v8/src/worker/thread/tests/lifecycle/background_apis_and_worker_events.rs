@@ -265,7 +265,7 @@ self.addEventListener("message", event => {
                 );
                 saw_completion = true;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
@@ -468,7 +468,7 @@ self.addEventListener("notificationclick", event => {
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)
@@ -625,7 +625,7 @@ self.addEventListener("notificationclose", event => {
                 assert_eq!(completion.result, Ok(()));
                 break;
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_)

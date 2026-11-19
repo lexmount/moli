@@ -95,24 +95,9 @@ impl PageScriptHost {
             crate::worker::WorkerToParentMessage::Post(payload) => Ok(
                 RendererDedicatedWorkerMessageEvent::Message(Box::new(payload)),
             ),
-            crate::worker::WorkerToParentMessage::Error {
-                message,
-                filename,
-                lineno,
-                colno,
-                event_kind,
-                phase,
-                pending_report,
-                ..
-            } => Ok(RendererDedicatedWorkerMessageEvent::Error {
-                message,
-                filename,
-                lineno,
-                colno,
-                event_kind,
-                phase,
-                pending_report,
-            }),
+            crate::worker::WorkerToParentMessage::Error(error) => {
+                Ok(RendererDedicatedWorkerMessageEvent::Error(error))
+            }
             message => Err(Box::new(message)),
         }
     }

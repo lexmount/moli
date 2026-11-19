@@ -1,5 +1,6 @@
 //! Worker-side message types and parent-facing handle.
 
+use crate::diagnostics::{ErrorReportOutcome, WorkerExceptionDiagnostic};
 use crate::protocol_types::SubresourceNetworkRecord;
 use crate::runtime::WorkerInspectorError;
 use crate::runtime::{
@@ -210,16 +211,7 @@ pub(crate) enum WorkerToParentMessage {
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
     /// The worker encountered an unhandled error.
-    Error {
-        message: String,
-        filename: String,
-        lineno: u32,
-        colno: u32,
-        event_kind: WorkerParentErrorEventKind,
-        phase: WorkerErrorPhase,
-        source: WorkerErrorSource,
-        pending_report: Option<Box<crate::diagnostics::PendingExceptionReport>>,
-    },
+    Error(WorkerErrorReport),
     /// A worker `console.*` call that should be surfaced through the owning page until
     /// workers get their own CDP targets.
     Console(WorkerConsoleMessage),
@@ -315,6 +307,66 @@ pub(crate) enum WorkerToParentMessage {
     /// Completion signal for a worker-owned fetch/XHR that was continued after interception.
     #[cfg(test)]
     SubresourceContinue(PendingSubresourceContinueEvent),
+}
+
+/// The error data used by each owner to dispatch its event and settle the diagnostic.
+#[derive(Debug)]
+pub(crate) struct WorkerErrorReport {
+    pub(crate) message: String,
+    pub(crate) filename: String,
+    pub(crate) lineno: u32,
+    pub(crate) colno: u32,
+    pub(crate) event_kind: WorkerParentErrorEventKind,
+    pub(crate) phase: WorkerErrorPhase,
+    pub(crate) source: WorkerErrorSource,
+    pub(super) diagnostic: Option<WorkerExceptionDiagnostic>,
+}
+
+impl WorkerErrorReport {
+    pub(crate) fn new(
+        message: String,
+        filename: String,
+        (lineno, colno): (u32, u32),
+        event_kind: WorkerParentErrorEventKind,
+        phase: WorkerErrorPhase,
+        source: WorkerErrorSource,
+    ) -> Self {
+        Self {
+            message,
+            filename,
+            lineno,
+            colno,
+            event_kind,
+            phase,
+            source,
+            diagnostic: None,
+        }
+    }
+
+    pub(crate) fn complete(&mut self, outcome: impl FnOnce() -> ErrorReportOutcome) {
+        if let Some(diagnostic) = self.diagnostic.take() {
+            diagnostic.publish(
+                &self.message,
+                &self.filename,
+                (self.lineno, self.colno),
+                outcome,
+            );
+        }
+    }
+
+    pub(crate) fn into_text(mut self) -> (String, String) {
+        self.complete(|| ErrorReportOutcome::Interrupted);
+        (
+            std::mem::take(&mut self.message),
+            std::mem::take(&mut self.filename),
+        )
+    }
+}
+
+impl Drop for WorkerErrorReport {
+    fn drop(&mut self) {
+        self.complete(|| ErrorReportOutcome::Interrupted);
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1021,3 +1073,52 @@ impl Drop for WorkerHandle {
 use crate::protocol_types::{
     PendingSubresourceContinueEvent, PendingSubresourceFetchInfo, SubresourceAuthCredentials,
 };
+
+#[cfg(test)]
+mod error_report_tests {
+    use super::*;
+    use crate::diagnostics::{
+        DiagnosticEmitter, DiagnosticEvent, DiagnosticSource, ExceptionOrigin,
+    };
+
+    #[test]
+    fn worker_error_publishes_once_when_completed_or_interrupted() {
+        let diagnostics = DiagnosticEmitter::default();
+        let mut receiver = diagnostics.subscribe().expect("first subscription");
+        let source = DiagnosticSource::DedicatedWorker { instance_id: 2 };
+        for expected in [
+            ErrorReportOutcome::Canceled,
+            ErrorReportOutcome::Interrupted,
+        ] {
+            let mut report = WorkerErrorReport::new(
+                "worker exception".into(),
+                "worker.js".into(),
+                (1, 2),
+                WorkerParentErrorEventKind::ErrorEvent,
+                WorkerErrorPhase::Runtime,
+                WorkerErrorSource::Runtime,
+            );
+            report.diagnostic =
+                diagnostics.prepare_worker_exception(source, || Some("at throwFromWorker".into()));
+            assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+            if expected == ErrorReportOutcome::Canceled {
+                report.complete(|| expected);
+            }
+            drop(report);
+            assert_eq!(
+                receiver.try_recv(),
+                Ok(DiagnosticEvent::RuntimeException {
+                    source,
+                    origin: ExceptionOrigin::UncaughtException,
+                    message: "worker exception".into(),
+                    filename: "worker.js".into(),
+                    lineno: 1,
+                    colno: 2,
+                    stack: Some("at throwFromWorker".into()),
+                    outcome: expected,
+                })
+            );
+            assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+        }
+    }
+}

@@ -10,8 +10,7 @@ use std::{
 };
 
 use crate::diagnostics::{
-    DiagnosticEmitter, DiagnosticEvent, DiagnosticSource, PendingExceptionReport,
-    RuntimeExceptionSnapshot,
+    DiagnosticEmitter, DiagnosticEvent, DiagnosticSource, WorkerExceptionDiagnostic,
 };
 use crate::planning::{
     PreparedScript, SharedScriptSourceLoadCompleter,
@@ -1094,12 +1093,12 @@ impl RendererWorkerContextRuntime {
         self.diagnostics.emit(|| self.diagnostic_source.map(build));
     }
 
-    pub(crate) fn prepare_exception_report(
+    pub(crate) fn prepare_worker_exception(
         &self,
-        build: impl FnOnce(DiagnosticSource) -> RuntimeExceptionSnapshot,
-    ) -> Option<PendingExceptionReport> {
+        capture_stack: impl FnOnce() -> Option<String>,
+    ) -> Option<WorkerExceptionDiagnostic> {
         self.diagnostics
-            .prepare_exception_report(|| self.diagnostic_source.map(build))
+            .prepare_worker_exception(self.diagnostic_source?, capture_stack)
     }
 
     pub(crate) fn message_port_registry(

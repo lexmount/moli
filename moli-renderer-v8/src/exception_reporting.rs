@@ -182,7 +182,7 @@ pub(crate) fn diagnostic_from_unhandled_rejection<'s>(
         &message,
         &filename,
         (lineno, colno),
-        stack.as_deref(),
+        stack,
         crate::ErrorReportOutcome::from_default_prevented(default_prevented),
     )
 }

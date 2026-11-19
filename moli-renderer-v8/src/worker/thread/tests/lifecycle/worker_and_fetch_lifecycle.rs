@@ -59,7 +59,7 @@ async fn dedicated_worker_agent_allows_blocking_atomics_wait() {
         WorkerToParentMessage::Post(payload) => {
             assert_eq!(stringify_payload(&payload), r#""timed-out""#);
         }
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             panic!("unexpected worker Atomics.wait error: {message}");
         }
         other => panic!("unexpected worker Atomics.wait message: {other:?}"),
@@ -94,7 +94,7 @@ async fn worker_teardown_releases_context_owned_v8_finalizers_before_isolate_dro
             WorkerToParentMessage::Post(payload) => {
                 assert_eq!(stringify_payload(&payload), "256");
             }
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected worker finalizer setup error: {message}");
             }
             other => panic!("unexpected worker finalizer setup message: {other:?}"),
@@ -128,7 +128,7 @@ async fn readable_stream_reader_cancel_notifies_underlying_source() {
         WorkerToParentMessage::Post(payload) => {
             assert_eq!(stringify_payload(&payload), r#""reader-cancelled:stop""#);
         }
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             panic!("unexpected worker error while waiting for reader cancel: {message}");
         }
         other => panic!("unexpected message while waiting for reader cancel: {other:?}"),
@@ -169,7 +169,7 @@ async fn readable_stream_controller_error_rejects_pending_read() {
                 r#""read-rejected:stream-broken""#
             );
         }
-        WorkerToParentMessage::Error { message, .. } => {
+        WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
             panic!("unexpected worker error while waiting for reader error: {message}");
         }
         other => panic!("unexpected message while waiting for reader error: {other:?}"),
@@ -655,7 +655,7 @@ async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_j
                 break;
             }
             WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 assert_eq!(
                     message, "null",
                     "worker emitted an unexpected error while recovering"
@@ -880,7 +880,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             _ => {}
@@ -981,7 +981,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             _ => {}
@@ -1050,7 +1050,7 @@ async fn service_worker_fetch_event_preload_response_rejects_before_response() {
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             _ => {}
@@ -1167,7 +1167,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             _ => {}
@@ -1270,7 +1270,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
         match message {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
             WorkerToParentMessage::Console(message) => posts.push(message.message),
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             _ => {}
@@ -1322,7 +1322,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
             .expect("service worker channel closed");
         match message {
             WorkerToParentMessage::Console(message) => posts.push(message.message),
-            WorkerToParentMessage::Error { message, .. } => {
+            WorkerToParentMessage::Error(WorkerErrorReport { ref message, .. }) => {
                 panic!("unexpected service worker error: {message}");
             }
             _ => {}
