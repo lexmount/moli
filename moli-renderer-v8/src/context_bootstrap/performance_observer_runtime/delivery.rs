@@ -9,6 +9,7 @@ use super::registration::{
     performance_observer_callback_is_current,
 };
 use super::*;
+use crate::util::context_host_ptr_from_context_slot;
 use moli_webapi::performance::observer::build_performance_observer_callback_options;
 
 fn performance_observer_flush_callback<'s>(
@@ -16,26 +17,48 @@ fn performance_observer_flush_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(observer) = pop_first_object_from_global_queue(scope, PERFORMANCE_OBSERVER_QUEUE_SLOT)
-    else {
-        return;
-    };
-    set_performance_observer_scheduled(scope, observer, false);
+    deliver_next_performance_observer(scope);
+}
+
+/// Snapshot the Window's registered observers before invoking author code.
+pub(crate) fn notify_performance_observers(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    let context = scope.get_current_context();
+    let observers = active_performance_observers(scope, context);
+    let mut invoked = false;
+    for observer in observers {
+        invoked |= deliver_performance_observer(scope, observer);
+    }
+    invoked
+}
+
+fn deliver_next_performance_observer(scope: &mut v8::PinScope<'_, '_>) {
+    if let Some(observer) =
+        pop_first_object_from_global_queue(scope, PERFORMANCE_OBSERVER_QUEUE_SLOT)
+    {
+        set_performance_observer_scheduled(scope, observer, false);
+        deliver_performance_observer(scope, observer);
+    }
+}
+
+fn deliver_performance_observer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) -> bool {
     if !performance_observer_active(scope, observer) {
-        return;
+        return false;
     }
     let Some(pending) = performance_observer_pending(scope, observer) else {
-        return;
+        return false;
     };
     if pending.length() == 0 {
-        return;
+        return false;
     }
     let next_pending = v8::Array::new(scope, 0);
     set_performance_observer_pending(scope, observer, next_pending);
     let Some(delivery) = PerformanceObserverRegistration::from_observer(scope, observer)
         .and_then(|registration| registration.prepare_delivery(scope))
     else {
-        return;
+        return false;
     };
     let dropped_entries_count =
         super::observer::take_performance_observer_dropped_entries_count(scope, observer);
@@ -56,7 +79,7 @@ fn performance_observer_flush_callback<'s>(
         "PerformanceObserver callback",
         observer_value,
         &[list.into(), observer_value, options.into()],
-    );
+    )
 }
 
 pub(super) fn enqueue_buffered_performance_entries<'s>(
@@ -125,12 +148,16 @@ pub(super) fn queue_performance_observer_delivery<'s>(
     // even when observe() was borrowed from another Realm. Callback Realm
     // entry remains the shared Web IDL execution layer's responsibility.
     let scope = &mut v8::ContextScope::new(scope, context);
-    if performance_observer_scheduled(scope, observer) {
-        return;
-    }
     if !performance_observer_callback_is_current(scope, observer) {
         let pending = v8::Array::new(scope, 0);
         set_performance_observer_pending(scope, observer, pending);
+        return;
+    }
+    if let Some(host) = context_host_ptr_from_context_slot(context) {
+        unsafe { &mut *host }.queue_performance_observer_task(scope, context);
+        return;
+    }
+    if performance_observer_scheduled(scope, observer) {
         return;
     }
     set_performance_observer_scheduled(scope, observer, true);

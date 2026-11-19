@@ -307,6 +307,28 @@ fn mutation_observer_observe_accepts_registered_native_proxy_targets_and_receive
 
 fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
     let mut vm = new_storage_test_vm(url);
+    setup_observer_callback_frame(&mut vm);
+    materialize_single_child_default_realm_for_test(&mut vm, "observer callback child-realm setup");
+    vm
+}
+
+fn performance_observer_test_vm(url: &str) -> crate::runtime::PageVmTaskExecutorTestHarness {
+    let mut vm = new_storage_page_task_executor_test_vm(url);
+    setup_observer_callback_frame(&mut vm);
+    assert_eq!(
+        vm.eval("String(__observerCallbackFrame.contentWindow !== null)")
+            .expect("expose the observer callback child Window"),
+        "true",
+    );
+    assert!(
+        vm.run_one_child_realm_materialization_body_for_test()
+            .expect("materialize the observer callback child Realm")
+            .is_some(),
+    );
+    vm
+}
+
+fn setup_observer_callback_frame(vm: &mut ScriptVm) {
     vm.eval(
         r#"
 (() => {
@@ -321,13 +343,11 @@ fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
 "#,
     )
     .expect("observer callback child-realm setup should evaluate");
-    materialize_single_child_default_realm_for_test(&mut vm, "observer callback child-realm setup");
-    vm
 }
 
 #[test]
 fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
-    let mut vm = observer_callback_test_vm("https://performance-borrowed-method-realms.test/");
+    let mut vm = performance_observer_test_vm("https://performance-borrowed-method-realms.test/");
     let source = format!(
         "({})(window, __observerCallbackFrame.contentWindow).then(result => globalThis.__borrowedTimeline = result, error => globalThis.__borrowedTimeline = {{ error: String(error) }});",
         include_str!("performance_timeline_borrowed_methods.js"),
@@ -335,14 +355,16 @@ fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
     vm.eval(&source)
         .expect("queue borrowed mark and measure deliveries");
     assert_eq!(
-        vm.eval("JSON.stringify(__borrowedTimeline)").unwrap(),
+        vm.eval_after_selected_page_tasks("JSON.stringify(__borrowedTimeline)")
+            .unwrap(),
         r#"{"received":{"parent":["parent-mark","parent-measure"],"child":["child-mark","child-measure"]},"failures":[]}"#,
     );
 }
 
 #[test]
 fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffer() {
-    let mut vm = observer_callback_test_vm("https://performance-borrowed-buffered-observe.test/");
+    let mut vm =
+        performance_observer_test_vm("https://performance-borrowed-buffered-observe.test/");
     vm.eval(
         r#"
 (() => {
@@ -363,14 +385,15 @@ fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffer() {
     )
     .expect("subscribe to buffers using the other Realm's observe method");
     assert_eq!(
-        vm.eval("JSON.stringify(__borrowedBuffered)").unwrap(),
+        vm.eval_after_selected_page_tasks("JSON.stringify(__borrowedBuffered)")
+            .unwrap(),
         r#"{"parent":["parent-buffered"],"child":["child-buffered"]}"#,
     );
 }
 
 #[test]
 fn borrowed_performance_delivery_survives_retirement_of_the_method_realm() {
-    let mut vm = observer_callback_test_vm("https://performance-method-realm-retirement.test/");
+    let mut vm = performance_observer_test_vm("https://performance-method-realm-retirement.test/");
     vm.eval(
         r#"
 (() => {
@@ -388,14 +411,16 @@ fn borrowed_performance_delivery_survives_retirement_of_the_method_realm() {
     )
     .expect("retire the method Realm after queuing to the surviving timeline");
     assert_eq!(
-        vm.eval("JSON.stringify(__survivingTimeline)").unwrap(),
+        vm.eval_after_selected_page_tasks("JSON.stringify(__survivingTimeline)")
+            .unwrap(),
         r#"["before-method-realm-retirement","after-method-realm-retirement"]"#,
     );
 }
 
 #[test]
 fn common_callback_registry_keeps_active_observers_until_owner_teardown() {
-    let mut vm = new_storage_test_vm("https://performance-observer-active-root.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://performance-observer-active-root.test/");
     let common = std::rc::Rc::clone(&vm._context_host.borrow().common);
     vm.eval(
         r#"
@@ -413,7 +438,8 @@ new PerformanceObserver(list => {
     vm.eval("performance.mark('after-gc')")
         .expect("deliver to the active observer after GC");
     assert_eq!(
-        vm.eval("JSON.stringify(__activeObserverEntries)").unwrap(),
+        vm.eval_after_selected_page_tasks("JSON.stringify(__activeObserverEntries)")
+            .unwrap(),
         r#"["after-gc"]"#,
     );
     drop(vm);
@@ -423,7 +449,8 @@ new PerformanceObserver(list => {
 
 #[test]
 fn performance_observer_registration_uses_its_own_global_with_a_foreign_callback_realm() {
-    let mut vm = observer_callback_test_vm("https://performance-observer-global-isolation.test/");
+    let mut vm =
+        performance_observer_test_vm("https://performance-observer-global-isolation.test/");
     vm.eval(
         r#"
 (() => {
@@ -447,7 +474,8 @@ fn performance_observer_registration_uses_its_own_global_with_a_foreign_callback
     )
     .expect("queue separate global timelines with crossed callback realms");
     assert_eq!(
-        vm.eval("JSON.stringify(__timelineEntries)").unwrap(),
+        vm.eval_after_selected_page_tasks("JSON.stringify(__timelineEntries)")
+            .unwrap(),
         r#"{"parent":["parent-only"],"child":["child-only"],"callbackRealms":[true,true]}"#,
     );
 }
@@ -474,7 +502,7 @@ fn windowless_fragment_insertions_preserve_native_mutation_records() {
 
 #[test]
 fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-function-semantics.test/");
+    let mut vm = performance_observer_test_vm("https://observer-callback-function-semantics.test/");
 
     let queued = vm
         .eval(
@@ -543,7 +571,7 @@ fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_sema
     assert_eq!(queued, "queued");
 
     let result = vm
-        .eval(
+        .eval_after_selected_page_tasks(
             r#"
 JSON.stringify({
   facts: globalThis.__observerCallbackFacts.sort((a, b) =>
@@ -692,7 +720,7 @@ async fn intersection_entries_project_targets_into_the_isolated_callback_world()
 
 #[test]
 fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/");
+    let mut vm = performance_observer_test_vm("https://observer-callback-exception-realm.test/");
 
     vm.eval(
         r#"
@@ -738,7 +766,7 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
     .expect("observer exception projection should queue");
 
     let result = vm
-        .eval(
+        .eval_after_selected_page_tasks(
             "JSON.stringify(globalThis.__observerCallbackErrors.sort((a, b) => a.message.localeCompare(b.message)))",
         )
         .expect("observer exception projection should flush");
@@ -750,7 +778,7 @@ fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
 
 #[test]
 fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
-    let mut vm = observer_callback_test_vm("https://observer-callback-retirement.test/");
+    let mut vm = performance_observer_test_vm("https://observer-callback-retirement.test/");
 
     let queued = vm
         .eval(
@@ -821,7 +849,7 @@ fn observer_deliveries_retire_with_the_exact_observer_or_callback_realm() {
     assert_eq!(queued, "true");
 
     let result = vm
-        .eval("JSON.stringify(globalThis.__retiredObserverCallbacks)")
+        .eval_after_selected_page_tasks("JSON.stringify(globalThis.__retiredObserverCallbacks)")
         .expect("retired observer callbacks should remain suppressed");
     assert_eq!(result, "[]");
 }
@@ -883,7 +911,8 @@ fn js_owned_observer_callback_cycles_remain_v8_collectable() {
 
 #[test]
 fn performance_observer_disconnect_retires_and_reobserve_restores_delivery() {
-    let mut vm = new_storage_test_vm("https://performance-observer-reobserve.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://performance-observer-reobserve.test/");
 
     vm.eval(
         r#"
@@ -906,7 +935,7 @@ fn performance_observer_disconnect_retires_and_reobserve_restores_delivery() {
     .expect("PerformanceObserver re-observe workflow should queue");
 
     let delivered = vm
-        .eval("JSON.stringify(globalThis.__performanceReobserveEntries)")
+        .eval_after_selected_page_tasks("JSON.stringify(globalThis.__performanceReobserveEntries)")
         .expect("PerformanceObserver re-observe workflow should flush");
     assert_eq!(delivered, r#"["delivered-after-reobserve"]"#);
 }

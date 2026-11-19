@@ -65,10 +65,7 @@ async fn performance_names_retain_utf16_identity_across_realms_and_observers() {
         include_str!("../../../tests/fixtures/performance-name-utf16.js"),
     );
     vm.eval(&source).unwrap();
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
-    vm.advance_timers_until_deadline_for_test(&loader)
-        .await
-        .unwrap();
+    run_performance_observer_tasks_for_test(&mut vm).await;
     let result: serde_json::Value = serde_json::from_str(
         &vm.eval("JSON.stringify(globalThis.__performanceNameResult)")
             .unwrap(),

@@ -29,21 +29,25 @@ fn performance_observer_drop_reporting_preserves_flags_and_callback_realms() {
 
 #[test]
 fn performance_observer_delivery_follows_registration_order_after_reobserve() {
-    let mut vm = new_storage_test_vm("https://performance-observer-registration-order.test/");
+    let mut vm = new_storage_page_task_executor_test_vm(
+        "https://performance-observer-registration-order.test/",
+    );
     let source = format!(
         "({}).then(result => globalThis.__registrationOrder = result, error => globalThis.__registrationOrder = {{ error: String(error) }});",
         include_str!("../../../tests/fixtures/performance-observer-registration-order.js"),
     );
     vm.eval(&source).expect("queue registered observers");
     assert_eq!(
-        vm.eval("JSON.stringify(__registrationOrder)").unwrap(),
+        vm.eval_after_selected_page_tasks("JSON.stringify(__registrationOrder)")
+            .unwrap(),
         r#"["second:initial","first:initial","first:reobserved","second:reobserved"]"#,
     );
 }
 
 #[test]
 fn performance_observer_delivery_preserves_batches_and_reentrant_registration() {
-    let mut vm = new_storage_test_vm("https://performance-observer-delivery.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://performance-observer-delivery.test/");
     let source = format!(
         "({}).then(result => globalThis.__performanceDeliveryResult = result, error => globalThis.__performanceDeliveryResult = {{ error: String(error) }});",
         include_str!("../../../tests/fixtures/performance-observer-delivery.js"),
@@ -51,7 +55,7 @@ fn performance_observer_delivery_preserves_batches_and_reentrant_registration() 
     vm.eval(&source)
         .expect("queue PerformanceObserver delivery");
     assert_eq!(
-        vm.eval("JSON.stringify(__performanceDeliveryResult)")
+        vm.eval_after_selected_page_tasks("JSON.stringify(__performanceDeliveryResult)")
             .unwrap(),
         r#"{"batches":[["first","second"],["after-reobserve"]],"taken":["taken-during-callback"],"proxyCalls":2}"#,
     );
@@ -79,5 +83,54 @@ fn performance_observer_options_and_modes_follow_webidl_and_timeline_algorithms(
         vm.eval("JSON.stringify(__observerContractChecks.filter(row => !row.passed))")
             .unwrap(),
         "[]"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_performance_observers_are_notified_in_one_task_after_microtasks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://observer-task.test/");
+    vm.eval(
+        r#"
+        globalThis.trace = [];
+        new PerformanceObserver(() => {
+          trace.push('observer-1');
+          Promise.resolve().then(() => trace.push('observer-microtask'));
+        }).observe({type: 'mark'});
+        new PerformanceObserver(() => trace.push('observer-2')).observe({type: 'mark'});
+        performance.mark('before-delivery');
+        Promise.resolve().then(() => trace.push('earlier-microtask'));
+        "#,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("trace.join(',')").unwrap(), "earlier-microtask");
+    assert_eq!(run_performance_observer_tasks_for_test(&mut vm).await, 1);
+    assert_eq!(
+        vm.eval("trace.join(',')").unwrap(),
+        "earlier-microtask,observer-1,observer-2,observer-microtask",
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_performance_observer_notification_survives_document_open() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://observer-task.test/");
+    vm.eval(
+        r#"
+        globalThis.observedMarks = [];
+        new PerformanceObserver(list => {
+          observedMarks.push(...list.getEntries().map(entry => entry.name));
+        }).observe({type: 'mark'});
+        performance.mark('old-document');
+        "#,
+    )
+    .unwrap();
+    vm.eval(
+        "document.open(); document.write('<body>replacement</body>'); document.close(); \
+         performance.mark('new-document');",
+    )
+    .unwrap();
+    assert_eq!(run_performance_observer_tasks_for_test(&mut vm).await, 1);
+    assert_eq!(
+        vm.eval("observedMarks.join(',')").unwrap(),
+        "old-document,new-document",
     );
 }

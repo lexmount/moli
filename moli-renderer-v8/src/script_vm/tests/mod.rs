@@ -1151,6 +1151,23 @@ impl ScriptVm {
         task_count
     }
 }
+
+async fn run_performance_observer_tasks_for_test(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+) -> usize {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for count in 0..32 {
+        if !vm
+            .run_one_misc_platform_api_task_executor_turn(&loader)
+            .await
+            .expect("run the selected observer task")
+        {
+            return count;
+        }
+    }
+    panic!("performance observer tasks did not become idle");
+}
+
 trait StoragePageTaskExecutorTestWaitExt {
     fn eval_after_selected_page_tasks(&mut self, source: &str) -> anyhow::Result<String>;
 }
