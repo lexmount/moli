@@ -463,7 +463,7 @@ Moli는 문서에서 정의한 에이전트 브라우저 시나리오 안에서 
   <img alt="lexmount/moli의 스타 기록" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## Awesome Moli
+## Moli's Friends
 
 관련 프로젝트, 통합 도구, 배포 옵션은
 [Awesome Moli](https://github.com/lexmount/awesome-moli)에서 확인할 수 있습니다.

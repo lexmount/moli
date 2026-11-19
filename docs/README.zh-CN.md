@@ -383,6 +383,6 @@ Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源�
   <img alt="lexmount/moli 的 Star 增长曲线" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
 </picture>
 
-## Awesome Moli
+## Moli's Friends
 
 相关项目、集成和部署方案见 [Awesome Moli](https://github.com/lexmount/awesome-moli)。
