@@ -39,6 +39,10 @@ impl ModuleLoadError {
         self.failed_resource.as_deref()
     }
 
+    pub(crate) fn into_message_and_failed_resource(self) -> (String, Option<Box<ModuleMapKey>>) {
+        (self.message, self.failed_resource)
+    }
+
     pub(crate) fn with_error_constructor(
         mut self,
         error_constructor: ScriptErrorConstructorKind,

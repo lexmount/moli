@@ -59,6 +59,10 @@ impl ModuleAttributesKey {
     pub(crate) fn pairs(&self) -> &[(String, String)] {
         &self.attributes
     }
+
+    pub(crate) fn into_pairs(self) -> Vec<(String, String)> {
+        self.attributes
+    }
 }
 
 impl Default for ModuleAttributesKey {
@@ -179,6 +183,10 @@ impl ModuleMapKey {
 
     pub(crate) fn attributes(&self) -> &ModuleAttributesKey {
         &self.attributes
+    }
+
+    pub(crate) fn into_parts(self) -> (Url, ModuleKind, ModuleAttributesKey) {
+        (self.url, self.kind, self.attributes)
     }
 }
 

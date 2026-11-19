@@ -1,12 +1,15 @@
 //! Diagnostics shared by the Pages and Workers of one Browser.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 const TEXT_MAX_BYTES: usize = 4 * 1024;
-const STACK_MAX_BYTES: usize = 16 * 1024;
+pub(crate) const STACK_MAX_BYTES: usize = 16 * 1024;
 
 /// The Page or Worker that produced a diagnostic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,16 +153,24 @@ fn bound_stack(mut stack: String) -> String {
 type DiagnosticSender = mpsc::UnboundedSender<DiagnosticEvent>;
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DiagnosticEmitter(Arc<OnceLock<Mutex<Option<DiagnosticSender>>>>);
+pub(crate) struct DiagnosticEmitter(Arc<DiagnosticState>);
+
+#[derive(Debug, Default)]
+struct DiagnosticState {
+    // Both this hint and the sender slot are updated under the same lock.
+    may_have_receiver: AtomicBool,
+    sender: Mutex<Option<DiagnosticSender>>,
+}
 
 impl DiagnosticEmitter {
     pub(crate) fn subscribe(&self) -> Option<DiagnosticsSubscription> {
-        let mut slot = self.0.get_or_init(Mutex::default).lock();
+        let mut slot = self.0.sender.lock();
         if slot.as_ref().is_some_and(|sender| !sender.is_closed()) {
             return None;
         }
         let (sender, receiver) = mpsc::unbounded_channel();
         *slot = Some(sender);
+        self.0.may_have_receiver.store(true, Ordering::Release);
         Some(receiver)
     }
 
@@ -185,12 +196,16 @@ impl DiagnosticEmitter {
     }
 
     fn active_sender(&self) -> Option<DiagnosticSender> {
-        self.0
-            .get()?
-            .lock()
-            .as_ref()
-            .filter(|sender| !sender.is_closed())
-            .cloned()
+        if !self.0.may_have_receiver.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut slot = self.0.sender.lock();
+        if let Some(sender) = slot.as_ref().filter(|sender| !sender.is_closed()) {
+            return Some(sender.clone());
+        }
+        *slot = None;
+        self.0.may_have_receiver.store(false, Ordering::Release);
+        None
     }
 }
 
@@ -231,7 +246,7 @@ mod tests {
     #[test]
     fn diagnostics_are_lazy_without_an_open_receiver() {
         let diagnostics = DiagnosticEmitter::default();
-        assert!(diagnostics.0.get().is_none());
+        assert!(!diagnostics.0.may_have_receiver.load(Ordering::Acquire));
         diagnostics.emit(|| panic!("no receiver"));
         assert!(
             diagnostics
@@ -244,12 +259,35 @@ mod tests {
 
         let mut receiver = diagnostics.subscribe().expect("first subscription");
         assert!(diagnostics.clone().subscribe().is_none());
+        let report = diagnostics
+            .prepare_worker_exception(DiagnosticSource::DedicatedWorker { instance_id: 2 }, || {
+                None
+            })
+            .expect("report for first subscription");
         receiver.close();
         diagnostics.emit(|| panic!("the receiver was closed"));
+        assert!(!diagnostics.0.may_have_receiver.load(Ordering::Acquire));
+        assert!(diagnostics.0.sender.lock().is_none());
 
-        let replacement = diagnostics
+        let mut replacement = diagnostics
             .subscribe()
             .expect("closed receiver can be replaced");
+        report.publish("stale report", "worker.js", (1, 1), || {
+            panic!("the original receiver was closed")
+        });
+        assert_eq!(
+            replacement.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        );
+
+        let event = DiagnosticEvent::script_load_failure(
+            DiagnosticSource::Page { page_id: 1 },
+            "root.js",
+            "missing.js",
+            "missing",
+        );
+        diagnostics.emit(|| Some(event.clone()));
+        assert_eq!(replacement.try_recv(), Ok(event));
         drop(replacement);
         diagnostics.emit(|| panic!("the receiver was dropped"));
         assert!(diagnostics.subscribe().is_some());
