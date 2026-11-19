@@ -46,6 +46,7 @@ editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
 fetch/api/abort/serviceworker-intercepted.https.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
+html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/back-forward-cache/storage-events.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-fragment-scrolling-cross-origin.html
 html/browsers/browsing-the-web/navigating-across-documents/009.html
@@ -69,6 +70,7 @@ html/editing/the-hidden-attribute/hidden-until-found-and-details.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-empty.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-nonexistent.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-top.html
+html/semantics/embedded-content/image-maps/image-map-processing-model/hash-name-reference.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-img-element/below-viewport-image-loading-lazy-load-event.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-iframe.html
@@ -79,6 +81,7 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-scr
 html/semantics/embedded-content/the-img-element/image-loading-lazy-zero-intersection-area.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/sizes/implicit-sizes-ignores-width.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
@@ -95,6 +98,7 @@ navigation-api/navigate-event/defer/tentative/defer-cross-origin.html
 navigation-api/navigate-event/defer/tentative/defer-restore-callback-abort.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-single-reject.html
+navigation-api/per-entry-events/dispose-after-bfcache.html
 permissions-policy/policy-extends-to-sandbox.html
 permissions-policy/reporting/fullscreen-reporting.html
 permissions-policy/reporting/sync-xhr-report-only.html
@@ -114,3 +118,4 @@ svg/linking/scripted/href-script-element.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-navigation.html?36-last
 xhr/open-url-multi-window-4.htm
+xhr/setrequestheader-header-forbidden.htm

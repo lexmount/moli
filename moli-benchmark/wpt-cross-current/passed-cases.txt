@@ -7414,7 +7414,6 @@ html/semantics/embedded-content/the-img-element/scrolling-below-viewport-image-l
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
 html/semantics/embedded-content/the-img-element/srcset-natural-size-in-dynamic-iframe.html
 html/semantics/embedded-content/the-img-element/srcset/avoid-reload-on-resize.html
@@ -8788,7 +8787,6 @@ html/webappapis/the-windoworworkerglobalscope-mixin/Worker_Self_Origin.html
 html/webappapis/timers/setinterval-cross-realm-callback-report-exception.html
 html/webappapis/timers/setinterval-settimeout-clamping.html
 html/webappapis/timers/settimeout-cross-realm-callback-report-exception.html
-html/webappapis/timers/timer-nesting-not-inherited-in-microtask.html
 html/webappapis/user-prompts/print-during-beforeunload.html
 html/webappapis/user-prompts/print-during-unload.html
 html/webappapis/user-prompts/print-in-detached-frame.html
@@ -11244,7 +11242,6 @@ xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
 xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
-xhr/setrequestheader-header-forbidden.htm
 xhr/setrequestheader-open-setrequestheader.htm
 xhr/status-async.htm
 xhr/status-basic.htm
