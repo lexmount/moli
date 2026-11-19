@@ -1,7 +1,7 @@
 //! XPath result objects initialized before the evaluator installs results and iterator state.
 
 use crate::interfaces as web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub const XPATH_RESULT_TYPE_SLOT: &str = "__moliXPathType";
 pub const XPATH_RESULT_STRING_VALUE_SLOT: &str = "__moliXPathStringValue";
@@ -40,4 +40,66 @@ pub fn build_xpath_result_base<'s>(
     XPathResultBaseDeclaration::new(result_type)
         .bind(scope)
         .ok()
+}
+
+pub const XPATH_ANY_TYPE: u32 = 0;
+pub const XPATH_NUMBER_TYPE: u32 = 1;
+pub const XPATH_STRING_TYPE: u32 = 2;
+pub const XPATH_BOOLEAN_TYPE: u32 = 3;
+pub const XPATH_UNORDERED_NODE_ITERATOR_TYPE: u32 = 4;
+pub const XPATH_ORDERED_NODE_ITERATOR_TYPE: u32 = 5;
+pub const XPATH_UNORDERED_NODE_SNAPSHOT_TYPE: u32 = 6;
+pub const XPATH_ORDERED_NODE_SNAPSHOT_TYPE: u32 = 7;
+pub const XPATH_ANY_UNORDERED_NODE_TYPE: u32 = 8;
+pub const XPATH_FIRST_ORDERED_NODE_TYPE: u32 = 9;
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::XPathResult)]
+pub struct XPathResultConstantsDeclaration {
+    #[webapi(constant = "ANY_TYPE", value = XPATH_ANY_TYPE)]
+    any_type: (),
+
+    #[webapi(constant = "NUMBER_TYPE", value = XPATH_NUMBER_TYPE)]
+    number_type: (),
+
+    #[webapi(constant = "STRING_TYPE", value = XPATH_STRING_TYPE)]
+    string_type: (),
+
+    #[webapi(constant = "BOOLEAN_TYPE", value = XPATH_BOOLEAN_TYPE)]
+    boolean_type: (),
+
+    #[webapi(
+        constant = "UNORDERED_NODE_ITERATOR_TYPE",
+        value = XPATH_UNORDERED_NODE_ITERATOR_TYPE
+    )]
+    unordered_node_iterator_type: (),
+
+    #[webapi(
+        constant = "ORDERED_NODE_ITERATOR_TYPE",
+        value = XPATH_ORDERED_NODE_ITERATOR_TYPE
+    )]
+    ordered_node_iterator_type: (),
+
+    #[webapi(
+        constant = "UNORDERED_NODE_SNAPSHOT_TYPE",
+        value = XPATH_UNORDERED_NODE_SNAPSHOT_TYPE
+    )]
+    unordered_node_snapshot_type: (),
+
+    #[webapi(
+        constant = "ORDERED_NODE_SNAPSHOT_TYPE",
+        value = XPATH_ORDERED_NODE_SNAPSHOT_TYPE
+    )]
+    ordered_node_snapshot_type: (),
+
+    #[webapi(
+        constant = "ANY_UNORDERED_NODE_TYPE",
+        value = XPATH_ANY_UNORDERED_NODE_TYPE
+    )]
+    any_unordered_node_type: (),
+
+    #[webapi(
+        constant = "FIRST_ORDERED_NODE_TYPE",
+        value = XPATH_FIRST_ORDERED_NODE_TYPE
+    )]
+    first_ordered_node_type: (),
 }

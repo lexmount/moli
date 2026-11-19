@@ -17,10 +17,10 @@ use moli_webapi::idle_detector_values::{
     IDLE_DETECTOR_ABORT_ALGORITHM_SLOT, IDLE_DETECTOR_ABORT_SIGNAL_SLOT,
     IDLE_DETECTOR_SCREEN_UNLOCKED_SLOT, IDLE_DETECTOR_STARTED_SLOT, IDLE_DETECTOR_USER_ACTIVE_SLOT,
 };
+use moli_webapi::idle_detector_values::{IdleOptions, MINIMUM_IDLE_THRESHOLD_MS};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 const IDLE_DETECTOR_REGISTRY_SLOT: &str = "__lmIdleDetectorRegistry";
-const MINIMUM_IDLE_THRESHOLD_MS: u32 = 60_000;
 const ACTUAL_IDLE_STATE: crate::protocol_types::EmulatedIdleOverride =
     crate::protocol_types::EmulatedIdleOverride {
         is_user_active: true,
@@ -165,15 +165,6 @@ fn idle_detector_screen_state_getter<'s>(
 struct IdleDetectorStartArgs<'s> {
     #[webidl(dictionary)]
     options: IdleOptions<'s>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "IdleOptions")]
-struct IdleOptions<'s> {
-    #[webidl(converter = "raw")]
-    signal: Option<crate::abort_signal_route::ResolvedAbortSignal<'s>>,
-    #[webidl(default = MINIMUM_IDLE_THRESHOLD_MS, converter = "enforce_range_unsigned_long")]
-    threshold: u32,
 }
 
 fn idle_detector_start_callback<'s>(

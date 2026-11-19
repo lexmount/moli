@@ -150,3 +150,24 @@ fn result_attribute_getter<'s>(
             .expect("branded ResizeObserver result should retain its attributes"),
     );
 }
+
+use moli_webidl as webidl;
+
+pub const RESIZE_OBSERVER_RECORD_BOX_SLOT: &str = "__moliResizeObserverRecordBox";
+
+#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
+#[webidl(name = "ResizeObserverBoxOptions", rename_all = "kebab-case")]
+pub enum ResizeObserverBoxOptions {
+    #[default]
+    ContentBox,
+    BorderBox,
+    DevicePixelContentBox,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "ResizeObserverOptions", snapshot)]
+pub struct ResizeObserverOptions {
+    #[webidl(name = "box", converter = "enum", default = ResizeObserverBoxOptions::ContentBox)]
+    #[webidl(snapshot_slot = RESIZE_OBSERVER_RECORD_BOX_SLOT)]
+    pub observed_box: ResizeObserverBoxOptions,
+}

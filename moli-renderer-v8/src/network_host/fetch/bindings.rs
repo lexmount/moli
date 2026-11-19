@@ -14,14 +14,8 @@ use super::promise::{make_rejected_promise, make_rejected_promise_with_value};
 use super::*;
 use crate::native_bridge::abort::abort_error_value;
 use crate::structured_clone::V8StructuredClonePayload;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
-
-#[derive(Default, WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct FetchAbortListenerOptionsDeclaration {
-    #[webapi(init = true)]
-    once: (),
-}
+use moli_webapi::abort_signal::abort_listener_options;
+use moli_webapi_declare::ObjectLiteralDeclaration;
 
 fn window_fetch_abort_listener_id(
     scope: &mut v8::PinScope<'_, '_>,
@@ -383,9 +377,7 @@ fn install_window_fetch_abort_listener<'s>(
     else {
         return;
     };
-    let options = FetchAbortListenerOptionsDeclaration::default()
-        .bind(scope)
-        .expect("fetch abort listener options declaration should bind");
+    let options = abort_listener_options(scope);
     let _ = add_event_listener.call(
         scope,
         signal.into(),

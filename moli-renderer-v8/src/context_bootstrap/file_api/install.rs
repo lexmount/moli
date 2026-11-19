@@ -1,17 +1,5 @@
 use super::*;
-use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiFunctionTemplate;
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileReader, enumerable)]
-struct FileReaderConstantsDeclaration {
-    #[webapi(constant = "EMPTY", value = 0u32)]
-    empty: (),
-    #[webapi(constant = "LOADING", value = 1u32)]
-    loading: (),
-    #[webapi(constant = "DONE", value = 2u32)]
-    done: (),
-}
+use moli_webapi::interface_constants::FileReaderConstantsDeclaration;
 
 pub(in crate::context_bootstrap) fn install_file_api_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,

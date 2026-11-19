@@ -1,24 +1,5 @@
 use super::*;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct ErrorEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-    #[webapi(data_property, enumerable)]
-    bubbles: bool,
-    #[webapi(data_property, enumerable)]
-    message: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    filename: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    lineno: u32,
-    #[webapi(data_property, enumerable)]
-    colno: u32,
-    #[webapi(data_property, enumerable)]
-    error: v8::Local<'scope, v8::Value>,
-}
+use moli_webapi::events::dispatch_init::ReportedErrorEventInitDeclaration;
 
 const BODY_ONERROR_RESOLUTION_GUARD_SLOT: &str = "__moliBodyOnerrorResolutionGuard";
 
@@ -145,10 +126,17 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
     let filename = v8_string(scope, filename)
         .map(|s| s.into())
         .unwrap_or_else(|| v8::null(scope).into());
-    let init =
-        ErrorEventInitDeclaration::new(true, false, message, filename, lineno, colno, error_value)
-            .bind(scope)
-            .expect("ErrorEvent init declaration should bind");
+    let init = ReportedErrorEventInitDeclaration::new(
+        true,
+        false,
+        message,
+        filename,
+        f64::from(lineno),
+        f64::from(colno),
+        error_value,
+    )
+    .bind(scope)
+    .expect("ErrorEvent init declaration should bind");
 
     let event_type = v8str(scope, "error");
     let event = super::super::exposed_interfaces::ensure_intrinsic_interface_constructor(

@@ -1,74 +1,8 @@
 use super::*;
 use crate::runtime::RendererPointerEventProperties;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct PointerEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    screen_x: f64,
-    screen_y: f64,
-    client_x: f64,
-    client_y: f64,
-    button: i32,
-    buttons: i32,
-    alt_key: bool,
-    ctrl_key: bool,
-    meta_key: bool,
-    shift_key: bool,
-    pointer_type: v8::Local<'scope, v8::String>,
-    pressure: f64,
-    tangential_pressure: f64,
-    tilt_x: f64,
-    tilt_y: f64,
-    twist: f64,
-    pointer_id: f64,
-    width: f64,
-    height: f64,
-    is_primary: bool,
-    related_target: Option<v8::Local<'scope, v8::Value>>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct DragEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    screen_x: f64,
-    screen_y: f64,
-    client_x: f64,
-    client_y: f64,
-    alt_key: bool,
-    ctrl_key: bool,
-    meta_key: bool,
-    shift_key: bool,
-    view: v8::Local<'scope, v8::Object>,
-    data_transfer: v8::Local<'scope, v8::Value>,
-    related_target: Option<v8::Local<'scope, v8::Value>>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct WheelEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    screen_x: f64,
-    screen_y: f64,
-    client_x: f64,
-    client_y: f64,
-    delta_x: f64,
-    delta_y: f64,
-    button: i32,
-    buttons: i32,
-    alt_key: bool,
-    ctrl_key: bool,
-    meta_key: bool,
-    shift_key: bool,
-    view: v8::Local<'scope, v8::Object>,
-}
+use moli_webapi::events::dispatch_init::{
+    DragEventInitDeclaration, PointerEventInitDeclaration, WheelEventInitDeclaration,
+};
 
 pub(crate) fn construct_mouse_event_with_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,

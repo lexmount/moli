@@ -1,4 +1,5 @@
 use super::*;
+use moli_webapi::font_face::FontFaceDescriptors;
 
 #[derive(Clone, Copy)]
 pub(super) struct FontFaceDescriptor {
@@ -66,25 +67,6 @@ pub(super) const FONT_FACE_WRITABLE_ATTRIBUTES: &[FontFaceDescriptor] = &[
     ),
     FontFaceDescriptor::new(FONT_FACE_SIZE_ADJUST_SLOT, "size-adjust", "100%"),
 ];
-
-// WebIDL reads dictionary members in lexicographic order, and must finish
-// their conversion before the constructor starts parsing CSS.
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "FontFaceDescriptors")]
-struct FontFaceDescriptors {
-    ascent_override: Option<String>,
-    descent_override: Option<String>,
-    display: Option<String>,
-    feature_settings: Option<String>,
-    line_gap_override: Option<String>,
-    size_adjust: Option<String>,
-    stretch: Option<String>,
-    style: Option<String>,
-    unicode_range: Option<String>,
-    variant: Option<String>,
-    variation_settings: Option<String>,
-    weight: Option<String>,
-}
 
 pub(super) fn parse_font_face_descriptors<'s>(
     scope: &mut v8::PinScope<'s, '_>,

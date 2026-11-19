@@ -5,9 +5,11 @@
 //! consume them. BufferSource validation uses native identity and never copies
 //! authenticator input or reads an author-visible `.buffer` property.
 
-use crate::{abort_signal_route::ResolvedAbortSignal, web_api_interfaces, webidl};
+use crate::{abort_signal::ResolvedAbortSignal, interfaces as web_api_interfaces};
+use moli_v8_util::buffer_source_has_shared_or_resizable_backing_store;
+use moli_webidl as webidl;
 
-use super::super::{
+use super::{
     schema::{Entity, Parameters, RelyingParty, Selection},
     value::Text,
 };
@@ -22,7 +24,7 @@ enum Mediation {
     Required,
 }
 
-pub(super) struct Signal<'s>(pub(super) ResolvedAbortSignal<'s>);
+pub struct Signal<'s>(pub ResolvedAbortSignal<'s>);
 
 impl<'s> webidl::WebIdlConverter<'s> for Signal<'s> {
     type Options = ();
@@ -59,7 +61,7 @@ impl<'s> webidl::WebIdlConverter<'s> for Buffer {
         _options: &Self::Options,
     ) -> Result<Self, webidl::WebIdlError> {
         let binary = value.is_array_buffer() || value.is_array_buffer_view();
-        if binary && !crate::blob::buffer_source_has_shared_or_resizable_backing_store(value) {
+        if binary && !buffer_source_has_shared_or_resizable_backing_store(value) {
             Ok(Self)
         } else {
             Err(webidl::WebIdlError::cannot_convert(context, "BufferSource"))
@@ -67,7 +69,7 @@ impl<'s> webidl::WebIdlConverter<'s> for Buffer {
     }
 }
 
-pub(super) struct PasswordInit;
+pub struct PasswordInit;
 
 impl<'s> webidl::WebIdlConverter<'s> for PasswordInit {
     type Options = ();
@@ -90,28 +92,28 @@ impl<'s> webidl::WebIdlConverter<'s> for PasswordInit {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CredentialsContainer.get")]
-pub(super) struct GetArgs<'s> {
+pub struct GetArgs<'s> {
     #[webidl(dictionary)]
-    pub(super) options: Request<'s>,
+    pub options: Request<'s>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CredentialsContainer.create")]
-pub(super) struct CreateArgs<'s> {
+pub struct CreateArgs<'s> {
     #[webidl(dictionary)]
-    pub(super) options: Creation<'s>,
+    pub options: Creation<'s>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CredentialsContainer.store")]
-pub(super) struct StoreArgs<'s> {
+pub struct StoreArgs<'s> {
     #[webidl(required, interface = web_api_interfaces::Credential)]
     _credential: v8::Local<'s, v8::Object>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "CredentialRequestOptions")]
-pub(super) struct Request<'s> {
+pub struct Request<'s> {
     #[webidl(converter = "raw")]
     _federated: Option<Dictionary<FederatedRequest>>,
     #[webidl(converter = "enum", default = Mediation::Optional)]
@@ -121,24 +123,24 @@ pub(super) struct Request<'s> {
     #[webidl(converter = "raw")]
     _public_key: Option<Dictionary<PublicKeyRequest>>,
     #[webidl(converter = "raw")]
-    pub(super) signal: Option<Signal<'s>>,
+    pub signal: Option<Signal<'s>>,
     #[webidl(converter = "raw")]
     _ui_mode: Option<Text>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "CredentialCreationOptions")]
-pub(super) struct Creation<'s> {
+pub struct Creation<'s> {
     #[webidl(converter = "raw")]
-    pub(super) federated: Option<Dictionary<FederatedInit>>,
+    pub federated: Option<Dictionary<FederatedInit>>,
     #[webidl(converter = "enum", default = Mediation::Optional)]
     _mediation: Mediation,
     #[webidl(converter = "raw")]
-    pub(super) password: Option<PasswordInit>,
+    pub password: Option<PasswordInit>,
     #[webidl(converter = "raw")]
-    pub(super) public_key: Option<Dictionary<PublicKeyCreation>>,
+    pub public_key: Option<Dictionary<PublicKeyCreation>>,
     #[webidl(converter = "raw")]
-    pub(super) signal: Option<Signal<'s>>,
+    pub signal: Option<Signal<'s>>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
@@ -159,7 +161,7 @@ struct CredentialData {
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "FederatedCredentialInit")]
-pub(super) struct FederatedInit {
+pub struct FederatedInit {
     #[webidl(inherit)]
     _base: CredentialData,
     #[webidl(name = "iconURL", converter = "usv_string")]
@@ -191,7 +193,7 @@ struct PasswordData {
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "PublicKeyCredentialCreationOptions")]
-pub(super) struct PublicKeyCreation {
+pub struct PublicKeyCreation {
     #[webidl(converter = "raw", default = Text::from("none"))]
     _attestation: Text,
     #[webidl(converter = "raw", default = webidl::Sequence(Vec::new()))]

@@ -8,6 +8,7 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use crate::webidl;
+use moli_webapi::performance::observer::PerformanceObserverObserveArgs;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -46,25 +47,6 @@ struct PerformanceObserverConstructorArgs {
         missing_message = "Failed to construct 'PerformanceObserver': parameter 1 is not a function."
     )]
     callback: webidl::WebIdlCallbackFunction,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "PerformanceObserver.observe")]
-struct PerformanceObserverObserveArgs {
-    #[webidl(required, dictionary)]
-    options: PerformanceObserverInit,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "PerformanceObserverInit")]
-struct PerformanceObserverInit {
-    buffered: Option<bool>,
-    #[webidl(converter = "double")]
-    duration_threshold: Option<f64>,
-    #[webidl(converter = "raw")]
-    entry_types: Option<webidl::Sequence<webidl::DomString>>,
-    #[webidl(name = "type")]
-    observed_type: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]

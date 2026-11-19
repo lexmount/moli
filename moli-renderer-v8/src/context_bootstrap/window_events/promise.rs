@@ -1,16 +1,5 @@
 use super::*;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct PromiseRejectionEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-    #[webapi(data_property, enumerable)]
-    promise: v8::Local<'scope, v8::Promise>,
-    #[webapi(data_property, enumerable)]
-    reason: v8::Local<'scope, v8::Value>,
-}
+use moli_webapi::events::dispatch_init::PromiseRejectionEventInitDeclaration;
 
 pub(crate) fn dispatch_window_promise_rejection_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,

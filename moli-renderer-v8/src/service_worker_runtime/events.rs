@@ -1,4 +1,5 @@
 use moli_fetch::{Request, RequestCacheMode, RequestMode};
+pub(crate) use moli_webapi::notification::NotificationMetadata as ServiceWorkerNotificationMetadata;
 use url::Url;
 
 use crate::types::NetworkBodySourceId;
@@ -166,39 +167,6 @@ pub(crate) struct ServiceWorkerShowNotification {
 pub(crate) struct ServiceWorkerShowNotificationResult {
     pub(crate) request_id: u64,
     pub(crate) result: Result<(), String>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ServiceWorkerNotificationMetadata {
-    pub(crate) dir: String,
-    pub(crate) lang: String,
-    pub(crate) body: String,
-    pub(crate) icon: String,
-    pub(crate) image: String,
-    pub(crate) badge: String,
-    pub(crate) vibrate: Vec<u32>,
-    pub(crate) timestamp: Option<u64>,
-    pub(crate) renotify: bool,
-    pub(crate) silent: Option<bool>,
-    pub(crate) require_interaction: bool,
-}
-
-impl Default for ServiceWorkerNotificationMetadata {
-    fn default() -> Self {
-        Self {
-            dir: "auto".to_owned(),
-            lang: String::new(),
-            body: String::new(),
-            icon: String::new(),
-            image: String::new(),
-            badge: String::new(),
-            vibrate: Vec::new(),
-            timestamp: None,
-            renotify: false,
-            silent: None,
-            require_interaction: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

@@ -5,7 +5,7 @@
 //! and conversion errors in the function realm. Do not manufacture credentials
 //! or claim to persist them.
 
-mod options;
+use moli_webapi::credentials::options;
 
 use anyhow::Result;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};

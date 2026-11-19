@@ -109,21 +109,9 @@ use super::module_runtime::{
     worker_has_runnable_dynamic_module_imports,
 };
 
+pub(crate) use moli_webapi::worker_options::WorkerScriptKind;
+
 const WORKER_STACK_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, crate::webidl::WebIdlEnum)]
-#[webidl(name = "WorkerType", parse_with = Self::parse_webidl_token)]
-#[strum(serialize_all = "lowercase")]
-pub(crate) enum WorkerScriptKind {
-    Classic,
-    Module,
-}
-
-impl WorkerScriptKind {
-    fn parse_webidl_token(value: &str) -> Option<Self> {
-        value.parse().ok()
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) enum WorkerScriptSource {

@@ -47,8 +47,8 @@ use crate::event_listener_args::{
 };
 use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
+use moli_webapi::events::dispatch_init::DispatchedEventInitDeclaration;
 pub(crate) use moli_webapi::idle_deadline::install_idle_deadline_template_bindings;
-use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -60,13 +60,6 @@ const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
 const IDLE_OPPORTUNITY_DELAY_MS: u32 = 1;
 const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
 pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessageEndpoint";
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct WindowDocumentEventInitDeclaration {
-    bubbles: bool,
-    cancelable: bool,
-}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Window.requestAnimationFrame")]
@@ -1914,7 +1907,7 @@ pub(crate) fn dispatch_document_event_for_handle(
         return false;
     };
     let (bubbles, cancelable) = super::host::host_event_defaults(event_type);
-    let init = WindowDocumentEventInitDeclaration::new(bubbles, cancelable)
+    let init = DispatchedEventInitDeclaration::new(bubbles, cancelable)
         .bind(scope)
         .expect("window document event init declaration should bind");
     let Some(event) = event_ctor.new_instance(scope, &[event_type_str.into(), init.into()]) else {

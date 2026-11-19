@@ -9,14 +9,7 @@ use super::registration::{
     performance_observer_callback_is_current,
 };
 use super::*;
-use crate::webidl::{self, SnapshotPrototype, WebIdlDictionarySerialize};
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PerformanceObserverCallbackOptions", snapshot)]
-struct PerformanceObserverCallbackOptions {
-    #[webidl(converter = "unsigned_long_long")]
-    dropped_entries_count: Option<u64>,
-}
+use moli_webapi::performance::observer::build_performance_observer_callback_options;
 
 fn performance_observer_flush_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -53,11 +46,7 @@ fn performance_observer_flush_callback<'s>(
         let scope = &mut v8::ContextScope::new(scope, context);
         let list = moli_webapi::performance::entry_list::build(scope, pending)
             .expect("PerformanceObserverEntryList declaration should bind");
-        let options = PerformanceObserverCallbackOptions {
-            dropped_entries_count,
-        }
-        .to_js_snapshot(scope, SnapshotPrototype::Ordinary)
-        .expect("PerformanceObserver callback options should serialize");
+        let options = build_performance_observer_callback_options(scope, dropped_entries_count);
         (list, options)
     };
     let observer_value: v8::Local<'_, v8::Value> = observer.into();

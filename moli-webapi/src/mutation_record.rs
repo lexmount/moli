@@ -93,3 +93,80 @@ fn attribute_getter<'s>(
             .expect("initialized MutationRecord retains its private attributes"),
     );
 }
+
+use moli_webidl as webidl;
+use std::collections::HashSet;
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "MutationObserverInit")]
+pub struct MutationObserverInit {
+    #[webidl(sequence, converter = "raw")]
+    attribute_filter: Option<Vec<webidl::DomString16>>,
+    attribute_old_value: Option<bool>,
+    attributes: Option<bool>,
+    character_data: Option<bool>,
+    character_data_old_value: Option<bool>,
+    #[webidl(default = false)]
+    child_list: bool,
+    #[webidl(default = false)]
+    subtree: bool,
+}
+
+#[derive(Clone, Default)]
+pub struct MutationObserverOptions {
+    pub child_list: bool,
+    pub attributes: bool,
+    pub character_data: bool,
+    pub subtree: bool,
+    pub attribute_old_value: bool,
+    pub character_data_old_value: bool,
+    pub attribute_filter: Option<HashSet<String>>,
+}
+
+impl TryFrom<MutationObserverInit> for MutationObserverOptions {
+    type Error = &'static str;
+
+    fn try_from(init: MutationObserverInit) -> Result<Self, Self::Error> {
+        let attributes = init
+            .attributes
+            .unwrap_or(init.attribute_old_value.is_some() || init.attribute_filter.is_some());
+        let character_data = init
+            .character_data
+            .unwrap_or(init.character_data_old_value.is_some());
+        let attribute_old_value = init.attribute_old_value.unwrap_or(false);
+        let character_data_old_value = init.character_data_old_value.unwrap_or(false);
+
+        if !init.child_list && !attributes && !character_data {
+            return Err(
+                "Failed to execute 'observe' on 'MutationObserver': at least one of childList, attributes, or characterData must be true.",
+            );
+        }
+        if !attributes && (attribute_old_value || init.attribute_filter.is_some()) {
+            return Err(
+                "Failed to execute 'observe' on 'MutationObserver': attributeOldValue and attributeFilter require attributes to be true.",
+            );
+        }
+        if !character_data && character_data_old_value {
+            return Err(
+                "Failed to execute 'observe' on 'MutationObserver': characterDataOldValue requires characterData to be true.",
+            );
+        }
+
+        Ok(Self {
+            child_list: init.child_list,
+            attributes,
+            character_data,
+            subtree: init.subtree,
+            attribute_old_value,
+            character_data_old_value,
+            // Native mutation local names are UTF-8. Ill-formed UTF-16 entries
+            // cannot match them; retain the filter even if no entries can match.
+            attribute_filter: init.attribute_filter.map(|names| {
+                names
+                    .into_iter()
+                    .filter_map(|name| String::from_utf16(&name.0).ok())
+                    .collect()
+            }),
+        })
+    }
+}

@@ -8,12 +8,17 @@ pub use moli_webapi::css_stylesheet::{
     CSS_MARGIN_RULE_STYLE_TEXT_SLOT, CSS_MEDIA_LIST_OWNER_KIND_SLOT,
     CSS_MEDIA_LIST_OWNER_RULE_SLOT, CSS_NESTED_DECLARATIONS_STYLE_TEXT_SLOT,
     CSS_PROPERTY_RULE_INHERITS_SLOT, CSS_PROPERTY_RULE_INITIAL_VALUE_SLOT,
-    CSS_PROPERTY_RULE_NAME_SLOT, CSS_PROPERTY_RULE_SYNTAX_SLOT,
-    CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT, CSS_RULE_LIST_LENGTH_SLOT, CSS_RULE_PARENT_RULE_SLOT,
-    CSS_RULE_PARENT_STYLE_SHEET_SLOT, CSS_STYLE_RULE_SELECTOR_TEXT_SLOT,
-    CSS_STYLE_RULE_STYLE_TEXT_SLOT, CSS_STYLE_SHEET_RULES_SLOT, CssAtRuleDeclaration,
-    CssFontFeatureValuesRuleDeclaration, CssKeyframeRuleDeclaration, CssMarginRuleDeclaration,
-    CssNestedDeclarationsRuleDeclaration, CssPropertyRuleDeclaration, CssRuleListDeclaration,
+    CSS_PROPERTY_RULE_NAME_SLOT, CSS_PROPERTY_RULE_SYNTAX_SLOT, CSS_RULE_CONTAINER_RULE_TYPE,
+    CSS_RULE_COUNTER_STYLE_RULE_TYPE, CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT,
+    CSS_RULE_FONT_FACE_RULE_TYPE, CSS_RULE_FONT_FEATURE_VALUES_RULE_TYPE,
+    CSS_RULE_IMPORT_RULE_TYPE, CSS_RULE_KEYFRAME_RULE_TYPE, CSS_RULE_KEYFRAMES_RULE_TYPE,
+    CSS_RULE_LIST_LENGTH_SLOT, CSS_RULE_MARGIN_RULE_TYPE, CSS_RULE_MEDIA_RULE_TYPE,
+    CSS_RULE_NAMESPACE_RULE_TYPE, CSS_RULE_PAGE_RULE_TYPE, CSS_RULE_PARENT_RULE_SLOT,
+    CSS_RULE_PARENT_STYLE_SHEET_SLOT, CSS_RULE_STYLE_RULE_TYPE, CSS_RULE_SUPPORTS_RULE_TYPE,
+    CSS_RULE_UNKNOWN_RULE_TYPE, CSS_STYLE_RULE_SELECTOR_TEXT_SLOT, CSS_STYLE_RULE_STYLE_TEXT_SLOT,
+    CSS_STYLE_SHEET_RULES_SLOT, CssAtRuleDeclaration, CssFontFeatureValuesRuleDeclaration,
+    CssKeyframeRuleDeclaration, CssMarginRuleDeclaration, CssNestedDeclarationsRuleDeclaration,
+    CssPropertyRuleDeclaration, CssRuleConstantsDeclaration, CssRuleListDeclaration,
     CssStyleRuleDeclaration, CssStyleSheetDeclaration, MediaListDeclaration,
     STYLE_SHEET_LIST_LENGTH_SLOT, StyleSheetListDeclaration,
 };
@@ -116,34 +121,6 @@ pub const CSS_MEDIA_LIST_OWNER_STYLE_SHEET: &str = "styleSheet";
 pub const ADOPTED_STYLE_SHEETS_ARRAY_TRACKED_SHEETS_SLOT: &str =
     "__moliAdoptedStyleSheetsArrayTrackedSheets";
 
-pub const CSS_RULE_UNKNOWN_RULE_TYPE: u32 = 0;
-
-pub const CSS_RULE_STYLE_RULE_TYPE: u32 = 1;
-
-pub const CSS_RULE_IMPORT_RULE_TYPE: u32 = 3;
-
-pub const CSS_RULE_MEDIA_RULE_TYPE: u32 = 4;
-
-pub const CSS_RULE_FONT_FACE_RULE_TYPE: u32 = 5;
-
-pub const CSS_RULE_PAGE_RULE_TYPE: u32 = 6;
-
-pub const CSS_RULE_KEYFRAMES_RULE_TYPE: u32 = 7;
-
-pub const CSS_RULE_KEYFRAME_RULE_TYPE: u32 = 8;
-
-pub const CSS_RULE_MARGIN_RULE_TYPE: u32 = 9;
-
-pub const CSS_RULE_NAMESPACE_RULE_TYPE: u32 = 10;
-
-pub const CSS_RULE_COUNTER_STYLE_RULE_TYPE: u32 = 11;
-
-pub const CSS_RULE_SUPPORTS_RULE_TYPE: u32 = 12;
-
-pub const CSS_RULE_FONT_FEATURE_VALUES_RULE_TYPE: u32 = 14;
-
-pub const CSS_RULE_CONTAINER_RULE_TYPE: u32 = 17;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CssAtRuleKind {
     Unknown,
@@ -183,67 +160,6 @@ pub enum CssRulePdbDeclarationKind {
     StyleRule,
     KeyframeRule,
     NestedDeclarations,
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSRule)]
-pub struct CssRuleConstantsDeclaration {
-    #[webapi(constant = "UNKNOWN_RULE", value = CSS_RULE_UNKNOWN_RULE_TYPE)]
-    pub unknown_rule: (),
-
-    #[webapi(constant = "STYLE_RULE", value = CSS_RULE_STYLE_RULE_TYPE)]
-    pub style_rule: (),
-
-    #[webapi(constant = "CHARSET_RULE", value = 2u32)]
-    pub charset_rule: (),
-
-    #[webapi(constant = "IMPORT_RULE", value = CSS_RULE_IMPORT_RULE_TYPE)]
-    pub import_rule: (),
-
-    #[webapi(constant = "MEDIA_RULE", value = CSS_RULE_MEDIA_RULE_TYPE)]
-    pub media_rule: (),
-
-    #[webapi(constant = "FONT_FACE_RULE", value = CSS_RULE_FONT_FACE_RULE_TYPE)]
-    pub font_face_rule: (),
-
-    #[webapi(constant = "PAGE_RULE", value = CSS_RULE_PAGE_RULE_TYPE)]
-    pub page_rule: (),
-
-    #[webapi(constant = "KEYFRAMES_RULE", value = CSS_RULE_KEYFRAMES_RULE_TYPE)]
-    pub keyframes_rule: (),
-
-    #[webapi(constant = "KEYFRAME_RULE", value = CSS_RULE_KEYFRAME_RULE_TYPE)]
-    pub keyframe_rule: (),
-
-    #[webapi(constant = "MARGIN_RULE", value = CSS_RULE_MARGIN_RULE_TYPE)]
-    pub margin_rule: (),
-
-    #[webapi(constant = "NAMESPACE_RULE", value = CSS_RULE_NAMESPACE_RULE_TYPE)]
-    pub namespace_rule: (),
-
-    #[webapi(
-        constant = "COUNTER_STYLE_RULE",
-        value = CSS_RULE_COUNTER_STYLE_RULE_TYPE
-    )]
-    pub counter_style_rule: (),
-
-    #[webapi(constant = "SUPPORTS_RULE", value = CSS_RULE_SUPPORTS_RULE_TYPE)]
-    pub supports_rule: (),
-
-    #[webapi(
-        constant = "FONT_FEATURE_VALUES_RULE",
-        value = CSS_RULE_FONT_FEATURE_VALUES_RULE_TYPE
-    )]
-    pub font_feature_values_rule: (),
-
-    #[webapi(constant = "VIEWPORT_RULE", value = 15u32)]
-    pub viewport_rule: (),
-
-    #[webapi(constant = "REGION_STYLE_RULE", value = 16u32)]
-    pub region_style_rule: (),
-
-    #[webapi(constant = "CONTAINER_RULE", value = CSS_RULE_CONTAINER_RULE_TYPE)]
-    pub container_rule: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

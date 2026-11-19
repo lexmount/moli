@@ -59,3 +59,58 @@ fn build_storage_usage_details_object<'s>(
     .bind(scope)
     .expect("StorageUsageDetails declaration should bind")
 }
+
+use moli_webidl as webidl;
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "StorageAccessTypes")]
+pub struct StorageAccessTypes {
+    #[webidl(default = false)]
+    all: bool,
+    #[webidl(default = false)]
+    cookies: bool,
+    #[webidl(name = "sessionStorage", default = false)]
+    session_storage: bool,
+    #[webidl(name = "localStorage", default = false)]
+    local_storage: bool,
+    #[webidl(name = "indexedDB", default = false)]
+    indexed_db: bool,
+    #[webidl(default = false)]
+    locks: bool,
+    #[webidl(default = false)]
+    caches: bool,
+    #[webidl(name = "getDirectory", default = false)]
+    get_directory: bool,
+    #[webidl(default = false)]
+    estimate: bool,
+    #[webidl(name = "createObjectURL", default = false)]
+    create_object_url: bool,
+    #[webidl(name = "revokeObjectURL", default = false)]
+    revoke_object_url: bool,
+    #[webidl(name = "BroadcastChannel", default = false)]
+    broadcast_channel: bool,
+    #[webidl(name = "SharedWorker", default = false)]
+    shared_worker: bool,
+}
+
+impl StorageAccessTypes {
+    pub fn requests_any_access(&self) -> bool {
+        self.all
+            || self.cookies
+            || self.session_storage
+            || self.local_storage
+            || self.indexed_db
+            || self.locks
+            || self.caches
+            || self.get_directory
+            || self.estimate
+            || self.create_object_url
+            || self.revoke_object_url
+            || self.broadcast_channel
+            || self.shared_worker
+    }
+
+    pub fn requests_get_directory(&self) -> bool {
+        self.all || self.get_directory
+    }
+}

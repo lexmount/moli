@@ -1,3 +1,10 @@
+#[cfg(any(test, feature = "devtools"))]
+use moli_webapi::events::dispatch_init::KeyboardEventInitDeclaration;
+use moli_webapi::events::dispatch_init::{
+    CommandEventInitDeclaration, FocusEventInitDeclaration, FormDataEventInitDeclaration,
+    InputEventInitDeclaration, InterestEventInitDeclaration, MouseEventInitDeclaration,
+    SimpleEventInitDeclaration, SubmitEventInitDeclaration, ToggleEventInitDeclaration,
+};
 #[cfg(feature = "devtools")]
 mod devtools;
 #[cfg(feature = "devtools")]
@@ -13,7 +20,6 @@ use crate::util::{v8_string, v8str};
 use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 use super::construct_event;
-use moli_webapi_declare::WebApiObject;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::native_bridge::element) enum ClickEventSource {
@@ -31,58 +37,6 @@ impl ClickEventSource {
     pub(in crate::native_bridge::element) fn is_trusted(self) -> bool {
         self != Self::Script
     }
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct MouseEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    screen_x: f64,
-    screen_y: f64,
-    client_x: f64,
-    client_y: f64,
-    detail: i32,
-    button: i32,
-    buttons: i32,
-    alt_key: bool,
-    ctrl_key: bool,
-    meta_key: bool,
-    shift_key: bool,
-    related_target: Option<v8::Local<'scope, v8::Value>>,
-    view: Option<v8::Local<'scope, v8::Object>>,
-}
-
-#[cfg(any(test, feature = "devtools"))]
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct KeyboardEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    key: v8::Local<'scope, v8::Value>,
-    code: v8::Local<'scope, v8::Value>,
-    location: u32,
-    char_code: f64,
-    key_code: f64,
-    which: f64,
-    alt_key: bool,
-    ctrl_key: bool,
-    meta_key: bool,
-    shift_key: bool,
-    repeat: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct InputEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    input_type: v8::Local<'scope, v8::String>,
-    data: v8::Local<'scope, v8::Value>,
-    data_transfer: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -310,65 +264,6 @@ fn keyboard_event_key_code_for_printable_key(key: &str) -> Option<u32> {
     })
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct FocusEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    related_target: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct SimpleEventInitDeclaration {
-    #[webapi(prototype, value = v8::null(scope))]
-    prototype: (),
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct SubmitEventInitDeclaration<'scope> {
-    #[webapi(prototype, value = v8::null(scope))]
-    prototype: (),
-    bubbles: bool,
-    cancelable: bool,
-    submitter: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct CommandEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    source: v8::Local<'scope, v8::Value>,
-    command: v8::Local<'scope, v8::String>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct ToggleEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    source: v8::Local<'scope, v8::Value>,
-    old_state: v8::Local<'scope, v8::String>,
-    new_state: v8::Local<'scope, v8::String>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct InterestEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    source: v8::Local<'scope, v8::Value>,
-}
-
 #[derive(Clone, Copy)]
 struct ModifierKeyState {
     alt: bool,
@@ -565,8 +460,6 @@ pub(crate) fn construct_focus_event<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let init = FocusEventInitDeclaration::new(
         bubbles,
-        false,
-        true,
         related_target.unwrap_or_else(|| v8::null(scope).into()),
     )
     .bind(scope)
@@ -677,15 +570,6 @@ pub(crate) fn construct_simple_event_for_target<'s>(
     let context = crate::native_bridge::node_relevant_context(scope, target)?;
     let scope = &mut v8::ContextScope::new(scope, context);
     construct_simple_event(scope, event_type, bubbles, cancelable, composed)
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct FormDataEventInitDeclaration<'s> {
-    #[webapi(prototype, value = v8::null(scope))]
-    prototype: (),
-    form_data: v8::Local<'s, v8::Object>,
-    bubbles: bool,
 }
 
 pub(crate) fn construct_form_data_event<'s>(

@@ -1,6 +1,7 @@
 use crate::content_security_policy::ContentSecurityPolicy;
 use crate::context_bootstrap::worker_host::new_worker_host_error_event as new_error_event;
 use crate::webidl;
+use moli_webapi::worker_options::{SameSiteCookies, SharedWorkerOptionsMembers};
 
 use super::{
     CHILD_BROWSING_CONTEXT_HANDLE_SLOT, MessagePortRealmBinding,
@@ -504,26 +505,6 @@ fn child_context_handle_from_global<'s>(
     } else {
         None
     }
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "SharedWorkerOptions")]
-struct SharedWorkerOptionsMembers {
-    #[webidl(inherit)]
-    worker: super::worker_host::WorkerOptionsMembers,
-    #[webidl(default = false)]
-    extended_lifetime: bool,
-    #[webidl(converter = "enum")]
-    same_site_cookies: Option<SameSiteCookies>,
-}
-
-#[derive(webidl::WebIdlEnum)]
-#[webidl(name = "SharedWorkerSameSiteCookies")]
-enum SameSiteCookies {
-    #[webidl(token = "all")]
-    All,
-    #[webidl(token = "none")]
-    None,
 }
 
 fn parse_shared_worker_options<'s>(

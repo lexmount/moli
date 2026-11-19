@@ -1,4 +1,4 @@
-use super::headers::{build_headers_object, headers_entries, headers_list, mark_headers_immutable};
+use super::headers::{headers_entries, headers_list, mark_headers_immutable};
 use super::response::{ParsedResponseInit, install_response_body_methods};
 use super::*;
 use crate::context_bootstrap::readable_stream_disturbed;
@@ -32,50 +32,22 @@ pub(in crate::network_host) const REQUEST_IS_RELOAD_NAVIGATION_SLOT: &str =
     "__lmRequestIsReloadNavigation";
 pub(in crate::network_host) const REQUEST_BODY_SLOT: &str = "__lmRequestBody";
 pub(in crate::network_host) const REQUEST_BODY_USED_SLOT: &str = "__lmRequestBodyUsed";
-pub(crate) const RESPONSE_TYPE_SLOT: &str = "__lmResponseType";
-pub(crate) const RESPONSE_URL_SLOT: &str = "__lmResponseUrl";
-pub(crate) const RESPONSE_INTERNAL_STATUS_SLOT: &str = "__lmResponseInternalStatus";
-pub(crate) const RESPONSE_INTERNAL_STATUS_TEXT_SLOT: &str = "__lmResponseInternalStatusText";
-pub(crate) const RESPONSE_INTERNAL_HEADERS_SLOT: &str = "__lmResponseInternalHeadersObject";
-pub(crate) const RESPONSE_REDIRECTED_SLOT: &str = "__lmResponseRedirected";
-pub(crate) const RESPONSE_STATUS_SLOT: &str = "__lmResponseStatus";
-pub(crate) const RESPONSE_OK_SLOT: &str = "__lmResponseOk";
-pub(crate) const RESPONSE_STATUS_TEXT_SLOT: &str = "__lmResponseStatusText";
-pub(crate) const RESPONSE_HEADERS_SLOT: &str = "__lmResponseHeadersObject";
-pub(crate) const RESPONSE_BODY_SLOT: &str = "__lmResponseBody";
-pub(crate) const RESPONSE_BODY_USED_SLOT: &str = "__lmResponseBodyUsed";
+use moli_webapi::fetch_response::{
+    FetchResponseHeadDeclaration, ResponseCloneShellDeclaration, build_response_init_object,
+    empty_response_init_object,
+};
+pub(crate) use moli_webapi::fetch_response::{
+    RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT,
+    RESPONSE_INTERNAL_HEADERS_SLOT, RESPONSE_INTERNAL_STATUS_SLOT,
+    RESPONSE_INTERNAL_STATUS_TEXT_SLOT, RESPONSE_OK_SLOT, RESPONSE_REDIRECTED_SLOT,
+    RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT, RESPONSE_URL_SLOT,
+};
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Request)]
 struct RequestCloneShellDeclaration {
     #[webapi(slot = REQUEST_BODY_USED_SLOT, init = false)]
     body_used: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Response)]
-struct ResponseCloneShellDeclaration<'scope> {
-    #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
-    body_used: (),
-    #[webapi(slot = RESPONSE_BODY_SLOT)]
-    body: Option<v8::Local<'scope, v8::Value>>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct ResponseInitObjectDeclaration<'scope> {
-    status: Option<f64>,
-    status_text: Option<String>,
-    headers: Option<v8::Local<'scope, v8::Value>>,
-}
-
-#[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::Response)]
-struct ResponseErrorStateDeclaration {
-    #[webapi(slot = RESPONSE_STATUS_SLOT, init = 0)]
-    status: (),
-    #[webapi(slot = RESPONSE_OK_SLOT, init = false)]
-    ok: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -550,14 +522,12 @@ fn response_static_error_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let init = ResponseInitObjectDeclaration::new(None, None, None)
-        .bind(scope)
-        .expect("Response error init declaration should bind");
+    let init = empty_response_init_object(scope);
     let Some(response) = new_response_instance(scope, v8::null(scope).into(), init.into()) else {
         rv.set_undefined();
         return;
     };
-    ResponseErrorStateDeclaration::default()
+    FetchResponseHeadDeclaration::new(0.0, false)
         .initialize(scope, response)
         .expect("Response error state declaration should initialize");
     super::response::set_response_metadata(
@@ -701,36 +671,6 @@ fn response_json_body<'s>(
             None
         }
     }
-}
-
-fn build_response_init_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    mut parsed: ParsedResponseInit,
-    extra_headers: &[(&str, &str)],
-) -> v8::Local<'s, v8::Object> {
-    for (name, value) in extra_headers {
-        if !parsed
-            .headers
-            .iter()
-            .any(|(entry_name, _): &(String, String)| entry_name.eq_ignore_ascii_case(name))
-        {
-            parsed
-                .headers
-                .push((name.to_ascii_lowercase(), (*value).to_owned()));
-        }
-    }
-
-    ResponseInitObjectDeclaration::new(
-        Some(parsed.status as f64),
-        (!parsed.status_text.is_empty()).then_some(parsed.status_text),
-        if parsed.headers.is_empty() {
-            None
-        } else {
-            Some(build_headers_object(scope, &parsed.headers).into())
-        },
-    )
-    .bind(scope)
-    .expect("Response init declaration should bind")
 }
 
 fn new_response_instance<'s>(

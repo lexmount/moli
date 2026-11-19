@@ -1,5 +1,5 @@
 use crate::web_api_interfaces;
-use moli_webapi::credentials::{base64url, schema, value};
+use moli_webapi::credentials::{base64url, value};
 use moli_webapi_declare::WebApiFunctionTemplate;
 mod container;
 mod signals;

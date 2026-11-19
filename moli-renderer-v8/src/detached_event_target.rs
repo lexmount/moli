@@ -1,16 +1,5 @@
 use super::util::v8_string;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct DetachedFocusEventInitDeclaration<'scope> {
-    bubbles: bool,
-    #[webapi(constructor_default = false)]
-    cancelable: bool,
-    #[webapi(constructor_default = true)]
-    composed: bool,
-    related_target: v8::Local<'scope, v8::Value>,
-}
+use moli_webapi::events::dispatch_init::FocusEventInitDeclaration;
 
 fn build_focus_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -21,7 +10,7 @@ fn build_focus_event<'s>(
     let constructor =
         crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "FocusEvent")
             .ok()?;
-    let init = DetachedFocusEventInitDeclaration::new(
+    let init = FocusEventInitDeclaration::new(
         bubbles,
         related_target.unwrap_or_else(|| v8::null(scope).into()),
     )

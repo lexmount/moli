@@ -17,6 +17,7 @@ use moli_svg::{
     self as svg_geometry, SvgGeometryBox, SvgGeometryElement, SvgGeometryPoint, SvgGeometrySegment,
     SvgLength, SvgLengthUnit, SvgMatrixComponents, SvgTransform, SvgTransformKind,
 };
+use moli_webapi::svg_values::constants::*;
 use moli_webapi::svg_values::{
     SVG_ANGLE_READ_ONLY_SLOT, SVG_ANGLE_UNIT_TYPE_SLOT, SVG_ANGLE_VALUE_AS_STRING_SLOT,
     SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT, SVG_ANGLE_VALUE_SLOT,
@@ -395,22 +396,6 @@ const SVG_ANGLE_TYPE_DEG: u32 = 2;
 const SVG_ANGLE_TYPE_RAD: u32 = 3;
 const SVG_ANGLE_TYPE_GRAD: u32 = 4;
 
-const SVG_PRESERVE_ASPECT_RATIO_UNKNOWN: u32 = 0;
-const SVG_PRESERVE_ASPECT_RATIO_NONE: u32 = 1;
-const SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MIN: u32 = 2;
-const SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MIN: u32 = 3;
-const SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MIN: u32 = 4;
-const SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MID: u32 = 5;
-const SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID: u32 = 6;
-const SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MID: u32 = 7;
-const SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MAX: u32 = 8;
-const SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MAX: u32 = 9;
-const SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MAX: u32 = 10;
-
-const SVG_MEET_OR_SLICE_UNKNOWN: u32 = 0;
-const SVG_MEET_OR_SLICE_MEET: u32 = 1;
-const SVG_MEET_OR_SLICE_SLICE: u32 = 2;
-
 const SVG_MARKER_UNITS_UNKNOWN: u32 = 0;
 const SVG_MARKER_UNITS_USER_SPACE_ON_USE: u32 = 1;
 const SVG_MARKER_UNITS_STROKE_WIDTH: u32 = 2;
@@ -431,90 +416,6 @@ const SVG_TRANSFORM_TYPE_SKEWY: u32 = 6;
 const SVG_LENGTH_ADJUST_UNKNOWN: u32 = 0;
 const SVG_LENGTH_ADJUST_SPACING: u32 = 1;
 const SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS: u32 = 2;
-
-const SVG_UNIT_TYPE_UNKNOWN: u32 = 0;
-const SVG_UNIT_TYPE_USER_SPACE_ON_USE: u32 = 1;
-const SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX: u32 = 2;
-
-const SVG_SPREAD_METHOD_UNKNOWN: u32 = 0;
-const SVG_SPREAD_METHOD_PAD: u32 = 1;
-const SVG_SPREAD_METHOD_REFLECT: u32 = 2;
-const SVG_SPREAD_METHOD_REPEAT: u32 = 3;
-
-const SVG_COMPONENT_TRANSFER_TYPE_UNKNOWN: u32 = 0;
-const SVG_COMPONENT_TRANSFER_TYPE_IDENTITY: u32 = 1;
-const SVG_COMPONENT_TRANSFER_TYPE_TABLE: u32 = 2;
-const SVG_COMPONENT_TRANSFER_TYPE_DISCRETE: u32 = 3;
-const SVG_COMPONENT_TRANSFER_TYPE_LINEAR: u32 = 4;
-const SVG_COMPONENT_TRANSFER_TYPE_GAMMA: u32 = 5;
-
-const SVG_FE_BLEND_MODE_UNKNOWN: u32 = 0;
-const SVG_FE_BLEND_MODE_NORMAL: u32 = 1;
-const SVG_FE_BLEND_MODE_MULTIPLY: u32 = 2;
-const SVG_FE_BLEND_MODE_SCREEN: u32 = 3;
-const SVG_FE_BLEND_MODE_DARKEN: u32 = 4;
-const SVG_FE_BLEND_MODE_LIGHTEN: u32 = 5;
-const SVG_FE_BLEND_MODE_OVERLAY: u32 = 6;
-const SVG_FE_BLEND_MODE_COLOR_DODGE: u32 = 7;
-const SVG_FE_BLEND_MODE_COLOR_BURN: u32 = 8;
-const SVG_FE_BLEND_MODE_HARD_LIGHT: u32 = 9;
-const SVG_FE_BLEND_MODE_SOFT_LIGHT: u32 = 10;
-const SVG_FE_BLEND_MODE_DIFFERENCE: u32 = 11;
-const SVG_FE_BLEND_MODE_EXCLUSION: u32 = 12;
-const SVG_FE_BLEND_MODE_HUE: u32 = 13;
-const SVG_FE_BLEND_MODE_SATURATION: u32 = 14;
-const SVG_FE_BLEND_MODE_COLOR: u32 = 15;
-const SVG_FE_BLEND_MODE_LUMINOSITY: u32 = 16;
-
-const SVG_FE_COLOR_MATRIX_TYPE_UNKNOWN: u32 = 0;
-const SVG_FE_COLOR_MATRIX_TYPE_MATRIX: u32 = 1;
-const SVG_FE_COLOR_MATRIX_TYPE_SATURATE: u32 = 2;
-const SVG_FE_COLOR_MATRIX_TYPE_HUE_ROTATE: u32 = 3;
-const SVG_FE_COLOR_MATRIX_TYPE_LUMINANCE_TO_ALPHA: u32 = 4;
-
-const SVG_FE_COMPOSITE_OPERATOR_UNKNOWN: u32 = 0;
-const SVG_FE_COMPOSITE_OPERATOR_OVER: u32 = 1;
-const SVG_FE_COMPOSITE_OPERATOR_IN: u32 = 2;
-const SVG_FE_COMPOSITE_OPERATOR_OUT: u32 = 3;
-const SVG_FE_COMPOSITE_OPERATOR_ATOP: u32 = 4;
-const SVG_FE_COMPOSITE_OPERATOR_XOR: u32 = 5;
-const SVG_FE_COMPOSITE_OPERATOR_LIGHTER: u32 = 6;
-const SVG_FE_COMPOSITE_OPERATOR_ARITHMETIC: u32 = 7;
-
-const SVG_EDGE_MODE_UNKNOWN: u32 = 0;
-const SVG_EDGE_MODE_DUPLICATE: u32 = 1;
-const SVG_EDGE_MODE_WRAP: u32 = 2;
-const SVG_EDGE_MODE_NONE: u32 = 3;
-
-const SVG_CHANNEL_UNKNOWN: u32 = 0;
-const SVG_CHANNEL_R: u32 = 1;
-const SVG_CHANNEL_G: u32 = 2;
-const SVG_CHANNEL_B: u32 = 3;
-const SVG_CHANNEL_A: u32 = 4;
-
-const SVG_MORPHOLOGY_OPERATOR_UNKNOWN: u32 = 0;
-const SVG_MORPHOLOGY_OPERATOR_ERODE: u32 = 1;
-const SVG_MORPHOLOGY_OPERATOR_DILATE: u32 = 2;
-
-const SVG_TURBULENCE_TYPE_UNKNOWN: u32 = 0;
-const SVG_TURBULENCE_TYPE_FRACTAL_NOISE: u32 = 1;
-const SVG_TURBULENCE_TYPE_TURBULENCE: u32 = 2;
-
-const SVG_STITCH_TYPE_UNKNOWN: u32 = 0;
-const SVG_STITCH_TYPE_STITCH: u32 = 1;
-const SVG_STITCH_TYPE_NO_STITCH: u32 = 2;
-
-const SVG_TEXT_PATH_METHOD_TYPE_UNKNOWN: u32 = 0;
-const SVG_TEXT_PATH_METHOD_TYPE_ALIGN: u32 = 1;
-const SVG_TEXT_PATH_METHOD_TYPE_STRETCH: u32 = 2;
-
-const SVG_TEXT_PATH_SPACING_TYPE_UNKNOWN: u32 = 0;
-const SVG_TEXT_PATH_SPACING_TYPE_AUTO: u32 = 1;
-const SVG_TEXT_PATH_SPACING_TYPE_EXACT: u32 = 2;
-
-const SVG_TEXT_PATH_SIDE_TYPE_UNKNOWN: u32 = 0;
-const SVG_TEXT_PATH_SIDE_TYPE_LEFT: u32 = 1;
-const SVG_TEXT_PATH_SIDE_TYPE_RIGHT: u32 = 2;
 
 const SVG_UNIT_TYPE_VALUES: &[(&str, u32)] = &[
     ("userSpaceOnUse", SVG_UNIT_TYPE_USER_SPACE_ON_USE),
@@ -1257,7 +1158,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     bindings::install_svg_element_accessor_bindings(scope, template, name);
     animation::install_bindings(scope, template, name);
     filters::install_bindings(scope, template, name);
-    bindings::install_svg_enumeration_constant_bindings(scope, template, name);
+    install_svg_enumeration_constant_bindings(scope, template, name);
     match name {
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
         "SVGAngle" => bindings::install_svg_angle_bindings(scope, template),
@@ -1286,8 +1187,8 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGAnimatedNumberList" => {
             bindings::install_svg_animated_number_list_bindings(scope, template)
         }
-        "SVGUnitTypes" => bindings::install_svg_unit_types_bindings(scope, template),
-        "SVGGradientElement" => bindings::install_svg_gradient_element_bindings(scope, template),
+        "SVGUnitTypes" => install_svg_unit_types_bindings(scope, template),
+        "SVGGradientElement" => install_svg_gradient_element_bindings(scope, template),
         "SVGAnimatedEnumeration" => {
             bindings::install_svg_animated_enumeration_bindings(scope, template)
         }

@@ -23,19 +23,7 @@ use crate::{
     },
 };
 use moli_time::{TimerId, TimerScheduler};
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct TimerErrorEventInitDeclaration<'scope> {
-    cancelable: bool,
-    bubbles: bool,
-    message: v8::Local<'scope, v8::String>,
-    filename: v8::Local<'scope, v8::Value>,
-    lineno: f64,
-    colno: f64,
-    error: v8::Local<'scope, v8::Value>,
-}
+use moli_webapi::events::dispatch_init::ReportedErrorEventInitDeclaration;
 
 struct ScheduledTimerSource {
     context: v8::Global<v8::Context>,
@@ -1441,10 +1429,10 @@ fn timer_callback_error_event_from_report<'s>(
     let filename = v8_string(scope, report.source.as_deref().unwrap_or(""))
         .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into());
-    let init = TimerErrorEventInitDeclaration::new(
+    let init = ReportedErrorEventInitDeclaration::new(
         true,
         false,
-        message_value,
+        message_value.into(),
         filename,
         report.line.unwrap_or(0) as f64,
         report.column.unwrap_or(0) as f64,

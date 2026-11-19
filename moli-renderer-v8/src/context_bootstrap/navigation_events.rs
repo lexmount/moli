@@ -26,6 +26,11 @@ use crate::document_runtime::EventTargetHandle;
 use crate::page_task_queue::RendererPageHashChangeData;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
+use moli_webapi::events::dispatch_init::{
+    HashChangeEventStateDeclaration, NavigateEventInitDeclaration,
+    NavigationCurrentEntryChangeEventInitDeclaration, NavigationErrorEventInitDeclaration,
+    PopStateEventStateDeclaration,
+};
 use moli_webapi::navigation_values::{
     NAVIGATION_DESTINATION_ENTRY_SLOT, NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT,
     NAVIGATION_DESTINATION_STATE_SLOT, NAVIGATION_DESTINATION_URL_SLOT, new_navigation_destination,
@@ -62,73 +67,6 @@ pub(super) const NAVIGATION_SCROLL_TARGET_HREF_SLOT: &str = "__lmNavigationScrol
 const ACTIVE_NAVIGATE_EVENT_EVENT_SLOT: &str = "__lmActiveNavigateEventEvent";
 const ACTIVE_NAVIGATE_EVENT_SIGNAL_SLOT: &str = "__lmActiveNavigateEventSignal";
 const ACTIVE_NAVIGATE_EVENT_HREF_SLOT: &str = "__lmActiveNavigateEventHref";
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct NavigationCurrentEntryChangeEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    from: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    navigation_type: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct NavigationErrorEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    message: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    filename: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    lineno: u32,
-    #[webapi(data_property, enumerable)]
-    colno: u32,
-    #[webapi(data_property, enumerable)]
-    error: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct PopStateEventStateDeclaration<'scope> {
-    #[webapi(data_property)]
-    state: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct HashChangeEventStateDeclaration {
-    #[webapi(data_property = "oldURL")]
-    old_url: String,
-    #[webapi(data_property = "newURL")]
-    new_url: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct NavigateEventInitDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    navigation_type: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    destination: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, enumerable)]
-    can_intercept: bool,
-    #[webapi(data_property, enumerable)]
-    user_initiated: bool,
-    #[webapi(data_property, enumerable)]
-    hash_change: bool,
-    #[webapi(data_property, enumerable)]
-    signal: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    form_data: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    download_request: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    info: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    source_element: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]

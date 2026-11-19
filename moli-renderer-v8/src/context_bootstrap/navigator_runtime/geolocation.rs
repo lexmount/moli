@@ -6,6 +6,7 @@ use crate::{
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
     webidl,
 };
+use moli_webapi::geolocation::PositionOptions;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod position;
@@ -72,19 +73,6 @@ struct WatchPositionArgs {
 struct ClearWatchArgs {
     #[webidl(required)]
     watch_id: i32,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "PositionOptions")]
-struct PositionOptions {
-    #[webidl(name = "enableHighAccuracy", default = false)]
-    enable_high_accuracy: bool,
-
-    #[webidl(with = clamped_unsigned_long_position_option)]
-    timeout: u32,
-
-    #[webidl(name = "maximumAge", with = clamped_unsigned_long_position_option)]
-    maximum_age: u32,
 }
 
 pub(super) fn install_geolocation_template_bindings<'s>(
@@ -184,31 +172,6 @@ fn geolocation_clear_watch_callback<'s>(
             unsafe { &mut *host_ptr }.cancel_geolocation_watch(scope, args.this(), parsed.watch_id);
     }
     rv.set_undefined();
-}
-
-fn clamped_unsigned_long_position_option<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<u32, webidl::WebIdlError> {
-    let default = if name == "timeout" { u32::MAX } else { 0 };
-    let value = webidl::optional_member::<webidl::UnrestrictedDouble>(
-        scope,
-        object,
-        name,
-        webidl::Context::member("PositionOptions", name),
-    )?;
-    Ok(value.map_or(default, |value| clamp_unsigned_long(value.0)))
-}
-
-fn clamp_unsigned_long(value: f64) -> u32 {
-    if value.is_nan() || value <= 0.0 {
-        return 0;
-    }
-    if value >= f64::from(u32::MAX) {
-        return u32::MAX;
-    }
-    value.round_ties_even() as u32
 }
 
 fn take_next_watch_id<'s>(

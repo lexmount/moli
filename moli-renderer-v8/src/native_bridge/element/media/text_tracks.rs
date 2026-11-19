@@ -16,6 +16,7 @@ use crate::util::{
     v8str,
 };
 use crate::web_api_interfaces;
+use moli_webapi::events::dispatch_init::TrackEventInitDeclaration;
 use moli_webapi::media_cue_values::{
     TEXT_TRACK_LIST_ITEMS_SLOT, TEXT_TRACK_LIST_ONADDTRACK_SLOT,
     TEXT_TRACK_LIST_ONREMOVETRACK_SLOT, new_text_track_cue_list, new_text_track_list,
@@ -173,12 +174,6 @@ struct TextTrackTemplateDeclaration {
 
     #[webapi(method, length = 1, enumerable, callback = text_track_remove_cue_callback)]
     remove_cue: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct TrackEventInitDeclaration<'scope> {
-    track: v8::Local<'scope, v8::Object>,
 }
 
 pub(crate) fn install_text_track_template_bindings<'s>(

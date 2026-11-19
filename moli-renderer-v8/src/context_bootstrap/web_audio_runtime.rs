@@ -490,40 +490,7 @@ fn audio_worklet_getter<'s>(
     rv.set(worklet.into());
 }
 
-#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
-#[webidl(name = "RequestCredentials", rename_all = "kebab-case")]
-enum WorkletCredentials {
-    Omit,
-    #[default]
-    SameOrigin,
-    Include,
-}
-
-impl WorkletCredentials {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Omit => "omit",
-            Self::SameOrigin => "same-origin",
-            Self::Include => "include",
-        }
-    }
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "WorkletOptions")]
-struct WorkletOptions {
-    #[webidl(converter = "enum", default = WorkletCredentials::SameOrigin)]
-    credentials: WorkletCredentials,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Worklet.addModule")]
-struct WorkletAddModuleArgs {
-    #[webidl(required, converter = "usv_string")]
-    module_url: String,
-    #[webidl(dictionary)]
-    options: WorkletOptions,
-}
+use moli_webapi::worker_options::WorkletAddModuleArgs;
 
 fn audio_worklet_add_module_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -585,7 +552,7 @@ fn audio_worklet_add_module_callback<'s>(
         return;
     }
     let Some(worker) =
-        create_audio_worklet_module_worker(scope, &module_url, parsed.options.credentials.as_str())
+        create_audio_worklet_module_worker(scope, &module_url, parsed.options.credentials.0.into())
     else {
         let error = type_error_value(scope, "AudioWorklet module failed.")
             .unwrap_or_else(|| v8::undefined(scope).into());

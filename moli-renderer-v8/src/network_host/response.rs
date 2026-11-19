@@ -3,16 +3,15 @@ mod body_methods;
 mod cors;
 mod materialize;
 mod metadata;
-pub(in crate::network_host) use metadata::{RESPONSE_METADATA_SLOT, response_metadata_attribute};
-pub(crate) use metadata::{fetch_response_metadata, set_response_metadata};
-
-use super::headers::{
-    HeadersGuard, build_headers_object_with_state, filter_headers_for_guard,
-    headers_entries_from_init,
+pub(crate) use metadata::fetch_response_metadata;
+pub(crate) use moli_webapi::fetch_response::set_response_metadata;
+pub(in crate::network_host) use moli_webapi::fetch_response::{
+    RESPONSE_METADATA_SLOT, response_metadata_attribute,
 };
+
+use super::headers::{HeadersGuard, build_headers_object_with_state, filter_headers_for_guard};
 use super::*;
 
-pub(in crate::network_host) use self::bindings::ParsedResponseInit;
 pub(crate) use self::bindings::response_constructor_callback;
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
@@ -38,6 +37,7 @@ pub(crate) use self::materialize::{
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter,
 };
+pub(in crate::network_host) use moli_webapi::fetch_response::ParsedResponseInit;
 
 #[cfg(test)]
 pub(crate) use materialize::build_fetch_response_object_from_stream_for_request_mode;

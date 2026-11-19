@@ -7,61 +7,9 @@
 use crate::{native_bridge::throw_dom_exception, util::context_host_ptr_from_context_slot, webidl};
 
 use super::{base64url, value::Text};
-
-// Convert members in WebIDL lexicographic order before API-specific validation.
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "UnknownCredentialOptions")]
-struct UnknownCredential {
-    #[webidl(required, converter = "raw")]
-    credential_id: Text,
-    #[webidl(required, converter = "raw")]
-    rp_id: Text,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "AllAcceptedCredentialsOptions")]
-struct AllAcceptedCredentials {
-    #[webidl(required, converter = "raw")]
-    all_accepted_credential_ids: webidl::Sequence<Text>,
-    #[webidl(required, converter = "raw")]
-    rp_id: Text,
-    #[webidl(required, converter = "raw")]
-    user_id: Text,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "CurrentUserDetailsOptions")]
-struct CurrentUserDetails {
-    #[webidl(required, converter = "raw")]
-    display_name: Text,
-    #[webidl(required, converter = "raw")]
-    name: Text,
-    #[webidl(required, converter = "raw")]
-    rp_id: Text,
-    #[webidl(required, converter = "raw")]
-    user_id: Text,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "PublicKeyCredential.signalUnknownCredential")]
-struct UnknownCredentialArgs {
-    #[webidl(required, dictionary)]
-    options: UnknownCredential,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "PublicKeyCredential.signalAllAcceptedCredentials")]
-struct AllAcceptedCredentialsArgs {
-    #[webidl(required, dictionary)]
-    options: AllAcceptedCredentials,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "PublicKeyCredential.signalCurrentUserDetails")]
-struct CurrentUserDetailsArgs {
-    #[webidl(required, dictionary)]
-    options: CurrentUserDetails,
-}
+use moli_webapi::credentials::signal_options::{
+    AllAcceptedCredentialsArgs, CurrentUserDetailsArgs, UnknownCredentialArgs,
+};
 
 fn valid_base64url(scope: &mut v8::PinScope<'_, '_>, text: &Text) -> bool {
     if base64url::decode(text).is_some() {

@@ -8,54 +8,6 @@ pub(super) fn response_body_init<'s>(
     body_init(scope, body, webidl::Context::argument("Response", 1))
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ResponseInit")]
-pub(in crate::network_host) struct ParsedResponseInit {
-    #[webidl(default = 200)]
-    pub(in crate::network_host) status: u16,
-    #[webidl(converter = "byte_string", default = "")]
-    pub(in crate::network_host) status_text: String,
-    #[webidl(with = response_init_headers_member)]
-    pub(in crate::network_host) headers: Vec<(String, String)>,
-}
-
-pub(in crate::network_host) fn parse_response_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    init_arg: v8::Local<'s, v8::Value>,
-) -> Result<ParsedResponseInit, webidl::WebIdlError> {
-    webidl::parse_dictionary::<ParsedResponseInit>(
-        scope,
-        init_arg,
-        webidl::Context::argument("Response", 2),
-    )
-    .map(Option::unwrap_or_default)
-}
-
-fn response_init_headers_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    _key: &str,
-) -> Result<Vec<(String, String)>, webidl::WebIdlError> {
-    let context = webidl::Context::member("ResponseInit", "headers");
-    let Some(headers) = webidl::property_result(scope, object, "headers", context)? else {
-        return Ok(Vec::new());
-    };
-    if headers.is_null_or_undefined() {
-        return Ok(Vec::new());
-    }
-    headers_entries_from_init(scope, headers)
-}
-
-impl Default for ParsedResponseInit {
-    fn default() -> Self {
-        Self {
-            status: 200,
-            status_text: String::new(),
-            headers: Vec::new(),
-        }
-    }
-}
-
 pub(super) fn install_response_headers(
     scope: &mut v8::PinScope<'_, '_>,
     obj: v8::Local<'_, v8::Object>,

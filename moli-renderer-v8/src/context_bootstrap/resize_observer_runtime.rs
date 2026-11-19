@@ -8,6 +8,9 @@ use crate::webidl;
 use entry::ResizeObserverEntryData;
 pub(super) use entry::install_resize_observer_entry_template_bindings;
 use moli_webapi::resize_observer_entry as entry;
+use moli_webapi::resize_observer_entry::{
+    RESIZE_OBSERVER_RECORD_BOX_SLOT, ResizeObserverBoxOptions, ResizeObserverOptions,
+};
 use moli_webapi_declare::WebApiObject;
 use webidl::WebIdlDictionarySerialize;
 
@@ -86,28 +89,10 @@ struct ResizeObserverUnobserveArgs<'s> {
     target: v8::Local<'s, v8::Object>,
 }
 
-#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
-#[webidl(name = "ResizeObserverBoxOptions", rename_all = "kebab-case")]
-enum ResizeObserverBoxOptions {
-    #[default]
-    ContentBox,
-    BorderBox,
-    DevicePixelContentBox,
-}
-
 const RESIZE_OBSERVER_RECORD_TARGET_SLOT: &str = "__moliResizeObserverRecordTarget";
-const RESIZE_OBSERVER_RECORD_BOX_SLOT: &str = "__moliResizeObserverRecordBox";
 const RESIZE_OBSERVER_RECORD_LAST_INLINE_SIZE_SLOT: &str =
     "__moliResizeObserverRecordLastInlineSize";
 const RESIZE_OBSERVER_RECORD_LAST_BLOCK_SIZE_SLOT: &str = "__moliResizeObserverRecordLastBlockSize";
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "ResizeObserverOptions", snapshot)]
-struct ResizeObserverOptions {
-    #[webidl(name = "box", converter = "enum", default = ResizeObserverBoxOptions::ContentBox)]
-    #[webidl(snapshot_slot = RESIZE_OBSERVER_RECORD_BOX_SLOT)]
-    observed_box: ResizeObserverBoxOptions,
-}
 
 pub(super) fn resize_observer_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,

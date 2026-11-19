@@ -1,3 +1,4 @@
+use moli_webapi::element_visibility::parse_check_visibility_options;
 use std::collections::HashSet;
 
 use crate::{
@@ -341,32 +342,6 @@ fn is_active_render_tree_root(runtime: &PageScriptHost, handle: DomHandle) -> bo
     runtime
         .lightweight_popup_id_for_document_handle(handle)
         .is_some_and(|popup_id| runtime.lightweight_popup_is_open(popup_id))
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "CheckVisibilityOptions")]
-struct CheckVisibilityOptions {
-    #[webidl(name = "checkOpacity", default = false)]
-    check_opacity: bool,
-    #[webidl(name = "checkVisibilityCSS", default = false)]
-    check_visibility_css: bool,
-    #[webidl(name = "contentVisibilityAuto", default = false)]
-    content_visibility_auto: bool,
-    #[webidl(name = "opacityProperty", default = false)]
-    opacity_property: bool,
-    #[webidl(name = "visibilityProperty", default = false)]
-    visibility_property: bool,
-}
-
-fn parse_check_visibility_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<CheckVisibilityOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("Element.checkVisibility", 1);
-    webidl::dictionary_arg(args, 0, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|options| options.unwrap_or_default())
 }
 
 pub(super) fn node_check_visibility_callback<'s>(

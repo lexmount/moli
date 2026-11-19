@@ -1,7 +1,8 @@
 use super::*;
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{
-    callback_data_index_value, callback_data_item, get_private_value, throw_type_error, v8str,
+    callback_data_index_value, callback_data_item, get_private_value, object_property_as_object,
+    throw_type_error, v8str,
 };
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
@@ -464,4 +465,34 @@ pub fn install<'s>(
         }
         _ => {}
     }
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct PerformanceJsonSnapshotDeclaration<'scope> {
+    time_origin: Option<v8::Local<'scope, v8::Value>>,
+    timing: Option<v8::Local<'scope, v8::Value>>,
+    navigation: Option<v8::Local<'scope, v8::Value>>,
+}
+
+pub fn performance_to_json_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let timing = object_property_as_object(scope, args.this(), "timing").map(|timing| {
+        object_json_snapshot(scope, timing, PERFORMANCE_TIMING_ATTRIBUTE_NAMES).into()
+    });
+    let navigation =
+        object_property_as_object(scope, args.this(), "navigation").map(|navigation| {
+            object_json_snapshot(scope, navigation, PERFORMANCE_NAVIGATION_JSON_KEYS).into()
+        });
+    let output = PerformanceJsonSnapshotDeclaration {
+        time_origin: args.this().get(scope, v8str(scope, "timeOrigin").into()),
+        timing,
+        navigation,
+    }
+    .bind(scope)
+    .expect("Performance toJSON snapshot declaration should bind");
+    rv.set(output.into());
 }

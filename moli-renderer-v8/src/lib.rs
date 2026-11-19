@@ -109,7 +109,7 @@ mod script_execution;
 mod script_execution_control;
 mod script_provenance;
 mod script_vm;
-mod scroll_options;
+pub(crate) use moli_webapi::scroll_options;
 mod service_worker_runtime;
 mod shared_worker_runtime;
 mod structured_clone;

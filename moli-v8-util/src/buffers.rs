@@ -36,3 +36,18 @@ pub fn new_uint8_array_from_bytes<'s>(
     let buffer = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
     v8::Uint8Array::new(scope, buffer, 0, len)
 }
+
+pub fn buffer_source_has_shared_or_resizable_backing_store(
+    value: v8::Local<'_, v8::Value>,
+) -> bool {
+    if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
+        let backing_store = buffer.get_backing_store();
+        return backing_store.is_shared() || backing_store.is_resizable_by_user_javascript();
+    }
+    if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value)
+        && let Some(backing_store) = view.get_backing_store()
+    {
+        return backing_store.is_shared() || backing_store.is_resizable_by_user_javascript();
+    }
+    false
+}

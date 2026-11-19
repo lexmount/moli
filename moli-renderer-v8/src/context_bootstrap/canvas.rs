@@ -191,7 +191,7 @@ pub(crate) use offscreen::{
     offscreen_canvas_transfer_to_image_bitmap_callback,
 };
 pub(crate) use webgl::{
-    WEBGL_CONSTANTS, WEBGL2_CONSTANTS, build_webgl_context_object, build_webgl2_context_object,
+    build_webgl_context_object, build_webgl2_context_object,
     webgl_debug_renderer_info_constructor_callback, webgl_lose_context_constructor_callback,
     webgl_rendering_context_constructor_callback,
 };

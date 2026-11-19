@@ -1,18 +1,7 @@
+use super::super::detached_objects::DetachedNamespaceAttributeRecordDeclaration;
 use super::*;
 use crate::custom_elements;
 use crate::util::context_host_ptr_from_global_bridge;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct DetachedSurfaceNamespaceAttributeRecordDeclaration<'scope> {
-    name: v8::Local<'scope, v8::String>,
-    value: v8::Local<'scope, v8::String>,
-    #[webapi(data_property = "namespaceURI")]
-    namespace_uri: v8::Local<'scope, v8::Value>,
-    prefix: v8::Local<'scope, v8::Value>,
-    local_name: v8::Local<'scope, v8::String>,
-}
 
 fn required_callback_arg_string(
     scope: &mut v8::PinScope<'_, '_>,
@@ -347,21 +336,21 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
             &value,
         );
 
-        let record = DetachedSurfaceNamespaceAttributeRecordDeclaration {
-            name: v8_string(scope, &qualified_name).unwrap_or_else(|| v8::String::empty(scope)),
-            value: v8_string(scope, &value).unwrap_or_else(|| v8::String::empty(scope)),
-            namespace_uri: namespace
+        let record = DetachedNamespaceAttributeRecordDeclaration::new(
+            v8_string(scope, &qualified_name).unwrap_or_else(|| v8::String::empty(scope)),
+            v8_string(scope, &value).unwrap_or_else(|| v8::String::empty(scope)),
+            namespace
                 .as_deref()
                 .and_then(|namespace| v8_string(scope, namespace))
                 .map(Into::<v8::Local<'_, v8::Value>>::into)
                 .unwrap_or_else(|| v8::null(scope).into()),
-            prefix: prefix
+            prefix
                 .as_deref()
                 .and_then(|prefix| v8_string(scope, prefix))
                 .map(Into::<v8::Local<'_, v8::Value>>::into)
                 .unwrap_or_else(|| v8::null(scope).into()),
-            local_name: v8_string(scope, &local_name).unwrap_or_else(|| v8::String::empty(scope)),
-        }
+            v8_string(scope, &local_name).unwrap_or_else(|| v8::String::empty(scope)),
+        )
         .bind(scope)
         .expect("detached namespace attribute record declaration should bind");
         let key_value = v8_string(scope, &key)
