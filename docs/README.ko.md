@@ -90,6 +90,9 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/rele
 
 ## 예시
 
+관련 프로젝트, 통합 도구, 배포 옵션은
+[Awesome Moli](https://github.com/lexmount/awesome-moli)에서 확인할 수 있습니다.
+
 <p align="center">
   <a href="../assets/moli-game.jpg">
     <img
