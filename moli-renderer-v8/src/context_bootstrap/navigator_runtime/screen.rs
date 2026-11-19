@@ -8,21 +8,15 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi::window_values::{
+    SCREEN_AVAIL_HEIGHT_SLOT, SCREEN_AVAIL_LEFT_SLOT, SCREEN_AVAIL_TOP_SLOT,
+    SCREEN_AVAIL_WIDTH_SLOT, SCREEN_COLOR_DEPTH_SLOT, SCREEN_HEIGHT_SLOT,
+    SCREEN_ORIENTATION_ANGLE_SLOT, SCREEN_ORIENTATION_ONCHANGE_SLOT, SCREEN_ORIENTATION_TYPE_SLOT,
+    SCREEN_PIXEL_DEPTH_SLOT, SCREEN_WIDTH_SLOT, new_screen, new_screen_orientation,
+};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
-const SCREEN_WIDTH_SLOT: &str = "__moliScreenWidth";
-const SCREEN_HEIGHT_SLOT: &str = "__moliScreenHeight";
-const SCREEN_AVAIL_WIDTH_SLOT: &str = "__moliScreenAvailWidth";
-const SCREEN_AVAIL_HEIGHT_SLOT: &str = "__moliScreenAvailHeight";
-const SCREEN_AVAIL_LEFT_SLOT: &str = "__moliScreenAvailLeft";
-const SCREEN_AVAIL_TOP_SLOT: &str = "__moliScreenAvailTop";
-const SCREEN_COLOR_DEPTH_SLOT: &str = "__moliScreenColorDepth";
-const SCREEN_PIXEL_DEPTH_SLOT: &str = "__moliScreenPixelDepth";
 const SCREEN_ORIENTATION_SLOT: &str = "__moliScreenOrientation";
-
-const SCREEN_ORIENTATION_TYPE_SLOT: &str = "__moliScreenOrientationType";
-const SCREEN_ORIENTATION_ANGLE_SLOT: &str = "__moliScreenOrientationAngle";
-const SCREEN_ORIENTATION_ONCHANGE_SLOT: &str = "__moliScreenOrientationOnchange";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, webidl::WebIdlEnum)]
 #[webidl(name = "OrientationLockType", rename_all = "kebab-case")]
@@ -42,27 +36,6 @@ enum OrientationLockType {
 struct ScreenOrientationLockArgs {
     #[webidl(required, converter = "enum")]
     orientation: OrientationLockType,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Screen)]
-struct ScreenObjectDeclaration {
-    #[webapi(slot = SCREEN_WIDTH_SLOT)]
-    width: f64,
-    #[webapi(slot = SCREEN_HEIGHT_SLOT)]
-    height: f64,
-    #[webapi(slot = SCREEN_AVAIL_WIDTH_SLOT)]
-    avail_width: f64,
-    #[webapi(slot = SCREEN_AVAIL_HEIGHT_SLOT)]
-    avail_height: f64,
-    #[webapi(slot = SCREEN_AVAIL_LEFT_SLOT)]
-    avail_left: f64,
-    #[webapi(slot = SCREEN_AVAIL_TOP_SLOT)]
-    avail_top: f64,
-    #[webapi(slot = SCREEN_COLOR_DEPTH_SLOT)]
-    color_depth: f64,
-    #[webapi(slot = SCREEN_PIXEL_DEPTH_SLOT)]
-    pixel_depth: f64,
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
@@ -86,17 +59,6 @@ struct ScreenPrototypeAccessorsDeclaration {
     pixel_depth: (),
     #[webapi(accessor_property, getter = screen_attribute_getter_callback, data = callback_data_index_value(scope, 8), enumerable)]
     orientation: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ScreenOrientation)]
-struct ScreenOrientationObjectDeclaration {
-    #[webapi(slot = SCREEN_ORIENTATION_TYPE_SLOT)]
-    orientation_type: &'static str,
-    #[webapi(slot = SCREEN_ORIENTATION_ANGLE_SLOT)]
-    angle: f64,
-    #[webapi(slot = SCREEN_ORIENTATION_ONCHANGE_SLOT, init = "null")]
-    onchange: (),
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
@@ -213,18 +175,7 @@ pub(in crate::context_bootstrap) fn install_screen_template_bindings<'s>(
 pub(in crate::context_bootstrap) fn build_window_screen<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    let profile = &DEFAULT_WINDOW_SURFACE_PROFILE;
-    let screen = ScreenObjectDeclaration {
-        width: profile.screen_width,
-        height: profile.screen_height,
-        avail_width: profile.screen_avail_width,
-        avail_height: profile.screen_avail_height,
-        avail_left: 0.0,
-        avail_top: 0.0,
-        color_depth: profile.color_depth,
-        pixel_depth: profile.pixel_depth,
-    }
-    .bind(scope)?;
+    let screen = new_screen(scope)?;
     initialize_simple_event_target(scope, screen);
     Ok(screen)
 }
@@ -330,12 +281,7 @@ fn build_screen_orientation_in_current_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     screen: v8::Local<'s, v8::Object>,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    let profile = &DEFAULT_WINDOW_SURFACE_PROFILE;
-    let orientation = ScreenOrientationObjectDeclaration::new(
-        profile.orientation_type,
-        profile.orientation_angle,
-    )
-    .bind(scope)?;
+    let orientation = new_screen_orientation(scope)?;
     initialize_simple_event_target(scope, orientation);
     set_private_value(scope, screen, SCREEN_ORIENTATION_SLOT, orientation.into());
     Ok(orientation)

@@ -1,11 +1,29 @@
 //! Value bindings for navigation. The embedding runtime owns history and promise settlement.
 
 use crate::interfaces as web_api_interfaces;
-use moli_v8_util::{get_private_value, set_private_value, v8str};
+use moli_v8_util::{get_private_value, set_private_value, v8_string, v8str};
 use moli_webapi_declare::WebApiObject;
 
 const NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT: &str =
     "__lmNavigationTransitionCommittedResolver";
+
+pub const NAVIGATION_DESTINATION_URL_SLOT: &str = "__lmNavigationDestinationUrl";
+pub const NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT: &str = "__lmNavigationDestinationSameDocument";
+pub const NAVIGATION_DESTINATION_ENTRY_SLOT: &str = "__lmNavigationDestinationEntry";
+pub const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::NavigationDestination)]
+struct NavigationDestinationDeclaration<'scope> {
+    #[webapi(slot = NAVIGATION_DESTINATION_URL_SLOT)]
+    url: v8::Local<'scope, v8::String>,
+    #[webapi(slot = NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT)]
+    same_document: bool,
+    #[webapi(slot = NAVIGATION_DESTINATION_ENTRY_SLOT)]
+    entry: Option<v8::Local<'scope, v8::Object>>,
+    #[webapi(slot = NAVIGATION_DESTINATION_STATE_SLOT)]
+    state: v8::Local<'scope, v8::Value>,
+}
 
 #[derive(WebApiObject)]
 #[webapi(
@@ -32,19 +50,19 @@ struct NavigationActivationObjectDeclaration<'scope> {
 )]
 struct NavigationTransitionObjectDeclaration<'scope> {
     #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Object>,
+    from: v8::Local<'scope, v8::Value>,
 
     #[webapi(data_property)]
     to: v8::Local<'scope, v8::Value>,
 
     #[webapi(data_property = "navigationType")]
-    navigation_type: &'static str,
+    navigation_type: v8::Local<'scope, v8::Value>,
 
     #[webapi(data_property)]
     committed: v8::Local<'scope, v8::Promise>,
 
     #[webapi(slot = NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT)]
-    committed_resolver: v8::Local<'scope, v8::PromiseResolver>,
+    committed_resolver: Option<v8::Local<'scope, v8::PromiseResolver>>,
 
     #[webapi(data_property)]
     finished: v8::Local<'scope, v8::Promise>,
@@ -103,17 +121,54 @@ pub fn new_navigation_transition<'s>(
     finished: v8::Local<'s, v8::Promise>,
 ) -> v8::Local<'s, v8::Object> {
     NavigationTransitionObjectDeclaration {
-        from,
+        from: from.into(),
         to: to
             .map(v8::Local::<v8::Value>::from)
             .unwrap_or_else(|| v8::null(scope).into()),
-        navigation_type,
+        navigation_type: v8str(scope, navigation_type).into(),
         committed: committed_resolver.get_promise(scope),
-        committed_resolver,
+        committed_resolver: Some(committed_resolver),
         finished,
     }
     .bind(scope)
     .expect("NavigationTransition declaration should bind")
+}
+
+pub fn new_navigation_transition_view<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    from: v8::Local<'s, v8::Value>,
+    to: v8::Local<'s, v8::Value>,
+    navigation_type: v8::Local<'s, v8::Value>,
+    committed: v8::Local<'s, v8::Promise>,
+    finished: v8::Local<'s, v8::Promise>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    NavigationTransitionObjectDeclaration {
+        from,
+        to,
+        navigation_type,
+        committed,
+        committed_resolver: None,
+        finished,
+    }
+    .bind(scope)
+    .ok()
+}
+
+pub fn new_navigation_destination<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    href: &str,
+    same_document: bool,
+    entry: Option<v8::Local<'s, v8::Object>>,
+    state: v8::Local<'s, v8::Value>,
+) -> v8::Local<'s, v8::Object> {
+    NavigationDestinationDeclaration::new(
+        v8_string(scope, href).unwrap_or_else(|| v8::String::empty(scope)),
+        same_document,
+        entry,
+        state,
+    )
+    .bind(scope)
+    .expect("NavigationDestination declaration should bind")
 }
 
 pub fn take_transition_committed_resolver<'s>(

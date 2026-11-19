@@ -3,7 +3,7 @@ use crate::web_api_interfaces;
 use crate::{
     message_port_runtime::{MessagePortOwner, SharedMessagePortRegistry},
     types::MessagePortId,
-    util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
+    util::{get_private_value, set_private_value},
     worker::{
         forget_worker_message_port_wrapper, register_worker_message_port_wrapper,
         worker_message_port_registry, worker_message_port_wake_sender, worker_message_port_wrapper,
@@ -182,25 +182,6 @@ struct MessagePortPrototypeDeclaration {
     onclose: (),
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MessageChannel)]
-struct MessageChannelPrototypeDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = message_channel_attribute_getter_callback,
-        data = callback_data_index_value(scope, 0),
-        enumerable
-    )]
-    port1: (),
-    #[webapi(
-        accessor_property,
-        getter = message_channel_attribute_getter_callback,
-        data = callback_data_index_value(scope, 1),
-        enumerable
-    )]
-    port2: (),
-}
-
 pub(in crate::context_bootstrap) fn install_message_port_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -209,7 +190,7 @@ pub(in crate::context_bootstrap) fn install_message_port_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match interface_name {
         "MessageChannel" => {
-            MessageChannelPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            moli_webapi::message_channel::install_prototype_template(scope, prototype);
         }
         "MessagePort" => {
             MessagePortPrototypeDeclaration::initialize_prototype_template(scope, prototype);
@@ -217,29 +198,6 @@ pub(in crate::context_bootstrap) fn install_message_port_template_bindings<'s>(
         _ => {}
     }
 }
-
-fn message_channel_attribute_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(slot) = callback_data_item(
-        scope,
-        &args,
-        MESSAGE_CHANNEL_ATTRIBUTE_SLOTS,
-        "MessageChannel attribute slots",
-    ) else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(
-        message_port_slot_value(scope, args.this(), slot)
-            .unwrap_or_else(|| v8::undefined(scope).into()),
-    );
-}
-
-const MESSAGE_CHANNEL_ATTRIBUTE_SLOTS: &[&str] =
-    &[MESSAGE_CHANNEL_PORT1_SLOT, MESSAGE_CHANNEL_PORT2_SLOT];
 
 pub(in crate::context_bootstrap::message_ports) fn new_message_port_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,

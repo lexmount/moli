@@ -1,21 +1,7 @@
 use super::*;
-use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
-struct WebSocketSimpleEventFallbackDeclaration {
-    #[webapi(data_property, enumerable)]
-    r#type: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct WebSocketCloseEventInitDeclaration<'scope> {
-    code: u16,
-    reason: v8::Local<'scope, v8::String>,
-    was_clean: bool,
-}
+pub(super) use moli_webapi::websocket_values::{
+    new_websocket_close_event as new_close_event, new_websocket_simple_event as simple_event_object,
+};
 
 pub(super) fn dispatch_named_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -24,24 +10,6 @@ pub(super) fn dispatch_named_event<'s>(
 ) -> bool {
     let event = simple_event_object(scope, event_type);
     dispatch_simple_event_target_event(scope, socket, event_type, event)
-}
-
-pub(super) fn simple_event_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-) -> v8::Local<'s, v8::Object> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        && let Some(event_type) = v8_string(scope, event_type)
-        && let Some(event) = ctor.new_instance(scope, &[event_type.into()])
-    {
-        return event;
-    }
-    WebSocketSimpleEventFallbackDeclaration::new(event_type.to_owned())
-        .bind(scope)
-        .expect("WebSocket simple event fallback declaration should bind")
 }
 
 pub(super) fn new_message_event<'s>(
@@ -85,29 +53,4 @@ pub(super) fn websocket_binary_message_data<'s>(
         return Some(buffer.into());
     }
     blob::build_blob_object(scope, bytes, String::new()).map(|blob| blob.into())
-}
-
-pub(super) fn new_close_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    code: u16,
-    reason: &str,
-    was_clean: bool,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let reason = v8_string(scope, reason)?;
-    if let Some(ctor) = global
-        .get(scope, v8str(scope, "CloseEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        let event_type = v8_string(scope, "close")?;
-        let init = WebSocketCloseEventInitDeclaration::new(code, reason, was_clean)
-            .bind(scope)
-            .ok()?;
-        return ctor.new_instance(scope, &[event_type.into(), init.into()]);
-    }
-    let event = simple_event_object(scope, "close");
-    WebSocketCloseEventInitDeclaration::new(code, reason, was_clean)
-        .initialize(scope, event)
-        .ok()?;
-    Some(event)
 }

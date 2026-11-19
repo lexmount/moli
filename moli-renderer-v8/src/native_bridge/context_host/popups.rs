@@ -2,7 +2,6 @@ mod renderer_owned;
 
 use super::{NavigationHistoryEntrySeed, PageScriptHost};
 use crate::content_security_policy::ContentSecurityPolicy;
-use crate::web_api_interfaces;
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
     context_bootstrap::{
@@ -47,6 +46,7 @@ use moli_encoding::decode_html_document_with_fallback;
 use moli_fetch::Request;
 use moli_storage_key::{MoliStorageKey, StoragePartitionRelation, site_for_url};
 use moli_url::origin_ascii_serialization;
+use moli_webapi::events::fallback::{PlainEventDeclaration, PlainPopStateEventDeclaration};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 use std::collections::{HashMap, HashSet};
 use url::Url;
@@ -134,19 +134,6 @@ struct LightweightPopupDocumentStreamMethodsDeclaration<'scope> {
         data = self.popup_id
     )]
     close: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event, prototype = "Object", data_properties, enumerable)]
-struct LightweightPopupEventDeclaration<'scope> {
-    r#type: v8::Local<'scope, v8::String>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PopStateEvent, prototype = "Object")]
-struct LightweightPopupPopStateEventDeclaration<'scope> {
-    #[webapi(data_property)]
-    state: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(Default, WebApiObject)]
@@ -4177,7 +4164,7 @@ impl PageScriptHost {
         let task = LightweightPopupNavigationTaskToken::from_parts(document_owner, navigation_id);
         if let Some(event) = lightweight_popup_event(scope, window, "popstate") {
             let state = v8::null(scope).into();
-            let _ = LightweightPopupPopStateEventDeclaration::new(state).initialize(scope, event);
+            let _ = PlainPopStateEventDeclaration::new(state).initialize(scope, event);
             self.dispatch_lightweight_popup_window_event(scope, popup_id, "popstate", event);
         }
         if !self.lightweight_popup_committed_navigation_task_is_current(task) {
@@ -5070,7 +5057,7 @@ fn lightweight_popup_event<'s>(
     _window: v8::Local<'s, v8::Object>,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    LightweightPopupEventDeclaration::new(v8_string(scope, event_type)?)
+    PlainEventDeclaration::new(v8_string(scope, event_type)?)
         .bind(scope)
         .ok()
 }

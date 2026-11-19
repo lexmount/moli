@@ -14,6 +14,7 @@ use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use crate::worker::WorkerScriptKind;
+use moli_webapi::events::fallback::PlainEventDeclaration;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject, WebApiObjectDeclaration};
 
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
@@ -261,13 +262,6 @@ struct ServiceWorkerObjectDeclaration {
 
     #[webapi(method = "postMessage", callback = service_worker_post_message_callback, length = 1)]
     post_message: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
-struct ServiceWorkerSimpleEventDeclaration<'scope> {
-    #[webapi(data_property = "type", enumerable)]
-    event_type: v8::Local<'scope, v8::String>,
 }
 
 fn bind_declared_service_worker_object<'s, D>(
@@ -2985,8 +2979,7 @@ fn dispatch_service_worker_simple_event<'s>(
         ServiceWorkerInternalEventCallbackDispatchEffect::CallbackBodyDispatched
     };
     let event = v8::Object::new(scope);
-    let _ =
-        ServiceWorkerSimpleEventDeclaration::new(v8str(scope, event_type)).initialize(scope, event);
+    let _ = PlainEventDeclaration::new(v8str(scope, event_type)).initialize(scope, event);
     dispatch_simple_event_target_event(scope, target, event_type, event);
     callback_effect
 }

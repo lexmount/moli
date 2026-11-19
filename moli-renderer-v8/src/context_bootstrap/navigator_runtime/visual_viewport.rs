@@ -4,34 +4,12 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, throw_type_error,
 };
 use crate::web_api_interfaces;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-
-const VISUAL_VIEWPORT_OFFSET_LEFT_SLOT: &str = "__moliVisualViewportOffsetLeft";
-const VISUAL_VIEWPORT_OFFSET_TOP_SLOT: &str = "__moliVisualViewportOffsetTop";
-const VISUAL_VIEWPORT_PAGE_LEFT_SLOT: &str = "__moliVisualViewportPageLeft";
-const VISUAL_VIEWPORT_PAGE_TOP_SLOT: &str = "__moliVisualViewportPageTop";
-const VISUAL_VIEWPORT_WIDTH_SLOT: &str = "__moliVisualViewportWidth";
-const VISUAL_VIEWPORT_HEIGHT_SLOT: &str = "__moliVisualViewportHeight";
-const VISUAL_VIEWPORT_SCALE_SLOT: &str = "__moliVisualViewportScale";
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::VisualViewport)]
-struct VisualViewportObjectDeclaration {
-    #[webapi(slot = VISUAL_VIEWPORT_OFFSET_LEFT_SLOT)]
-    offset_left: f64,
-    #[webapi(slot = VISUAL_VIEWPORT_OFFSET_TOP_SLOT)]
-    offset_top: f64,
-    #[webapi(slot = VISUAL_VIEWPORT_PAGE_LEFT_SLOT)]
-    page_left: f64,
-    #[webapi(slot = VISUAL_VIEWPORT_PAGE_TOP_SLOT)]
-    page_top: f64,
-    #[webapi(slot = VISUAL_VIEWPORT_WIDTH_SLOT)]
-    width: f64,
-    #[webapi(slot = VISUAL_VIEWPORT_HEIGHT_SLOT)]
-    height: f64,
-    #[webapi(slot = VISUAL_VIEWPORT_SCALE_SLOT)]
-    scale: f64,
-}
+use moli_webapi::window_values::{
+    VISUAL_VIEWPORT_HEIGHT_SLOT, VISUAL_VIEWPORT_OFFSET_LEFT_SLOT, VISUAL_VIEWPORT_OFFSET_TOP_SLOT,
+    VISUAL_VIEWPORT_PAGE_LEFT_SLOT, VISUAL_VIEWPORT_PAGE_TOP_SLOT, VISUAL_VIEWPORT_SCALE_SLOT,
+    VISUAL_VIEWPORT_WIDTH_SLOT, new_visual_viewport,
+};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::VisualViewport)]
@@ -97,17 +75,9 @@ pub(in crate::context_bootstrap) fn build_window_visual_viewport<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    let profile = &DEFAULT_WINDOW_SURFACE_PROFILE;
-    let viewport = VisualViewportObjectDeclaration {
-        offset_left: 0.0,
-        offset_top: 0.0,
-        page_left: 0.0,
-        page_top: 0.0,
-        width: super::super::window_accessors::window_inner_surface_width(scope, window),
-        height: super::super::window_accessors::window_inner_surface_height(scope, window),
-        scale: profile.visual_viewport_scale,
-    }
-    .bind(scope)?;
+    let width = super::super::window_accessors::window_inner_surface_width(scope, window);
+    let height = super::super::window_accessors::window_inner_surface_height(scope, window);
+    let viewport = new_visual_viewport(scope, width, height)?;
     initialize_simple_event_target(scope, viewport);
     Ok(viewport)
 }

@@ -1,52 +1,10 @@
 use super::object::range_backing_object;
-use super::*;
 use crate::native_bridge::RangeBoundarySide;
 use crate::util::{get_private_value, set_private_value};
-use crate::web_api_interfaces;
-use crate::webidl::{self, WebIdlDictionarySerialize};
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::AbstractRange)]
-struct StaticRangeBoundaryStorageDeclaration {}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "StaticRangeInit", snapshot)]
-pub(in crate::context_bootstrap) struct StaticRangeInitMembers<'s> {
-    #[webidl(required, name = "startContainer", interface = web_api_interfaces::Node)]
-    #[webidl(snapshot_slot = STATIC_RANGE_START_CONTAINER_STORAGE_KEY)]
-    pub(in crate::context_bootstrap) start_container: v8::Local<'s, v8::Object>,
-    #[webidl(required, name = "startOffset")]
-    #[webidl(snapshot_slot = STATIC_RANGE_START_OFFSET_STORAGE_KEY)]
-    pub(in crate::context_bootstrap) start_offset: u32,
-    #[webidl(required, name = "endContainer", interface = web_api_interfaces::Node)]
-    #[webidl(snapshot_slot = STATIC_RANGE_END_CONTAINER_STORAGE_KEY)]
-    pub(in crate::context_bootstrap) end_container: v8::Local<'s, v8::Object>,
-    #[webidl(required, name = "endOffset")]
-    #[webidl(snapshot_slot = STATIC_RANGE_END_OFFSET_STORAGE_KEY)]
-    pub(in crate::context_bootstrap) end_offset: u32,
-}
-
-pub(in crate::context_bootstrap) fn initialize_static_range_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    range: v8::Local<'s, v8::Object>,
-    start_container: v8::Local<'s, v8::Object>,
-    start_offset: u32,
-    end_container: v8::Local<'s, v8::Object>,
-    end_offset: u32,
-) {
-    StaticRangeInitMembers {
-        start_container,
-        start_offset,
-        end_container,
-        end_offset,
-    }
-    .initialize_snapshot(scope, range)
-    .expect("StaticRange boundaries");
-    StaticRangeBoundaryStorageDeclaration::new()
-        .initialize(scope, range)
-        .expect("StaticRange boundary declaration should initialize object");
-}
+use moli_webapi::static_range::{
+    STATIC_RANGE_END_CONTAINER_STORAGE_KEY, STATIC_RANGE_END_OFFSET_STORAGE_KEY,
+    STATIC_RANGE_START_CONTAINER_STORAGE_KEY, STATIC_RANGE_START_OFFSET_STORAGE_KEY,
+};
 
 pub(in crate::context_bootstrap) fn set_static_range_boundary<'s>(
     scope: &mut v8::PinScope<'s, '_>,

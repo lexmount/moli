@@ -1,15 +1,5 @@
 use super::*;
-use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::MessageChannel)]
-struct MessageChannelObjectDeclaration<'scope> {
-    #[webapi(slot = MESSAGE_CHANNEL_PORT1_SLOT)]
-    port1: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = MESSAGE_CHANNEL_PORT2_SLOT)]
-    port2: v8::Local<'scope, v8::Object>,
-}
+use moli_webapi::message_channel::initialize_message_channel;
 
 pub(in crate::context_bootstrap) fn message_channel_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -34,8 +24,7 @@ pub(in crate::context_bootstrap) fn message_channel_constructor_callback<'s>(
             let Some(port2) = new_detached_message_port_object(scope) else {
                 return;
             };
-            MessageChannelObjectDeclaration::new(port1, port2)
-                .initialize(scope, args.this())
+            initialize_message_channel(scope, args.this(), port1, port2)
                 .expect("MessageChannel declaration should initialize detached ports");
             rv.set(args.this().into());
             return;
@@ -69,8 +58,7 @@ pub(in crate::context_bootstrap) fn message_channel_constructor_callback<'s>(
 
     set_message_port_peer(scope, port1, port2);
     set_message_port_peer(scope, port2, port1);
-    MessageChannelObjectDeclaration::new(port1, port2)
-        .initialize(scope, args.this())
+    initialize_message_channel(scope, args.this(), port1, port2)
         .expect("MessageChannel declaration should initialize ports");
     rv.set(args.this().into());
 }

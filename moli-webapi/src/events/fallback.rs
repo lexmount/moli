@@ -1,6 +1,30 @@
-use crate::util::v8str;
-use crate::web_api_interfaces;
+//! Plain event objects used when an event constructor is unavailable.
+
+use crate::interfaces as web_api_interfaces;
+use moli_v8_util::v8str;
 use moli_webapi_declare::WebApiObject;
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::Event, prototype = "Object", data_properties, enumerable)]
+pub struct PlainEventDeclaration<'scope> {
+    r#type: v8::Local<'scope, v8::String>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PopStateEvent, prototype = "Object")]
+pub struct PlainPopStateEventDeclaration<'scope> {
+    #[webapi(data_property)]
+    state: v8::Local<'scope, v8::Value>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::PromiseRejectionEvent, prototype = "Object")]
+pub struct PlainPromiseRejectionEventDeclaration<'scope> {
+    #[webapi(data_property, enumerable)]
+    promise: v8::Local<'scope, v8::Promise>,
+    #[webapi(data_property, enumerable)]
+    reason: v8::Local<'scope, v8::Value>,
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -36,7 +60,7 @@ struct WorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
     error: v8::Local<'scope, v8::Value>,
 }
 
-pub(in crate::context_bootstrap) fn new_worker_host_error_event<'s>(
+pub fn new_worker_host_error_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
     filename: &str,

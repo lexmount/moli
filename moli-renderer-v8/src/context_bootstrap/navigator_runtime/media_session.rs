@@ -6,27 +6,11 @@ use super::super::*;
 use crate::util::{get_private_value, set_private_value};
 use crate::v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction;
 use crate::{web_api_interfaces, webidl};
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-
-const HANDLERS: &str = "__moliMediaSessionHandlers";
-const PLAYBACK_STATE: &str = "__moliMediaSessionPlaybackState";
-const STATE: &str = "__moliMediaSessionState";
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::MediaSession)]
-struct MediaSessionObjectDeclaration<'s> {
-    #[webapi(slot = STATE)]
-    state: v8::Local<'s, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct MediaSessionStateDeclaration {
-    #[webapi(slot = HANDLERS, init = "null_object")]
-    handlers: (),
-    #[webapi(slot = PLAYBACK_STATE)]
-    playback_state: &'static str,
-}
+use moli_webapi::window_values::{
+    MEDIA_SESSION_HANDLERS_SLOT as HANDLERS, MEDIA_SESSION_PLAYBACK_STATE_SLOT as PLAYBACK_STATE,
+    MEDIA_SESSION_STATE_SLOT as STATE, new_media_session, new_media_session_state,
+};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MediaSession, enumerable)]
@@ -118,8 +102,7 @@ pub(super) fn build<'s>(
         let context = default_context.unwrap_or(context);
         let state = {
             let target_scope = &mut v8::ContextScope::new(scope, context);
-            let state = MediaSessionStateDeclaration::new("none")
-                .bind(target_scope)
+            let state = new_media_session_state(target_scope)
                 .map_err(|error| anyhow!("failed to bind MediaSession state: {error}"))?;
             v8::Global::new(target_scope, state)
         };
@@ -127,8 +110,7 @@ pub(super) fn build<'s>(
         set_private_value(scope, anchor, STATE, state.into());
         state
     };
-    MediaSessionObjectDeclaration::new(state)
-        .bind(scope)
+    new_media_session(scope, state)
         .map_err(|error| anyhow!("failed to bind MediaSession object: {error}"))
 }
 

@@ -1,4 +1,5 @@
 use crate::web_api_interfaces;
+use moli_webapi::events::fallback::PlainPromiseRejectionEventDeclaration;
 use std::{
     cell::{Cell, RefCell},
     pin::pin,
@@ -79,15 +80,6 @@ const MAX_REPORTED_WORKER_PROMISE_REJECTIONS: usize = 1024;
 struct WorkerPromiseRejectionEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     cancelable: bool,
-    #[webapi(data_property, enumerable)]
-    promise: v8::Local<'scope, v8::Promise>,
-    #[webapi(data_property, enumerable)]
-    reason: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PromiseRejectionEvent, prototype = "Object")]
-struct WorkerPromiseRejectionEventFallbackDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     promise: v8::Local<'scope, v8::Promise>,
     #[webapi(data_property, enumerable)]
@@ -627,7 +619,7 @@ fn new_worker_promise_rejection_event<'s>(
     }
 
     let event = new_worker_event_object(scope, event_type);
-    let _ = WorkerPromiseRejectionEventFallbackDeclaration::new(
+    let _ = PlainPromiseRejectionEventDeclaration::new(
         promise,
         reason.unwrap_or_else(|| v8::null(scope).into()),
     )

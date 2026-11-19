@@ -17,6 +17,28 @@ use moli_svg::{
     self as svg_geometry, SvgGeometryBox, SvgGeometryElement, SvgGeometryPoint, SvgGeometrySegment,
     SvgLength, SvgLengthUnit, SvgMatrixComponents, SvgTransform, SvgTransformKind,
 };
+use moli_webapi::svg_values::{
+    SVG_ANGLE_READ_ONLY_SLOT, SVG_ANGLE_UNIT_TYPE_SLOT, SVG_ANGLE_VALUE_AS_STRING_SLOT,
+    SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT, SVG_ANGLE_VALUE_SLOT,
+    SVG_ANIMATED_ANGLE_ANIM_VAL_SLOT, SVG_ANIMATED_ANGLE_BASE_VAL_SLOT,
+    SVG_ANIMATED_BOOLEAN_ANIM_VAL_SLOT, SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT,
+    SVG_ANIMATED_ENUMERATION_ANIM_VAL_SLOT, SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT,
+    SVG_ANIMATED_INTEGER_ANIM_VAL_SLOT, SVG_ANIMATED_INTEGER_BASE_VAL_SLOT,
+    SVG_ANIMATED_LENGTH_ANIM_VAL_SLOT, SVG_ANIMATED_LENGTH_BASE_VAL_SLOT,
+    SVG_ANIMATED_LENGTH_LIST_ANIM_VAL_SLOT, SVG_ANIMATED_LENGTH_LIST_BASE_VAL_SLOT,
+    SVG_ANIMATED_NUMBER_ANIM_VAL_SLOT, SVG_ANIMATED_NUMBER_BASE_VAL_SLOT,
+    SVG_ANIMATED_NUMBER_LIST_ANIM_VAL_SLOT, SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT,
+    SVG_ANIMATED_PRESERVE_ASPECT_RATIO_ANIM_VAL_SLOT,
+    SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT, SVG_ANIMATED_RECT_ANIM_VAL_SLOT,
+    SVG_ANIMATED_RECT_BASE_VAL_SLOT, SVG_ANIMATED_STRING_ANIM_VAL_SLOT,
+    SVG_ANIMATED_STRING_BASE_VAL_SLOT, SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT,
+    SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT, SVG_LENGTH_UNIT_SUFFIX_SLOT,
+    SVG_LENGTH_UNIT_TYPE_SLOT, SVG_LENGTH_VALUE_AS_STRING_SLOT,
+    SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT, SVG_LENGTH_VALUE_SLOT, SVG_NUMBER_VALUE_SLOT,
+    SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT, SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT,
+    SVG_PRESERVE_ASPECT_RATIO_OWNER_ELEMENT_SLOT, SVG_PRESERVE_ASPECT_RATIO_READ_ONLY_SLOT,
+    SVG_STRING_LIST_ITEMS_SLOT,
+};
 
 mod animation;
 mod bindings;
@@ -34,73 +56,33 @@ const SVG_GRADIENT_TRANSFORM_SLOT: &str = "__moliSvgGradientTransform";
 const SVG_GEOMETRY_PATH_LENGTH_SLOT: &str = "__moliSvgGeometryPathLength";
 const SVG_ELEMENT_CLASS_NAME_SLOT: &str = "__moliSvgElementClassName";
 const SVG_URI_HREF_SLOT: &str = "__moliSvgUriHref";
-const SVG_ANIMATED_STRING_BASE_VAL_SLOT: &str = "__moliSvgAnimatedStringBaseVal";
-const SVG_ANIMATED_STRING_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedStringAnimVal";
 const SVG_ANIMATED_STRING_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedStringOwnerElement";
 const SVG_ANIMATED_STRING_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgAnimatedStringOwnerAttribute";
-const SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT: &str = "__moliSvgAnimatedBooleanBaseVal";
-const SVG_ANIMATED_BOOLEAN_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedBooleanAnimVal";
 const SVG_ANIMATED_BOOLEAN_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedBooleanOwnerElement";
 const SVG_ANIMATED_BOOLEAN_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgAnimatedBooleanOwnerAttribute";
 const SVG_ANIMATED_BOOLEAN_INITIAL_VALUE_SLOT: &str = "__moliSvgAnimatedBooleanInitialValue";
 const SVG_FE_CONVOLVE_MATRIX_PRESERVE_ALPHA_SLOT: &str = "__moliSvgFeConvolveMatrixPreserveAlpha";
-const SVG_ANIMATED_LENGTH_BASE_VAL_SLOT: &str = "__moliSvgAnimatedLengthBaseVal";
-const SVG_ANIMATED_LENGTH_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedLengthAnimVal";
 const SVG_MARKER_ORIENT_ANGLE_SLOT: &str = "__moliSvgMarkerOrientAngle";
 const SVG_MARKER_UNITS_SLOT: &str = "__moliSvgMarkerUnits";
 const SVG_MARKER_ORIENT_TYPE_SLOT: &str = "__moliSvgMarkerOrientType";
-const SVG_ANIMATED_ANGLE_BASE_VAL_SLOT: &str = "__moliSvgAnimatedAngleBaseVal";
-const SVG_ANIMATED_ANGLE_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedAngleAnimVal";
 const SVG_FIT_VIEW_BOX_SLOT: &str = "__moliSvgFitViewBox";
 const SVG_FIT_PRESERVE_ASPECT_RATIO_SLOT: &str = "__moliSvgFitPreserveAspectRatio";
-const SVG_ANIMATED_RECT_BASE_VAL_SLOT: &str = "__moliSvgAnimatedRectBaseVal";
-const SVG_ANIMATED_RECT_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedRectAnimVal";
-const SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT: &str =
-    "__moliSvgAnimatedPreserveAspectRatioBaseVal";
-const SVG_ANIMATED_PRESERVE_ASPECT_RATIO_ANIM_VAL_SLOT: &str =
-    "__moliSvgAnimatedPreserveAspectRatioAnimVal";
-const SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT: &str = "__moliSvgPreserveAspectRatioAlign";
-const SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT: &str =
-    "__moliSvgPreserveAspectRatioMeetOrSlice";
-const SVG_PRESERVE_ASPECT_RATIO_OWNER_ELEMENT_SLOT: &str =
-    "__moliSvgPreserveAspectRatioOwnerElement";
-const SVG_PRESERVE_ASPECT_RATIO_READ_ONLY_SLOT: &str = "__moliSvgPreserveAspectRatioReadOnly";
 const SVG_ANGLE_OWNER_ELEMENT_SLOT: &str = "__moliSvgAngleOwnerElement";
 const SVG_ANGLE_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgAngleOwnerAttribute";
-const SVG_ANGLE_UNIT_TYPE_SLOT: &str = "__moliSvgAngleUnitType";
-const SVG_ANGLE_VALUE_SLOT: &str = "__moliSvgAngleValue";
-const SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT: &str = "__moliSvgAngleValueInSpecifiedUnits";
-const SVG_ANGLE_VALUE_AS_STRING_SLOT: &str = "__moliSvgAngleValueAsString";
-const SVG_ANGLE_READ_ONLY_SLOT: &str = "__moliSvgAngleReadOnly";
-const SVG_ANIMATED_LENGTH_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedLengthListBaseVal";
-const SVG_ANIMATED_LENGTH_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedLengthListAnimVal";
 const SVG_LENGTH_LIST_ITEMS_SLOT: &str = "__moliSvgLengthListItems";
 const SVG_LENGTH_OWNER_ELEMENT_SLOT: &str = "__moliSvgLengthOwnerElement";
 const SVG_LENGTH_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgLengthOwnerAttribute";
 const SVG_LENGTH_INITIAL_VALUE_SLOT: &str = "__moliSvgLengthInitialValue";
 const SVG_LENGTH_READ_ONLY_SLOT: &str = "__moliSvgLengthReadOnly";
-const SVG_LENGTH_UNIT_TYPE_SLOT: &str = "__moliSvgLengthUnitType";
-const SVG_LENGTH_UNIT_SUFFIX_SLOT: &str = "__moliSvgLengthUnitSuffix";
-const SVG_LENGTH_VALUE_SLOT: &str = "__moliSvgLengthValue";
-const SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT: &str = "__moliSvgLengthValueInSpecifiedUnits";
-const SVG_LENGTH_VALUE_AS_STRING_SLOT: &str = "__moliSvgLengthValueAsString";
-const SVG_NUMBER_VALUE_SLOT: &str = "__moliSvgNumberValue";
 const SVG_ANIMATED_NUMBER_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedNumberOwnerElement";
 const SVG_ANIMATED_NUMBER_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgAnimatedNumberOwnerAttribute";
 const SVG_ANIMATED_NUMBER_PROPERTY_INDEX_SLOT: &str = "__moliSvgAnimatedNumberPropertyIndex";
-const SVG_ANIMATED_NUMBER_BASE_VAL_SLOT: &str = "__moliSvgAnimatedNumberBaseVal";
-const SVG_ANIMATED_NUMBER_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedNumberAnimVal";
-const SVG_ANIMATED_INTEGER_BASE_VAL_SLOT: &str = "__moliSvgAnimatedIntegerBaseVal";
-const SVG_ANIMATED_INTEGER_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedIntegerAnimVal";
 const SVG_ANIMATED_INTEGER_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedIntegerOwnerElement";
 const SVG_ANIMATED_INTEGER_PROPERTY_INDEX_SLOT: &str = "__moliSvgAnimatedIntegerPropertyIndex";
-const SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedNumberListBaseVal";
-const SVG_ANIMATED_NUMBER_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedNumberListAnimVal";
 const SVG_NUMBER_LIST_ITEMS_SLOT: &str = "__moliSvgNumberListItems";
 const SVG_POINT_LIST_ITEMS_SLOT: &str = "__moliSvgPointListItems";
 const SVG_POINTS_SLOT: &str = "__moliSvgPoints";
 const SVG_ANIMATED_POINTS_SLOT: &str = "__moliSvgAnimatedPoints";
-const SVG_STRING_LIST_ITEMS_SLOT: &str = "__moliSvgStringListItems";
 const SVG_STRING_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgStringListOwnerElement";
 const SVG_STRING_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgStringListOwnerAttribute";
 const SVG_STRING_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str = "__moliSvgStringListSyncedAttributeValue";
@@ -111,8 +93,6 @@ const SVG_VALUE_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgValueListOwnerAttrib
 const SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT: &str = "__moliSvgValueListItemOwnerList";
 const SVG_VALUE_LIST_READ_ONLY_SLOT: &str = "__moliSvgValueListReadOnly";
 const SVG_VALUE_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str = "__moliSvgValueListSyncedAttributeValue";
-const SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT: &str = "__moliSvgAnimatedEnumerationBaseVal";
-const SVG_ANIMATED_ENUMERATION_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedEnumerationAnimVal";
 const SVG_ANIMATED_ENUMERATION_OWNER_ELEMENT_SLOT: &str =
     "__moliSvgAnimatedEnumerationOwnerElement";
 const SVG_ANIMATED_ENUMERATION_PROPERTY_INDEX_SLOT: &str =
@@ -144,8 +124,6 @@ const SVG_FE_TURBULENCE_NUM_OCTAVES_SLOT: &str = "__moliSvgFeTurbulenceNumOctave
 const SVG_TEXT_PATH_METHOD_SLOT: &str = "__moliSvgTextPathMethod";
 const SVG_TEXT_PATH_SPACING_SLOT: &str = "__moliSvgTextPathSpacing";
 const SVG_TEXT_PATH_SIDE_SLOT: &str = "__moliSvgTextPathSide";
-const SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedTransformListBaseVal";
-const SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedTransformListAnimVal";
 const SVG_TRANSFORM_LIST_ITEMS_SLOT: &str = "__moliSvgTransformListItems";
 const SVG_TRANSFORM_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgTransformListOwnerElement";
 const SVG_TRANSFORM_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgTransformListOwnerAttribute";

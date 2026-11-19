@@ -1,11 +1,8 @@
-pub(super) const XPATH_RESULT_NODES_SLOT: &str = "__moliXPathNodes";
-pub(super) const XPATH_RESULT_INDEX_SLOT: &str = "__moliXPathIndex";
-pub(super) const XPATH_RESULT_TYPE_SLOT: &str = "__moliXPathType";
-pub(super) const XPATH_RESULT_STRING_VALUE_SLOT: &str = "__moliXPathStringValue";
-pub(super) const XPATH_RESULT_NUMBER_VALUE_SLOT: &str = "__moliXPathNumberValue";
-pub(super) const XPATH_RESULT_BOOLEAN_VALUE_SLOT: &str = "__moliXPathBooleanValue";
-pub(super) const XPATH_RESULT_SINGLE_NODE_VALUE_SLOT: &str = "__moliXPathSingleNodeValue";
-pub(super) const XPATH_RESULT_SNAPSHOT_LENGTH_SLOT: &str = "__moliXPathSnapshotLength";
+pub(super) use moli_webapi::xpath_values::{
+    XPATH_RESULT_BOOLEAN_VALUE_SLOT, XPATH_RESULT_INDEX_SLOT, XPATH_RESULT_NODES_SLOT,
+    XPATH_RESULT_NUMBER_VALUE_SLOT, XPATH_RESULT_SINGLE_NODE_VALUE_SLOT,
+    XPATH_RESULT_SNAPSHOT_LENGTH_SLOT, XPATH_RESULT_STRING_VALUE_SLOT, XPATH_RESULT_TYPE_SLOT,
+};
 pub(super) const XPATH_RESULT_RUNTIME_SLOT: &str = "__moliXPathRuntime";
 pub(super) const XPATH_RESULT_OBJECT_TREE_ROOT_SLOT: &str = "__moliXPathObjectTreeRoot";
 pub(super) const XPATH_RESULT_QUERY_VERSION_SLOT: &str = "__moliXPathQueryVersion";

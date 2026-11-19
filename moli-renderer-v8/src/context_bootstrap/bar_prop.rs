@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use moli_webapi::window_values::{BAR_PROP_OWNER_SLOT as OWNER_SLOT, new_bar_prop};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::shared::throw_error;
@@ -17,18 +18,8 @@ const NAMES: &[&str] = &[
     "toolbar",
 ];
 const WINDOW_CACHE_SLOT: &str = "__moliWindowBarProps";
-const OWNER_SLOT: &str = "__moliBarPropOwner";
 const POPUP_SLOT: &str = "__moliBarPropPopup";
 const POPUP_WINDOW_SLOT: &str = "__moliBarPropPopupWindow";
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::BarProp)]
-struct BarPropObjectDeclaration<'s> {
-    #[webapi(prototype)]
-    prototype: v8::Local<'s, v8::Object>,
-    #[webapi(slot = OWNER_SLOT)]
-    owner: v8::Local<'s, v8::Array>,
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BarProp, enumerable)]
@@ -179,7 +170,7 @@ fn bar_getter<'s>(
             .ok_or_else(|| anyhow!("BarProp cache has no realm"))?;
         let scope = &mut v8::ContextScope::new(scope, context);
         let prototype = super::ensure_intrinsic_interface_prototype(scope, "BarProp")?;
-        let object = BarPropObjectDeclaration::new(prototype, cache).bind(scope)?;
+        let object = new_bar_prop(scope, prototype, cache)?;
         cache.set_index(scope, index, object.into());
         Ok(object)
     })();

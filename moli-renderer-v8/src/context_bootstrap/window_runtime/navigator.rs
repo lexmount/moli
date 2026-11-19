@@ -3,6 +3,9 @@ use crate::web_api_interfaces;
 use moli_storage_service::SqlBucketOperation;
 use moli_v8_util::reject_promise_with_type_error as reject_type_error;
 use moli_webapi::storage_values::new_storage_estimate;
+use moli_webapi::window_values::{
+    PERMISSION_STATUS_NAME_SLOT, PERMISSION_STATUS_STATE_SLOT, new_permission_status,
+};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
@@ -35,8 +38,6 @@ pub(in crate::context_bootstrap) use legacy_storage_quota::{
     build_legacy_storage_info_object, build_legacy_storage_quota_object,
 };
 
-const PERMISSION_STATUS_NAME_SLOT: &str = "__moliPermissionStatusName";
-const PERMISSION_STATUS_STATE_SLOT: &str = "__moliPermissionStatusState";
 const VIBRATION_PATTERN_LENGTH_MAX: usize = 99;
 const VIBRATION_DURATION_MS_MAX: u32 = 10_000;
 const STORAGE_BUCKET_CACHES_OBJECT_SLOT: &str = "__moliStorageBucketCachesObject";
@@ -152,19 +153,6 @@ pub(in crate::context_bootstrap) fn install_cache_template_bindings<'s>(
         }
         _ => {}
     }
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::PermissionStatus)]
-struct PermissionStatusObjectDeclaration {
-    #[webapi(slot = PERMISSION_STATUS_NAME_SLOT)]
-    name: String,
-
-    #[webapi(slot = PERMISSION_STATUS_STATE_SLOT)]
-    state: String,
-
-    #[webapi(data_property, init = "null")]
-    onchange: (),
 }
 
 #[derive(webidl::WebIdlDictionary)]
@@ -516,9 +504,7 @@ fn build_permission_status_object<'s>(
     name: &str,
     state: &str,
 ) -> v8::Local<'s, v8::Object> {
-    let status = PermissionStatusObjectDeclaration::new(name.to_owned(), state.to_owned())
-        .bind(scope)
-        .expect("PermissionStatus declaration should bind");
+    let status = new_permission_status(scope, name, state);
     initialize_simple_event_target(scope, status);
     status
 }

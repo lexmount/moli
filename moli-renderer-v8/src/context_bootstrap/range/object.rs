@@ -143,14 +143,7 @@ pub(in crate::context_bootstrap) fn static_range_snapshot<'s>(
     let range =
         super::super::exposed_interfaces::build_intrinsic_interface_instance(scope, "StaticRange")
             .ok()?;
-    super::static_storage::initialize_static_range_object(
-        scope,
-        range,
-        start,
-        start_offset,
-        end,
-        end_offset,
-    );
+    super::initialize_static_range_object(scope, range, start, start_offset, end, end_offset);
     let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
         scope,
         "StaticRange",
