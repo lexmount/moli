@@ -205,7 +205,7 @@ fn emit_window_exception_diagnostic<'s>(
             filename,
             location,
             stack.as_deref(),
-            default_prevented,
+            crate::ErrorReportOutcome::from_default_prevented(default_prevented),
         ))
     });
 }

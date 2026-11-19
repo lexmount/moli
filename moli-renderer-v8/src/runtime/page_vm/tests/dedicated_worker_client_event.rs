@@ -247,6 +247,7 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
                     colno: 1,
                     event_kind: WorkerParentErrorEventKind::Event,
                     phase: WorkerErrorPhase::Bootstrap,
+                    pending_report: None,
                 },
             ))
             .expect("bootstrap Worker error should enter its typed source");
@@ -276,6 +277,7 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
                     colno: 3,
                     event_kind: WorkerParentErrorEventKind::ErrorEvent,
                     phase: WorkerErrorPhase::Runtime,
+                    pending_report: None,
                 },
             ))
             .expect("runtime Worker error should enter its typed source");
@@ -364,6 +366,7 @@ globalThis.__bootstrapEventWorker = new Worker("data:text/javascript,onmessage =
                     colno: 5,
                     event_kind: WorkerParentErrorEventKind::Event,
                     phase: WorkerErrorPhase::Bootstrap,
+                    pending_report: None,
                 },
             ))
             .expect("bootstrap error should enter the typed Worker source");

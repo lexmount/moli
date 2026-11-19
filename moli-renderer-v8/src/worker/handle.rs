@@ -218,6 +218,7 @@ pub(crate) enum WorkerToParentMessage {
         event_kind: WorkerParentErrorEventKind,
         phase: WorkerErrorPhase,
         source: WorkerErrorSource,
+        pending_report: Option<Box<crate::diagnostics::PendingExceptionReport>>,
     },
     /// A worker `console.*` call that should be surfaced through the owning page until
     /// workers get their own CDP targets.

@@ -478,6 +478,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                                 event_kind: crate::worker::WorkerParentErrorEventKind::Event,
                                 phase: crate::worker::WorkerErrorPhase::Bootstrap,
                                 source: crate::worker::WorkerErrorSource::Runtime,
+                                pending_report: None,
                             }),
                         });
                 set_private_value(
@@ -542,16 +543,24 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         };
         let mut worker_handle = spawn_worker_with_options(options);
         if let Some(mut rx) = worker_handle.take_receiver() {
-            let wake_tx = nested_context.wake_tx.clone();
+            let wake_tx = nested_context.wake_tx;
+            let closed_owner_error_tx = nested_context.closed_owner_error_tx;
             let worker_id = nested_context.worker_id;
             let _ = std::thread::Builder::new()
                 .name(format!("nested-worker-pump:{worker_id}"))
                 .spawn(move || {
                     while let Some(message) = rx.blocking_recv() {
-                        let _ = wake_tx.send(crate::worker::WorkerMessage::NestedWorkerEvent {
-                            worker_id,
-                            message: Box::new(message),
-                        });
+                        if let Err(error) =
+                            wake_tx.send(crate::worker::WorkerMessage::NestedWorkerEvent {
+                                worker_id,
+                                message: Box::new(message),
+                            })
+                            && let Some(parent_tx) = &closed_owner_error_tx
+                        {
+                            crate::worker::forward_nested_worker_error_after_owner_close(
+                                error.0, parent_tx,
+                            );
+                        }
                     }
                 });
         }
