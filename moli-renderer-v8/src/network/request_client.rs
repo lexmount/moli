@@ -15,6 +15,7 @@ use moli_fetch::{
     ResponseHead, StreamingRawResponse,
 };
 use moli_parkable_image::ParkableImageManager;
+use moli_url_policy::LocalFileNavigationAccess;
 
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
 
@@ -152,6 +153,42 @@ impl ResourceRequestClient {
 
     pub fn page_network_policy(&self) -> PageNetworkPolicy {
         self.page_network_policy.clone()
+    }
+
+    pub fn local_file_navigation_access(&self) -> LocalFileNavigationAccess {
+        self.resource_runtime
+            .client()
+            .local_file_navigation_access()
+    }
+
+    fn local_text_response(&self, request: &Request) -> Option<Result<Response>> {
+        if request.url.scheme() == "file" {
+            return self.local_file_response(request);
+        }
+        crate::network_host::local_url_response_result(&request.url, &request.method)
+            .map(|result| result.map_err(anyhow::Error::msg))
+    }
+
+    /// Without the browser capability a file URL is left to the HTTP
+    /// transport, which rejects it. With it, a file may be read by a
+    /// navigation the browser itself granted, or by a document that is itself
+    /// a file, never by a web page.
+    fn local_file_response(&self, request: &Request) -> Option<Result<Response>> {
+        if self.local_file_navigation_access() != LocalFileNavigationAccess::BrowserGranted {
+            return None;
+        }
+        let browser_navigation = request.request_mode == moli_fetch::RequestMode::Navigate
+            && request.local_file_navigation_access() == LocalFileNavigationAccess::BrowserGranted;
+        let file_initiator = request
+            .initiator_url()
+            .is_some_and(|initiator_url| initiator_url.scheme() == "file");
+        if request.method != "GET" || !(browser_navigation || file_initiator) {
+            return Some(Err(anyhow!(
+                "file URL `{}` is not accessible from this request",
+                request.url
+            )));
+        }
+        Some(crate::network_host::file_url_response(&request.url).map_err(anyhow::Error::msg))
     }
 
     /// Captures page request configuration for an owned operation. Headers,
@@ -321,7 +358,7 @@ impl ResourceRequestClient {
             .browser_request_metadata
             .get_or_insert(moli_fetch::BrowserRequestMetadata::Script);
         let request = self.apply_network_policy(request)?;
-        if let Some(result) = local_text_response(&request) {
+        if let Some(result) = self.local_text_response(&request) {
             return result;
         }
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
@@ -488,7 +525,7 @@ impl ResourceRequestClient {
             .browser_request_metadata
             .get_or_insert(moli_fetch::BrowserRequestMetadata::Script);
         let request = self.apply_network_policy(request)?;
-        if let Some(result) = local_text_response(&request) {
+        if let Some(result) = self.local_text_response(&request) {
             let task_runner = resource_load.task_runner();
             task_runner.spawn(async move {
                 resource_load.finish();
@@ -704,7 +741,7 @@ impl ResourceRequestClient {
     where
         F: FnOnce(Result<Response>) + Send + 'static,
     {
-        if let Some(result) = local_text_response(&request) {
+        if let Some(result) = self.local_text_response(&request) {
             callback(result);
             return Ok(());
         }
@@ -718,7 +755,7 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<StreamingRawResponse> {
-        if let Some(response) = local_text_response(&request) {
+        if let Some(response) = self.local_text_response(&request) {
             return streaming_raw_response_from_local_response(response?);
         }
 
@@ -754,7 +791,7 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
-        if let Some(response) = local_text_response(&request) {
+        if let Some(response) = self.local_text_response(&request) {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_local_response(response?)?,
             ));
@@ -1176,11 +1213,6 @@ fn streaming_raw_response_from_cached_subresource(
         redirect.network_extra_info_available = false;
     }
     streaming_raw_response_from_head_and_body(head, response.clone_body_bytes())
-}
-
-fn local_text_response(request: &Request) -> Option<Result<Response>> {
-    crate::network_host::local_url_response_result(&request.url, &request.method)
-        .map(|result| result.map_err(anyhow::Error::msg))
 }
 
 fn streaming_raw_response_from_local_response(response: Response) -> Result<StreamingRawResponse> {

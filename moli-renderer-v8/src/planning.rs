@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use moli_encoding::decode_classic_script_source;
 use moli_fetch::{RequestCredentialsMode, RequestMode};
+use moli_url_policy::LocalFileNavigationAccess;
 use moli_web_mime::{
     FetchDestination, MimeSniffingContext, ScriptResponseMimeError, check_script_response_mime,
     computed_response_mime_type, is_webassembly_mime,
@@ -336,6 +337,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                 script,
                 request_origin,
                 document_character_set,
+                loader.local_file_navigation_access(),
             ) {
                 return outcome;
             }
@@ -408,6 +410,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
         script,
         request_origin,
         document_character_set,
+        loader.local_file_navigation_access(),
     ) {
         return outcome;
     }
@@ -453,10 +456,13 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     }
 }
 
+/// A granted file URL is left to the request client, which decides whether
+/// this document may read it.
 fn local_or_unsupported_external_script_source_load_outcome(
     script: &PreparedScript,
     request_origin: &moli_url::WebOrigin,
     document_character_set: Option<&str>,
+    local_file_access: LocalFileNavigationAccess,
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     match script.url.scheme() {
         "data" => Some(PreparedScriptSourceLoadOutcome {
@@ -483,6 +489,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
             )),
         }),
         "http" | "https" => None,
+        "file" if local_file_access == LocalFileNavigationAccess::BrowserGranted => None,
         scheme => Some(failed_external_script_source_load_outcome(format!(
             "failed to fetch script `{}`: URL scheme `{scheme}` is not allowed",
             script.url
@@ -494,6 +501,7 @@ pub(crate) fn immediate_external_script_source_load_outcome(
     script: &PreparedScript,
     request_origin: &moli_url::WebOrigin,
     document_character_set: Option<&str>,
+    local_file_access: LocalFileNavigationAccess,
 ) -> Option<PreparedScriptSourceLoadOutcome> {
     if !matches!(script.source, ScriptSource::External) {
         return None;
@@ -502,6 +510,7 @@ pub(crate) fn immediate_external_script_source_load_outcome(
         script,
         request_origin,
         document_character_set,
+        local_file_access,
     )
 }
 
@@ -969,6 +978,7 @@ mod tests {
             &data,
             &moli_url::WebOrigin::from_url(&data.initiator_url),
             Some("utf-8"),
+            LocalFileNavigationAccess::Denied,
         )
         .expect("data URL source should be synchronously terminal");
         assert_eq!(
@@ -981,7 +991,8 @@ mod tests {
             immediate_external_script_source_load_outcome(
                 &unsupported,
                 &moli_url::WebOrigin::from_url(&unsupported.initiator_url),
-                None
+                None,
+                LocalFileNavigationAccess::Denied,
             )
             .expect("unsupported scheme should be synchronously terminal")
             .source_result
@@ -993,7 +1004,31 @@ mod tests {
             immediate_external_script_source_load_outcome(
                 &network,
                 &moli_url::WebOrigin::from_url(&network.initiator_url),
-                None
+                None,
+                LocalFileNavigationAccess::Denied,
+            )
+            .is_none()
+        );
+
+        let file = prepared_external_script("file:///reports/app.js", ScriptKind::Classic);
+        let file_origin = moli_url::WebOrigin::from_url(&file.initiator_url);
+        assert!(
+            immediate_external_script_source_load_outcome(
+                &file,
+                &file_origin,
+                None,
+                LocalFileNavigationAccess::Denied,
+            )
+            .expect("a file script without the capability should be synchronously terminal")
+            .source_result
+            .is_err()
+        );
+        assert!(
+            immediate_external_script_source_load_outcome(
+                &file,
+                &file_origin,
+                None,
+                LocalFileNavigationAccess::BrowserGranted,
             )
             .is_none()
         );

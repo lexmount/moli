@@ -49,6 +49,8 @@ mod disable_css_boundaries;
 mod disable_js;
 #[path = "fetch_cli/eval.rs"]
 mod eval;
+#[path = "fetch_cli/file_urls.rs"]
+mod file_urls;
 #[path = "fetch_cli/http_fail.rs"]
 mod http_fail;
 #[path = "fetch_cli/idle.rs"]
