@@ -4873,8 +4873,6 @@ dom/nodes/Node-replaceChild.html
 dom/nodes/Node-textContent.html
 dom/nodes/NodeList-Iterable.html
 dom/nodes/NodeList-static-length-getter-tampered-1.html
-dom/nodes/NodeList-static-length-getter-tampered-2.html
-dom/nodes/NodeList-static-length-getter-tampered-3.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-2.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-3.html
@@ -6591,6 +6589,9 @@ html/browsers/browsing-the-web/history-traversal/history-traversal-navigate-pare
 html/browsers/browsing-the-web/history-traversal/history-traversal-navigates-multiple-frames.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation-iframe.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation.html
+html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
+html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
+html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/resume-timer-on-history-back.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-basic.html
 html/browsers/browsing-the-web/history-traversal/popstate_event.html
@@ -7836,7 +7837,6 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
-html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
@@ -8251,7 +8251,6 @@ html/semantics/tabular-data/historical.html
 html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
-html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
 html/semantics/tabular-data/the-table-element/createTBody.html
@@ -9313,6 +9312,7 @@ navigation-api/updateCurrentEntry-method/initial-about-blank.html
 navigation-api/updateCurrentEntry-method/no-args.html
 navigation-api/updateCurrentEntry-method/not-fully-active.html
 navigation-api/updateCurrentEntry-method/opaque-origin.html
+navigation-api/updateCurrentEntry-method/reentrancy-on-serialize.html
 navigation-api/updateCurrentEntry-method/same-document-away-and-back-location-api.html
 navigation-api/updateCurrentEntry-method/unserializable.html
 navigation-timing/dom-interactive-image-document.html

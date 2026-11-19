@@ -38,6 +38,8 @@ dom/events/webkit-animation-end-event.html
 dom/events/webkit-animation-iteration-event.html
 dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
+dom/nodes/NodeList-static-length-getter-tampered-2.html
+dom/nodes/NodeList-static-length-getter-tampered-3.html
 editing/crashtests/designMode-caret-change.html
 editing/crashtests/inserthorizontalrule-in-textarea-in-editor-and-undo-on-error-events.html
 editing/crashtests/insertimage-with-replacing-selection-in-picture-element.html
@@ -83,6 +85,7 @@ html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
+html/semantics/tabular-data/processing-model-1/span-limits.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
 infrastructure/channels/test_call.html
 infrastructure/channels/test_postMessage.html
@@ -92,7 +95,6 @@ navigation-api/navigate-event/defer/tentative/defer-cross-origin.html
 navigation-api/navigate-event/defer/tentative/defer-restore-callback-abort.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-single-reject.html
-navigation-api/updateCurrentEntry-method/reentrancy-on-serialize.html
 permissions-policy/policy-extends-to-sandbox.html
 permissions-policy/reporting/fullscreen-reporting.html
 permissions-policy/reporting/sync-xhr-report-only.html
