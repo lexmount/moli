@@ -717,6 +717,7 @@ mod indexed_db_task_body;
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
+mod long_task_reporting;
 mod main_world;
 use main_world::MainWorld;
 #[cfg(feature = "devtools")]

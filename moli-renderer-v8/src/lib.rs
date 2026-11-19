@@ -78,6 +78,7 @@ mod link_as;
 mod live_document_parser;
 mod live_stylesheet;
 pub(crate) mod local_executor;
+mod long_task;
 mod message_port_runtime;
 mod meta_refresh_scheduler;
 mod module_runtime;

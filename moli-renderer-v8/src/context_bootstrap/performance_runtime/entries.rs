@@ -140,7 +140,7 @@ pub(super) fn assign_navigation_performance_entry_identity<'s>(
     set_performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT, id);
 }
 
-fn assign_queued_performance_entry_identity<'s>(
+pub(super) fn assign_queued_performance_entry_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
     entry: v8::Local<'s, v8::Object>,

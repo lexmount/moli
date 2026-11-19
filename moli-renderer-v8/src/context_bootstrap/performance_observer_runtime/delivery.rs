@@ -87,7 +87,13 @@ pub(super) fn enqueue_buffered_performance_entries<'s>(
     performance: v8::Local<'s, v8::Object>,
     observer: v8::Local<'s, v8::Object>,
 ) {
-    let Some(entries) = performance_slot_array(scope, performance, PERFORMANCE_ENTRIES_SLOT) else {
+    let buffer =
+        if performance_observer_observed_type(scope, observer).as_deref() == Some("longtask") {
+            super::super::performance_runtime::LONG_TASK_BUFFER_SLOT
+        } else {
+            PERFORMANCE_ENTRIES_SLOT
+        };
+    let Some(entries) = performance_slot_array(scope, performance, buffer) else {
         return;
     };
     let pending = v8::Array::new(scope, 0);

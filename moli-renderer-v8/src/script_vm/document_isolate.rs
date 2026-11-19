@@ -5,7 +5,7 @@ use super::{
     },
     runtime_bindings::{
         PromiseRejectDispatchSlot, failed_access_check_callback, promise_reject_callback,
-        promise_trace_hook,
+        window_promise_hook,
     },
 };
 use crate::{
@@ -985,9 +985,7 @@ impl RendererIsolateHolder {
         isolate.set_modify_code_generation_from_strings_callback(
             super::security_policy::string_code_generation_check_callback,
         );
-        if moli_trace::dom_binding_timing_enabled() {
-            isolate.set_promise_hook(promise_trace_hook);
-        }
+        isolate.set_promise_hook(window_promise_hook);
         isolate.set_promise_reject_callback(promise_reject_callback);
         isolate.set_failed_access_check_callback_function(failed_access_check_callback);
 

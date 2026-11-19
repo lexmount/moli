@@ -1082,7 +1082,7 @@ fn performance_navigation_observer_supports_idle_gap_probe() {
 
     assert_eq!(
         result,
-        r#"{"supported":"event,first-input,mark,measure,navigation,resource","records":1,"entryType":"navigation","finiteTiming":true,"nonZeroDuration":true,"idleGapFound":true}"#
+        r#"{"supported":"event,first-input,longtask,mark,measure,navigation,resource","records":1,"entryType":"navigation","finiteTiming":true,"nonZeroDuration":true,"idleGapFound":true}"#
     );
 }
 

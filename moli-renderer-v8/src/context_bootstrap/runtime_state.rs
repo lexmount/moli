@@ -1534,6 +1534,8 @@ pub(crate) fn finish_context_bootstrap(
         ("TextDecoderStream", "TextDecoderStream"),
         ("Performance", "Performance"),
         ("PerformanceEntry", "PerformanceEntry"),
+        ("PerformanceLongTaskTiming", "PerformanceLongTaskTiming"),
+        ("TaskAttributionTiming", "TaskAttributionTiming"),
         ("PerformanceMark", "PerformanceMark"),
         ("PerformanceMeasure", "PerformanceMeasure"),
         ("PerformanceResourceTiming", "PerformanceResourceTiming"),
