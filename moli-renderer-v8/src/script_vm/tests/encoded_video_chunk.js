@@ -211,17 +211,18 @@
       const fixed = new ArrayBuffer(1), resizable = new ArrayBuffer(1, {maxByteLength: 2});
       throws(realm, 'TypeError', () => new C(init({transfer: [fixed, resizable]}))); equal(fixed.byteLength, 1);
     });
-    if (typeof SharedArrayBuffer === 'function') {
+    {
+      const SharedBuffer = new WebAssembly.Memory({shared:true,initial:1,maximum:1}).buffer.constructor;
       for (const view of [false, true]) test(`shared BufferSource snapshot and destination ${view}`, () => {
-        const data = new SharedArrayBuffer(5), source = new Uint8Array(data); source.set([8, 1, 2, 3, 9]);
+        const data = new SharedBuffer(5), source = new Uint8Array(data); source.set([8, 1, 2, 3, 9]);
         const result = new C(init({data: view ? new DataView(data, 1, 3) : data})); source.fill(7);
-        const destination = new SharedArrayBuffer(9), bytes = new Uint8Array(destination); bytes.fill(8);
+        const destination = new SharedBuffer(9), bytes = new Uint8Array(destination); bytes.fill(8);
         result.copyTo(new Uint8Array(destination, 2, 5));
         bytesEqual(bytes, view ? [8, 8, 1, 2, 3, 8, 8, 8, 8] : [8, 8, 8, 1, 2, 3, 9, 8, 8]);
       });
-      test('shared buffer is not an ArrayBuffer transfer', () => throws(realm, 'TypeError', () => new C(init({transfer: [new SharedArrayBuffer(3)]}))));
-      if (typeof SharedArrayBuffer.prototype.grow === 'function') for (const view of [false, true]) test(`growable shared source rejected ${view}`, () => {
-        const data = new SharedArrayBuffer(3, {maxByteLength: 8});
+      test('shared buffer is not an ArrayBuffer transfer', () => throws(realm, 'TypeError', () => new C(init({transfer: [new SharedBuffer(3)]}))));
+      if (typeof SharedBuffer.prototype.grow === 'function') for (const view of [false, true]) test(`growable shared source rejected ${view}`, () => {
+        const data = new SharedBuffer(3, {maxByteLength: 8});
         throws(realm, 'TypeError', () => new C(init({data: view ? new Uint8Array(data) : data})));
       });
     }

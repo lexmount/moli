@@ -97,7 +97,10 @@
         if(mode==='null') {value=null;expected=[];}
         control.internals.setFormValue(value);return {control,expected};
       },(state,fail)=>override(state.control,'tagName',fail));
-
+      for(const [name,submitter,throws] of [['undefined',undefined,false],['null',null,false],['div',doc.createElement('div'),false],['button',doc.createElement('button'),false],['object',{},true],['number',1,true],['proxy',new Proxy(doc.createElement('button'),{}),true],['forged',Object.create(w.HTMLElement.prototype),true]]) {
+        let result,error=null;try {result=new FD(undefined,submitter);}catch(e){error=e;}
+        rows.push({label:label+'/omitted-form/'+name,checks:{conversion:throws?error instanceof w.TypeError:error===null&&Array.from(result).length===0,calleeRealm:!error||error instanceof w.TypeError}});
+      }
     }
   }
   globalThis.__formDataNativeResults={rows,errors};

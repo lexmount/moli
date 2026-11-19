@@ -1,4 +1,6 @@
 globalThis.runDecoderStreamSourceContract = async function () {
+  // Shared buffers remain constructible through Wasm in nonisolated realms.
+  const SharedBuffer = new WebAssembly.Memory({shared:true, initial:1, maximum:1}).buffer.constructor;
   const checks = [];
   async function check(name, operation) {
     globalThis.__decoderStreamSourceProgress = name;
@@ -28,17 +30,17 @@ globalThis.runDecoderStreamSourceContract = async function () {
       return new DataView(bytes.buffer, 1, 1);
     }],
     ["shared buffer", () => {
-      const bytes = new Uint8Array(new SharedArrayBuffer(1));
+      const bytes = new Uint8Array(new SharedBuffer(1));
       bytes[0] = 65;
       return bytes.buffer;
     }],
     ["shared view", () => {
-      const bytes = new Uint8Array(new SharedArrayBuffer(3));
+      const bytes = new Uint8Array(new SharedBuffer(3));
       bytes[1] = 65;
       return bytes.subarray(1, 2);
     }],
     ["shared DataView", () => {
-      const bytes = new Uint8Array(new SharedArrayBuffer(3));
+      const bytes = new Uint8Array(new SharedBuffer(3));
       bytes[1] = 65;
       return new DataView(bytes.buffer, 1, 1);
     }],
@@ -72,7 +74,7 @@ globalThis.runDecoderStreamSourceContract = async function () {
   for (const shared of [false, true]) {
     for (const kind of ["buffer", "view", "DataView"]) {
       invalid.push([`${shared ? "growable shared" : "resizable"} ${kind}`, () => {
-        const buffer = shared ? new SharedArrayBuffer(1, { maxByteLength: 2 }) :
+        const buffer = shared ? new SharedBuffer(1, { maxByteLength: 2 }) :
           new ArrayBuffer(1, { maxByteLength: 2 });
         new Uint8Array(buffer)[0] = 65;
         return kind === "buffer" ? buffer : kind === "view" ? new Uint8Array(buffer) : new DataView(buffer);
@@ -132,7 +134,7 @@ globalThis.runDecoderStreamSourceContract = async function () {
     })],
     invalid[1],
     ["resizable buffer", () => new ArrayBuffer(1, { maxByteLength: 2 })],
-    ["growable shared view", () => new Uint8Array(new SharedArrayBuffer(1, { maxByteLength: 2 }))],
+    ["growable shared view", () => new Uint8Array(new SharedBuffer(1, { maxByteLength: 2 }))],
     ["detached resizable buffer", () => {
       const buffer = new ArrayBuffer(1, { maxByteLength: 2 });
       buffer.transfer(0);
@@ -169,7 +171,7 @@ globalThis.runDecoderStreamSourceContract = async function () {
     await check(`queued input mutation: ${kind}`, async () => {
       const shared = kind.startsWith("shared");
       const detach = kind.startsWith("detached");
-      const buffer = shared ? new SharedArrayBuffer(3) : new ArrayBuffer(3);
+      const buffer = shared ? new SharedBuffer(3) : new ArrayBuffer(3);
       const bytes = new Uint8Array(buffer);
       bytes[1] = 65;
       const input = kind.endsWith("DataView") ? new DataView(buffer, 1, 1) :
@@ -212,7 +214,7 @@ globalThis.runDecoderStreamSourceContract = async function () {
     });
   }
   await check("shared UTF-8 prefix survives to fixed trailing chunk", async () => {
-    const prefix = new SharedArrayBuffer(1);
+    const prefix = new SharedBuffer(1);
     new Uint8Array(prefix)[0] = 0xe2;
     const source = new ReadableStream({ start(controller) {
       controller.enqueue(prefix);
