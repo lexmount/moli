@@ -200,6 +200,36 @@ pub(crate) enum WorkerTestRequestClient {
 }
 
 #[cfg(test)]
+type NestedErrorSelectionGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[cfg(test)]
+thread_local! {
+    static NEXT_NESTED_ERROR_SELECTION_GATE: std::cell::Cell<Option<NestedErrorSelectionGate>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_nested_error_selection_gate_for_test<T>(
+    spawn: impl FnOnce() -> T,
+) -> (
+    T,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let (selected_tx, selected_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    NEXT_NESTED_ERROR_SELECTION_GATE.with(|slot| {
+        assert!(slot.replace(Some((selected_tx, resume_rx))).is_none());
+        let result = spawn();
+        assert!(slot.take().is_none(), "worker spawn must take the gate");
+        (result, selected_rx, resume_tx)
+    })
+}
+
+#[cfg(test)]
 pub(crate) struct WorkerTestHandle {
     handle: Option<WorkerHandle>,
     request_client: ResourceRequestClient,
@@ -1383,6 +1413,8 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
     let network_cancel = control.network_cancel_handle();
     let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
+    #[cfg(test)]
+    let nested_error_selection_gate = NEXT_NESTED_ERROR_SELECTION_GATE.take();
 
     let join_handle = std::thread::Builder::new()
         .name(format!("worker:{script_url}"))
@@ -1429,6 +1461,8 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 worker_isolate_handle,
                 worker_termination_requested,
                 worker_inspector_tasks,
+                #[cfg(test)]
+                nested_error_selection_gate,
             ));
         })
         .expect("failed to spawn worker thread");
@@ -1561,6 +1595,7 @@ async fn worker_main(
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     termination_requested: Arc<AtomicBool>,
     inspector_task_runner: WorkerInspectorTaskRunner,
+    #[cfg(test)] mut nested_error_selection_gate: Option<NestedErrorSelectionGate>,
 ) {
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
@@ -2067,12 +2102,36 @@ async fn worker_main(
             }
         };
 
+        #[cfg(test)]
+        if nested_error_selection_gate.is_some()
+            && matches!(
+                &wake,
+                WorkerLoopWake::Message(Some(WorkerMessage::NestedWorkerEvent { message, .. }))
+                    if matches!(
+                        message.as_ref(),
+                        WorkerToParentMessage::Error { phase: WorkerErrorPhase::Runtime, .. }
+                    )
+            )
+            && let Some((selected, resume)) = nested_error_selection_gate.take()
+        {
+            let _ = selected.send(());
+            let _ = resume.await;
+        }
+
         // `MessagePortWake` and `Terminate` can be sent through different
         // clones of the worker channel. The explicit lifecycle bit, rather
         // than cross-sender queue order, decides whether the selected task is
         // still allowed to enter V8.
         if termination_requested.load(Ordering::Acquire) {
-            trace!(url = %script_url, "worker termination discarded a selected task");
+            if let WorkerLoopWake::Message(Some(message)) = wake
+                && matches!(
+                    state.borrow().global_kind,
+                    WorkerGlobalKind::Dedicated { .. }
+                )
+            {
+                crate::worker::forward_nested_worker_error_after_owner_close(message, &parent_tx);
+            }
+            trace!(url = %script_url, "worker termination stopped a selected task");
             break;
         }
 
