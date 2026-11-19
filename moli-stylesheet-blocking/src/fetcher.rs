@@ -528,10 +528,14 @@ pub trait StylesheetFetcher: Clone + Send + 'static {
         true
     }
 
-    /// A link preload supplies the Document preload map, while speculative
-    /// ordinary stylesheets remain directly adoptable through this store.
+    /// A Document preload supplies the preload map. Speculative ordinary
+    /// stylesheets remain directly adoptable through this store.
     fn is_document_preload(&self, _url: &Url) -> bool {
         false
+    }
+
+    fn resource_timing_initiator_type(&self) -> &'static str {
+        "link"
     }
 
     fn prepare_stylesheet_resource(
@@ -620,6 +624,7 @@ struct StylesheetFetchRequest {
     start_unix_millis: f64,
     started_at: std::time::Instant,
     terminal: OnceLock<Arc<StylesheetFetchTerminal>>,
+    resource_timing_initiator_type: &'static str,
     resource_timing_initiator_url: OnceLock<String>,
     physical_observation_emitted: AtomicBool,
 }
@@ -630,6 +635,7 @@ impl StylesheetFetch {
         request_url: Url,
         options: StylesheetFetchOptions,
         start_unix_millis: f64,
+        resource_timing_initiator_type: &'static str,
     ) -> Self {
         let key = options.resource_key(request_url);
         Self(Arc::new(StylesheetFetchRequest {
@@ -639,6 +645,7 @@ impl StylesheetFetch {
             start_unix_millis,
             started_at: std::time::Instant::now(),
             terminal: OnceLock::new(),
+            resource_timing_initiator_type,
             resource_timing_initiator_url: OnceLock::new(),
             physical_observation_emitted: AtomicBool::new(false),
         }))
@@ -660,6 +667,10 @@ impl StylesheetFetch {
     /// link clients and without changing the resource reuse key.
     pub fn set_resource_timing_initiator_url(&self, url: String) {
         let _ = self.0.resource_timing_initiator_url.set(url);
+    }
+
+    pub fn resource_timing_initiator_type(&self) -> &'static str {
+        self.0.resource_timing_initiator_type
     }
 
     pub fn resource_timing_initiator_url(&self) -> Option<&str> {

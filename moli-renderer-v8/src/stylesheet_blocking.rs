@@ -215,6 +215,14 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         self.link_preload && matches!(url.scheme(), "http" | "https")
     }
 
+    fn resource_timing_initiator_type(&self) -> &'static str {
+        if self.request_initiator_type == SubresourceRequestInitiatorType::Css {
+            "css"
+        } else {
+            "link"
+        }
+    }
+
     fn prepare_stylesheet_resource(
         &self,
         document_url: Url,
@@ -261,14 +269,24 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
                 }))
             };
         }
-        let producer = self
-            .link_preload
-            .then(|| {
-                self.loader
-                    .request_client()
-                    .register_document_preload(&request)
-            })
-            .flatten();
+        let producer = if self.link_preload {
+            let client = self.loader.request_client();
+            if self.request_initiator_type == SubresourceRequestInitiatorType::Css {
+                let Some(producer) = client.register_document_preload_if_absent(&request) else {
+                    // An earlier preload already supplies the import.
+                    return moli_stylesheet_blocking::PreparedStylesheetFetch::reused(
+                        StylesheetFetchTerminal::consumed_preload_error(
+                            "stylesheet already preloaded",
+                        ),
+                    );
+                };
+                Some(producer)
+            } else {
+                client.register_document_preload(&request)
+            }
+        } else {
+            None
+        };
         let prepared = moli_stylesheet_blocking::PreparedStylesheetFetch::new(
             self.fetch_stylesheet_resource(document_url, url, options.clone()),
         );

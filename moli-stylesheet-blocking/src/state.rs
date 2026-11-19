@@ -403,6 +403,7 @@ impl StylesheetBlockingState {
             request_url.clone(),
             options.clone(),
             start_unix_millis,
+            fetcher.resource_timing_initiator_type(),
         );
         let sender = self.completion_source.sender();
         let completion_wake = self.completion_wake.clone();
@@ -1062,6 +1063,7 @@ mod tests {
             stylesheet_url.clone(),
             StylesheetFetchOptions::default(),
             1.0,
+            "link",
         );
         let first_clone = first.clone();
         let distinct = StylesheetFetch::new(
@@ -1069,6 +1071,7 @@ mod tests {
             stylesheet_url,
             StylesheetFetchOptions::default(),
             1.0,
+            "link",
         );
         let mut identities = HashSet::new();
 

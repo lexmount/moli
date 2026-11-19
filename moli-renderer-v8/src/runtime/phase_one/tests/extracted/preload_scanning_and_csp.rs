@@ -291,6 +291,38 @@ fn html_preload_scanner_filters_and_carries_stylesheet_attributes() {
     );
 }
 #[test]
+fn html_preload_scanner_discovers_inline_imports_across_chunks() {
+    let document = Url::parse("https://example.test/page.html").unwrap();
+    let mut scanner = IncrementalHtmlPreloadScanner::new(document);
+    let first = scanner.scan_chunk(
+        r#"<base href="/css/"><template><style>@import "inert.css";</style></template>
+           <style type="module">@import "module.css";</style>
+           <style media="screen" nonce="allowed">@import url(sh"#,
+    );
+    assert!(first.stylesheet_requests.is_empty());
+
+    let second = scanner.scan_chunk(
+        r#"ared.css); @import "skipped.css" supports(unknown-property: unsupported);
+           p { color: black; } @import "too-late.css";</style>
+           <style>@import 'without-semicolon.css'</style>"#,
+    );
+    let requests = second.stylesheet_requests;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].url.as_str(),
+        "https://example.test/css/shared.css"
+    );
+    assert_eq!(requests[0].media.as_deref(), Some("screen"));
+    assert_eq!(
+        requests[0].inline_style.as_ref().unwrap().nonce.as_deref(),
+        Some("allowed"),
+    );
+    assert_eq!(
+        requests[1].url.as_str(),
+        "https://example.test/css/without-semicolon.css"
+    );
+}
+#[test]
 fn html_preload_scanner_dedupes_stylesheet_and_style_preload_resource() {
     let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
     let requests = collect_preloadable_stylesheet_requests_from_html(
@@ -386,6 +418,7 @@ fn scanned_stylesheet_admission_respects_media_and_fetch_interception() {
                     options.clone(),
                     moli_fetch::RequestResourceType::CssStyleSheet,
                     false,
+                    None,
                 ),
                 ScannedStylesheetAdmission::DeferredToParser(
                     ScannedStylesheetDeferral::MediaMismatch
@@ -405,6 +438,7 @@ fn scanned_stylesheet_admission_respects_media_and_fetch_interception() {
                     options.clone(),
                     moli_fetch::RequestResourceType::CssStyleSheet,
                     false,
+                    None,
                 ),
                 ScannedStylesheetAdmission::DeferredToParser(
                     ScannedStylesheetDeferral::FetchInterception
@@ -424,6 +458,7 @@ fn scanned_stylesheet_admission_respects_media_and_fetch_interception() {
                     options.clone(),
                     moli_fetch::RequestResourceType::CssStyleSheet,
                     false,
+                    None,
                 ),
                 ScannedStylesheetAdmission::Admitted,
                 "interception for another resource type must not disable stylesheet scanning"
@@ -439,6 +474,7 @@ fn scanned_stylesheet_admission_respects_media_and_fetch_interception() {
                     options,
                     moli_fetch::RequestResourceType::CssStyleSheet,
                     false,
+                    None,
                 ),
                 ScannedStylesheetAdmission::DeferredToParser(
                     ScannedStylesheetDeferral::ContentSecurityPolicy
@@ -484,6 +520,7 @@ fn scanned_stylesheet_admission_uses_processed_meta_csp() {
                     crate::stylesheet_blocking::StylesheetFetchOptions::default(),
                     moli_fetch::RequestResourceType::CssStyleSheet,
                     false,
+                    None,
                 ),
                 ScannedStylesheetAdmission::DeferredToParser(
                     ScannedStylesheetDeferral::ContentSecurityPolicy

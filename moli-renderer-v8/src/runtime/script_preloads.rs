@@ -92,6 +92,7 @@ impl MetaCspPreloadGate {
 }
 
 pub(super) const MAX_PENDING_CSP_PRELOAD_CANDIDATES: usize = 4096;
+const MAX_INLINE_STYLE_PRELOAD_BYTES: usize = 64 * 1024;
 
 pub(super) struct BufferedScriptPreloadEntry {
     pub(super) request: BufferedScriptPreloadRequest,
@@ -541,6 +542,16 @@ impl BufferedDocumentPreloadState {
         &mut self,
         inputs: &[DocumentOwnedStylesheetDiscoveryInput],
     ) {
+        let claimed_import_urls = inputs
+            .iter()
+            .filter_map(|input| match input.signature() {
+                DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } => {
+                    Some(urls.iter().map(crate::live_stylesheet::import_url_identity))
+                }
+                DocumentBlockingStylesheetSignature::Link { .. } => None,
+            })
+            .flatten()
+            .collect::<HashSet<_>>();
         let claimed_resources = inputs
             .iter()
             .filter_map(|input| match input.signature() {
@@ -560,11 +571,16 @@ impl BufferedDocumentPreloadState {
                 DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. } => None,
             })
             .collect::<HashSet<_>>();
-        if claimed_resources.is_empty() {
+        if claimed_resources.is_empty() && claimed_import_urls.is_empty() {
             return;
         }
         self.pending_stylesheet_preloads.retain(|request| {
-            !claimed_resources.contains(&request.options.resource_key(request.url.clone()))
+            if request.inline_style.is_some() {
+                !claimed_import_urls
+                    .contains(&crate::live_stylesheet::import_url_identity(&request.url))
+            } else {
+                !claimed_resources.contains(&request.options.resource_key(request.url.clone()))
+            }
         });
     }
 
@@ -894,6 +910,14 @@ pub(super) struct BufferedStylesheetPreloadRequest {
     pub(super) options: StylesheetFetchOptions,
     pub(super) request_resource_type: moli_fetch::RequestResourceType,
     pub(super) link_preload: bool,
+    pub(super) inline_style: Option<Arc<InlineStylePreload>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct InlineStylePreload {
+    pub(super) text: String,
+    pub(super) nonce: Option<String>,
+    media: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -934,6 +958,7 @@ pub(super) fn admit_stylesheet_preloads(
             request.options,
             request.request_resource_type,
             request.link_preload,
+            request.inline_style.as_deref(),
         ) {
             ScannedStylesheetAdmission::Admitted => admitted_count += 1,
             ScannedStylesheetAdmission::DeferredToParser(
@@ -1330,6 +1355,7 @@ struct HtmlPreloadScannerSink {
     seen_import_map: Cell<bool>,
     template_depth: Cell<usize>,
     picture_depth: Cell<usize>,
+    inline_style: RefCell<Option<InlineStylePreload>>,
 }
 
 impl HtmlPreloadScannerSink {
@@ -1347,6 +1373,7 @@ impl HtmlPreloadScannerSink {
             seen_import_map: Cell::new(false),
             template_depth: Cell::new(0),
             picture_depth: Cell::new(0),
+            inline_style: RefCell::new(None),
         }
     }
 
@@ -1586,11 +1613,70 @@ impl HtmlPreloadScannerSink {
                 moli_fetch::RequestResourceType::CssStyleSheet
             },
             link_preload: is_style_preload,
+            inline_style: None,
         };
         let key = request.scanner_key();
         let mut requests = self.requests.borrow_mut();
         if requests.seen.insert(BufferedPreloadKey::Stylesheet(key)) {
             requests.stylesheet_requests.push(request);
+        }
+    }
+
+    fn start_inline_style_scan(&self, tag: &Tag) {
+        if !matches!(self.meta_csp_mode, MetaCspScannerMode::CollectDescriptors)
+            || !moli_web_mime::is_css_style_element_type_attribute(
+                html_attr_value(&tag.attrs, "type").as_deref(),
+            )
+        {
+            return;
+        }
+        *self.inline_style.borrow_mut() = Some(InlineStylePreload {
+            text: String::new(),
+            nonce: html_attr_value(&tag.attrs, "nonce"),
+            media: html_attr_value(&tag.attrs, "media"),
+        });
+    }
+
+    fn append_inline_style_text(&self, text: &str) {
+        let mut inline_style = self.inline_style.borrow_mut();
+        let Some(style) = inline_style.as_mut() else {
+            return;
+        };
+        if text.len() > MAX_INLINE_STYLE_PRELOAD_BYTES.saturating_sub(style.text.len()) {
+            // Bound the speculative copy. The live parser still reads the complete style block.
+            inline_style.take();
+            return;
+        }
+        style.text.push_str(text);
+    }
+
+    fn finish_inline_style_scan(&self) {
+        let Some(style) = self.inline_style.borrow_mut().take() else {
+            return;
+        };
+        if !style.text.contains('@') {
+            return;
+        }
+        let urls =
+            moli_css_parse::stylesheet_import_urls_with_stylo(&style.text, &self.base_url.borrow());
+        let style = Arc::new(style);
+        for url in urls {
+            if !matches!(url.scheme(), "http" | "https") {
+                continue;
+            }
+            self.requests
+                .borrow_mut()
+                .stylesheet_requests
+                .push(BufferedStylesheetPreloadRequest {
+                    url,
+                    media: style.media.clone(),
+                    options: StylesheetFetchOptions::default().with_document_referrer_policy(
+                        self.document_referrer_policy.borrow().clone(),
+                    ),
+                    request_resource_type: moli_fetch::RequestResourceType::CssStyleSheet,
+                    link_preload: false,
+                    inline_style: Some(Arc::clone(&style)),
+                });
         }
     }
 
@@ -1696,9 +1782,21 @@ impl TokenSink for HtmlPreloadScannerSink {
     type Handle = ();
 
     fn process_token(&self, token: Token, _line_number: u64) -> TokenSinkResult<Self::Handle> {
-        let Token::TagToken(tag) = token else {
-            return TokenSinkResult::Continue;
+        let tag = match token {
+            Token::TagToken(tag) => tag,
+            Token::CharacterTokens(text) => {
+                self.append_inline_style_text(&text);
+                return TokenSinkResult::Continue;
+            }
+            Token::NullCharacterToken => {
+                self.append_inline_style_text("\u{fffd}");
+                return TokenSinkResult::Continue;
+            }
+            _ => return TokenSinkResult::Continue,
         };
+        if AsRef::<str>::as_ref(&tag.name) == "style" && tag.kind == TagKind::EndTag {
+            self.finish_inline_style_scan();
+        }
         if AsRef::<str>::as_ref(&tag.name) == "template" {
             match tag.kind {
                 TagKind::StartTag => {
@@ -1747,6 +1845,10 @@ impl TokenSink for HtmlPreloadScannerSink {
                 self.maybe_note_import_map(&tag);
                 self.maybe_collect_script_preload(&tag);
                 TokenSinkResult::RawData(ScriptData)
+            }
+            "style" => {
+                self.start_inline_style_scan(&tag);
+                TokenSinkResult::RawData(Rawtext)
             }
             "link" => {
                 self.maybe_collect_modulepreload(&tag);

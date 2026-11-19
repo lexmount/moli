@@ -4787,6 +4787,7 @@ impl PageVm {
         options: crate::stylesheet_blocking::StylesheetFetchOptions,
         request_resource_type: moli_fetch::RequestResourceType,
         link_preload: bool,
+        inline_style: Option<&super::script_preloads::InlineStylePreload>,
     ) -> ScannedStylesheetAdmission {
         if self.vm().fetch_subresource_interception_matches(
             crate::types::SubresourceResourceType::Stylesheet,
@@ -4801,9 +4802,23 @@ impl PageVm {
             );
         }
 
-        let (_, enforced_violation) = self
-            .vm()
-            .document_runtime
+        let document = &self.vm().document_runtime;
+        if let Some(style) = inline_style {
+            let (_, violations) = document
+                .inline_style_element_csp_check(
+                    &style.text,
+                    crate::content_security_policy::ContentSecurityPolicyStyleElementRequest {
+                        nonce: style.nonce.as_deref(),
+                    },
+                )
+                .into_violations();
+            if !violations.is_empty() {
+                return ScannedStylesheetAdmission::DeferredToParser(
+                    ScannedStylesheetDeferral::ContentSecurityPolicy,
+                );
+            }
+        }
+        let (_, enforced_violation) = document
             .style_element_request_csp_check(
                 &request_url,
                 crate::content_security_policy::ContentSecurityPolicyStyleElementRequest {
@@ -4817,6 +4832,14 @@ impl PageVm {
             );
         }
 
+        if inline_style.is_some() {
+            self.vm_mut().document_runtime.preload_inline_style_import(
+                request_url,
+                options,
+                request_resource_type,
+            );
+            return ScannedStylesheetAdmission::Admitted;
+        }
         match self
             .vm_mut()
             .document_runtime

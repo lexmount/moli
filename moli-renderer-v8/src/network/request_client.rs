@@ -430,7 +430,7 @@ impl ResourceRequestClient {
         self.document_requests.as_ref()?.preloads.register(request)
     }
 
-    pub(crate) fn register_document_response_preload(
+    pub(crate) fn register_document_preload_if_absent(
         &self,
         request: &Request,
     ) -> Option<super::preloads::DocumentPreloadProducer> {
