@@ -5,9 +5,9 @@ use super::value::{
 };
 use super::*;
 use crate::dom::forms::parse_non_negative_length_attribute;
-use crate::native_bridge::element::{
-    TextEditInputType, construct_input_event, dispatch_beforeinput,
-};
+#[cfg(feature = "devtools")]
+use crate::native_bridge::element::dispatch_beforeinput;
+use crate::native_bridge::element::{TextEditInputType, construct_input_event};
 #[cfg(feature = "devtools")]
 use crate::util::{
     utf16_next_scalar_boundary, utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after,
@@ -141,6 +141,7 @@ pub(crate) fn restore_focused_text_control_selection(
     }
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn replace_text_control_selection(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -188,8 +189,7 @@ pub(crate) fn replace_text_control_selection_for_insert_html(
     )
 }
 
-#[cfg(feature = "devtools")]
-pub(crate) fn replace_text_control_selection_after_beforeinput(
+pub(crate) fn replace_text_control_selection_with_input_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
@@ -212,6 +212,7 @@ pub(crate) fn replace_text_control_selection_after_beforeinput(
 
 #[derive(Clone, Copy)]
 enum TextControlEditEvents {
+    #[cfg(feature = "devtools")]
     BeforeInputAndInput,
     InputOnly {
         include_noop: bool,
@@ -242,6 +243,7 @@ fn replace_text_control_selection_with_events(
         return false;
     }
 
+    #[cfg(feature = "devtools")]
     if matches!(events, TextControlEditEvents::BeforeInputAndInput)
         && !dispatch_beforeinput(
             scope,

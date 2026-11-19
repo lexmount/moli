@@ -6,7 +6,7 @@ use super::super::events::construct_text_input_event_for_target;
 #[cfg(feature = "devtools")]
 use super::super::forms::is_text_control_user_editable;
 #[cfg(feature = "devtools")]
-use super::super::forms::replace_text_control_selection_after_beforeinput;
+use super::super::forms::replace_text_control_selection_with_input_event;
 #[cfg(feature = "devtools")]
 use super::super::{
     TextEditInputType, contenteditable_editing_host, dispatch_beforeinput, dispatch_public_event,
@@ -143,7 +143,7 @@ pub(crate) fn perform_text_input(
                 return false;
             }
         }
-        return replace_text_control_selection_after_beforeinput(
+        return replace_text_control_selection_with_input_event(
             scope,
             runtime_ptr,
             edit_target,
