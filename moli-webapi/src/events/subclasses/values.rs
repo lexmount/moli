@@ -102,6 +102,17 @@ pub(super) struct PageRevealInit<'s> {
     view_transition: Option<v8::Local<'s, v8::Object>>,
 }
 
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PageSwapEventInit", snapshot)]
+pub(super) struct PageSwapInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::NavigationActivation, snapshot_slot = PAGE_SWAP_EVENT_ACTIVATION_SLOT)]
+    activation: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(nullable, interface = web_api_interfaces::ViewTransition, snapshot_slot = PAGE_SWAP_EVENT_VIEW_TRANSITION_SLOT)]
+    view_transition: Option<v8::Local<'s, v8::Object>>,
+}
+
 pub(super) enum ValueEventInit<'s> {
     Clipboard(ClipboardInit<'s>),
     Close(CloseInit),
@@ -112,6 +123,7 @@ pub(super) enum ValueEventInit<'s> {
     HashChange(HashChangeInit),
     PageTransition(PageTransitionInit),
     PageReveal(PageRevealInit<'s>),
+    PageSwap(PageSwapInit<'s>),
 }
 
 impl<'s> ValueEventInit<'s> {
@@ -145,6 +157,9 @@ impl<'s> ValueEventInit<'s> {
             EventSubclassKind::PageRevealEvent => {
                 Self::PageReveal(parse_event_dictionary(scope, args, "PageRevealEvent")?)
             }
+            EventSubclassKind::PageSwapEvent => {
+                Self::PageSwap(parse_event_dictionary(scope, args, "PageSwapEvent")?)
+            }
             EventSubclassKind::PageTransitionEvent => {
                 Self::PageTransition(parse_event_dictionary(scope, args, "PageTransitionEvent")?)
             }
@@ -163,6 +178,7 @@ impl<'s> ValueEventInit<'s> {
             Self::HashChange(init) => &init.base,
             Self::PageTransition(init) => &init.base,
             Self::PageReveal(init) => &init.base,
+            Self::PageSwap(init) => &init.base,
         };
         (base.bubbles, base.cancelable, base.composed)
     }
@@ -182,6 +198,7 @@ impl<'s> ValueEventInit<'s> {
             Self::HashChange(init) => init.initialize_snapshot(scope, event),
             Self::PageTransition(init) => init.initialize_snapshot(scope, event),
             Self::PageReveal(init) => init.initialize_snapshot(scope, event),
+            Self::PageSwap(init) => init.initialize_snapshot(scope, event),
         }
         .expect("value event dictionary state");
     }

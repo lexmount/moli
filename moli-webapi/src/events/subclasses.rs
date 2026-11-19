@@ -45,6 +45,8 @@ const SUBMIT_EVENT_AGENT_INVOKED_SLOT: &str = "__moliSubmitEventAgentInvoked";
 const SUBMIT_EVENT_RESPONSE_SLOT: &str = "__moliSubmitEventResponse";
 pub const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
 const PAGE_REVEAL_EVENT_VIEW_TRANSITION_SLOT: &str = "__moliPageRevealEventViewTransition";
+const PAGE_SWAP_EVENT_ACTIVATION_SLOT: &str = "__moliPageSwapEventActivation";
+const PAGE_SWAP_EVENT_VIEW_TRANSITION_SLOT: &str = "__moliPageSwapEventViewTransition";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT: &str = "__moliClipboardEventClipboardData";
 const CLIPBOARD_CHANGE_EVENT_TYPES_SLOT: &str = "__moliClipboardChangeEventTypes";
@@ -122,7 +124,8 @@ impl<'s> SubclassInit<'s> {
             | EventSubclassKind::PopStateEvent
             | EventSubclassKind::HashChangeEvent
             | EventSubclassKind::PageTransitionEvent
-            | EventSubclassKind::PageRevealEvent => {
+            | EventSubclassKind::PageRevealEvent
+            | EventSubclassKind::PageSwapEvent => {
                 Self::Values(values::ValueEventInit::parse(scope, args, kind)?)
             }
             EventSubclassKind::PromiseRejectionEvent
@@ -319,6 +322,7 @@ pub fn build_template<'s>(
         | EventSubclassKind::HashChangeEvent
         | EventSubclassKind::PageTransitionEvent
         | EventSubclassKind::PageRevealEvent
+        | EventSubclassKind::PageSwapEvent
         | EventSubclassKind::PromiseRejectionEvent
         | EventSubclassKind::FormDataEvent
         | EventSubclassKind::SubmitEvent

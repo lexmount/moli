@@ -34,6 +34,7 @@ pub enum EventSubclassKind {
     HashChangeEvent = 32,
     ClipboardChangeEvent = 33,
     PageRevealEvent = 34,
+    PageSwapEvent = 35,
 }
 
 impl EventSubclassKind {
@@ -88,6 +89,7 @@ impl EventSubclassKind {
             32 => Some(Self::HashChangeEvent),
             33 => Some(Self::ClipboardChangeEvent),
             34 => Some(Self::PageRevealEvent),
+            35 => Some(Self::PageSwapEvent),
             _ => None,
         }
     }
@@ -116,6 +118,7 @@ impl EventSubclassKind {
             Self::PopStateEvent => "PopStateEvent",
             Self::PageTransitionEvent => "PageTransitionEvent",
             Self::PageRevealEvent => "PageRevealEvent",
+            Self::PageSwapEvent => "PageSwapEvent",
             Self::CommandEvent => "CommandEvent",
             Self::ToggleEvent => "ToggleEvent",
             Self::TrackEvent => "TrackEvent",

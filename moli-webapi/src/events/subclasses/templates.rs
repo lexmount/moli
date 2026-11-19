@@ -153,6 +153,7 @@ struct ClipboardChangeEventTemplateAccessorsDeclaration {
 pub fn template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
         "PageRevealEvent" => EventTemplateDeclaration::new::<PageRevealEventTemplateDeclaration>(),
+        "PageSwapEvent" => EventTemplateDeclaration::new::<PageSwapEventTemplateDeclaration>(),
         "MessageEvent" => EventTemplateDeclaration::new::<MessageEventTemplateMethodsDeclaration>(),
         "StorageEvent" => EventTemplateDeclaration::new::<StorageEventTemplateMethodsDeclaration>(),
         "ClipboardEvent" => {
@@ -200,5 +201,23 @@ struct StorageEventTemplateMethodsDeclaration {
 #[webapi(interface = web_api_interfaces::PageRevealEvent, enumerable)]
 struct PageRevealEventTemplateDeclaration {
     #[webapi(accessor_property = "viewTransition", getter = page_reveal_event_view_transition_getter)]
+    view_transition: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PageSwapEvent, enumerable)]
+struct PageSwapEventTemplateDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = nullable_event_slot_getter,
+        data = moli_v8_util::v8str(scope, PAGE_SWAP_EVENT_ACTIVATION_SLOT)
+    )]
+    activation: (),
+
+    #[webapi(
+        accessor_property = "viewTransition",
+        getter = nullable_event_slot_getter,
+        data = moli_v8_util::v8str(scope, PAGE_SWAP_EVENT_VIEW_TRANSITION_SLOT)
+    )]
     view_transition: (),
 }

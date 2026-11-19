@@ -53,6 +53,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     HashChangeEvent,
     PageTransitionEvent,
     PageRevealEvent,
+    PageSwapEvent,
     DomException,
     WebTransportError,
     RtcError,

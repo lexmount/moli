@@ -477,6 +477,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::PageRevealEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::PageSwapEvent::DESCRIPTOR,
+        kind: ConstructorKind::PageSwapEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PageTransitionEvent::DESCRIPTOR,
         kind: ConstructorKind::PageTransitionEvent,
     },

@@ -1,5 +1,16 @@
 use super::*;
 
+pub(super) fn nullable_event_slot_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let slot = args.data().to_rust_string_lossy(scope);
+    rv.set(
+        event_private_value(scope, args.this(), &slot).unwrap_or_else(|| v8::null(scope).into()),
+    );
+}
+
 pub fn event_subclass_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
