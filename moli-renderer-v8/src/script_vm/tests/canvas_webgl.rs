@@ -109,41 +109,99 @@ fn create_image_bitmap_matches_chromium_offscreen_canvas_and_close_contract() {
 }
 
 #[test]
-fn canvas_html_and_offscreen_styles_accept_modern_css_colors() {
+fn canvas_html_and_offscreen_draw_with_modern_fill_and_stroke_colors() {
     let mut vm = new_storage_test_vm("https://canvas-css-colors.test/");
     let result = vm
         .eval(
             r#"
 (() => {
-  for (const canvas of [document.createElement('canvas'), new OffscreenCanvas(2, 2)]) {
-    canvas.width = canvas.height = 2;
+  for (const canvas of [document.createElement('canvas'), new OffscreenCanvas(8, 8)]) {
+    canvas.width = canvas.height = 8;
     const ctx = canvas.getContext('2d');
+    ctx.lineWidth = 2;
+    const pixel = (x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data);
     for (const [color, expected] of [
       ['oklch(0.5 0 0)', [99, 99, 99, 255]],
       ['hsl(120 100% 50%)', [0, 255, 0, 255]],
       ['color(srgb 1 0 0 / 0.5)', [255, 0, 0, 128]],
       ['color-mix(in srgb, red 50%, blue 50%)', [128, 0, 128, 255]],
     ]) {
-      ctx.fillStyle = '#000';
+      ctx.fillStyle = 'black';
+      ctx.strokeStyle = 'black';
       ctx.fillStyle = color;
-      ctx.clearRect(0, 0, 2, 2);
-      ctx.fillRect(0, 0, 1, 1);
-      const pixel = Array.from(ctx.getImageData(0, 0, 1, 1).data);
-      if (pixel.some((value, index) => Math.abs(value - expected[index]) > 1)) {
-        throw new Error(`${color}: ${pixel} != ${expected}`);
-      }
       ctx.strokeStyle = color;
-      if (ctx.strokeStyle !== ctx.fillStyle) throw new Error('stroke color differs');
       const style = ctx.fillStyle;
-      ctx.fillStyle = 'oklch(invalid)';
-      if (ctx.fillStyle !== style) throw new Error('invalid color changed the style');
+      if (ctx.strokeStyle !== style) throw new Error('stroke color differs');
+      for (const invalid of ['oklch(invalid)', 'CanvasText', 'light-dark(red, blue)',
+                             'currentcolor', 'rgb(1, 2, 3, 1, 0)', 'rgb(50%, 0, 0)']) {
+        ctx.fillStyle = invalid;
+        ctx.strokeStyle = invalid;
+        if (ctx.fillStyle !== style || ctx.strokeStyle !== style) {
+          throw new Error("invalid assignment changed the style: " + invalid);
+        }
+      }
+      ctx.clearRect(0, 0, 8, 8);
+      ctx.fillRect(0, 0, 1, 1);
+      ctx.strokeRect(2, 2, 4, 4);
+      for (const rgba of [pixel(0, 0), pixel(4, 2)]) {
+        if (rgba.some((value, index) => Math.abs(value - expected[index]) > 1)) {
+          throw new Error(color + ': ' + rgba + ' != ' + expected);
+        }
+      }
     }
+
+    ctx.clearRect(0, 0, 8, 8);
+    ctx.fillStyle = 'color(srgb 1 0 0 / 0.1)';
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(0, 0, 1, 1);
+    if (pixel(0, 0)[3] !== 15) throw new Error('alpha was quantized before drawing');
   }
   return 'ok';
 })()
 "#,
         )
-        .expect("HTML and OffscreenCanvas should accept modern CSS colors");
+        .expect("HTML and OffscreenCanvas should draw with modern CSS colors");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn canvas_style_getters_keep_modern_color_spaces_and_precision() {
+    let mut vm = new_storage_test_vm("https://canvas-color-serialization.test/");
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  for (const canvas of [document.createElement('canvas'), new OffscreenCanvas(2, 2)]) {
+    const ctx = canvas.getContext('2d');
+    for (const [input, expected] of [
+      ['rgb(1, 2, 3)', '#010203'],
+      ['rgb(1 2 3)', '#010203'],
+      ['#ff000080', 'rgba(255, 0, 0, 0.5)'],
+      ['rgba(255, 0, 0, 0.9999)', 'rgba(255, 0, 0, 0.9999)'],
+      ['lab(29% 39 20)', 'lab(29 39 20)'],
+      ['oklch(0.543218 0.12 33.25)', 'oklch(0.543218 0.12 33.25)'],
+      ['color(srgb 1 0 0 / 0.5)', 'color(srgb 1 0 0 / 0.5)'],
+      ['color-mix(in srgb, red 50%, blue 50%)', 'color(srgb 0.5 0 0.5)'],
+      ['color(display-p3 1 0.25 0 / 0.1234567)', 'color(display-p3 1 0.25 0 / 0.123457)'],
+      ['rgb(none 0 0)', 'color(srgb none 0 0)'],
+      ['hsl(none 20% 30% / none)', 'hsl(none 20% 30% / none)'],
+    ]) {
+      ctx.fillStyle = input;
+      ctx.strokeStyle = input;
+      if (ctx.fillStyle !== expected || ctx.strokeStyle !== expected) {
+        throw new Error(input + ': ' + [ctx.fillStyle, ctx.strokeStyle] + ' != ' + expected);
+      }
+    }
+    canvas.width = canvas.width;
+    if (ctx.fillStyle !== '#000000' || ctx.strokeStyle !== '#000000') {
+      throw new Error('resizing did not reset both colors');
+    }
+  }
+  return 'ok';
+})()
+"##,
+        )
+        .expect("Canvas getters should serialize typed colors");
     assert_eq!(result, "ok");
 }
 
@@ -1205,7 +1263,7 @@ fn html_canvas_fill_style_getter_canonicalizes_supported_values() {
         )
         .expect("canvas fillStyle canonicalization should evaluate");
 
-    assert_eq!(result, r##"["#663399","#aabbcc","rgba(255, 0, 0, 0.50)"]"##);
+    assert_eq!(result, r##"["#663399","#aabbcc","rgba(255, 0, 0, 0.5)"]"##);
 }
 
 #[test]

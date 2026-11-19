@@ -41,16 +41,11 @@ pub fn parse_css_color_to_srgb_bytes(value: &str) -> Option<[u8; 4]> {
     Some(absolute_srgb_bytes(absolute))
 }
 
-/// Parse a context-independent color into clipped, unpremultiplied sRGB bytes.
-///
-/// Values that need an owner color or theme are rejected rather than resolved
-/// against an arbitrary black foreground. Absolute color mixes are supported.
-pub fn parse_absolute_css_color_to_srgb_bytes(value: &str) -> Option<[u8; 4]> {
+/// Parse a context-independent CSS color and retain its color space and alpha.
+/// Colors requiring an owner foreground or theme cannot be computed here.
+pub fn parse_absolute_css_color(value: &str) -> Option<AbsoluteColor> {
     let color = parse_specified_color(value)?.to_computed_color(None).ok()?;
-    let style::values::computed::color::Color::Absolute(absolute) = color else {
-        return None;
-    };
-    Some(absolute_srgb_bytes(absolute))
+    color.as_absolute().copied()
 }
 
 /// Resolve a CSS system-color keyword through the headless Servo light
@@ -164,26 +159,24 @@ mod tests {
     use style_traits::ToCss;
 
     #[test]
-    fn absolute_colors_preserve_alpha_and_reject_owner_dependent_values() {
-        assert_eq!(
-            parse_absolute_css_color_to_srgb_bytes("color(srgb 1 0 0 / 0.5)"),
-            Some([255, 0, 0, 128])
-        );
-        assert_eq!(
-            parse_absolute_css_color_to_srgb_bytes("color-mix(in srgb, red 50%, blue 50%)"),
-            Some([128, 0, 128, 255])
-        );
+    fn absolute_colors_preserve_space_and_alpha_without_an_owner() {
+        let p3 = parse_absolute_css_color("color(display-p3 1 0 0 / 0.1234567)").unwrap();
+        assert_eq!(p3.color_space, ColorSpace::DisplayP3);
+        assert_eq!(*p3.raw_components(), [1.0, 0.0, 0.0, 0.1234567]);
+        let mix = parse_absolute_css_color("color-mix(in srgb, red 50%, blue 50%)").unwrap();
+        assert_eq!(absolute_srgb_bytes(mix), [128, 0, 128, 255]);
         for value in [
             "currentcolor",
             "\\63 urrentcolor",
             "color-mix(in srgb, currentcolor 50%, red 50%)",
+            "CanvasText",
+            "light-dark(red, blue)",
             "oklch(invalid)",
+            "rgb(1, 2, 3, 1, 0)",
+            "rgb(50%, 0, 0)",
+            "#💚",
         ] {
-            assert_eq!(
-                parse_absolute_css_color_to_srgb_bytes(value),
-                None,
-                "{value}"
-            );
+            assert_eq!(parse_absolute_css_color(value), None, "{value}");
         }
     }
 

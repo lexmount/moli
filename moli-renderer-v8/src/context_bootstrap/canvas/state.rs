@@ -1,14 +1,16 @@
-//! Native path state belongs to a Canvas 2D context or a Path2D object.
+//! Canvas contexts own their drawing state. Path2D objects own their paths.
 //!
-//! The isolate owns the table. Weak object handles remove entries on GC;
+//! The isolate owns the table. Weak context handles remove entries on GC;
 //! dropping the isolate also drops every remaining entry without needing GC.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use style::color::AbsoluteColor;
 
+use super::color::CanvasColorStyle;
 use super::path::Canvas2dPathState;
 use crate::util::{get_private_value, set_private_value};
 
-const PATH_STATE_SLOT: &str = "__moliCanvasPathState";
+const CANVAS_STATE_SLOT: &str = "__moliCanvasState";
 type StateStore = Rc<RefCell<CanvasStates>>;
 
 #[derive(Default)]
@@ -19,13 +21,25 @@ struct CanvasStates {
 
 struct CanvasStateEntry {
     _owner: v8::Weak<v8::Object>,
-    state: Rc<RefCell<Canvas2dPathState>>,
+    path: Rc<RefCell<Canvas2dPathState>>,
+    fill: AbsoluteColor,
+    stroke: AbsoluteColor,
 }
 
-pub(super) fn canvas_path_state<'s>(
+impl CanvasStateEntry {
+    fn color(&mut self, style: CanvasColorStyle) -> &mut AbsoluteColor {
+        match style {
+            CanvasColorStyle::Fill => &mut self.fill,
+            CanvasColorStyle::Stroke => &mut self.stroke,
+        }
+    }
+}
+
+fn with_canvas_state<'s, T>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Rc<RefCell<Canvas2dPathState>> {
+    update: impl FnOnce(&mut CanvasStateEntry) -> T,
+) -> T {
     let store = if let Some(store) = scope.get_slot::<StateStore>() {
         store.clone()
     } else {
@@ -33,55 +47,86 @@ pub(super) fn canvas_path_state<'s>(
         scope.set_slot(store.clone());
         store
     };
-    if let Some(id) = get_private_value(scope, object, PATH_STATE_SLOT)
+    let id = if let Some(id) = get_private_value(scope, object, CANVAS_STATE_SLOT)
         .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
         .map(|value| value.u64_value().0)
     {
-        return store
-            .borrow()
-            .entries
-            .get(&id)
-            .expect("a live object must retain its native path state")
-            .state
-            .clone();
-    }
-    let id = {
-        let mut store = store.borrow_mut();
-        store.next_id = store
-            .next_id
-            .checked_add(1)
-            .expect("canvas state identity exhausted");
-        store.next_id
+        id
+    } else {
+        let id = {
+            let mut store = store.borrow_mut();
+            store.next_id = store
+                .next_id
+                .checked_add(1)
+                .expect("canvas state identity exhausted");
+            store.next_id
+        };
+        let weak_store = Rc::downgrade(&store);
+        let owner = v8::Weak::with_finalizer(
+            scope,
+            object,
+            Box::new(move |_| {
+                if let Some(store) = weak_store.upgrade() {
+                    store.borrow_mut().entries.remove(&id);
+                }
+            }),
+        );
+        store.borrow_mut().entries.insert(
+            id,
+            CanvasStateEntry {
+                _owner: owner,
+                path: Rc::new(RefCell::new(Canvas2dPathState::default())),
+                fill: AbsoluteColor::BLACK,
+                stroke: AbsoluteColor::BLACK,
+            },
+        );
+        let identity = v8::BigInt::new_from_u64(scope, id);
+        set_private_value(scope, object, CANVAS_STATE_SLOT, identity.into());
+        id
     };
-    let weak_store = Rc::downgrade(&store);
-    let owner = v8::Weak::with_finalizer(
-        scope,
-        object,
-        Box::new(move |_| {
-            if let Some(store) = weak_store.upgrade() {
-                store.borrow_mut().entries.remove(&id);
-            }
-        }),
-    );
-    let state = Rc::new(RefCell::new(Canvas2dPathState::default()));
-    store.borrow_mut().entries.insert(
-        id,
-        CanvasStateEntry {
-            _owner: owner,
-            state: state.clone(),
-        },
-    );
-    let id = v8::BigInt::new_from_u64(scope, id);
-    set_private_value(scope, object, PATH_STATE_SLOT, id.into());
-    state
+    let mut store = store.borrow_mut();
+    update(
+        store
+            .entries
+            .get_mut(&id)
+            .expect("a live object must retain its native drawing state"),
+    )
 }
 
-pub(super) fn reset_canvas_path_state<'s>(
+pub(super) fn canvas_path_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Rc<RefCell<Canvas2dPathState>> {
+    with_canvas_state(scope, object, |state| state.path.clone())
+}
+
+pub(super) fn canvas_color<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    style: CanvasColorStyle,
+) -> AbsoluteColor {
+    with_canvas_state(scope, context, |state| *state.color(style))
+}
+
+pub(super) fn set_canvas_color<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    style: CanvasColorStyle,
+    color: AbsoluteColor,
+) {
+    with_canvas_state(scope, context, |state| *state.color(style) = color);
+}
+
+pub(super) fn reset_canvas_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
 ) {
-    if get_private_value(scope, context, PATH_STATE_SLOT).is_some() {
-        *canvas_path_state(scope, context).borrow_mut() = Canvas2dPathState::default();
+    if get_private_value(scope, context, CANVAS_STATE_SLOT).is_some() {
+        with_canvas_state(scope, context, |state| {
+            *state.path.borrow_mut() = Canvas2dPathState::default();
+            state.fill = AbsoluteColor::BLACK;
+            state.stroke = AbsoluteColor::BLACK;
+        });
     }
 }
 
