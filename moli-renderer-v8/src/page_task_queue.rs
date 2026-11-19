@@ -380,8 +380,8 @@ pub(crate) use self::message_port_delivery::{
 pub(crate) use self::misc_platform_api::{
     PageMiscPlatformApiTargetEffect, PageMiscPlatformApiTurnAction, PageMiscPlatformApiTurnOutcome,
     RendererPageMiscPlatformApiOwner, RendererPageMiscPlatformApiSender,
-    RendererPageMiscPlatformApiTask, RendererPageMiscPlatformApiTaskId,
-    RendererPageMiscPlatformApiTaskKind,
+    RendererPageMiscPlatformApiTarget, RendererPageMiscPlatformApiTask,
+    RendererPageMiscPlatformApiTaskId, RendererPageMiscPlatformApiTaskKind,
 };
 #[cfg(test)]
 pub(crate) use self::module_reaction::PageModuleReactionCurrentEffect;

@@ -1,12 +1,14 @@
-//! Exact Window/Document tasks from the HTML miscellaneous platform API
-//! task source.
+//! Exact Window and Document tasks routed through miscellaneous platform APIs.
 //!
 //! This source is intentionally separate from timers, DOM manipulation, and
 //! storage events. A Web API binding may publish an immutable task envelope,
 //! but only the Page owner may authorize its exact Window/Document and the
 //! selected-task dispatcher remains the sole task-completion authority.
 
-use crate::runtime::PageOwnerTurnOutcome;
+use crate::{
+    native_bridge::{WindowDocumentTaskTarget, WindowExecutionContextIdentity},
+    runtime::PageOwnerTurnOutcome,
+};
 
 use super::{
     RendererPageWindowDocumentTask, RendererPageWindowDocumentTaskOwner,
@@ -38,24 +40,36 @@ pub(crate) enum RendererPageMiscPlatformApiTaskKind {
     MediaTrackConstraints,
     EncryptedMediaRequest,
     ContentSecurityPolicyViolation,
+    PerformanceObserver,
 }
 
-pub(crate) type RendererPageMiscPlatformApiOwner = RendererPageWindowDocumentTaskOwner;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RendererPageMiscPlatformApiTarget {
+    Document(WindowDocumentTaskTarget),
+    Window(WindowExecutionContextIdentity),
+}
+
+pub(crate) type RendererPageMiscPlatformApiOwner =
+    RendererPageWindowDocumentTaskOwner<RendererPageMiscPlatformApiTarget>;
 pub(crate) type RendererPageMiscPlatformApiTask = RendererPageWindowDocumentTask<
     RendererPageMiscPlatformApiTaskId,
     RendererPageMiscPlatformApiTaskKind,
+    RendererPageMiscPlatformApiTarget,
 >;
 pub(super) type RendererPageMiscPlatformApiRoute = RendererPageWindowDocumentTaskRoute<
     RendererPageMiscPlatformApiTaskId,
     RendererPageMiscPlatformApiTaskKind,
+    RendererPageMiscPlatformApiTarget,
 >;
 pub(crate) type RendererPageMiscPlatformApiSender = RendererPageWindowDocumentTaskSender<
     RendererPageMiscPlatformApiTaskId,
     RendererPageMiscPlatformApiTaskKind,
+    RendererPageMiscPlatformApiTarget,
 >;
 pub(super) type RendererPageMiscPlatformApiSource = RendererPageWindowDocumentTaskSource<
     RendererPageMiscPlatformApiTaskId,
     RendererPageMiscPlatformApiTaskKind,
+    RendererPageMiscPlatformApiTarget,
 >;
 
 /// Execution fact produced after exact Window/Document authorization.

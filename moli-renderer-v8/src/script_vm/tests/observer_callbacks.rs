@@ -658,6 +658,7 @@ async fn borrowed_performance_methods_use_receiver_timeline_and_entry_realms() {
     );
     vm.eval(&source)
         .expect("queue borrowed mark and measure deliveries");
+    run_performance_observer_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval("JSON.stringify(__borrowedTimeline)").unwrap(),
         r#"{"received":{"parent":["parent-mark","parent-measure"],"child":["child-mark","child-measure"]},"failures":[]}"#,
@@ -687,6 +688,7 @@ async fn borrowed_performance_observe_reads_and_delivers_the_observers_own_buffe
 "#,
     )
     .expect("subscribe to buffers using the other Realm's observe method");
+    run_performance_observer_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval("JSON.stringify(__borrowedBuffered)").unwrap(),
         r#"{"parent":["parent-buffered"],"child":["child-buffered"]}"#,
@@ -713,6 +715,7 @@ async fn borrowed_performance_delivery_survives_retirement_of_the_method_realm()
 "#,
     )
     .expect("retire the method Realm after queuing to the surviving timeline");
+    run_performance_observer_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval("JSON.stringify(__survivingTimeline)").unwrap(),
         r#"["before-method-realm-retirement","after-method-realm-retirement"]"#,
@@ -721,7 +724,8 @@ async fn borrowed_performance_delivery_survives_retirement_of_the_method_realm()
 
 #[test]
 fn common_callback_registry_keeps_active_observers_until_owner_teardown() {
-    let mut vm = new_storage_test_vm("https://performance-observer-active-root.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://performance-observer-active-root.test/");
     let common = std::rc::Rc::clone(&vm._context_host.borrow().common);
     vm.eval(
         r#"
@@ -739,7 +743,8 @@ new PerformanceObserver(list => {
     vm.eval("performance.mark('after-gc')")
         .expect("deliver to the active observer after GC");
     assert_eq!(
-        vm.eval("JSON.stringify(__activeObserverEntries)").unwrap(),
+        vm.eval_after_selected_page_tasks("JSON.stringify(__activeObserverEntries)")
+            .unwrap(),
         r#"["after-gc"]"#,
     );
     drop(vm);
@@ -773,6 +778,7 @@ async fn performance_observer_registration_uses_its_own_global_with_a_foreign_ca
 "#,
     )
     .expect("queue separate global timelines with crossed callback realms");
+    run_performance_observer_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval("JSON.stringify(__timelineEntries)").unwrap(),
         r#"{"parent":["parent-only"],"child":["child-only"],"callbackRealms":[true,true]}"#,
@@ -905,6 +911,7 @@ async fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_prox
     vm.advance_timers_until_deadline_for_test(&loader)
         .await
         .expect("deliver rendering observers");
+    run_performance_observer_tasks_for_test(&mut vm).await;
     let result = vm
         .eval(
             r#"
@@ -1127,6 +1134,7 @@ async fn observer_callback_exceptions_are_reported_to_the_callback_relevant_wind
     vm.advance_timers_until_deadline_for_test(&loader)
         .await
         .expect("deliver rendering observers");
+    run_performance_observer_tasks_for_test(&mut vm).await;
     let result = vm
         .eval(
             "JSON.stringify(globalThis.__observerCallbackErrors.sort((a, b) => a.message.localeCompare(b.message)))",
@@ -1281,7 +1289,8 @@ fn js_owned_observer_callback_cycles_remain_v8_collectable() {
 
 #[test]
 fn performance_observer_disconnect_retires_and_reobserve_restores_delivery() {
-    let mut vm = new_storage_test_vm("https://performance-observer-reobserve.test/");
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://performance-observer-reobserve.test/");
 
     vm.eval(
         r#"
@@ -1304,7 +1313,7 @@ fn performance_observer_disconnect_retires_and_reobserve_restores_delivery() {
     .expect("PerformanceObserver re-observe workflow should queue");
 
     let delivered = vm
-        .eval("JSON.stringify(globalThis.__performanceReobserveEntries)")
+        .eval_after_selected_page_tasks("JSON.stringify(globalThis.__performanceReobserveEntries)")
         .expect("PerformanceObserver re-observe workflow should flush");
     assert_eq!(delivered, r#"["delivered-after-reobserve"]"#);
 }
