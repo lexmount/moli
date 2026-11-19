@@ -2,7 +2,7 @@ use super::state::{event_private_value, mark_event_trusted, new_event_state};
 use super::{initialize_event_object, initialize_event_wrapper, new_event_wrapper};
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::throw_type_error;
-use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_webidl as webidl;
 use webidl::WebIdlDictionarySerialize;
 
@@ -172,4 +172,41 @@ pub fn install_progress_event_template_bindings<'s>(
             template.prototype_template(scope),
         );
     }
+}
+
+#[derive(WebApiObject)]
+#[webapi(
+    interface = web_api_interfaces::ProgressEvent, prototype = "Object",
+    scope_lifetime = 'scope,
+    data_properties,
+    enumerable
+)]
+struct FileReaderEventFallbackDeclaration<'scope, 'event> {
+    r#type: &'event str,
+    target: v8::Local<'scope, v8::Object>,
+    bubbles: bool,
+    cancelable: bool,
+    loaded: f64,
+    total: f64,
+    length_computable: bool,
+}
+
+pub fn new_file_reader_progress_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    loaded: f64,
+    total: f64,
+) -> v8::Local<'s, v8::Object> {
+    FileReaderEventFallbackDeclaration {
+        r#type: event_type,
+        target: reader,
+        bubbles: false,
+        cancelable: false,
+        loaded,
+        total,
+        length_computable: true,
+    }
+    .bind(scope)
+    .expect("FileReader event fallback declaration should bind")
 }

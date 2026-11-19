@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 pub mod audio;
 pub mod device;
+pub mod fallback;
 pub mod fetch;
 pub mod ice_error_event;
 pub mod init;

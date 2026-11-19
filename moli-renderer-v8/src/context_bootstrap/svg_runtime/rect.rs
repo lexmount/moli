@@ -9,28 +9,12 @@ use crate::{
     util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
     webidl,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi::svg_values::{SVG_RECT_FIELD_SLOTS as FIELDS, SVG_RECT_X_SLOT as X, new_svg_rect};
+pub(super) use moli_webapi::svg_values::{set_svg_view_box_rect_values, svg_view_box_rect_values};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
-const X: &str = "__moliSvgRectX";
-const Y: &str = "__moliSvgRectY";
-const WIDTH: &str = "__moliSvgRectWidth";
-const HEIGHT: &str = "__moliSvgRectHeight";
 const VIEW_BOX_OWNER: &str = "__moliSvgRectViewBoxOwner";
 const READ_ONLY: &str = "__moliSvgRectReadOnly";
-const FIELDS: &[(&str, &str)] = &[("x", X), ("y", Y), ("width", WIDTH), ("height", HEIGHT)];
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::SVGRect)]
-struct SvgRectObjectDeclaration {
-    #[webapi(slot = X)]
-    x: f64,
-    #[webapi(slot = Y)]
-    y: f64,
-    #[webapi(slot = WIDTH)]
-    width: f64,
-    #[webapi(slot = HEIGHT)]
-    height: f64,
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGRect, enumerable)]
@@ -78,10 +62,7 @@ pub(super) fn create_svg_rect<'s>(
         );
         return;
     }
-    let rect = SvgRectObjectDeclaration::new(0.0, 0.0, 0.0, 0.0)
-        .bind(scope)
-        .expect("SVGRect declaration should bind");
-    rv.set(rect.into());
+    rv.set(new_svg_rect(scope, [0.0; 4]).into());
 }
 
 pub(super) fn build_svg_view_box_rect<'s>(
@@ -90,10 +71,7 @@ pub(super) fn build_svg_view_box_rect<'s>(
     values: [f64; 4],
     read_only: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let [x, y, width, height] = values.map(|value| f64::from(value as f32));
-    let rect = SvgRectObjectDeclaration::new(x, y, width, height)
-        .bind(scope)
-        .expect("SVGRect declaration should bind");
+    let rect = new_svg_rect(scope, values);
     set_private_value(scope, rect, VIEW_BOX_OWNER, owner.into());
     set_private_value(
         scope,
@@ -110,32 +88,6 @@ pub(super) fn svg_view_box_rect_owner<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     get_private_value(scope, rect, VIEW_BOX_OWNER)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-pub(super) fn svg_view_box_rect_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rect: v8::Local<'s, v8::Object>,
-) -> [f64; 4] {
-    [X, Y, WIDTH, HEIGHT].map(|slot| {
-        get_private_value(scope, rect, slot)
-            .and_then(|value| v8::Local::<v8::Number>::try_from(value).ok())
-            .map_or(0.0, |value| value.value())
-    })
-}
-
-pub(super) fn set_svg_view_box_rect_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rect: v8::Local<'s, v8::Object>,
-    values: [f64; 4],
-) {
-    for (slot, value) in [X, Y, WIDTH, HEIGHT].into_iter().zip(values) {
-        set_private_value(
-            scope,
-            rect,
-            slot,
-            v8::Number::new(scope, f64::from(value as f32)).into(),
-        );
-    }
 }
 
 fn field_for_receiver<'s>(

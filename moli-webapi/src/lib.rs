@@ -34,6 +34,7 @@ pub mod dom_quad;
 pub mod dom_rect;
 pub mod dom_rect_list;
 pub mod dom_string_list;
+pub mod drag_data_values;
 pub mod encoded_video_chunk;
 pub mod event_target;
 pub mod events;
@@ -59,7 +60,9 @@ pub mod media_capabilities;
 pub mod media_cue_values;
 pub mod media_device_info;
 pub mod media_error;
+pub mod media_query_list;
 pub mod media_source;
+pub mod message_channel;
 pub mod mutation_record;
 pub mod navigation_values;
 pub mod navigator_collections;
@@ -71,8 +74,10 @@ pub mod queuing_strategy;
 pub mod resize_observer_entry;
 pub mod rtc;
 pub mod speech_synthesis;
+pub mod static_range;
 pub mod storage_values;
 pub mod streams;
+pub mod svg_values;
 pub mod text_codec;
 pub mod text_decoder;
 pub mod text_encoder;
@@ -89,7 +94,9 @@ pub mod webgl;
 pub mod webgl_values;
 pub mod webidl_iterator;
 pub mod websocket_values;
+pub mod window_values;
 pub mod worker_location;
+pub mod xpath_values;
 
 pub use embedding::{
     RealmCallbacks, RealmRuntime, WebIdlCallbackInvocation, WebIdlCallbackResult,

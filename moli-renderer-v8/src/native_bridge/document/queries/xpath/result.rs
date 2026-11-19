@@ -4,7 +4,8 @@ use crate::native_bridge::document::detached_tree_query_version;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi::xpath_values::build_xpath_result_base;
+use moli_webapi_declare::WebApiFunctionTemplate;
 use moli_xpath::SnapshotValue;
 use std::ffi::c_void;
 
@@ -25,27 +26,6 @@ pub(super) enum XPathIteratorMutationState<'s> {
 struct XPathResultSnapshotItemArgs {
     #[webidl(required)]
     index: u32,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::XPathResult)]
-struct XPathResultBaseDeclaration<'scope> {
-    #[webapi(slot = XPATH_RESULT_TYPE_SLOT)]
-    result_type: u32,
-    #[webapi(slot = XPATH_RESULT_STRING_VALUE_SLOT, constructor_default = "")]
-    string_value: &'static str,
-    #[webapi(slot = XPATH_RESULT_NUMBER_VALUE_SLOT, constructor_default = 0.0)]
-    number_value: f64,
-    #[webapi(slot = XPATH_RESULT_BOOLEAN_VALUE_SLOT, constructor_default = false)]
-    boolean_value: bool,
-    #[webapi(slot = XPATH_RESULT_SINGLE_NODE_VALUE_SLOT, init = "null")]
-    _single_node_value: (),
-    #[webapi(slot = XPATH_RESULT_SNAPSHOT_LENGTH_SLOT, constructor_default = 0)]
-    snapshot_length: u32,
-    #[webapi(slot = XPATH_RESULT_INDEX_SLOT, constructor_default = 0)]
-    index: i32,
-    #[webapi(slot = XPATH_RESULT_NODES_SLOT, constructor_default = Vec::new())]
-    nodes: Vec<v8::Local<'scope, v8::Value>>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -152,15 +132,6 @@ fn set_xpath_result_slot<'s>(
         return;
     };
     set_private_value(scope, object, name, value);
-}
-
-fn build_xpath_result_base<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    result_type: u32,
-) -> Option<v8::Local<'s, v8::Object>> {
-    XPathResultBaseDeclaration::new(result_type)
-        .bind(scope)
-        .ok()
 }
 
 pub(super) fn build_xpath_nodes_result<'s>(

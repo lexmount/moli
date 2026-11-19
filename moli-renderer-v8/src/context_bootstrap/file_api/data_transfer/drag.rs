@@ -8,6 +8,10 @@ use moli_file_api::data_transfer::{
     child_entry_full_path, drag_operations_mask_from_effect_allowed,
 };
 
+use moli_webapi::drag_data_values::{
+    DataTransferDirectoryItemObjectDeclaration, FileSystemDirectoryEntryObjectDeclaration,
+};
+
 fn set_data_transfer_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -62,38 +66,6 @@ struct DataTransferShellDeclaration {
     drop_effect: (),
     #[webapi(slot = DATA_TRANSFER_EFFECT_ALLOWED_SLOT, init = string("uninitialized"))]
     effect_allowed: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct DataTransferDirectoryItemObjectDeclaration<'s> {
-    #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "file")]
-    kind: &'static str,
-    #[webapi(slot = DATA_TRANSFER_ITEM_TYPE_SLOT, constructor_default = "")]
-    item_type: &'static str,
-    #[webapi(slot = DATA_TRANSFER_ITEM_ENTRY_SLOT)]
-    entry: v8::Local<'s, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::FileSystemDirectoryEntry,
-    scope_lifetime = 's,
-    require_prototype
-)]
-struct FileSystemDirectoryEntryObjectDeclaration<'s, 'full_path, 'name> {
-    #[webapi(slot = FILE_SYSTEM_ENTRY_FILESYSTEM_SLOT)]
-    filesystem: v8::Local<'s, v8::Object>,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_FULL_PATH_SLOT)]
-    full_path: &'full_path str,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_IS_DIRECTORY_SLOT, constructor_default = true)]
-    is_directory: bool,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_IS_FILE_SLOT, constructor_default = false)]
-    is_file: bool,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_NAME_SLOT)]
-    name: &'name str,
-    #[webapi(slot = FILE_SYSTEM_DIRECTORY_ENTRY_ENTRIES_SLOT)]
-    entries: Vec<v8::Local<'s, v8::Object>>,
 }
 
 #[cfg(feature = "devtools")]

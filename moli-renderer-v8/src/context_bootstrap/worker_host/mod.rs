@@ -20,7 +20,6 @@ const WORKER_ONERROR_SLOT: &str = "__moliWorkerOnError";
 
 mod constructor;
 mod dispatch;
-mod error_event;
 mod methods;
 
 pub(in crate::context_bootstrap) use constructor::{
@@ -35,8 +34,8 @@ pub(crate) use dispatch::{
     dispatch_worker_error_event_with_kind, dispatch_worker_event,
     flush_pending_worker_messages_for_listener, worker_has_message_delivery_listener,
 };
-pub(super) use error_event::new_worker_host_error_event;
 pub(super) use methods::{worker_post_message_callback, worker_terminate_callback};
+pub(super) use moli_webapi::events::fallback::new_worker_host_error_event;
 
 #[cfg(test)]
 mod tests;

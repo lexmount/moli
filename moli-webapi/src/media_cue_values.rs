@@ -113,3 +113,43 @@ pub fn vtt_cue_constructor_callback<'s>(
 
     rv.set(args.this().into());
 }
+
+pub const TEXT_TRACK_LIST_ITEMS_SLOT: &str = "__moliTextTrackListItems";
+pub const TEXT_TRACK_LIST_ONADDTRACK_SLOT: &str = "__moliTextTrackListOnAddTrack";
+pub const TEXT_TRACK_LIST_ONREMOVETRACK_SLOT: &str = "__moliTextTrackListOnRemoveTrack";
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::TextTrackCueList)]
+struct TextTrackCueListObjectDeclaration<'scope> {
+    #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
+    items: Vec<v8::Local<'scope, v8::Value>>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::TextTrackList)]
+struct TextTrackListObjectDeclaration<'scope> {
+    #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
+    items: Vec<v8::Local<'scope, v8::Value>>,
+
+    #[webapi(slot = TEXT_TRACK_LIST_ONADDTRACK_SLOT, init = "null")]
+    _onaddtrack: (),
+
+    #[webapi(slot = TEXT_TRACK_LIST_ONREMOVETRACK_SLOT, init = "null")]
+    _onremovetrack: (),
+}
+
+pub fn new_text_track_cue_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    TextTrackCueListObjectDeclaration::new(Vec::new())
+        .bind(scope)
+        .ok()
+}
+
+pub fn new_text_track_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    TextTrackListObjectDeclaration::new(Vec::new())
+        .bind(scope)
+        .ok()
+}

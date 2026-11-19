@@ -12,6 +12,20 @@ use moli_file_api::data_transfer::{
     data_transfer_types_from_items, normalize_drag_data_type, valid_drop_effect,
     valid_effect_allowed,
 };
+use moli_webapi::drag_data_values::{
+    DATA_TRANSFER_ITEM_ENTRY_SLOT, DATA_TRANSFER_ITEM_FILE_SLOT, DATA_TRANSFER_ITEM_KIND_SLOT,
+    DATA_TRANSFER_ITEM_OWNER_SLOT, DATA_TRANSFER_ITEM_RECORD_SLOT, DATA_TRANSFER_ITEM_STRING_SLOT,
+    DATA_TRANSFER_ITEM_TYPE_SLOT, DataTransferFileItemObjectDeclaration,
+    DataTransferItemViewDeclaration, FILE_SYSTEM_DIRECTORY_ENTRY_ENTRIES_SLOT,
+    FILE_SYSTEM_FILE_ENTRY_FILE_SLOT, FileSystemFileEntryObjectDeclaration,
+    build_data_transfer_item_for_string, build_file_system_directory_reader,
+    build_file_system_object,
+};
+pub(super) use moli_webapi::drag_data_values::{
+    FILE_SYSTEM_DIRECTORY_READER_ACTIVE_REQUEST_SLOT, FILE_SYSTEM_DIRECTORY_READER_DONE_SLOT,
+    FILE_SYSTEM_DIRECTORY_READER_ENTRIES_SLOT, FILE_SYSTEM_DIRECTORY_READER_ERROR_SLOT,
+    FILE_SYSTEM_DIRECTORY_READER_OFFSET_SLOT,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 pub(crate) use moli_file_api::data_transfer::DragDataStoreMode;
@@ -24,34 +38,11 @@ const DATA_TRANSFER_EFFECT_ALLOWED_SLOT: &str = "__lmDataTransferEffectAllowed";
 const DATA_TRANSFER_STORE_SLOT: &str = "__lmDataTransferStore";
 const DATA_TRANSFER_STORE_ITEMS_SLOT: &str = "__lmDragDataStoreItems";
 const DATA_TRANSFER_MODE_SLOT: &str = "__lmDataTransferMode";
-const DATA_TRANSFER_ITEM_OWNER_SLOT: &str = "__lmDataTransferItemOwner";
-const DATA_TRANSFER_ITEM_RECORD_SLOT: &str = "__lmDataTransferItemRecord";
 const DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT: &str = "__lmDataTransferItemArray";
 const DATA_TRANSFER_ITEM_LIST_OWNER_SLOT: &str = "__lmDataTransferOwner";
 const DATA_TRANSFER_ITEM_LIST_INDEXED_LENGTH_SLOT: &str = "__lmDataTransferItemListIndexedLength";
-const DATA_TRANSFER_ITEM_KIND_SLOT: &str = "__lmDataTransferItemKind";
-const DATA_TRANSFER_ITEM_TYPE_SLOT: &str = "__lmDataTransferItemType";
-const DATA_TRANSFER_ITEM_FILE_SLOT: &str = "__lmDataTransferItemFile";
-const DATA_TRANSFER_ITEM_ENTRY_SLOT: &str = "__lmDataTransferItemEntry";
-const DATA_TRANSFER_ITEM_STRING_SLOT: &str = "__lmDataTransferItemString";
 const DATA_TRANSFER_ITEM_TITLE_SLOT: &str = "__lmDataTransferItemTitle";
 const DATA_TRANSFER_ITEM_BASE_URL_SLOT: &str = "__lmDataTransferItemBaseURL";
-const FILE_SYSTEM_ENTRY_FILESYSTEM_SLOT: &str = "__lmFileSystemEntryFilesystem";
-const FILE_SYSTEM_ENTRY_FULL_PATH_SLOT: &str = "__lmFileSystemEntryFullPath";
-const FILE_SYSTEM_ENTRY_IS_DIRECTORY_SLOT: &str = "__lmFileSystemEntryIsDirectory";
-const FILE_SYSTEM_ENTRY_IS_FILE_SLOT: &str = "__lmFileSystemEntryIsFile";
-const FILE_SYSTEM_ENTRY_NAME_SLOT: &str = "__lmFileSystemEntryName";
-const FILE_SYSTEM_FILE_ENTRY_FILE_SLOT: &str = "__lmFileSystemFileEntryFile";
-const FILE_SYSTEM_DIRECTORY_ENTRY_ENTRIES_SLOT: &str = "__lmFileSystemDirectoryEntryEntries";
-pub(super) const FILE_SYSTEM_DIRECTORY_READER_ENTRIES_SLOT: &str =
-    "__lmFileSystemDirectoryReaderEntries";
-pub(super) const FILE_SYSTEM_DIRECTORY_READER_OFFSET_SLOT: &str =
-    "__lmFileSystemDirectoryReaderOffset";
-pub(super) const FILE_SYSTEM_DIRECTORY_READER_ACTIVE_REQUEST_SLOT: &str =
-    "__lmFileSystemDirectoryReaderActiveRequest";
-pub(super) const FILE_SYSTEM_DIRECTORY_READER_DONE_SLOT: &str = "__lmFileSystemDirectoryReaderDone";
-pub(super) const FILE_SYSTEM_DIRECTORY_READER_ERROR_SLOT: &str =
-    "__lmFileSystemDirectoryReaderError";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::DataTransfer, require_prototype)]
@@ -156,39 +147,6 @@ struct DataTransferItemListPrototypeAccessorsDeclaration {
     length: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, scope_lifetime = 's)]
-struct DataTransferFileItemObjectDeclaration<'s, 'item_type> {
-    #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "file")]
-    kind: &'static str,
-    #[webapi(slot = DATA_TRANSFER_ITEM_TYPE_SLOT)]
-    item_type: &'item_type str,
-    #[webapi(slot = DATA_TRANSFER_ITEM_FILE_SLOT)]
-    file: v8::Local<'s, v8::Object>,
-    #[webapi(slot = DATA_TRANSFER_ITEM_ENTRY_SLOT)]
-    entry: v8::Local<'s, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct DataTransferStringItemObjectDeclaration<'item_type, 'data> {
-    #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "string")]
-    kind: &'static str,
-    #[webapi(slot = DATA_TRANSFER_ITEM_TYPE_SLOT)]
-    item_type: &'item_type str,
-    #[webapi(slot = DATA_TRANSFER_ITEM_STRING_SLOT)]
-    data: &'data str,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, require_prototype)]
-struct DataTransferItemViewDeclaration<'s> {
-    #[webapi(slot = DATA_TRANSFER_ITEM_OWNER_SLOT)]
-    owner: v8::Local<'s, v8::Object>,
-    #[webapi(slot = DATA_TRANSFER_ITEM_RECORD_SLOT)]
-    record: v8::Local<'s, v8::Object>,
-}
-
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::DataTransferItem)]
 struct DataTransferItemPrototypeAccessorsDeclaration {
@@ -196,79 +154,6 @@ struct DataTransferItemPrototypeAccessorsDeclaration {
     kind: (),
     #[webapi(accessor_property = "type", getter = data_transfer_item_type_getter, enumerable)]
     item_type: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::FileSystem, require_prototype)]
-struct FileSystemObjectDeclaration<'s> {
-    #[webapi(data_property, constructor_default = "")]
-    name: &'static str,
-    #[webapi(data_property)]
-    root: v8::Local<'s, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::FileSystemFileEntry,
-    scope_lifetime = 's,
-    require_prototype
-)]
-struct FileSystemFileEntryObjectDeclaration<'s, 'full_path, 'name> {
-    #[webapi(slot = FILE_SYSTEM_ENTRY_FILESYSTEM_SLOT)]
-    filesystem: v8::Local<'s, v8::Object>,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_FULL_PATH_SLOT)]
-    full_path: &'full_path str,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_IS_DIRECTORY_SLOT, constructor_default = false)]
-    is_directory: bool,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_IS_FILE_SLOT, constructor_default = true)]
-    is_file: bool,
-    #[webapi(slot = FILE_SYSTEM_ENTRY_NAME_SLOT)]
-    name: &'name str,
-    #[webapi(slot = FILE_SYSTEM_FILE_ENTRY_FILE_SLOT)]
-    file: v8::Local<'s, v8::Object>,
-}
-
-#[derive(WebApiFunctionTemplate)]
-// The legacy entry getters return empty values when the receiver has no entry.
-#[webapi(interface = web_api_interfaces::FileSystemEntry, receiver = false)]
-struct FileSystemEntryPrototypeAccessorsDeclaration {
-    #[webapi(accessor_property, getter = file_system_entry_filesystem_getter, enumerable)]
-    filesystem: (),
-    #[webapi(
-        accessor_property = "fullPath",
-        getter = file_system_entry_full_path_getter,
-        enumerable
-    )]
-    full_path: (),
-    #[webapi(
-        accessor_property = "isDirectory",
-        getter = file_system_entry_is_directory_getter,
-        enumerable
-    )]
-    is_directory: (),
-    #[webapi(
-        accessor_property = "isFile",
-        getter = file_system_entry_is_file_getter,
-        enumerable
-    )]
-    is_file: (),
-    #[webapi(accessor_property, getter = file_system_entry_name_getter, enumerable)]
-    name: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::FileSystemDirectoryReader, require_prototype)]
-struct FileSystemDirectoryReaderObjectDeclaration<'s> {
-    #[webapi(slot = FILE_SYSTEM_DIRECTORY_READER_ENTRIES_SLOT)]
-    entries: v8::Local<'s, v8::Array>,
-    #[webapi(slot = FILE_SYSTEM_DIRECTORY_READER_OFFSET_SLOT, constructor_default = 0.0)]
-    offset: f64,
-    #[webapi(slot = FILE_SYSTEM_DIRECTORY_READER_ACTIVE_REQUEST_SLOT)]
-    active_request: v8::Local<'s, v8::Value>,
-    #[webapi(slot = FILE_SYSTEM_DIRECTORY_READER_DONE_SLOT, constructor_default = false)]
-    done: bool,
-    #[webapi(slot = FILE_SYSTEM_DIRECTORY_READER_ERROR_SLOT)]
-    error: v8::Local<'s, v8::Value>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -340,7 +225,7 @@ pub(super) fn install_data_transfer_template_bindings<'s>(
             );
         }
         "FileSystemEntry" => {
-            FileSystemEntryPrototypeAccessorsDeclaration::initialize_prototype_template(
+            moli_webapi::drag_data_values::install_file_system_entry_template_bindings(
                 scope, prototype,
             );
         }
@@ -374,14 +259,6 @@ fn private_number_property<'s>(
     slot: &'static str,
 ) -> Option<f64> {
     get_private_value(scope, object, slot)?.number_value(scope)
-}
-
-fn private_bool_property<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> Option<bool> {
-    get_private_value(scope, object, slot).map(|value| value.boolean_value(scope))
 }
 
 fn private_property_as_array<'s>(
@@ -860,26 +737,6 @@ fn build_data_transfer_item_for_file<'s>(
     Some(record)
 }
 
-fn build_data_transfer_item_for_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    mime_type: &str,
-    data: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let record = crate::util::new_null_prototype_object(scope);
-    DataTransferStringItemObjectDeclaration::new(mime_type, data)
-        .initialize(scope, record)
-        .ok()?;
-    Some(record)
-}
-
-fn build_file_system_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    FileSystemObjectDeclaration::new(v8::null(scope).into())
-        .bind(scope)
-        .ok()
-}
-
 fn build_file_system_file_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     file: v8::Local<'s, v8::Object>,
@@ -899,21 +756,6 @@ fn build_file_system_file_entry_with_full_path<'s>(
     FileSystemFileEntryObjectDeclaration::new(filesystem, full_path, &name, file)
         .bind(scope)
         .ok()
-}
-
-fn build_file_system_directory_reader<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entries: v8::Local<'s, v8::Array>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let no_active_request = v8::null(scope);
-    let no_error = v8::null(scope);
-    FileSystemDirectoryReaderObjectDeclaration::new(
-        entries,
-        no_active_request.into(),
-        no_error.into(),
-    )
-    .bind(scope)
-    .ok()
 }
 
 fn clone_array<'s>(
@@ -1247,59 +1089,6 @@ fn data_transfer_item_list_length_getter<'s>(
         .map(|items| items.length())
         .unwrap_or(0);
     rv.set(v8::Number::new(scope, length as f64).into());
-}
-
-fn file_system_entry_filesystem_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value = get_private_value(scope, args.this(), FILE_SYSTEM_ENTRY_FILESYSTEM_SLOT)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    rv.set(value);
-}
-
-fn file_system_entry_full_path_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value = private_string_property(scope, args.this(), FILE_SYSTEM_ENTRY_FULL_PATH_SLOT)
-        .and_then(|value| v8_string(scope, &value).map(Into::into))
-        .unwrap_or_else(|| v8str(scope, "").into());
-    rv.set(value);
-}
-
-fn file_system_entry_is_directory_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set_bool(
-        private_bool_property(scope, args.this(), FILE_SYSTEM_ENTRY_IS_DIRECTORY_SLOT)
-            .unwrap_or(false),
-    );
-}
-
-fn file_system_entry_is_file_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set_bool(
-        private_bool_property(scope, args.this(), FILE_SYSTEM_ENTRY_IS_FILE_SLOT).unwrap_or(false),
-    );
-}
-
-fn file_system_entry_name_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value = private_string_property(scope, args.this(), FILE_SYSTEM_ENTRY_NAME_SLOT)
-        .and_then(|value| v8_string(scope, &value).map(Into::into))
-        .unwrap_or_else(|| v8str(scope, "").into());
-    rv.set(value);
 }
 
 /// Reads an event view without consulting author-visible methods or properties.

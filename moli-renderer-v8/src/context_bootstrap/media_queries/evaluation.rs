@@ -20,18 +20,8 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::MediaQueryList)]
-struct MediaQueryListObjectDeclaration {
-    #[webapi(slot = MEDIA_QUERY_LIST_MEDIA_SLOT)]
-    media: String,
-    #[webapi(slot = MEDIA_QUERY_LIST_MATCHES_SLOT)]
-    matches: bool,
-    #[webapi(slot = MEDIA_QUERY_LIST_ONCHANGE_SLOT, init = "null")]
-    onchange: (),
-}
+use moli_webapi::media_query_list::new_media_query_list;
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MediaQueryList)]
@@ -167,9 +157,7 @@ pub(crate) fn window_match_media_callback<'s>(
             (None, match_media_style_viewport(None))
         };
     let matches = evaluate_media_query_list(&serialized_query, emulated_media.as_ref(), viewport);
-    let mql = MediaQueryListObjectDeclaration::new(serialized_query, matches)
-        .bind(scope)
-        .expect("MediaQueryList declaration should bind");
+    let mql = new_media_query_list(scope, serialized_query, matches);
     initialize_simple_event_target(scope, mql);
 
     if global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT).is_none() {

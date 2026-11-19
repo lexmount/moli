@@ -1,23 +1,7 @@
 use super::world_wrappers;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::util::v8str;
-use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NavigationTransition, own_to_string_tag = "NavigationTransition", readonly_to_string_tag)]
-struct TransitionView<'scope> {
-    #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property)]
-    to: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property)]
-    navigation_type: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property)]
-    committed: v8::Local<'scope, v8::Promise>,
-    #[webapi(data_property)]
-    finished: v8::Local<'scope, v8::Promise>,
-}
+use moli_webapi::navigation_values::new_navigation_transition_view;
 
 pub(super) fn transition_in_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -44,15 +28,8 @@ pub(super) fn transition_in_realm<'s>(
     let finished = transition.get(scope, v8str(scope, "finished").into())?;
     let finished =
         promise_in_current_realm(scope, v8::Local::<v8::Promise>::try_from(finished).ok()?)?;
-    let wrapper = TransitionView {
-        from,
-        to,
-        navigation_type,
-        committed,
-        finished,
-    }
-    .bind(scope)
-    .ok()?;
+    let wrapper =
+        new_navigation_transition_view(scope, from, to, navigation_type, committed, finished)?;
     world_wrappers::insert(scope, transition, wrapper);
     Some(wrapper)
 }

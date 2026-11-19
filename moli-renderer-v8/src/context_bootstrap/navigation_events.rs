@@ -26,13 +26,13 @@ use crate::document_runtime::EventTargetHandle;
 use crate::page_task_queue::RendererPageHashChangeData;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
+use moli_webapi::navigation_values::{
+    NAVIGATION_DESTINATION_ENTRY_SLOT, NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT,
+    NAVIGATION_DESTINATION_STATE_SLOT, NAVIGATION_DESTINATION_URL_SLOT, new_navigation_destination,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
-const NAVIGATION_DESTINATION_ENTRY_SLOT: &str = "__lmNavigationDestinationEntry";
 const NAVIGATION_DESTINATION_BACKING_SLOT: &str = "__moliNavigationDestinationBacking";
-const NAVIGATION_DESTINATION_URL_SLOT: &str = "__lmNavigationDestinationUrl";
-const NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT: &str = "__lmNavigationDestinationSameDocument";
 const NAVIGATE_EVENT_SYNTHETIC_SLOT: &str = "__lmNavigateEventSynthetic";
 const NAVIGATE_EVENT_INTERCEPTED_SLOT: &str = "__lmNavigateEventIntercepted";
 const NAVIGATION_ERROR_EVENT_ACTIVE_SLOT: &str = "__lmNavigationErrorEventActive";
@@ -139,19 +139,6 @@ struct ActiveNavigateEventDataDeclaration<'scope> {
     signal: Option<v8::Local<'scope, v8::Object>>,
     #[webapi(slot = ACTIVE_NAVIGATE_EVENT_HREF_SLOT)]
     href: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NavigationDestination)]
-struct NavigationDestinationDeclaration<'scope> {
-    #[webapi(slot = NAVIGATION_DESTINATION_URL_SLOT)]
-    url: v8::Local<'scope, v8::String>,
-    #[webapi(slot = NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT)]
-    same_document: bool,
-    #[webapi(slot = NAVIGATION_DESTINATION_ENTRY_SLOT)]
-    entry: Option<v8::Local<'scope, v8::Object>>,
-    #[webapi(slot = NAVIGATION_DESTINATION_STATE_SLOT)]
-    state: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1306,14 +1293,8 @@ fn create_navigation_destination<'s>(
     same_document: bool,
     state: Option<v8::Local<'s, v8::Value>>,
 ) -> v8::Local<'s, v8::Object> {
-    NavigationDestinationDeclaration::new(
-        v8_string(scope, href).unwrap_or_else(|| v8::String::empty(scope)),
-        same_document,
-        None,
-        state.unwrap_or_else(|| v8::null(scope).into()),
-    )
-    .bind(scope)
-    .expect("NavigationDestination declaration should bind")
+    let state = state.unwrap_or_else(|| v8::null(scope).into());
+    new_navigation_destination(scope, href, same_document, None, state)
 }
 
 fn navigation_destination_backing<'s>(
@@ -1358,14 +1339,7 @@ fn create_navigation_destination_for_entry<'s>(
         .is_some_and(|current| navigation_entries_share_document(scope, current, entry));
     let state =
         clone_navigation_entry_state(scope, entry).unwrap_or_else(|| v8::undefined(scope).into());
-    NavigationDestinationDeclaration::new(
-        v8_string(scope, &url).unwrap_or_else(|| v8::String::empty(scope)),
-        same_document,
-        Some(entry),
-        state,
-    )
-    .bind(scope)
-    .expect("entry-backed NavigationDestination declaration should bind")
+    new_navigation_destination(scope, &url, same_document, Some(entry), state)
 }
 
 fn navigation_destination_entry<'s>(

@@ -16,6 +16,10 @@ use crate::util::{
     v8str,
 };
 use crate::web_api_interfaces;
+use moli_webapi::media_cue_values::{
+    TEXT_TRACK_LIST_ITEMS_SLOT, TEXT_TRACK_LIST_ONADDTRACK_SLOT,
+    TEXT_TRACK_LIST_ONREMOVETRACK_SLOT, new_text_track_cue_list, new_text_track_list,
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
@@ -37,23 +41,13 @@ const TEXT_TRACK_CUES_SLOT: &str = "__moliTextTrackCues";
 const TEXT_TRACK_ACTIVE_CUES_SLOT: &str = "__moliTextTrackActiveCues";
 const TEXT_TRACK_INSERTION_COUNTER_SLOT: &str = "__moliTextTrackInsertionCounter";
 const TEXT_TRACK_CUE_ORDER_SLOT: &str = "__moliTextTrackCueOrder";
-const TEXT_TRACK_LIST_ITEMS_SLOT: &str = "__moliTextTrackListItems";
 const TEXT_TRACK_ONCUECHANGE_SLOT: &str = "__moliTextTrackOnCueChange";
-const TEXT_TRACK_LIST_ONADDTRACK_SLOT: &str = "__moliTextTrackListOnAddTrack";
-const TEXT_TRACK_LIST_ONREMOVETRACK_SLOT: &str = "__moliTextTrackListOnRemoveTrack";
 const TRACK_READY_STATE_SLOT: &str = "__moliTrackReadyState";
 
 const TRACK_READY_STATE_NONE: u32 = 0;
 const TRACK_READY_STATE_LOADING: u32 = 1;
 const TRACK_READY_STATE_LOADED: u32 = 2;
 const TRACK_READY_STATE_ERROR: u32 = 3;
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::TextTrackCueList)]
-struct TextTrackCueListObjectDeclaration<'scope> {
-    #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
-    items: Vec<v8::Local<'scope, v8::Value>>,
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TextTrackCueList, enumerable)]
@@ -74,19 +68,6 @@ struct TextTrackCueListTemplateDeclaration {
         callback = text_track_cue_list_get_cue_by_id_callback
     )]
     get_cue_by_id: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::TextTrackList)]
-struct TextTrackListObjectDeclaration<'scope> {
-    #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
-    items: Vec<v8::Local<'scope, v8::Value>>,
-
-    #[webapi(slot = TEXT_TRACK_LIST_ONADDTRACK_SLOT, init = "null")]
-    _onaddtrack: (),
-
-    #[webapi(slot = TEXT_TRACK_LIST_ONREMOVETRACK_SLOT, init = "null")]
-    _onremovetrack: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -353,17 +334,13 @@ fn owner_track_attribute_or_default<'s>(
 }
 
 fn make_cue_list<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
-    let list = TextTrackCueListObjectDeclaration::new(Vec::new())
-        .bind(scope)
-        .ok()?;
+    let list = new_text_track_cue_list(scope)?;
     update_indexed_list(scope, list, &[]);
     Some(list)
 }
 
 fn make_text_track_list<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
-    let list = TextTrackListObjectDeclaration::new(Vec::new())
-        .bind(scope)
-        .ok()?;
+    let list = new_text_track_list(scope)?;
     initialize_simple_event_target(scope, list);
     update_indexed_list(scope, list, &[]);
     Some(list)

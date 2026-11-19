@@ -1,6 +1,7 @@
 //! WebSocket dictionaries and error values; sockets and transport stay with the host.
 use crate::dom_exception::initialize_websocket_error;
-use moli_v8_util::{throw_type_error, v8_string};
+use crate::events::fallback::PlainEventDeclaration;
+use moli_v8_util::{throw_type_error, v8_string, v8str};
 use moli_webapi_declare::WebApiObject;
 use moli_webidl as webidl;
 use moli_websocket_types::{WebSocketCloseValidationError, close_info_code_from_number};
@@ -133,4 +134,56 @@ pub fn new_websocket_stream_close_info<'s>(
     WebSocketStreamCloseInfoDeclaration::new(close_code as f64, v8_string(scope, reason))
         .bind(scope)
         .expect("WebSocketStream close info declaration should bind")
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct WebSocketCloseEventInitDeclaration<'scope> {
+    code: u16,
+    reason: v8::Local<'scope, v8::String>,
+    was_clean: bool,
+}
+
+pub fn new_websocket_simple_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+) -> v8::Local<'s, v8::Object> {
+    let global = scope.get_current_context().global(scope);
+    if let Some(ctor) = global
+        .get(scope, v8str(scope, "Event").into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        && let Some(event_type) = v8_string(scope, event_type)
+        && let Some(event) = ctor.new_instance(scope, &[event_type.into()])
+    {
+        return event;
+    }
+    let event_type = v8_string(scope, event_type).expect("WebSocket event type should allocate");
+    PlainEventDeclaration::new(event_type)
+        .bind(scope)
+        .expect("WebSocket simple event fallback declaration should bind")
+}
+
+pub fn new_websocket_close_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    code: u16,
+    reason: &str,
+    was_clean: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let global = scope.get_current_context().global(scope);
+    let reason = v8_string(scope, reason)?;
+    if let Some(ctor) = global
+        .get(scope, v8str(scope, "CloseEvent").into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    {
+        let event_type = v8_string(scope, "close")?;
+        let init = WebSocketCloseEventInitDeclaration::new(code, reason, was_clean)
+            .bind(scope)
+            .ok()?;
+        return ctor.new_instance(scope, &[event_type.into(), init.into()]);
+    }
+    let event = new_websocket_simple_event(scope, "close");
+    WebSocketCloseEventInitDeclaration::new(code, reason, was_clean)
+        .initialize(scope, event)
+        .ok()?;
+    Some(event)
 }

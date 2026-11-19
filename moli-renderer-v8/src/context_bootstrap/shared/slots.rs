@@ -40,20 +40,8 @@ pub(in crate::context_bootstrap) const WINDOW_FRAMES_SLOT: &str = "__moliWindowF
 pub(crate) use moli_webapi::event_target::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 pub(in crate::context_bootstrap) const DOM_IMPLEMENTATION_SINGLETON_SLOT: &str =
     "__moliDOMImplementationSingleton";
-pub(in crate::context_bootstrap) const STATIC_RANGE_START_CONTAINER_STORAGE_KEY: &str =
-    "__moliStaticRangeStartContainer";
-pub(in crate::context_bootstrap) const STATIC_RANGE_START_OFFSET_STORAGE_KEY: &str =
-    "__moliStaticRangeStartOffset";
-pub(in crate::context_bootstrap) const STATIC_RANGE_END_CONTAINER_STORAGE_KEY: &str =
-    "__moliStaticRangeEndContainer";
-pub(in crate::context_bootstrap) const STATIC_RANGE_END_OFFSET_STORAGE_KEY: &str =
-    "__moliStaticRangeEndOffset";
 pub(in crate::context_bootstrap) const SELECTION_RANGE_SLOT: &str = "__moliSelectionRange";
 
-pub(in crate::context_bootstrap) const MESSAGE_CHANNEL_PORT1_SLOT: &str =
-    "__moliMessageChannelPort1";
-pub(in crate::context_bootstrap) const MESSAGE_CHANNEL_PORT2_SLOT: &str =
-    "__moliMessageChannelPort2";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_PEER_SLOT: &str = "__moliMessagePortPeer";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_ONMESSAGE_HANDLER_SLOT: &str =
     "__lmMessagePortOnmessageHandler";
@@ -109,12 +97,9 @@ pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_QUEUE_SLOT: &str =
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES_SLOT: &str =
     "__moliPerformanceObserverSupportedEntryTypes";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRIES_SLOT: &str = "__moliPerformanceEntries";
-pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_MEDIA_SLOT: &str =
-    "__moliMediaQueryListMedia";
-pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_MATCHES_SLOT: &str =
-    "__moliMediaQueryListMatches";
-pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_ONCHANGE_SLOT: &str =
-    "__moliMediaQueryListOnchange";
+pub(in crate::context_bootstrap) use moli_webapi::media_query_list::{
+    MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
+};
 pub(in crate::context_bootstrap) const MEDIA_QUERY_LIST_REGISTRY_SLOT: &str =
     "__moliMediaQueryLists";
 pub(in crate::context_bootstrap) use moli_webapi::streams::slots::{
