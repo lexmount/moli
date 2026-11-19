@@ -1,8 +1,7 @@
 use crate::web_api_interfaces;
-use moli_webapi::events::dispatch_init::{
-    PromiseRejectionEventInitDeclaration, ServiceWorkerExtendableMessageEventInitDeclaration,
-};
+use moli_webapi::events::dispatch_init::ServiceWorkerExtendableMessageEventInitDeclaration;
 use moli_webapi::events::fallback::PlainPromiseRejectionEventDeclaration;
+use moli_webapi::events::subclasses::construct_native_promise_rejection_event;
 use std::{
     cell::{Cell, RefCell},
     pin::pin,
@@ -567,23 +566,10 @@ fn new_worker_promise_rejection_event<'s>(
     promise: v8::Local<'s, v8::Promise>,
     reason: Option<v8::Local<'s, v8::Value>>,
 ) -> v8::Local<'s, v8::Object> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(event_ctor) = global
-        .get(scope, v8str(scope, "PromiseRejectionEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    if let Some(event) =
+        construct_native_promise_rejection_event(scope, event_type, promise, reason)
     {
-        let init = PromiseRejectionEventInitDeclaration::new(
-            event_type == "unhandledrejection",
-            promise,
-            reason.unwrap_or_else(|| v8::null(scope).into()),
-        )
-        .bind(scope)
-        .expect("worker PromiseRejectionEvent init declaration should bind");
-        if let Some(type_value) = v8::String::new(scope, event_type)
-            && let Some(event) = event_ctor.new_instance(scope, &[type_value.into(), init.into()])
-        {
-            return event;
-        }
+        return event;
     }
 
     let event = new_worker_event_object(scope, event_type);

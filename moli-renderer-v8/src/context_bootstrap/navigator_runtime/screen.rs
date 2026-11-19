@@ -8,6 +8,7 @@ use crate::util::{
 };
 use crate::web_api_interfaces;
 use crate::webidl;
+use moli_webapi::navigator_options::ScreenOrientationLockArgs;
 use moli_webapi::window_values::{
     SCREEN_AVAIL_HEIGHT_SLOT, SCREEN_AVAIL_LEFT_SLOT, SCREEN_AVAIL_TOP_SLOT,
     SCREEN_AVAIL_WIDTH_SLOT, SCREEN_COLOR_DEPTH_SLOT, SCREEN_HEIGHT_SLOT,
@@ -17,26 +18,6 @@ use moli_webapi::window_values::{
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 const SCREEN_ORIENTATION_SLOT: &str = "__moliScreenOrientation";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, webidl::WebIdlEnum)]
-#[webidl(name = "OrientationLockType", rename_all = "kebab-case")]
-enum OrientationLockType {
-    Any,
-    Natural,
-    Landscape,
-    Portrait,
-    PortraitPrimary,
-    PortraitSecondary,
-    LandscapePrimary,
-    LandscapeSecondary,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "ScreenOrientation.lock")]
-struct ScreenOrientationLockArgs {
-    #[webidl(required, converter = "enum")]
-    orientation: OrientationLockType,
-}
 
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Screen)]

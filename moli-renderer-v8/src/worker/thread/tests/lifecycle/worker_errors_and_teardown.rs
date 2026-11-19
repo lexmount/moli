@@ -224,6 +224,8 @@ async fn worker_global_unhandledrejection_event_dispatches_after_microtask_check
     ensure_v8();
     let mut handle = spawn_worker(
         r#"
+        const NativePromiseRejectionEvent = PromiseRejectionEvent;
+        self.PromiseRejectionEvent = function() { throw new Error("public event constructor"); };
         onunhandledrejection = event => {
             const defaultPreventedBefore = event.defaultPrevented;
             event.preventDefault();
@@ -231,6 +233,7 @@ async fn worker_global_unhandledrejection_event_dispatches_after_microtask_check
                 type: event.type,
                 reason: event.reason,
                 promise: event.promise instanceof Promise,
+                native: event instanceof NativePromiseRejectionEvent,
                 cancelable: event.cancelable,
                 defaultPreventedBefore,
                 defaultPreventedAfter: event.defaultPrevented
@@ -245,7 +248,7 @@ async fn worker_global_unhandledrejection_event_dispatches_after_microtask_check
 
     assert_eq!(
         recv_post_json(&mut handle).await,
-        r#"{"type":"unhandledrejection","reason":"worker-boom","promise":true,"cancelable":true,"defaultPreventedBefore":false,"defaultPreventedAfter":true}"#
+        r#"{"type":"unhandledrejection","reason":"worker-boom","promise":true,"native":true,"cancelable":true,"defaultPreventedBefore":false,"defaultPreventedAfter":true}"#
     );
 }
 

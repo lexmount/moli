@@ -36,6 +36,39 @@ impl<'s> FocusEventInit<'s> {
     }
 }
 
+pub fn construct_native_focus_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    bubbles: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let related_target = nullable_native_event_interface(
+        scope,
+        related_target,
+        "FocusEventInit",
+        "relatedTarget",
+        webidl::InterfaceOptions {
+            name: "EventTarget",
+            brand_check: web_api_interfaces::EventTarget::is_instance,
+        },
+    )?;
+    let flags = EventInit {
+        bubbles,
+        cancelable: false,
+        composed: true,
+    };
+    let init = FocusEventInit {
+        ui: UiEventInit::from_native(flags, 0, None),
+        related_target,
+    };
+    construct_native_subclass(
+        scope,
+        EventSubclassKind::FocusEvent,
+        event_type,
+        SubclassInit::Basic(BasicEventInit::Focus(init)),
+    )
+}
+
 impl<'s> CompositionEventInit<'s> {
     pub(super) fn event_flags(&self) -> (bool, bool, bool) {
         self.ui.event_flags()

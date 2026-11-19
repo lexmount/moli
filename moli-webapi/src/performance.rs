@@ -7,6 +7,7 @@ pub mod memory;
 pub mod name;
 pub mod observer;
 pub mod slots;
+pub mod user_timing;
 pub use entries::{
     performance_entry_slot_number, performance_entry_slot_string, performance_entry_slot_value,
     set_performance_entry_slot_number,

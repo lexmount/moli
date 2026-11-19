@@ -1,3 +1,5 @@
+pub(super) use moli_webapi::navigation_values::options::NavigationNavigateHistoryKind;
+
 use super::location_runtime::{
     is_same_document_fragment_navigation, location_href_slot, resolve_location_navigation_target,
     sync_location_object, urls_equal_ignoring_fragment,
@@ -38,7 +40,6 @@ use super::navigation_window::{
 use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
 use crate::util::context_host_ptr_for_navigation_owner;
-use crate::webidl;
 use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,17 +65,6 @@ pub(crate) fn resolve_cross_window_location_target(
         .join(raw)
         .ok()
         .map(|url| url.to_string())
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, strum::EnumString, webidl::WebIdlEnum)]
-#[webidl(name = "NavigationHistoryBehavior")]
-#[strum(serialize_all = "lowercase")]
-pub(super) enum NavigationNavigateHistoryKind {
-    #[webidl(token = "auto")]
-    #[strum(serialize = "auto")]
-    Default,
-    Push,
-    Replace,
 }
 
 pub(crate) fn navigate_location_object<'s>(

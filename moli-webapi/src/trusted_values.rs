@@ -2,6 +2,7 @@ use crate::interfaces as web_api_interfaces;
 use anyhow::{Result, anyhow};
 use moli_v8_util::{get_private_value, set_private_value, throw_type_error, v8str};
 use moli_webapi_declare::WebApiObject;
+use moli_webidl as webidl;
 pub const TRUSTED_TYPE_VALUE_SLOT: &str = "__moliTrustedTypeValue";
 pub const TRUSTED_SCRIPT_CODE_LIKE_CONSTRUCTOR_SLOT: &str =
     "__moliTrustedScriptCodeLikeConstructor";
@@ -219,4 +220,34 @@ fn trusted_type_to_string_callback<'s>(
         return;
     };
     rv.set(value);
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "TrustedTypePolicyOptions")]
+pub struct TrustedTypePolicyOptionsMembers {
+    #[webidl(name = "createHTML", converter = "callback_function")]
+    pub create_html: Option<webidl::WebIdlCallbackFunction>,
+    #[webidl(name = "createScript", converter = "callback_function")]
+    pub create_script: Option<webidl::WebIdlCallbackFunction>,
+    #[webidl(name = "createScriptURL", converter = "callback_function")]
+    pub create_script_url: Option<webidl::WebIdlCallbackFunction>,
+}
+
+pub fn parse_policy_callbacks<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    options: v8::Local<'s, v8::Value>,
+) -> Option<TrustedTypePolicyOptionsMembers> {
+    let members = match webidl::parse_dictionary::<TrustedTypePolicyOptionsMembers>(
+        scope,
+        options,
+        webidl::Context::argument("TrustedTypePolicyFactory.createPolicy", 2),
+    ) {
+        Ok(Some(members)) => members,
+        Ok(None) => TrustedTypePolicyOptionsMembers::default(),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return None;
+        }
+    };
+    Some(members)
 }

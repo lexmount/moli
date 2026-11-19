@@ -16,7 +16,7 @@ use crate::util::{
     v8str,
 };
 use crate::web_api_interfaces;
-use moli_webapi::events::dispatch_init::TrackEventInitDeclaration;
+use moli_webapi::events::subclasses::construct_native_track_event;
 use moli_webapi::media_cue_values::{
     TEXT_TRACK_LIST_ITEMS_SLOT, TEXT_TRACK_LIST_ONADDTRACK_SLOT,
     TEXT_TRACK_LIST_ONREMOVETRACK_SLOT, new_text_track_cue_list, new_text_track_list,
@@ -25,7 +25,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::{
-    construct_event, construct_simple_event, dispatch_public_event, element_attribute,
+    construct_simple_event, dispatch_public_event, element_attribute,
     html_media_element_getter_receiver, html_media_element_method_receiver,
 };
 
@@ -1649,10 +1649,7 @@ pub(crate) fn dispatch_text_track_list_event<'s>(
     track: v8::Local<'s, v8::Object>,
     event_type: &str,
 ) -> bool {
-    let Some(init) = TrackEventInitDeclaration::new(track).bind(scope).ok() else {
-        return false;
-    };
-    if let Some(event) = construct_event(scope, "TrackEvent", event_type, init) {
+    if let Some(event) = construct_native_track_event(scope, event_type, track) {
         let _ = dispatch_simple_event_target_event(scope, list, event_type, event);
         true
     } else {

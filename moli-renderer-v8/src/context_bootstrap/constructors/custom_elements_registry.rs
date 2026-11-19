@@ -1,3 +1,5 @@
+use moli_webapi::dom_options::ElementDefinitionOptions;
+
 use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -51,12 +53,6 @@ struct CustomElementsDefineArgs<'s> {
     constructor: v8::Local<'s, v8::Function>,
     #[webidl(dictionary)]
     options: ElementDefinitionOptions,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "ElementDefinitionOptions")]
-struct ElementDefinitionOptions {
-    extends: Option<String>,
 }
 
 #[derive(webidl::WebIdlArgs)]

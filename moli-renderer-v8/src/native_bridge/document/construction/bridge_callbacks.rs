@@ -22,7 +22,9 @@ pub(in crate::native_bridge) fn bridge_create_element_callback<'s>(
         rv.set_null();
         return;
     };
-    let Some(options) = parsed.options.flatten(scope, runtime_ptr, document_handle) else {
+    let Some(options) =
+        flatten_create_element_options(parsed.options, scope, runtime_ptr, document_handle)
+    else {
         return;
     };
     let local_name = if is_html_document(unsafe { &*runtime_ptr }, document_handle) {
@@ -63,7 +65,9 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
         rv.set_null();
         return;
     };
-    let Some(options) = parsed.options.flatten(scope, runtime_ptr, document_handle) else {
+    let Some(options) =
+        flatten_create_element_options(parsed.options, scope, runtime_ptr, document_handle)
+    else {
         return;
     };
     if namespace.as_deref() == Some(XHTML_NS) {
@@ -128,7 +132,7 @@ pub(in crate::native_bridge) fn bridge_create_element_ns_callback<'s>(
         rv.set_null();
         return;
     };
-    options.initialize_non_html_element(runtime_ptr, handle);
+    initialize_non_html_element(&options, runtime_ptr, handle);
     unsafe { &mut *runtime_ptr }.capture_node_creation_stack_trace(scope, handle);
     match unsafe { &mut *runtime_ptr }
         .native_bridge_mut()

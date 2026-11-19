@@ -65,13 +65,6 @@ struct DataTransferObjectDeclaration<'s> {
     mode: f64,
 }
 
-pub(crate) fn is_branded_data_transfer_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::DataTransfer::is_instance(scope, object)
-}
-
 fn data_transfer_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1440,7 +1433,9 @@ mod tests {
         with_transfer_scope(|scope| {
             let store = create_native_drag_data_store(scope).unwrap();
             let backing = store.local(scope);
-            assert!(!is_branded_data_transfer_object(scope, backing));
+            assert!(!web_api_interfaces::DataTransfer::is_instance(
+                scope, backing
+            ));
             let source =
                 create_drag_data_transfer_view(scope, &store, DragDataStoreMode::ReadWrite, "none")
                     .unwrap();

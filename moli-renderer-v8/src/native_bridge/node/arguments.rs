@@ -1,3 +1,5 @@
+use moli_webapi::dom_options::GetRootNodeOptions;
+
 use super::*;
 
 #[derive(webidl::WebIdlArgs)]
@@ -44,13 +46,6 @@ pub(in crate::native_bridge) struct NullableNodeArgs<'s> {
 pub(in crate::native_bridge) struct NodeNamespaceArgs {
     #[webidl(required, nullable)]
     pub namespace: Option<String>,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "GetRootNodeOptions")]
-pub(in crate::native_bridge) struct GetRootNodeOptions {
-    #[webidl(default = false)]
-    pub composed: bool,
 }
 
 #[derive(webidl::WebIdlArgs)]

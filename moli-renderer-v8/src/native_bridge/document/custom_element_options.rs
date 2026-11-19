@@ -25,39 +25,10 @@ pub(in crate::native_bridge::document) struct DocumentCreateElementNsArgs {
     pub(in crate::native_bridge::document) options: CreateElementOptions,
 }
 
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "ElementCreationOptions")]
-pub(in crate::native_bridge::document) struct CreateElementOptions {
-    // An omitted nullable member and an explicitly null registry have different
-    // meanings. Keep its presence while reusing native interface conversion.
-    #[webidl(name = "customElementRegistry", with = nullable_creation_registry)]
-    pub(in crate::native_bridge::document) registry_association:
-        Option<custom_elements::CustomElementRegistryAssociation>,
-    #[webidl(name = "is")]
-    pub(in crate::native_bridge::document) is_name: Option<String>,
-}
-
-impl<'s> webidl::WebIdlConverter<'s> for CreateElementOptions {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &(),
-    ) -> Result<Self, webidl::WebIdlError> {
-        // Objects select the dictionary even if they are boxed strings or have
-        // a toString method. Nullish values select the empty dictionary.
-        if value.is_object() || value.is_null_or_undefined() {
-            return webidl::parse_dictionary::<Self>(scope, value, context)
-                .map(Option::unwrap_or_default);
-        }
-        // Other primitives select the legacy DOMString member, which the DOM
-        // algorithm ignores. Conversion still rejects Symbols.
-        webidl::convert::<webidl::DomString16>(scope, value, context)?;
-        Ok(Self::default())
-    }
-}
+pub(in crate::native_bridge::document) type CreateElementOptions =
+    moli_webapi::dom_options::CreateElementOptions<
+        custom_elements::CustomElementRegistryAssociation,
+    >;
 
 fn create_element_options_argument<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -77,87 +48,79 @@ fn create_element_options_argument<'s>(
     )
 }
 
-fn nullable_creation_registry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    member: &'static str,
-) -> Result<Option<custom_elements::CustomElementRegistryAssociation>, webidl::WebIdlError> {
-    let context = webidl::Context::member("ElementCreationOptions", member);
-    let Some(value) = webidl::property_result(scope, object, member, context)? else {
-        return Ok(None);
-    };
-    if value.is_undefined() {
-        return Ok(None);
+impl<'s> webidl::WebIdlConverter<'s> for custom_elements::CustomElementRegistryAssociation {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        if value.is_null() {
+            return Ok(Self::Null);
+        }
+        let registry = webidl::convert_with_options::<webidl::InterfaceObject>(
+            scope,
+            value,
+            context,
+            &webidl::InterfaceOptions {
+                name: web_api_interfaces::CustomElementRegistry::NAME,
+                brand_check: web_api_interfaces::CustomElementRegistry::is_instance,
+            },
+        )?;
+        let target = moli_webapi_declare::web_api_object_target(scope, registry.0)
+            .expect("converted CustomElementRegistry has native identity");
+        Ok(Self::Registry(custom_elements::registry_store_key(
+            scope, target,
+        )))
     }
-    if value.is_null() {
-        return Ok(Some(
-            custom_elements::CustomElementRegistryAssociation::Null,
-        ));
-    }
-    let registry = webidl::convert_with_options::<webidl::InterfaceObject>(
-        scope,
-        value,
-        context,
-        &webidl::InterfaceOptions {
-            name: web_api_interfaces::CustomElementRegistry::NAME,
-            brand_check: web_api_interfaces::CustomElementRegistry::is_instance,
-        },
-    )?;
-    let target = moli_webapi_declare::web_api_object_target(scope, registry.0)
-        .expect("converted CustomElementRegistry has native identity");
-    Ok(Some(
-        custom_elements::CustomElementRegistryAssociation::Registry(
-            custom_elements::registry_store_key(scope, target),
-        ),
-    ))
 }
 
-impl CreateElementOptions {
-    pub(in crate::native_bridge::document) fn initialize_non_html_element(
-        &self,
-        runtime_ptr: *mut PageScriptHost,
-        handle: DomHandle,
-    ) {
-        let runtime = unsafe { &mut *runtime_ptr };
-        if let Some(registry) = self.registry_association {
-            runtime.set_custom_element_registry_association(handle, registry);
-        }
-        if let Some(is_name) = &self.is_name {
-            runtime
-                .dom_host_mut()
-                .set_custom_element_is_name(handle, Some(is_name.clone()));
-        }
+pub(in crate::native_bridge::document) fn initialize_non_html_element(
+    options: &CreateElementOptions,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+) {
+    let runtime = unsafe { &mut *runtime_ptr };
+    if let Some(registry) = options.registry_association {
+        runtime.set_custom_element_registry_association(handle, registry);
     }
+    if let Some(is_name) = &options.is_name {
+        runtime
+            .dom_host_mut()
+            .set_custom_element_is_name(handle, Some(is_name.clone()));
+    }
+}
 
-    pub(in crate::native_bridge::document) fn flatten(
-        mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        runtime_ptr: *mut PageScriptHost,
-        document_handle: DomHandle,
-    ) -> Option<Self> {
-        if self.registry_association.is_some() && self.is_name.is_some() {
-            throw_dom_exception(
-                scope,
-                "NotSupportedError",
-                9,
-                "An explicit CustomElementRegistry cannot be combined with is.",
-            );
-            return None;
-        }
-        if !validate_registry_association_for_document(
+pub(in crate::native_bridge::document) fn flatten_create_element_options(
+    mut options: CreateElementOptions,
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    document_handle: DomHandle,
+) -> Option<CreateElementOptions> {
+    if options.registry_association.is_some() && options.is_name.is_some() {
+        throw_dom_exception(
             scope,
-            runtime_ptr,
-            document_handle,
-            self.registry_association,
-        ) {
-            return None;
-        }
-        if self.registry_association.is_none() {
-            self.registry_association =
-                unsafe { &*runtime_ptr }.custom_element_registry_association(document_handle);
-        }
-        Some(self)
+            "NotSupportedError",
+            9,
+            "An explicit CustomElementRegistry cannot be combined with is.",
+        );
+        return None;
     }
+    if !validate_registry_association_for_document(
+        scope,
+        runtime_ptr,
+        document_handle,
+        options.registry_association,
+    ) {
+        return None;
+    }
+    if options.registry_association.is_none() {
+        options.registry_association =
+            unsafe { &*runtime_ptr }.custom_element_registry_association(document_handle);
+    }
+    Some(options)
 }
 
 pub(in crate::native_bridge) fn validate_registry_association_for_document(

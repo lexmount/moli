@@ -1,25 +1,4 @@
-use super::util::v8_string;
-use moli_webapi::events::dispatch_init::FocusEventInitDeclaration;
-
-fn build_focus_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    related_target: Option<v8::Local<'s, v8::Value>>,
-    bubbles: bool,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let constructor =
-        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "FocusEvent")
-            .ok()?;
-    let init = FocusEventInitDeclaration::new(
-        bubbles,
-        related_target.unwrap_or_else(|| v8::null(scope).into()),
-    )
-    .bind(scope)
-    .ok()?;
-    let event_type = v8_string(scope, event_type)?;
-    let value = constructor.new_instance(scope, &[event_type.into(), init.into()])?;
-    Some(value)
-}
+use moli_webapi::events::subclasses::construct_native_focus_event;
 
 pub(super) fn dispatch_detached_simple_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -44,7 +23,8 @@ pub(super) fn dispatch_detached_focus_event<'s>(
     related_target: Option<v8::Local<'s, v8::Value>>,
     bubbles: bool,
 ) -> bool {
-    let Some(event) = build_focus_event(scope, event_type, related_target, bubbles) else {
+    let Some(event) = construct_native_focus_event(scope, event_type, related_target, bubbles)
+    else {
         return true;
     };
     dispatch_node_event(scope, target, event)

@@ -1,5 +1,5 @@
 use super::*;
-use moli_webapi::events::dispatch_init::PromiseRejectionEventInitDeclaration;
+use moli_webapi::events::subclasses::construct_native_promise_rejection_event;
 
 pub(crate) fn dispatch_window_promise_rejection_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -9,27 +9,8 @@ pub(crate) fn dispatch_window_promise_rejection_event<'s>(
     promise: v8::Local<'s, v8::Promise>,
     reason: Option<v8::Local<'s, v8::Value>>,
 ) -> std::result::Result<bool, String> {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor_value) = global.get(scope, v8str(scope, "PromiseRejectionEvent").into())
+    let Some(event) = construct_native_promise_rejection_event(scope, event_type, promise, reason)
     else {
-        return Ok(true);
-    };
-    let Ok(event_ctor) = v8::Local::<v8::Function>::try_from(event_ctor_value) else {
-        return Ok(true);
-    };
-
-    let init = PromiseRejectionEventInitDeclaration::new(
-        event_type == "unhandledrejection",
-        promise,
-        reason.unwrap_or_else(|| v8::null(scope).into()),
-    )
-    .bind(scope)
-    .expect("PromiseRejectionEvent init declaration should bind");
-
-    let Some(type_value) = v8_string(scope, event_type) else {
-        return Ok(true);
-    };
-    let Some(event) = event_ctor.new_instance(scope, &[type_value.into(), init.into()]) else {
         return Ok(true);
     };
 

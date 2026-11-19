@@ -1,3 +1,5 @@
+use moli_webapi::dom_options::PointerLockOptions;
+
 use super::{
     PageScriptHost,
     abort::dom_exception_value,
@@ -12,13 +14,6 @@ use crate::{
     document_runtime::DomHandle, host::HostTimerOwner, util::context_host_ptr_from_global_bridge,
     webidl,
 };
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "PointerLockOptions")]
-struct PointerLockOptions {
-    #[webidl(name = "unadjustedMovement", default = false)]
-    unadjusted_movement: bool,
-}
 
 #[derive(Clone, Copy)]
 #[repr(i32)]

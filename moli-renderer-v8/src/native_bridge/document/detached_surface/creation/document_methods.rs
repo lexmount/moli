@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::native_bridge::document::CreateElementOptions;
+use crate::native_bridge::document::{CreateElementOptions, flatten_create_element_options};
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -207,7 +207,7 @@ pub(in crate::native_bridge::document) fn create_detached_element_for_document<'
     }
     let (runtime_ptr, document_handle) =
         node_runtime_and_handle_from_object_or_detached(scope, document).ok()?;
-    let options = options.flatten(scope, runtime_ptr, document_handle)?;
+    let options = flatten_create_element_options(options, scope, runtime_ptr, document_handle)?;
     // Conversion and DOM exceptions use the binding's realm. Allocation uses
     // the Document's realm so native ownership does not depend on the caller.
     let context = document.get_creation_context(scope)?;

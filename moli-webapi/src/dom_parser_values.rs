@@ -3,6 +3,7 @@
 use crate::interfaces;
 use moli_v8_util::throw_type_error;
 use moli_webapi_declare::WebApiObject;
+use moli_webidl as webidl;
 
 pub const DOM_PARSER_CONSTRUCTION_REALM_SLOT: &str = "__moliDomParserConstructionRealm";
 
@@ -30,4 +31,31 @@ pub fn dom_parser_constructor_callback<'s>(
         .initialize(scope, args.this())
         .expect("DOMParser state should initialize");
     rv.set(args.this().into());
+}
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "SupportedType")]
+pub enum DomParserSupportedType {
+    #[webidl(token = "text/html")]
+    Html,
+    #[webidl(token = "text/xml")]
+    TextXml,
+    #[webidl(token = "application/xml")]
+    ApplicationXml,
+    #[webidl(token = "application/xhtml+xml")]
+    ApplicationXhtmlXml,
+    #[webidl(token = "image/svg+xml")]
+    ImageSvgXml,
+}
+
+impl DomParserSupportedType {
+    pub fn as_mime(self) -> &'static str {
+        match self {
+            Self::Html => "text/html",
+            Self::TextXml => "text/xml",
+            Self::ApplicationXml => "application/xml",
+            Self::ApplicationXhtmlXml => "application/xhtml+xml",
+            Self::ImageSvgXml => "image/svg+xml",
+        }
+    }
 }

@@ -11,7 +11,7 @@ mod policy_callbacks;
 mod realm_state;
 
 use policy_callbacks::{
-    TrustedTypePolicyCallbackOutcome, invoke_policy_callback, parse_policy_callbacks,
+    TrustedTypePolicyCallbackOutcome, install_policy_callbacks, invoke_policy_callback,
 };
 
 #[cfg(test)]
@@ -531,8 +531,7 @@ fn trusted_types_create_policy_callback<'s>(
     }
     .bind(scope)
     .expect("TrustedTypePolicy declaration should bind");
-    webidl::WebIdlDictionarySerialize::initialize_snapshot(&callbacks, scope, policy)
-        .expect("TrustedTypePolicy callbacks should initialize");
+    install_policy_callbacks(scope, policy, callbacks);
 
     if name == "default" {
         let global = scope.get_current_context().global(scope);

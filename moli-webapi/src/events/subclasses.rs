@@ -10,18 +10,24 @@ use moli_webidl as webidl;
 
 mod accessors;
 mod basic;
-pub use basic::initialize_text_event;
+pub use basic::{construct_native_focus_event, initialize_text_event};
 mod captured_mouse;
 mod clipboard_change;
 mod custom;
+mod input;
 mod keyboard;
 mod navigation;
 mod pointer;
 mod touch;
+pub use input::{InputEventInit, construct_native_input_event};
 pub use keyboard::{construct_native_keyboard_event, keyboard_event_init_callback};
 pub use navigation::{
     NAVIGATE_EVENT_SYNTHETIC_SLOT, construct_native_current_entry_change_event,
     construct_native_navigate_event,
+};
+pub use payload::{
+    construct_native_form_data_event, construct_native_promise_rejection_event,
+    construct_native_submit_event, construct_native_track_event,
 };
 pub use pointer::{
     InputEventCoordinates, MouseEventInit, PointerEventProperties, construct_native_drag_event,
@@ -29,7 +35,11 @@ pub use pointer::{
     construct_native_wheel_event, pointer_event_get_coalesced_events_callback,
     pointer_event_get_predicted_events_callback,
 };
-pub use values::{construct_native_hash_change_event, construct_native_popstate_event};
+pub use values::{
+    construct_native_command_event, construct_native_hash_change_event,
+    construct_native_interest_event, construct_native_popstate_event,
+    construct_native_toggle_event,
+};
 pub mod error;
 pub mod font;
 pub mod message;
@@ -67,6 +77,7 @@ enum SubclassInit<'s> {
     Pointing(pointer::PointerEventInitPayload<'s>),
     Keyboard(keyboard::KeyboardEventInit<'s>),
     Touch(touch::TouchEventInit<'s>),
+    Input(input::InputEventValues<'s>),
     Basic(basic::BasicEventInit<'s>),
     CurrentEntry(navigation::NavigationCurrentEntryChangeEventInitMembers<'s>),
     Navigate(navigation::NavigateEventInitMembers<'s>, bool),
@@ -162,6 +173,7 @@ impl<'s> SubclassInit<'s> {
             Self::Pointing(init) => init.event_flags(),
             Self::Keyboard(init) => init.event_flags(),
             Self::Touch(init) => init.event_flags(),
+            Self::Input(init) => init.event_flags(),
             Self::Basic(init) => init.event_flags(),
             Self::CurrentEntry(init) => init.event_flags(),
             Self::Navigate(init, _) => init.event_flags(),
@@ -186,6 +198,7 @@ impl<'s> SubclassInit<'s> {
             Self::Pointing(init) => init.initialize(scope, event),
             Self::Keyboard(init) => keyboard::initialize_keyboard_event(scope, event, init),
             Self::Touch(init) => init.initialize(scope, event),
+            Self::Input(init) => return init.initialize(scope, event),
             Self::Basic(init) => init.initialize(scope, event),
             Self::CurrentEntry(init) => init.initialize(scope, event),
             Self::Navigate(init, synthetic) => init.initialize(scope, event, synthetic),
@@ -287,6 +300,19 @@ fn native_event_interface<'s>(
             webidl::throw_error(scope, &error);
             None
         }
+    }
+}
+
+fn nullable_native_event_interface<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: Option<v8::Local<'s, v8::Value>>,
+    prefix: &'static str,
+    member: &'static str,
+    options: webidl::InterfaceOptions,
+) -> Option<Option<v8::Local<'s, v8::Object>>> {
+    match value.filter(|value| !value.is_null_or_undefined()) {
+        Some(value) => native_event_interface(scope, value, prefix, member, options).map(Some),
+        None => Some(None),
     }
 }
 

@@ -2,6 +2,10 @@ use super::*;
 use crate::web_api_interfaces;
 use moli_storage_service::SqlBucketOperation;
 use moli_v8_util::reject_promise_with_type_error as reject_type_error;
+use moli_webapi::navigator_options::{
+    MidiPermissionDescriptorMembers, PermissionDescriptorMembers,
+};
+use moli_webapi::network_options::{CacheQueryOptions, MultiCacheQueryOptions};
 use moli_webapi::storage_values::new_storage_estimate;
 use moli_webapi::window_values::{
     PERMISSION_STATUS_NAME_SLOT, PERMISSION_STATUS_STATE_SLOT, new_permission_status,
@@ -155,23 +159,6 @@ pub(in crate::context_bootstrap) fn install_cache_template_bindings<'s>(
     }
 }
 
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PermissionDescriptor")]
-struct PermissionDescriptorMembers {
-    #[webidl(required)]
-    name: String,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "MidiPermissionDescriptor")]
-struct MidiPermissionDescriptorMembers {
-    #[webidl(required)]
-    name: String,
-
-    #[webidl(default = false)]
-    sysex: bool,
-}
-
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::BatteryManager, data_properties)]
 struct NavigatorBatteryStatusObjectDeclaration {
@@ -283,25 +270,6 @@ struct CachePutArgs<'s> {
     request: CacheRequestInput<'s>,
     #[webidl(required, interface = web_api_interfaces::Response)]
     response: v8::Local<'s, v8::Object>,
-}
-
-#[derive(Debug, Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "CacheQueryOptions")]
-struct CacheQueryOptions {
-    #[webidl(default = false)]
-    ignore_search: bool,
-    #[webidl(default = false)]
-    ignore_method: bool,
-    #[webidl(default = false)]
-    ignore_vary: bool,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "MultiCacheQueryOptions")]
-struct MultiCacheQueryOptions {
-    #[webidl(inherit)]
-    base: CacheQueryOptions,
-    cache_name: Option<String>,
 }
 
 #[derive(WebApiObject)]

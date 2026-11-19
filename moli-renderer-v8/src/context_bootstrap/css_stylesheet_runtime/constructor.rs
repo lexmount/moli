@@ -3,6 +3,7 @@ use crate::{
     native_bridge::OwnerDispatchScope,
     util::{callable_relevant_context, throw_type_error},
 };
+use moli_webapi::css_declarations::options::{CssStyleSheetConstructorArgs, CssStyleSheetMedia};
 
 pub(crate) fn css_style_sheet_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -21,60 +22,6 @@ pub(crate) fn css_style_sheet_constructor_callback<'s>(
     construct_css_style_sheet(scope, &args, rv);
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "CSSStyleSheet")]
-struct CssStyleSheetConstructorArgs<'s> {
-    #[webidl(dictionary)]
-    options: CssStyleSheetInit<'s>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "CSSStyleSheetInit")]
-struct CssStyleSheetInit<'s> {
-    // Constructed sheets have no title; the alternate flag has no selection
-    // effect, but its WebIDL conversion still runs before the other members.
-    #[webidl(name = "alternate", default = false)]
-    _alternate: bool,
-    #[webidl(name = "baseURL")]
-    base_url: Option<String>,
-    #[webidl(default = false)]
-    disabled: bool,
-    #[webidl(default = CssStyleSheetMedia::Text(String::new()), converter = "raw")]
-    media: CssStyleSheetMedia<'s>,
-}
-
-enum CssStyleSheetMedia<'s> {
-    Native(v8::Local<'s, v8::Object>),
-    Text(String),
-}
-
-impl<'s> webidl::WebIdlConverter<'s> for CssStyleSheetMedia<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _: &(),
-    ) -> Result<Self, webidl::WebIdlError> {
-        if let Ok(list) = v8::Local::<v8::Object>::try_from(value)
-            && crate::web_api_interfaces::MediaList::is_instance(scope, list)
-        {
-            return Ok(Self::Native(list));
-        }
-        webidl::convert::<webidl::DomString>(scope, value, context).map(|text| Self::Text(text.0))
-    }
-}
-
-impl<'s> CssStyleSheetMedia<'s> {
-    fn into_text(self, scope: &mut v8::PinScope<'s, '_>) -> String {
-        match self {
-            Self::Native(list) => media_list_native_text(scope, list),
-            Self::Text(text) => text,
-        }
-    }
-}
-
 fn construct_css_style_sheet<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -90,7 +37,10 @@ fn construct_css_style_sheet<'s>(
     else {
         return;
     };
-    let media_text = parsed.options.media.into_text(scope);
+    let media_text = match parsed.options.media {
+        CssStyleSheetMedia::Native(list) => media_list_native_text(scope, list),
+        CssStyleSheetMedia::Text(text) => text,
+    };
     initialize_css_style_sheet_object(scope, args.this());
     set_private_value(
         scope,

@@ -297,7 +297,6 @@ use event_handlers::{
     body_onload_setter_function, body_onmessageerror_getter_function,
     body_onmessageerror_setter_function,
 };
-pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;

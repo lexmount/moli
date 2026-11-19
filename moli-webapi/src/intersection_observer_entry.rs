@@ -1,3 +1,5 @@
+pub mod options;
+
 use crate::interfaces as web_api_interfaces;
 use moli_v8_util::{
     callback_data_index_value, callback_data_item, get_private_value, throw_type_error, v8str,

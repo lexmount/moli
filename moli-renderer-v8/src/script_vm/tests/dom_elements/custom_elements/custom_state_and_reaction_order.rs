@@ -244,6 +244,22 @@ fn document_create_element_customized_builtin_options_are_internal_state() {
               }
               const xhtml = "http://www.w3.org/1999/xhtml";
 
+              const sentinel = {};
+              for (const owner of [document, document.implementation.createHTMLDocument("")]) {
+                const invalidOptions = {
+                  customElementRegistry: {},
+                  get is() { throw sentinel; }
+                };
+                for (const create of [
+                  () => owner.createElement("div", invalidOptions),
+                  () => owner.createElementNS(xhtml, "div", invalidOptions)
+                ]) {
+                  let error;
+                  try { create(); } catch (caught) { error = caught; }
+                  if (!(error instanceof TypeError)) throw Error("registry must convert before is");
+                }
+              }
+
               class SuperP extends HTMLParagraphElement {}
               customElements.define("wpt-string-super-p", SuperP, { extends: "p" });
               const stringP = document.createElement("p", "wpt-string-super-p");

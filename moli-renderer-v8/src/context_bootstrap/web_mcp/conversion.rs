@@ -1,92 +1,13 @@
+pub(super) use moli_webapi::web_mcp_values::{
+    ExecuteOptions, GetOptions, RegisterOptions, ToolAnnotations, ToolDefinition, ToolReference,
+};
+
 use super::bindings::{dom_error, js_string};
 use super::state::{DocumentTools, RegisteredTool};
 use crate::web_api_interfaces;
 use crate::webidl::WebIdlDictionarySerialize;
 
 use crate::{abort_signal_route::ResolvedAbortSignal, webidl};
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, webidl::WebIdlDictionary)]
-#[webidl(prefix = "ToolAnnotations", snapshot)]
-pub(super) struct ToolAnnotations {
-    #[webidl(name = "consequentialHint", default = false)]
-    #[webidl(snapshot_order = 1)]
-    pub(super) consequential: bool,
-    #[webidl(default = false)]
-    #[webidl(snapshot_order = 3)]
-    pub(super) debugging: bool,
-    #[webidl(name = "readOnlyHint", default = false)]
-    #[webidl(snapshot_order = 0)]
-    pub(super) read_only: bool,
-    #[webidl(name = "untrustedContentHint", default = false)]
-    #[webidl(snapshot_order = 2)]
-    pub(super) untrusted_content: bool,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ModelContextTool")]
-pub(super) struct ToolDefinition<'s> {
-    #[webidl(dictionary)]
-    pub(super) annotations: Option<ToolAnnotations>,
-    #[webidl(required, converter = "dom_string")]
-    pub(super) description: String,
-    #[webidl(required, converter = "callback_function")]
-    pub(super) execute: webidl::WebIdlCallbackFunction,
-    #[webidl(name = "inputSchema")]
-    pub(super) input_schema: Option<v8::Local<'s, v8::Object>>,
-    #[webidl(required, converter = "dom_string")]
-    pub(super) name: String,
-    #[webidl(converter = "usv_string")]
-    pub(super) title: Option<String>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ModelContextRegisterToolOptions")]
-pub(super) struct RegisterOptions<'s> {
-    #[webidl(name = "exposedTo", converter = "raw", default = webidl::Sequence(Vec::new()))]
-    pub(super) exposed_to: webidl::Sequence<webidl::UsvString>,
-    #[webidl(with = signal_member)]
-    pub(super) signal: Option<v8::Local<'s, v8::Object>>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ModelContextGetToolOptions")]
-pub(super) struct GetOptions {
-    #[webidl(name = "fromOrigins", converter = "raw", default = webidl::Sequence(Vec::new()))]
-    pub(super) from_origins: webidl::Sequence<webidl::UsvString>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ExecuteToolOptions")]
-pub(super) struct ExecuteOptions<'s> {
-    #[webidl(with = signal_member)]
-    pub(super) signal: Option<v8::Local<'s, v8::Object>>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "RegisteredTool", snapshot)]
-pub(super) struct ToolReference<'s> {
-    #[webidl(dictionary)]
-    #[webidl(snapshot_order = 6)]
-    pub(super) annotations: Option<ToolAnnotations>,
-    #[webidl(required, converter = "dom_string")]
-    #[webidl(snapshot_order = 1)]
-    pub(super) description: String,
-    #[webidl(name = "inputSchema")]
-    #[webidl(snapshot_order = 5)]
-    pub(super) input_schema: Option<v8::Local<'s, v8::Object>>,
-    #[webidl(required, converter = "dom_string")]
-    #[webidl(snapshot_order = 0)]
-    pub(super) name: String,
-    #[webidl(required, converter = "usv_string")]
-    #[webidl(snapshot_order = 3)]
-    pub(super) origin: String,
-    #[webidl(converter = "dom_string")]
-    #[webidl(snapshot_order = 2)]
-    pub(super) title: Option<String>,
-    #[webidl(with = window_member)]
-    #[webidl(snapshot_order = 4)]
-    pub(super) window: v8::Local<'s, v8::Object>,
-}
 
 pub(super) fn dictionary<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -102,42 +23,33 @@ pub(super) fn dictionary<'s>(
     .map(|value| value.unwrap_or_else(|| crate::util::new_null_prototype_object(scope)))
 }
 
-fn signal_member<'s>(
+// Both option dictionaries convert signal last, before the runtime acts on the result.
+pub(super) fn validate_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    let signal = webidl::optional_member(
-        scope,
-        object,
-        name,
-        webidl::Context::member("ModelContextTool", name),
-    )?;
+    signal: Option<v8::Local<'s, v8::Object>>,
+) -> Result<(), webidl::WebIdlError> {
     if signal.is_some_and(|signal| ResolvedAbortSignal::resolve(scope, signal).is_none()) {
         return Err(webidl::WebIdlError::cannot_convert(
-            webidl::Context::member("ModelContextOptions", name),
+            webidl::Context::member("ModelContextOptions", "signal"),
             "AbortSignal",
         ));
     }
-    Ok(signal)
+    Ok(())
 }
 
-fn window_member<'s>(
+pub(super) fn validate_reference_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let context = webidl::Context::member("RegisteredTool", name);
-    let window = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-        .ok_or_else(|| webidl::WebIdlError::missing_required(context))?;
-    let window = webidl::convert::<v8::Local<v8::Object>>(scope, window, context)?;
+    window: v8::Local<'s, v8::Object>,
+) -> Result<(), webidl::WebIdlError> {
     if !web_api_interfaces::Window::is_instance(scope, window)
         && crate::native_bridge::lightweight_popup_id_from_window(scope, window).is_none()
     {
-        return Err(webidl::WebIdlError::cannot_convert(context, "Window"));
+        return Err(webidl::WebIdlError::cannot_convert(
+            webidl::Context::member("RegisteredTool", "window"),
+            "Window",
+        ));
     }
-    Ok(window)
+    Ok(())
 }
 
 pub(super) fn validate_origins<'s>(

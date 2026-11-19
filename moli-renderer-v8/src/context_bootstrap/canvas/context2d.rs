@@ -1,3 +1,5 @@
+use moli_webapi::canvas_context_values::ImageSmoothingQuality;
+
 use super::backing_store::{
     canvas_like_pixels_copy, canvas_owner_from_context, with_canvas_like_pixels_mut,
 };
@@ -23,7 +25,6 @@ use moli_layout::{
     PaintStroke, PaintTransform2D, PaintViewport,
 };
 use moli_webapi::text_metrics::CanvasTextMetricsDeclaration;
-use std::str::FromStr;
 
 const DEFAULT_IMAGE_SMOOTHING_QUALITY: &str = "low";
 const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
@@ -73,27 +74,6 @@ pub(crate) fn install_canvas_rect_bindings<'s>(
             OffscreenCanvasRectDeclaration::initialize_prototype_template(scope, prototype);
         }
         _ => unreachable!("only Canvas 2D contexts have rectangle bindings"),
-    }
-}
-
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr, webidl::WebIdlEnum,
-)]
-#[webidl(name = "ImageSmoothingQuality", parse_with = Self::parse)]
-#[strum(serialize_all = "lowercase")]
-enum ImageSmoothingQuality {
-    Low,
-    Medium,
-    High,
-}
-
-impl ImageSmoothingQuality {
-    fn parse(value: &str) -> Option<Self> {
-        Self::from_str(value).ok()
-    }
-
-    fn label(self) -> &'static str {
-        self.into()
     }
 }
 

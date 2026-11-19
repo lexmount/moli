@@ -13,60 +13,32 @@ use super::{
 };
 use crate::dom::native::DomStringValue;
 use crate::{
-    util::{get_private_value, v8str},
+    util::{get_private_value, set_private_value, v8str},
     v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction,
     webidl,
     webidl_callback_execution::{PreparedWebIdlCallbackExecution, WebIdlCallbackExecutionOutcome},
 };
+use moli_webapi::trusted_values::TrustedTypePolicyOptionsMembers;
 
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "TrustedTypePolicyOptions", snapshot)]
-pub(super) struct TrustedTypePolicyOptionsMembers {
-    #[webidl(name = "createHTML", converter = "callback_function")]
-    #[webidl(snapshot_slot = TRUSTED_TYPES_CREATE_HTML_SLOT, snapshot_state_with = callback_carrier)]
-    create_html: Option<webidl::WebIdlCallbackFunction>,
-    #[webidl(name = "createScript", converter = "callback_function")]
-    #[webidl(snapshot_slot = TRUSTED_TYPES_CREATE_SCRIPT_SLOT, snapshot_state_with = callback_carrier)]
-    create_script: Option<webidl::WebIdlCallbackFunction>,
-    #[webidl(name = "createScriptURL", converter = "callback_function")]
-    #[webidl(snapshot_slot = TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT, snapshot_state_with = callback_carrier)]
-    create_script_url: Option<webidl::WebIdlCallbackFunction>,
-}
-
-fn callback_carrier<'s>(
+/// Retains the converted callbacks on their policy with the resource initiator.
+pub(super) fn install_policy_callbacks<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    callback: &webidl::WebIdlCallbackFunction,
-) -> Option<v8::Local<'s, v8::Value>> {
-    Some(
-        V8TracedWebIdlCallbackFunction::from_callback(scope, callback)
-            .into_object()
-            .into(),
-    )
-}
-
-/// Converts the optional `TrustedTypePolicyOptions` dictionary before the
-/// Trusted Types policy-creation algorithm observes or mutates policy state.
-///
-/// Web IDL treats omitted, `undefined`, and `null` as an empty dictionary.
-/// Member reads and callback conversion retain their ordinary getter order and
-/// abrupt completion.
-pub(super) fn parse_policy_callbacks<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Value>,
-) -> Option<TrustedTypePolicyOptionsMembers> {
-    let members = match webidl::parse_dictionary::<TrustedTypePolicyOptionsMembers>(
-        scope,
-        options,
-        webidl::Context::argument("TrustedTypePolicyFactory.createPolicy", 2),
-    ) {
-        Ok(Some(members)) => members,
-        Ok(None) => TrustedTypePolicyOptionsMembers::default(),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
+    policy: v8::Local<'s, v8::Object>,
+    callbacks: TrustedTypePolicyOptionsMembers,
+) {
+    for (slot, callback) in [
+        (TRUSTED_TYPES_CREATE_HTML_SLOT, callbacks.create_html),
+        (TRUSTED_TYPES_CREATE_SCRIPT_SLOT, callbacks.create_script),
+        (
+            TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT,
+            callbacks.create_script_url,
+        ),
+    ] {
+        if let Some(callback) = callback {
+            let carrier = V8TracedWebIdlCallbackFunction::from_callback(scope, &callback);
+            set_private_value(scope, policy, slot, carrier.into_object().into());
         }
-    };
-    Some(members)
+    }
 }
 
 pub(super) enum TrustedTypePolicyCallbackOutcome {

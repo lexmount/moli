@@ -30,14 +30,6 @@ pub fn parse_event_dictionary<'s, T: webidl::WebIdlDictionary<'s>>(
     }
 }
 
-pub fn read_event_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<(bool, bool, bool)> {
-    parse_event_dictionary::<EventInit>(scope, args, "Event")
-        .map(|init| (init.bubbles, init.cancelable, init.composed))
-}
-
 pub fn event_type_argument<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,

@@ -6,122 +6,18 @@ use super::*;
 use crate::context_bootstrap::{structured_deserialize_value, structured_serialize_value};
 use crate::util::serialize_v8_iter_array;
 use crate::webidl;
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Performance.mark")]
-struct PerformanceMarkArgs {
-    #[webidl(required, converter = "raw")]
-    name: PerformanceEntryName,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "PerformanceMark")]
-struct PerformanceMarkConstructorArgs {
-    #[webidl(required, converter = "raw")]
-    name: PerformanceEntryName,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "PerformanceMarkOptions")]
-struct PerformanceMarkOptions<'s> {
-    #[webidl(converter = "raw")]
-    detail: Option<v8::Local<'s, v8::Value>>,
-    #[webidl(name = "startTime", converter = "double")]
-    start_time: Option<f64>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Performance.clearMarks")]
-struct PerformanceClearMarksArgs {
-    #[webidl(converter = "raw")]
-    name: Option<PerformanceEntryName>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Performance.measure")]
-struct PerformanceMeasureArgs<'s> {
-    #[webidl(required, converter = "raw")]
-    name: PerformanceEntryName,
-    #[webidl(
-        converter = "raw",
-        default = MeasureStartOrOptions::Dictionary(PerformanceMeasureOptions::default())
-    )]
-    start_or_options: MeasureStartOrOptions<'s>,
-    #[webidl(converter = "raw")]
-    end_mark: Option<PerformanceEntryName>,
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "PerformanceMeasureOptions")]
-struct PerformanceMeasureOptions<'s> {
-    #[webidl(converter = "raw")]
-    detail: Option<v8::Local<'s, v8::Value>>,
-    #[webidl(converter = "double")]
-    duration: Option<f64>,
-    #[webidl(converter = "raw")]
-    end: Option<MeasureBoundary>,
-    #[webidl(converter = "raw")]
-    start: Option<MeasureBoundary>,
-}
-
-enum MeasureStartOrOptions<'s> {
-    Mark(PerformanceEntryName),
-    Dictionary(PerformanceMeasureOptions<'s>),
-}
-
-enum MeasureBoundary {
-    Mark(PerformanceEntryName),
-    Timestamp(f64),
-}
-
-impl<'s> webidl::WebIdlConverter<'s> for MeasureStartOrOptions<'s> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        if value.is_object() || value.is_null_or_undefined() {
-            webidl::parse_dictionary::<PerformanceMeasureOptions>(scope, value, context)
-                .map(|options| Self::Dictionary(options.unwrap_or_default()))
-        } else {
-            webidl::convert::<PerformanceEntryName>(scope, value, context).map(Self::Mark)
-        }
-    }
-}
-
-impl<'s> webidl::WebIdlConverter<'s> for MeasureBoundary {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        if value.is_number() {
-            webidl::convert::<webidl::Double>(scope, value, context)
-                .map(|time| Self::Timestamp(time.0))
-        } else {
-            webidl::convert::<PerformanceEntryName>(scope, value, context).map(Self::Mark)
-        }
-    }
-}
+use moli_webapi::performance::user_timing::{
+    MeasureBoundary, MeasureStartOrOptions, PerformanceClearMarksArgs,
+    PerformanceClearMeasuresArgs, PerformanceMarkArgs, PerformanceMarkConstructorArgs,
+    PerformanceMarkOptions, PerformanceMeasureArgs, PerformanceMeasureOptions,
+    parse_performance_mark_options,
+};
 
 struct ParsedPerformanceMeasure<'s> {
     start: Option<MeasureBoundary>,
     duration: Option<f64>,
     end: Option<MeasureBoundary>,
     detail: Option<v8::Local<'s, v8::Value>>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Performance.clearMeasures")]
-struct PerformanceClearMeasuresArgs {
-    #[webidl(converter = "raw")]
-    name: Option<PerformanceEntryName>,
 }
 
 pub(in crate::context_bootstrap) fn performance_mark_callback<'s>(
@@ -199,29 +95,6 @@ pub(in crate::context_bootstrap) fn performance_mark_constructor_callback<'s>(
         detail,
     );
     rv.set(args.this().into());
-}
-
-fn parse_performance_mark_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    context: webidl::Context,
-) -> Option<PerformanceMarkOptions<'s>> {
-    match webidl::dictionary_arg(args, 1, context) {
-        Ok(Some(options)) => {
-            match webidl::parse_dictionary_object::<PerformanceMarkOptions>(scope, options) {
-                Ok(options) => Some(options),
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    None
-                }
-            }
-        }
-        Ok(None) => Some(PerformanceMarkOptions::default()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 fn prepare_performance_mark<'s>(

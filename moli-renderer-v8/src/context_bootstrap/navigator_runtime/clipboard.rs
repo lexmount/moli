@@ -13,6 +13,7 @@ use moli_webapi::clipboard_item::{
     clipboard_item_snapshot, clipboard_item_type_supported, clipboard_item_types,
     install_clipboard_item_template_bindings,
 };
+use moli_webapi::navigator_options::ClipboardUnsanitizedFormats;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
@@ -36,13 +37,6 @@ struct ClipboardPrototypeDeclaration {
 
     #[webapi(method, length = 1, callback = clipboard_write_text_callback, returns_promise)]
     write_text: (),
-}
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "ClipboardUnsanitizedFormats")]
-struct ClipboardUnsanitizedFormats {
-    #[webidl(sequence)]
-    unsanitized: Option<Vec<String>>,
 }
 
 #[derive(webidl::WebIdlArgs)]

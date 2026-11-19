@@ -1,5 +1,7 @@
 //! Window surface objects; the embedding supplies live viewport and event state.
 
+pub mod options;
+
 use crate::interfaces as web_api_interfaces;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use moli_webapi_declare::{BindError, WebApiObject};

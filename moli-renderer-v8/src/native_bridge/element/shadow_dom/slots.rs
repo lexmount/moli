@@ -1,3 +1,5 @@
+use moli_webapi::dom_options::AssignedNodesOptions;
+
 use crate::document_runtime::DomHandle;
 use crate::dom::native::Node;
 use crate::style_engine::StyleMutationEffect;
@@ -17,13 +19,6 @@ use super::super::{
     attribute_property_getter_from_object_or_detached, set_attribute_property_on_object_or_detached,
 };
 use crate::native_bridge::document;
-
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "AssignedNodesOptions")]
-struct AssignedNodesOptions {
-    #[webidl(default = false)]
-    flatten: bool,
-}
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "HTMLSlotElement.assignedNodes")]
