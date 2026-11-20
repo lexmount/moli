@@ -13,6 +13,7 @@ from typing import Any
 from moli_benchmark.chrome_dcl import (
     CdpDclDumpTimeoutError,
     DEFAULT_CHROME_DCL_USER_AGENT,
+    _parse_navigation_result,
     _recv_command_response,
     _recv_until_dcl_or_binary_main_resource,
     _wait_for_cdp,
@@ -82,23 +83,23 @@ async def _dump_dcl_with_timing(
 
         # Wait for DCL
         t0 = time.perf_counter()
-        frame_id = navigate_response.get("result", {}).get("frameId")
-        if frame_id is not None:
-            frame_id = str(frame_id)
+        navigation = _parse_navigation_result(navigate_response, url)
         try:
-            binary_body = await _recv_until_dcl_or_binary_main_resource(
+            main_document = await _recv_until_dcl_or_binary_main_resource(
                 client,
                 session_id=session_id,
-                frame_id=frame_id,
+                frame_id=navigation.frame_id,
+                expected_loader_id=navigation.loader_id,
                 deadline=deadline,
                 seen=seen,
+                download_navigation=navigation.is_download,
             )
         except TimeoutError as error:
             raise CdpDclDumpTimeoutError("DCL", error) from error
         timings["navigate_to_dcl_ms"] = (time.perf_counter() - t0) * 1000
-        if binary_body is not None:
+        if main_document.headers_only:
             timings["outer_html_ms"] = 0.0
-            timings["html_length"] = len(binary_body)
+            timings["html_length"] = 0
             return timings
 
         # Runtime.evaluate for outerHTML
