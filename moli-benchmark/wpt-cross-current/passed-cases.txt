@@ -5270,6 +5270,10 @@ editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?whi
 editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?white-space=pre
 editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?white-space=pre-line
 editing/plaintext-only/forwardDelete-around-linebreak-or-block-boundary.html?white-space=pre-wrap
+editing/plaintext-only/insertHTML.html?white-space=normal
+editing/plaintext-only/insertHTML.html?white-space=pre
+editing/plaintext-only/insertHTML.html?white-space=pre-line
+editing/plaintext-only/insertHTML.html?white-space=pre-wrap
 editing/plaintext-only/styling-commands.html?styleWithCSS=false
 editing/plaintext-only/styling-commands.html?styleWithCSS=true
 editing/whitespaces/inserttext-at-end-of-block-when-br-always-block.html
