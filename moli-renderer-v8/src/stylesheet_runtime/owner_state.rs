@@ -414,14 +414,11 @@ impl StylesheetOwnerRuntimeStates {
     pub(in crate::document_runtime) fn consume_link_event(
         &mut self,
         load: &Arc<super::StylesheetLinkClient>,
-    ) {
-        if let Some(state) = self
-            .by_owner
+    ) -> bool {
+        self.by_owner
             .get_mut(&load.owner())
             .and_then(|state| state.link_style_state.as_mut())
-        {
-            let _ = state.consume_posted_event(load);
-        }
+            .is_some_and(|state| state.consume_posted_event(load))
     }
 
     pub(in crate::document_runtime) fn consume_native_modulepreload_event(

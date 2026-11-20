@@ -50,6 +50,7 @@ impl PageVm {
         action: PageConnectedStyleEventTurnAction,
         loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
+        let event_owner = action.owner;
         let targeted_current_owner = !matches!(
             action.target_effect,
             PageConnectedStyleEventTargetEffect::DiscardedStaleOwner
@@ -63,6 +64,22 @@ impl PageVm {
             // after the callback checkpoint and runtime reconciliation.
             self.vm_mut()
                 .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            // A parser started by document.open()/setDocumentContent after
+            // phase one has no main-parser continuation producer. Its script
+            // gate can now become ready only after the link event finishes.
+            // Recheck the exact Document after callbacks and their checkpoint.
+            if self.vm().stylesheet_task_owner_is_current(
+                self.document_lifecycle.identity().document,
+                event_owner,
+            ) && self
+                .vm()
+                .document_runtime
+                .main_parser_continuation_producer()
+                .is_none()
+            {
+                self.run_ready_document_write_stylesheet_blocked_script()
+                    .await?;
+            }
         }
         Ok(())
     }
