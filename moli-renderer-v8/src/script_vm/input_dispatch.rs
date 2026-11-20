@@ -32,7 +32,7 @@ use crate::context_bootstrap::DragDataStoreMode;
 use crate::document_runtime::DomHandle;
 use crate::dom::{
     forms::InputType,
-    native::{Node, SelectedFile},
+    native::{ContentEditableState, Node, SelectedFile},
 };
 use crate::native_bridge::element::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TextInputSource,
@@ -3201,13 +3201,22 @@ impl ScriptVm {
                 {
                     return Ok(outcome);
                 }
-                if is_character_phase && contenteditable_editing_host(runtime, handle).is_some() {
+                if is_character_phase
+                    && let Some(editing_host) = contenteditable_editing_host(runtime, handle)
+                {
+                    let plaintext = runtime
+                        .dom_host()
+                        .node(editing_host)
+                        .and_then(Node::as_element)
+                        .is_some_and(|element| {
+                            element.content_editable_state() == ContentEditableState::PlaintextOnly
+                        });
                     return Ok(input_dispatch_outcome(perform_text_input(
                         scope,
                         runtime_ptr,
                         handle,
                         "\n",
-                        if shift {
+                        if shift || plaintext {
                             TextEditInputType::InsertLineBreak
                         } else {
                             TextEditInputType::InsertParagraph

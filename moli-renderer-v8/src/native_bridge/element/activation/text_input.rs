@@ -155,6 +155,14 @@ pub(crate) fn perform_text_input(
     let Some(editing_host) = contenteditable_editing_host(runtime, edit_target) else {
         return false;
     };
+    if matches!(input_type, TextEditInputType::InsertLineBreak) {
+        return crate::native_bridge::document::insert_line_break_in_editing_host(
+            scope,
+            runtime_ptr,
+            document,
+            editing_host,
+        );
+    }
     replace_contenteditable_selection_after_beforeinput(
         scope,
         runtime_ptr,

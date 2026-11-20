@@ -50,7 +50,7 @@ pub(super) fn exec_command_insert_line_break(
     insert_line_break_in_editing_host(scope, runtime_ptr, document, handle)
 }
 
-fn insert_line_break_in_editing_host(
+pub(crate) fn insert_line_break_in_editing_host(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     document: DomHandle,
