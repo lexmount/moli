@@ -381,8 +381,6 @@ pub(crate) fn parse_font_unicode_ranges(value: &str) -> Option<Vec<WebFontUnicod
         .ok()
 }
 
-pub(crate) use moli_css_parse::legacy_variations_font_format;
-
 fn resolve_font_source_url(raw_url: &str, base_url: &Url) -> Option<Url> {
     let raw_url = raw_url.trim();
     let url = base_url

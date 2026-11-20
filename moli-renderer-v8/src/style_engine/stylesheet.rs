@@ -9,10 +9,9 @@ use moli_selector::StyloSourceDependencySummary;
 use style::{
     context::QuirksMode,
     device::{Device, servo::FontMetricsProvider},
-    font_face::{
-        FontFaceRule, FontFaceSourceFormat, FontFaceSourceFormatKeyword, Source, SourceList,
-    },
+    font_face::{FontFaceRule, Source, SourceList},
     font_metrics::FontMetrics,
+    moli_font_face::supports_font_source,
     properties::{ComputedValues, style_structs::Font},
     servo::media_features::PointerCapabilities,
     servo_arc::Arc as ServoArc,
@@ -318,7 +317,7 @@ fn native_font_sources(source_list: &SourceList) -> Vec<moli_css_parse::CssFontS
             let Source::Url(source) = source else {
                 return None;
             };
-            if !native_font_source_format_is_supported(source.format_hint.as_ref()) {
+            if !supports_font_source(source) {
                 return None;
             }
             let url = source.url.url()?;
@@ -326,29 +325,6 @@ fn native_font_sources(source_list: &SourceList) -> Vec<moli_css_parse::CssFontS
                 .then(|| moli_css_parse::CssFontSource::Url(url.to_string()))
         })
         .collect()
-}
-
-fn native_font_source_format_is_supported(format: Option<&FontFaceSourceFormat>) -> bool {
-    match format {
-        None => true,
-        Some(FontFaceSourceFormat::Keyword(format)) => matches!(
-            format,
-            FontFaceSourceFormatKeyword::Collection
-                | FontFaceSourceFormatKeyword::Opentype
-                | FontFaceSourceFormatKeyword::Truetype
-                | FontFaceSourceFormatKeyword::Woff
-                | FontFaceSourceFormatKeyword::Woff2
-        ),
-        Some(FontFaceSourceFormat::String(format)) => {
-            let format = format.to_ascii_lowercase();
-            let format =
-                crate::css_resource_urls::legacy_variations_font_format(&format).unwrap_or(&format);
-            matches!(
-                format,
-                "collection" | "opentype" | "otf" | "truetype" | "ttf" | "woff" | "woff2"
-            )
-        }
-    }
 }
 
 pub(super) fn moli_user_agent_source_dependency_summary() -> StdArc<StyloSourceDependencySummary> {
