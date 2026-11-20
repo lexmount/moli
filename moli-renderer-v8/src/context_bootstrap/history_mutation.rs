@@ -272,6 +272,8 @@ fn mutate_history_object<'s>(
         },
     );
     pruned.extend(super::session_history::prune_views(scope, owner));
+    // Reentrant navigation from currententrychange must see the committed URL.
+    sync_child_navigation_entry_seed_from_owner(scope, owner);
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         dispatch_navigation_currententrychange(
             scope,
@@ -319,7 +321,6 @@ fn mutate_history_object<'s>(
     for entry in pruned {
         dispatch_navigation_entry_dispose(scope, entry);
     }
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
     if runtime_window_is_global(scope, owner) {
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return;
