@@ -3182,3 +3182,74 @@ fn notification_action_navigate_routes_to_page_owner_without_click_event() {
     let version = state.versions.get(&version_id).unwrap();
     assert_eq!(version.in_flight_event_count, 0);
 }
+
+#[test]
+fn controller_snapshots_preserve_native_active_version_lifecycle_state() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let page_url = url("https://example.test/app/page.html");
+    let expected = insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [page_url.clone()],
+    );
+    for (lifecycle, name) in [
+        (ServiceWorkerVersionLifecycleState::Activating, "activating"),
+        (ServiceWorkerVersionLifecycleState::Activated, "activated"),
+    ] {
+        service
+            .inner
+            .state
+            .lock()
+            .versions
+            .get_mut(&version_id)
+            .unwrap()
+            .lifecycle_state = lifecycle;
+        let actual = service.matching_controller_for_document(&page_url).unwrap();
+        assert_eq!(actual.active_version_state(), name);
+        assert_eq!(actual.active_version_id(), Some(version_id));
+        assert_eq!(actual.script_url(), expected.script_url());
+        let snapshot = ServiceWorkerRegistrationSnapshot::from_active_control_for_binding(actual);
+        assert_eq!(snapshot.active().unwrap().state(), name);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_controller_getters_preserve_native_activating_state_and_identity() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let document_url = url("https://controller-state.test/app/page.html");
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://controller-state.test/app/worker.js"),
+        url("https://controller-state.test/app/"),
+        [],
+    );
+    let loader = service.request_client();
+    let mut page = crate::runtime::PageVmTaskExecutorTestHarness::new_with_browser_context_runtime(
+        document_url,
+        &loader,
+        service.browser_context_runtime(),
+    );
+    // Drive the native state directly so this binding regression does not
+    // depend on activation/clients.claim scheduling or registration queries.
+    service
+        .inner
+        .state
+        .lock()
+        .versions
+        .get_mut(&version_id)
+        .unwrap()
+        .lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
+    assert_eq!(page.eval("globalThis.heldController = navigator.serviceWorker.controller; String(heldController && heldController.state)").unwrap(), "activating");
+    assert_eq!(page.eval("JSON.stringify([navigator.serviceWorker.controller === heldController, navigator.serviceWorker.controller.state, heldController.state])").unwrap(), r#"[true,"activating","activating"]"#);
+    page.eval("Promise.resolve().then(() => { globalThis.controllerMicrotaskState = navigator.serviceWorker.controller.state; });").unwrap();
+    assert_eq!(page.eval("controllerMicrotaskState").unwrap(), "activating");
+}
