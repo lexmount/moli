@@ -177,19 +177,14 @@ async fn page_enable_uses_background_initial_document_through_attached_session()
     });
     let background_owner = CommandOwnerScope::for_route(background_route.clone());
     let pending_initial_document = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&background_owner)
+        conn.ensure_target_initialization(&background_owner)
             .expect("background target lifecycle ensure should start")
             .expect("fresh background target should need an initial document page build")
     });
-    let completed_initial_document = pending_initial_document
+    pending_initial_document
         .wait()
         .await
         .expect("background initial document page build should complete");
-    (completed_initial_document)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .map(|_| ())
-        .expect("background initial document should install on captured owner");
 
     let background_session =
         attach_page_session_for_test(&mut ctx, second_target_id.as_str()).await;
@@ -287,20 +282,15 @@ async fn initial_document_page_ensure_completion_uses_captured_owner() {
     });
     let background_owner = CommandOwnerScope::for_route(background_route);
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&background_owner)
+        conn.ensure_target_initialization(&background_owner)
             .expect("background initial document page ensure should start")
             .expect("background initial document page ensure should pend")
     });
 
-    let completed = pending
+    pending
         .wait()
         .await
         .expect("initial document page build should complete");
-    (completed)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .map(|_| ())
-        .expect("completion should install on captured owner");
 
     ctx.with_fixture(|conn| {
         let browser_context = conn.browser_context.as_ref().expect("browser context");
@@ -361,7 +351,7 @@ async fn closed_target_rejects_late_initial_document_without_registering_window_
             (CommandOwnerScope::for_route(route), identity)
         });
         let pending = ctx.with_fixture(|conn| {
-            conn.start_initial_document_page_ensure_for_owner(&owner)
+            conn.start_initial_document_page_build_for_test(&owner)
                 .expect("enqueue first Document")
                 .expect("initial Document is pending")
         });
@@ -456,7 +446,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
 
     let initial_document_owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&initial_document_owner)
+        conn.start_initial_document_page_build_for_test(&initial_document_owner)
             .expect("target lifecycle ensure should start active initial page")
             .expect("fresh initial target should pend active initial document page build")
     });

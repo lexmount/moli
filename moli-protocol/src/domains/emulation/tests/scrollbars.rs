@@ -148,16 +148,11 @@ async fn scrollbars_hidden_is_replayed_before_navigation_scripts_and_initial_pag
     // Document. Both direct HTML creation and prepared commit must inherit.
     let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
     let pending = ctx.with_fixture(|conn| {
-        conn.start_initial_document_page_ensure_for_owner(&owner)
+        conn.ensure_target_initialization(&owner)
             .expect("initial Page ensure")
             .expect("staged initial Page")
     });
-    let completed = pending.wait().await.expect("initial Page creation");
-    (completed)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .map(|_| ())
-        .expect("initial Page installation");
+    pending.wait().await.expect("initial Page creation");
     assert_eq!(
         evaluate(
             &mut ctx,

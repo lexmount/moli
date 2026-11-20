@@ -231,12 +231,6 @@ enum InitialDocumentBuildError {
 }
 
 pub(super) enum PendingInitialDocumentPageBuildKind {
-    Target(crate::conn::target_initialization::TargetInitialDocumentWaiter),
-    TargetPage(crate::conn::target_initialization::TargetInitialDocumentWaiter),
-    TargetCreation(
-        crate::conn::target_initialization::TargetInitialDocumentWaiter,
-        crate::conn::target_initialization::TargetInitializationOutputClaim,
-    ),
     Build {
         owner: InitialDocumentPageOwner,
         load_inputs: Box<TargetNavigationLoadInputs>,
@@ -250,10 +244,6 @@ pub(super) enum PendingInitialDocumentPageBuildKind {
 }
 
 pub(crate) enum CompletedInitialDocumentPageBuild {
-    Installed(
-        std::rc::Rc<LoadedPageCreationDiagnosticsParts>,
-        Option<crate::conn::target_initialization::TargetInitializationOutputClaim>,
-    ),
     Built {
         owner: InitialDocumentPageOwner,
         load_inputs: Box<TargetNavigationLoadInputs>,
@@ -264,30 +254,10 @@ pub(crate) enum CompletedInitialDocumentPageBuild {
 }
 
 impl CompletedInitialDocumentPageBuild {
-    pub(crate) async fn install_into_context(
-        self,
-        driver: &mut ProtocolWorkflowDriver,
-        context: &mut super::CommandWorkflowContext,
-    ) -> Result<LoadedPageCreationDiagnosticsParts> {
-        if let Self::Installed(diagnostics, claim) = self {
-            if let Some(claim) = claim {
-                claim.publish(driver, Some(context))?;
-            }
-            return Ok((*diagnostics).clone());
-        }
-        self.install_using(driver).await
-    }
-
     pub(crate) async fn install_using(
         self,
         driver: &mut ProtocolWorkflowDriver,
     ) -> Result<LoadedPageCreationDiagnosticsParts> {
-        if let Self::Installed(diagnostics, claim) = self {
-            if let Some(claim) = claim {
-                claim.publish(driver, None)?;
-            }
-            return Ok((*diagnostics).clone());
-        }
         let Self::Built {
             owner,
             load_inputs,
@@ -350,9 +320,6 @@ pub(crate) enum InitialDocumentPageInstallResult {
 
 #[derive(Debug)]
 pub(crate) enum FailedInitialDocumentPageBuild {
-    Target {
-        error: crate::automation::DevToolsError,
-    },
     Build {
         owner: Box<InitialDocumentPageOwner>,
         message: String,
@@ -365,14 +332,12 @@ pub(crate) enum FailedInitialDocumentPageBuild {
 impl FailedInitialDocumentPageBuild {
     fn message(&self) -> &str {
         match self {
-            Self::Target { error } => &error.message,
             Self::Build { message, .. } | Self::Joined { message } => message,
         }
     }
 
     fn into_message(self) -> String {
         match self {
-            Self::Target { error } => error.message,
             Self::Build { message, .. } | Self::Joined { message } => message,
         }
     }
@@ -380,7 +345,7 @@ impl FailedInitialDocumentPageBuild {
     fn build_owner(&self) -> Option<&InitialDocumentPageOwner> {
         match self {
             Self::Build { owner, .. } => Some(owner),
-            Self::Target { .. } | Self::Joined { .. } => None,
+            Self::Joined { .. } => None,
         }
     }
 }
@@ -396,23 +361,6 @@ impl PendingInitialDocumentPageBuild {
         self,
     ) -> Result<CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild> {
         match self.kind {
-            PendingInitialDocumentPageBuildKind::TargetCreation(waiter, claim) => waiter
-                .wait()
-                .await
-                .map(|diagnostics| {
-                    CompletedInitialDocumentPageBuild::Installed(diagnostics, Some(claim))
-                })
-                .map_err(|error| FailedInitialDocumentPageBuild::Target { error }),
-            PendingInitialDocumentPageBuildKind::TargetPage(waiter) => waiter
-                .wait_page()
-                .await
-                .map(|diagnostics| CompletedInitialDocumentPageBuild::Installed(diagnostics, None))
-                .map_err(|error| FailedInitialDocumentPageBuild::Target { error }),
-            PendingInitialDocumentPageBuildKind::Target(waiter) => waiter
-                .wait()
-                .await
-                .map(|diagnostics| CompletedInitialDocumentPageBuild::Installed(diagnostics, None))
-                .map_err(|error| FailedInitialDocumentPageBuild::Target { error }),
             PendingInitialDocumentPageBuildKind::Build {
                 owner,
                 load_inputs,
@@ -447,7 +395,6 @@ impl PendingInitialDocumentPageBuild {
 
 #[derive(Clone, Default)]
 pub(crate) struct LoadedPageCreationDiagnosticsParts {
-    pub(crate) initialization_output_dependencies: super::RendererOutputDependencies,
     pub(crate) initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub(crate) renderer_output_predecessor: Option<RendererOutputFence>,
 }
@@ -456,7 +403,6 @@ fn loaded_page_creation_diagnostics_parts(
     diagnostics: RendererPageCreationDiagnostics,
 ) -> LoadedPageCreationDiagnosticsParts {
     LoadedPageCreationDiagnosticsParts {
-        initialization_output_dependencies: Default::default(),
         initial_runtime_realms: diagnostics.initial_runtime_realms,
         renderer_output_predecessor: diagnostics.renderer_output_predecessor,
     }

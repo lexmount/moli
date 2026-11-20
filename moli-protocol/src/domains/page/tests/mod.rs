@@ -222,7 +222,7 @@ async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: 
     };
     let (pending, public_work) = ctx.with_fixture(|conn| {
         let pending = conn
-            .start_initial_document_page_ensure_for_owner(&owner)
+            .ensure_target_initialization(&owner)
             .expect("target lifecycle initial document ensure should start")
             .expect("metadata-only initial target should need an initial document page build");
         (pending, conn.take_scheduler_events())
@@ -233,11 +233,7 @@ async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: 
         .drive_owned_wait(pending.wait())
         .await
         .expect("initial document page build should complete");
-    let diagnostics = (completed)
-        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
-        .await
-        .expect("initial document should install on captured owner");
-    if let Some(predecessor) = diagnostics.renderer_output_predecessor {
+    if let Some(predecessor) = completed.page.renderer_output_predecessor.clone() {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
             .await;
     }

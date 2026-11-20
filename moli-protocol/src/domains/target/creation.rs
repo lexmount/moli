@@ -261,25 +261,52 @@ fn start_devtools_create_target_command_with_result_host(
     };
     let pending_initial_document = {
         let owner = crate::conn::CommandOwnerScope::for_route(route);
-        conn.stage_target_initial_document(&owner);
-        conn.start_target_initial_document(
-            &owner,
-            crate::conn::InitialDocumentContinuation::Creation(creation_commit),
-        )
+        conn.reserve_target_initialization(&owner)
+            .and_then(|reservation| {
+                reservation.submit_creation(
+                    conn,
+                    crate::conn::TargetInitializationStage::Complete,
+                    Box::new(move |mut task, driver, context| {
+                        Box::pin(async move {
+                            let (page, activation) = task
+                                .install_with_activation(
+                                    driver,
+                                    creation_commit.activation().cloned(),
+                                )
+                                .await?;
+                            if let Some(predecessor) = page.renderer_output_predecessor.clone() {
+                                context
+                                    .context_mut()
+                                    .set_renderer_output_predecessor(predecessor);
+                            }
+                            let navigation = context
+                                .with_state(driver, move |state, context| {
+                                    state.prepare_target_creation_outputs(
+                                        creation_commit,
+                                        activation,
+                                        context,
+                                    )
+                                })
+                                .map_err(crate::conn::initialization_error)??;
+                            task.run_navigation(driver, context, navigation).await?;
+                            Ok(page)
+                        })
+                    }),
+                )
+            })
     };
     match pending_initial_document {
-        Ok(Some(initial_document)) => {
-            TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-                command_id,
-                session_id: command_session_id.map(str::to_owned),
-                kind: Box::new(PendingTargetCommandKind::CreateTarget {
-                    response_plan: plan,
-                    initial_document: Some(Box::new(initial_document)),
-                }),
-            })
+        Ok(initial_document) => TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
+            command_id,
+            session_id: command_session_id.map(str::to_owned),
+            kind: Box::new(PendingTargetCommandKind::CreateTarget {
+                response_plan: plan,
+                initial_document: Box::new(initial_document),
+            }),
+        }),
+        Err(error) => {
+            TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error))
         }
-        Ok(None) => TargetCommandTaskStep::Complete(plan),
-        Err(message) => TargetCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
     }
 }
 

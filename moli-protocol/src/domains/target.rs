@@ -245,7 +245,7 @@ enum PendingTargetCommandKind {
 
     CreateTarget {
         response_plan: CommandOutputPlan,
-        initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
+        initial_document: Box<crate::conn::PendingTargetCreation>,
     },
     ClosePageTarget {
         closing: closing::PreparedPageTargetCloseCommand,
@@ -259,12 +259,7 @@ enum CompletedTargetCommandKind {
 
     CreateTarget {
         response_plan: CommandOutputPlan,
-        initial_document: Option<
-            Result<
-                Box<crate::conn::CompletedInitialDocumentPageBuild>,
-                crate::conn::FailedInitialDocumentPageBuild,
-            >,
-        >,
+        initial_document: crate::conn::CompletedTargetCreation,
     },
 
     ClosePageTarget {
@@ -312,10 +307,7 @@ impl PendingTargetCommandDispatch {
                 initial_document,
             } => CompletedTargetCommandKind::CreateTarget {
                 response_plan,
-                initial_document: match initial_document {
-                    Some(pending) => Some(pending.wait().await.map(Box::new)),
-                    None => None,
-                },
+                initial_document: initial_document.wait().await,
             },
             PendingTargetCommandKind::ClosePageTarget {
                 closing,
@@ -351,17 +343,13 @@ impl CompletedTargetCommandDispatch {
                 initial_document,
             } => Ok(crate::conn::PreparedCommandWorkflow::new(
                 move |mut context| async move {
-                    let result = Box::pin(opening::complete_creation(
+                    let plan = opening::complete_creation(
                         &mut crate::conn::ProtocolWorkflowDriver::new(access),
                         response_plan,
                         initial_document,
                         &mut context,
-                    ))
-                    .await;
-                    match result {
-                        Ok(plan) => context.complete(plan),
-                        Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-                    }
+                    );
+                    context.complete(plan)
                 },
             )),
             kind => Err(Self {
@@ -854,17 +842,10 @@ mod devtools_runtime_entry_tests {
         };
         assert_eq!(pending.command_id, Some(41));
         assert_eq!(pending.session_id.as_deref(), None);
-        match &*pending.kind {
-            PendingTargetCommandKind::CreateTarget {
-                initial_document, ..
-            } => {
-                assert!(
-                    initial_document.is_some(),
-                    "Target.createTarget should start initial document page ensure"
-                );
-            }
-            _ => panic!("Target.createTarget should preserve create-target lifecycle work"),
-        }
+        assert!(matches!(
+            &*pending.kind,
+            PendingTargetCommandKind::CreateTarget { .. }
+        ));
 
         let out = complete_messages_for_target_step_for_test(
             &mut ctx,

@@ -424,7 +424,7 @@ impl CdpConnection {
             );
             return;
         }
-        if let Err(error) = self.start_initial_document_page_ensure_for_owner(&owner) {
+        if let Err(error) = self.ensure_target_initialization(&owner) {
             tracing::warn!(%error, "initial target Page could not be scheduled");
         }
     }

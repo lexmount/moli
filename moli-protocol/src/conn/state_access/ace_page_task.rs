@@ -122,7 +122,7 @@ impl ProtocolWorkflowState<'_> {
                     .map_err(|error| AcePageTaskError::new(409, error))?,
             );
             let initial = conn
-                .start_initial_document_page_ensure_for_owner(&owner)
+                .ensure_target_initialization(&owner)
                 .map_err(|error| AcePageTaskError::new(409, error))?;
             let kind = task.kind();
             let access = conn.protocol_state_access();
@@ -130,22 +130,9 @@ impl ProtocolWorkflowState<'_> {
                 move |mut context| async move {
                     let mut driver = ProtocolWorkflowDriver::new(access);
                     if let Some(initial) = initial {
-                        let diagnostics = match initial.wait().await {
-                            Ok(completed) => completed.install_using(&mut driver).await,
-                            Err(failed) => driver
-                                .with_state(|state| state.reset_failed_initial_document(failed))
-                                .and_then(|message| Err(anyhow::anyhow!(message))),
-                        };
-                        match diagnostics {
+                        match initial.wait().await {
                             Ok(diagnostics) => {
-                                context.context_mut().extend_renderer_output_dependencies(
-                                    diagnostics.initialization_output_dependencies,
-                                );
-                                if let Some(predecessor) = diagnostics.renderer_output_predecessor {
-                                    context
-                                        .context_mut()
-                                        .set_renderer_output_predecessor(predecessor);
-                                }
+                                diagnostics.retain_output_dependencies(context.context_mut());
                             }
                             Err(error) => {
                                 return context.complete(store_result(

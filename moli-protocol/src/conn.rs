@@ -113,7 +113,10 @@ mod state;
 mod target_initialization;
 pub(crate) use state::InitialDocumentPageBuildWaiter;
 pub(crate) use state::LoadPublicationState;
-pub(crate) use target_initialization::InitialDocumentContinuation;
+pub(crate) use target_initialization::{
+    CompletedTargetCreation, PendingTargetCreation, TargetInitializationReservation,
+    TargetInitializationStage, initialization_error,
+};
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub(crate) use state_access::PreparedProtocolCommand;
@@ -741,10 +744,10 @@ pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
     BackgroundNavigationLoadJob, CapturedPageReplacement, CommittedNavigationPage,
-    CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
-    InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
-    PreparedCapturedNavigationResponse, PreparedNavigationLoadError,
-    PreparedStreamingNavigationResponse, ResponseCommitReady, StablePageNavigationCommitTarget,
+    FailedInitialDocumentPageBuild, InitialDocumentPageInstallResult, InitialDocumentPageOwner,
+    PendingInitialDocumentPageBuild, PreparedCapturedNavigationResponse,
+    PreparedNavigationLoadError, PreparedStreamingNavigationResponse, ResponseCommitReady,
+    StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;

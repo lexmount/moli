@@ -1528,22 +1528,14 @@ mod tests {
                     );
                     state
                         .connection
-                        .start_initial_document_page_ensure_for_owner(&owner)
+                        .ensure_target_initialization(&owner)
                         .unwrap()
                 })
                 .unwrap();
             // Listener setup releases the Target-owned navigation; the
             // automation result need not wait for that public continuation.
             if let Some(initial) = initial {
-                initial
-                    .wait()
-                    .await
-                    .unwrap()
-                    .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(
-                        handle.clone(),
-                    ))
-                    .await
-                    .unwrap();
+                initial.wait().await.unwrap();
             }
         }
     }

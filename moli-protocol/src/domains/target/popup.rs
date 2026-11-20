@@ -54,10 +54,11 @@ impl PopupTargetCreation {
 
 pub(crate) enum PreparedPopupTarget {
     Existing(String),
-    New(NewPopupTarget),
+    New(Box<NewPopupTarget>),
 }
 
 pub(crate) struct NewPopupTarget {
+    initialization: crate::conn::TargetInitializationReservation,
     browser_context_id: String,
     target_id: String,
     tab_target_id: String,
@@ -103,9 +104,34 @@ impl PreparedPopupTarget {
         }
         out.extend(created);
         out.extend(attached);
-        if let Err(error) = conn.start_target_initial_document(
-            &owner,
-            crate::conn::InitialDocumentContinuation::Popup(predecessor),
+        if let Err(error) = prepared.initialization.submit(
+            conn,
+            predecessor,
+            Box::new(move |mut task, driver, context| {
+                Box::pin(async move {
+                    let page = match task.install(driver).await {
+                        Ok(page) => page,
+                        Err(error) => {
+                            let owner = task.owner;
+                            let host = task.host;
+                            let page = task.page;
+                            driver
+                                .with_state(move |state| {
+                                    state.fail_popup_initialization(owner, host, page, predecessor)
+                                })
+                                .map_err(crate::conn::initialization_error)?;
+                            return Err(error);
+                        }
+                    };
+                    if let Some(predecessor) = page.renderer_output_predecessor.clone() {
+                        context
+                            .context_mut()
+                            .set_renderer_output_predecessor(predecessor);
+                    }
+                    task.navigate(driver, context).await?;
+                    Ok(page)
+                })
+            }),
         ) {
             tracing::debug!(%error, "popup initialization could not be scheduled");
         }
@@ -369,9 +395,10 @@ pub(crate) fn prepare_popup_target(
         });
     }
 
-    if let Some(route) = conn.target_session_route_for_target_id(&target_id) {
-        conn.stage_target_initial_document(&CommandOwnerScope::for_route(route));
-    }
+    let route = conn.target_session_route_for_target_id(&target_id)?;
+    let initialization = conn
+        .reserve_target_initialization(&CommandOwnerScope::for_route(route))
+        .ok()?;
     let tab_target_id = conn.register_top_level_page_target(&target_id);
     let auto_attached_tab_sessions = auto_attached_tab_sessions
         .into_iter()
@@ -407,14 +434,15 @@ pub(crate) fn prepare_popup_target(
         })
         .collect::<Vec<_>>();
 
-    Some(PreparedPopupTarget::New(NewPopupTarget {
+    Some(PreparedPopupTarget::New(Box::new(NewPopupTarget {
+        initialization,
         browser_context_id,
         target_id,
         tab_target_id,
         auto_attached_tab_sessions,
         auto_attached_page_sessions,
         disposition,
-    }))
+    })))
 }
 
 pub(crate) fn popup_target_created_events(
@@ -797,14 +825,16 @@ mod initialization_tests {
                 .with_state(move |state| {
                     state.fixture(|conn| {
                         let mut events = Vec::new();
-                        let target = PreparedPopupTarget::New(NewPopupTarget {
+                        let initialization = conn.reserve_target_initialization(&owner).unwrap();
+                        let target = PreparedPopupTarget::New(Box::new(NewPopupTarget {
+                            initialization,
                             browser_context_id: "BID-held-popup".into(),
                             target_id: "TID-held-popup".into(),
                             tab_target_id,
                             auto_attached_tab_sessions: Vec::new(),
                             auto_attached_page_sessions: Vec::new(),
                             disposition: moli_core::page::RendererPopupDisposition::Background,
-                        })
+                        }))
                         .commit(conn, None, &mut events);
                         let mut tasks = conn.take_scheduler_events().into_iter().filter_map(
                             |event| match event {
