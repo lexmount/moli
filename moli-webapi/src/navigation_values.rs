@@ -3,11 +3,15 @@
 pub mod options;
 
 use crate::interfaces as web_api_interfaces;
-use moli_v8_util::{get_private_value, set_private_value, v8_string, v8str};
+use moli_v8_util::{get_private_object, get_private_value, set_private_value, v8_string, v8str};
 use moli_webapi_declare::WebApiObject;
 
 const NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT: &str =
     "__lmNavigationTransitionCommittedResolver";
+
+const ACTIVATION_ENTRY: &str = "__lmNavigationActivationEntry";
+const ACTIVATION_FROM: &str = "__lmNavigationActivationFrom";
+const ACTIVATION_TYPE: &str = "__lmNavigationActivationType";
 
 pub const NAVIGATION_DESTINATION_URL_SLOT: &str = "__lmNavigationDestinationUrl";
 pub const NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT: &str = "__lmNavigationDestinationSameDocument";
@@ -33,15 +37,28 @@ struct NavigationDestinationDeclaration<'scope> {
     own_to_string_tag = "NavigationActivation",
     readonly_to_string_tag
 )]
-struct NavigationActivationObjectDeclaration<'scope> {
+pub struct NavigationActivationObjectDeclaration<'scope> {
     #[webapi(data_property)]
-    entry: v8::Local<'scope, v8::Object>,
+    pub entry: v8::Local<'scope, v8::Object>,
 
     #[webapi(data_property)]
-    from: v8::Local<'scope, v8::Value>,
+    pub from: v8::Local<'scope, v8::Value>,
 
     #[webapi(data_property = "navigationType")]
-    navigation_type: v8::Local<'scope, v8::Value>,
+    pub navigation_type: v8::Local<'scope, v8::Value>,
+}
+
+impl<'s> NavigationActivationObjectDeclaration<'s> {
+    pub fn from_private_state(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Option<Self> {
+        Some(Self {
+            entry: get_private_object(scope, object, ACTIVATION_ENTRY)?,
+            from: get_private_value(scope, object, ACTIVATION_FROM)?,
+            navigation_type: get_private_value(scope, object, ACTIVATION_TYPE)?,
+        })
+    }
 }
 
 #[derive(WebApiObject)]
@@ -109,9 +126,13 @@ pub fn new_navigation_activation<'s>(
     from: v8::Local<'s, v8::Value>,
     navigation_type: v8::Local<'s, v8::Value>,
 ) -> v8::Local<'s, v8::Object> {
-    NavigationActivationObjectDeclaration::new(entry, from, navigation_type)
+    let activation = NavigationActivationObjectDeclaration::new(entry, from, navigation_type)
         .bind(scope)
-        .expect("NavigationActivation declaration should bind")
+        .expect("NavigationActivation declaration should bind");
+    set_private_value(scope, activation, ACTIVATION_ENTRY, entry.into());
+    set_private_value(scope, activation, ACTIVATION_FROM, from);
+    set_private_value(scope, activation, ACTIVATION_TYPE, navigation_type);
+    activation
 }
 
 pub fn new_navigation_transition<'s>(
