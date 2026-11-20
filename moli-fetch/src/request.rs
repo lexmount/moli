@@ -10,8 +10,8 @@ use moli_url::{WebOrigin, same_origin};
 use url::Url;
 
 use crate::{
-    FetchConfig, FetchPriorityHint, FetchUrlList, RedirectInfo,
-    network_fetch_result::NetworkObservationRecorder,
+    FetchConfig, FetchPriorityHint, FetchUrlList, NetworkRequestExtraInfo, RedirectInfo,
+    network_fetch_result::{NetworkObservationRecorder, NetworkRequestObserver},
 };
 
 /// Plain HTTP exchanges and browser Fetch requests have different security
@@ -87,6 +87,7 @@ pub struct Request {
     pub cookie_context: NetworkCookieRequestContext,
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
+    network_request_observer: Option<NetworkRequestObserver>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
     redirect_policy: Option<RequestRedirectPolicy>,
 }
@@ -638,6 +639,7 @@ impl Request {
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
+            network_request_observer: None,
             browser_identity: None,
             redirect_policy: None,
         })
@@ -678,6 +680,7 @@ impl Request {
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
+            network_request_observer: None,
             browser_identity: None,
             redirect_policy: None,
         }
@@ -751,6 +754,7 @@ impl Request {
             cookie_context: NetworkCookieRequestContext::subresource(method),
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
+            network_request_observer: None,
             browser_identity: None,
             redirect_policy: None,
         }
@@ -1040,6 +1044,21 @@ impl Request {
 
     pub(crate) fn network_observation_recorder(&self) -> Option<&NetworkObservationRecorder> {
         self.network_observation_recorder.as_ref()
+    }
+
+    /// On fetches with network metadata, report the first HTTP request header
+    /// block for each hop. The callback runs on the fetch thread and receives
+    /// the number of redirects already followed and that hop's cookie report.
+    pub fn with_network_request_observer(
+        mut self,
+        observer: impl Fn(usize, NetworkRequestExtraInfo) + Send + Sync + 'static,
+    ) -> Self {
+        self.network_request_observer = Some(NetworkRequestObserver::new(observer));
+        self
+    }
+
+    pub(crate) fn network_request_observer(&self) -> Option<&NetworkRequestObserver> {
+        self.network_request_observer.as_ref()
     }
 
     pub fn redirect_handling(&self) -> RequestRedirectHandling {

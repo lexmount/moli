@@ -638,6 +638,11 @@ pub enum ScriptNetworkOutputItem {
     SubresourceNetworkRecord(Box<SubresourceNetworkRecord>),
     SubresourceRequestStarted(Box<SubresourceRequestSnapshot>),
     SubresourceRequestUpdated(Box<SubresourceRequestSnapshot>),
+    SubresourceRequestExtraInfo {
+        handle: SubresourceNetworkRequestHandle,
+        hop: usize,
+        info: Box<NetworkRequestExtraInfo>,
+    },
     SubresourceResponseStarted(Box<SubresourceResponseStarted>),
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
@@ -1032,7 +1037,8 @@ impl ScriptExecutionReport {
                 state.bodies.insert(handle, *body);
                 self.try_materialize_staged_subresource_record(handle);
             }
-            ScriptNetworkOutputItem::SubresourceDataReceived(_)
+            ScriptNetworkOutputItem::SubresourceRequestExtraInfo { .. }
+            | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_) => {}
             ScriptNetworkOutputItem::WebSocketNetworkEvent(event) => {
                 self.websocket_network_events.push(event);

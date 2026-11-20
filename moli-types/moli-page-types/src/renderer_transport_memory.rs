@@ -69,6 +69,7 @@ impl ScriptNetworkOutputItem {
             Self::SubresourceRequestStarted(request) | Self::SubresourceRequestUpdated(request) => {
                 request_snapshot_charge(request)
             }
+            Self::SubresourceRequestExtraInfo { info, .. } => request_extra_info_charge(info),
             Self::SubresourceResponseStarted(response) => response_started_charge(response),
             Self::SubresourceDataReceived(_) => 0,
             Self::SubresourceEventSourceMessageReceived(message) => [
@@ -328,18 +329,20 @@ fn response_started_charge(response: &SubresourceResponseStarted) -> usize {
             response
                 .network_request_extra_info
                 .as_ref()
-                .map(|info| {
-                    headers_charge(&info.headers).saturating_add(
-                        info.cookie_report
-                            .included_cookies
-                            .len()
-                            .saturating_add(info.cookie_report.excluded_cookies.len())
-                            .saturating_mul(256),
-                    )
-                })
+                .map(request_extra_info_charge)
                 .unwrap_or(0),
         )
         .saturating_add(response.cookie_set_reports.len().saturating_mul(256))
+}
+
+fn request_extra_info_charge(info: &NetworkRequestExtraInfo) -> usize {
+    headers_charge(&info.headers).saturating_add(
+        info.cookie_report
+            .included_cookies
+            .len()
+            .saturating_add(info.cookie_report.excluded_cookies.len())
+            .saturating_mul(256),
+    )
 }
 
 fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {
