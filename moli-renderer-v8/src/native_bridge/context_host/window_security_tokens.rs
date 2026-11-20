@@ -74,7 +74,7 @@ impl PageScriptHost {
             return None;
         }
         let origin = self.main_document_security_origin();
-        if self.document_domain_override.borrow().is_some() {
+        if self.document_domain_override.get().is_some() {
             return None;
         }
         window_security_token_key(origin)
@@ -103,7 +103,7 @@ impl PageScriptHost {
         }
         window_isolated_world_security_token_key(
             self.main_document_security_origin(),
-            self.document_domain_override.borrow().is_some(),
+            self.document_domain_override.get().is_some(),
         )
     }
 
@@ -171,10 +171,10 @@ impl PageScriptHost {
                     continue;
                 }
                 let related_host = unsafe { &*related_ptr };
-                if !std::rc::Rc::ptr_eq(
-                    &self.document_domain_override,
-                    &related_host.document_domain_override,
-                ) {
+                if !self
+                    .document_domain_override
+                    .shares_with(&related_host.document_domain_override)
+                {
                     continue;
                 }
                 let dispatch_scope = OwnerDispatchScope::Top;
@@ -529,7 +529,7 @@ impl PageScriptHost {
         }
         WindowAccessOrigin::from_serialized_origin(
             serialized_origin,
-            self.document_domain_override.borrow().clone(),
+            self.document_domain_override.get(),
         )
     }
 

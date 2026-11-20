@@ -4,14 +4,17 @@ use std::net::IpAddr;
 use url::{Host, Url};
 
 impl PageScriptHost {
-    pub(crate) fn inherit_document_domain_override(&mut self, domain: Rc<RefCell<Option<String>>>) {
+    pub(crate) fn inherit_document_domain_override(
+        &mut self,
+        domain: moli_dom::native::DocumentDomainOverride,
+    ) {
         self.document_domain_override = domain;
     }
 
     pub(crate) fn inherited_document_domain(
         &self,
         child: Option<DomHandle>,
-    ) -> Rc<RefCell<Option<String>>> {
+    ) -> moli_dom::native::DocumentDomainOverride {
         match child.and_then(|handle| self.child_browsing_context_security_origin_owner(handle)) {
             Some(ChildSecurityOriginOwner::Child(owner)) => {
                 self.child_browsing_contexts[&owner].shared_document_domain_override()
@@ -24,11 +27,18 @@ impl PageScriptHost {
         &self,
         document_handle: DomHandle,
     ) -> String {
+        if let Some(domain) = self
+            .dom_host()
+            .node(document_handle)
+            .and_then(Node::as_document)
+            .and_then(|document| document.inherited_domain())
+        {
+            return domain.value();
+        }
         if document_handle == self.document_handle() {
             return self
                 .document_domain_override
-                .borrow()
-                .clone()
+                .get()
                 .unwrap_or_else(|| self.main_document_domain_host().unwrap_or_default());
         }
         if let Some(child_handle) =
@@ -45,6 +55,35 @@ impl PageScriptHost {
             .and_then(Node::as_document)
             .and_then(|document| url_host_domain(document.url()))
             .unwrap_or_default()
+    }
+
+    pub(crate) fn capture_document_domain(
+        &self,
+        document_handle: DomHandle,
+    ) -> moli_dom::native::DocumentDomain {
+        if let Some(domain) = self
+            .dom_host()
+            .node(document_handle)
+            .and_then(Node::as_document)
+            .and_then(|document| document.inherited_domain())
+        {
+            return domain.clone();
+        }
+        let domain_override = if document_handle == self.document_handle() {
+            self.document_domain_override.clone()
+        } else if let Some(child) =
+            self.child_browsing_context_handle_for_stored_document(document_handle)
+        {
+            self.inherited_document_domain(Some(child))
+        } else {
+            self.lightweight_popup_id_for_document_handle(document_handle)
+                .and_then(|id| self.shared_lightweight_popup_document_domain_override(id))
+                .unwrap_or_default()
+        };
+        moli_dom::native::DocumentDomain::new(
+            self.document_domain_value_for_document_handle(document_handle),
+            domain_override,
+        )
     }
 
     pub(crate) fn set_document_domain_for_document_handle(
@@ -65,7 +104,7 @@ impl PageScriptHost {
             if !document_domain_is_allowed_for_host(&current_host, &domain) {
                 return false;
             }
-            *self.document_domain_override.borrow_mut() = Some(domain);
+            self.document_domain_override.set(domain);
             return true;
         }
         let Some(child_handle) =
@@ -85,7 +124,7 @@ impl PageScriptHost {
         handle: DomHandle,
     ) -> Option<String> {
         match self.child_browsing_context_security_origin_owner(handle)? {
-            ChildSecurityOriginOwner::Main => self.document_domain_override.borrow().clone(),
+            ChildSecurityOriginOwner::Main => self.document_domain_override.get(),
             ChildSecurityOriginOwner::Child(owner) => self
                 .child_browsing_contexts
                 .get(&owner)
@@ -133,7 +172,7 @@ impl PageScriptHost {
         };
         match origin_owner {
             ChildSecurityOriginOwner::Main => {
-                *self.document_domain_override.borrow_mut() = Some(domain);
+                self.document_domain_override.set(domain);
             }
             ChildSecurityOriginOwner::Child(owner) => {
                 let Some(entry) = self.child_browsing_contexts.get_mut(&owner) else {

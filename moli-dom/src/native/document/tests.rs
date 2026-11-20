@@ -6,6 +6,34 @@ fn test_url() -> Url {
 }
 
 #[test]
+fn document_clones_keep_shared_inherited_domain_after_source_lifetime_ends() {
+    for mut document in [
+        Document::new_html(test_url()),
+        Document::new_xml(test_url()),
+    ] {
+        let domain = DocumentDomainOverride::default();
+        document.set_inherited_domain(DocumentDomain::new(
+            "sub.requester.test".into(),
+            domain.clone(),
+        ));
+        let clone = document.clone_for_node();
+        let transferred = clone.clone_metadata_for_new_arena();
+        assert_eq!(
+            clone.inherited_domain().unwrap().value(),
+            "sub.requester.test"
+        );
+        domain.set("requester.test".into());
+        drop(document);
+        drop(domain);
+        assert_eq!(clone.inherited_domain().unwrap().value(), "requester.test");
+        assert_eq!(
+            transferred.inherited_domain().unwrap().value(),
+            "requester.test"
+        );
+    }
+}
+
+#[test]
 fn replacing_document_discards_foreign_template_owner_handles() {
     for source_padding in [0, 6] {
         let mut source = NativeDom::new_html(test_url());
