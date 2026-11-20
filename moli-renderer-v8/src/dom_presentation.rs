@@ -12,6 +12,14 @@ use crate::{
     dom::native::{DomHost, Element, Node},
 };
 
+pub(crate) fn suppresses_noscript_box(
+    host: &DomHost,
+    node: DomHandle,
+    scripting_enabled: bool,
+) -> bool {
+    scripting_enabled && host.is_html_element_named(node, "noscript")
+}
+
 pub(crate) fn layout_element_classification(
     element: &Element,
 ) -> (LayoutElementCategory, Option<LayoutReplacedKind>) {

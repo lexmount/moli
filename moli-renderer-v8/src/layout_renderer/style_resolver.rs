@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::{
     document_runtime::DomHandle,
+    dom_presentation::suppresses_noscript_box,
     native_bridge::{PageScriptHost, element::StyleObservation},
     style_engine::{
         StyleResolutionPass, StyleViewport, StyloAnonymousBoxKind, StyloStyleEnvironment,
@@ -169,12 +170,7 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
             );
         }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
-        if self.scripting_enabled
-            && self
-                .runtime
-                .dom_host()
-                .is_html_element_named(node, "noscript")
-        {
+        if suppresses_noscript_box(self.runtime.dom_host(), node, self.scripting_enabled) {
             // Match Blink's HTMLNoScriptElement::LayoutObjectIsNeeded(): the
             // computed `display` remains observable, including author
             // overrides, but no layout object is generated while this exact
@@ -198,7 +194,7 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
-        let computed = self.pass.pseudo_style(node, "marker");
+        let computed = self.pass.marker_for_generation(node);
         if let Some(profile) = self.profile.as_mut() {
             profile.marker_count = profile.marker_count.saturating_add(1);
             profile.marker_read_ns = profile.marker_read_ns.saturating_add(

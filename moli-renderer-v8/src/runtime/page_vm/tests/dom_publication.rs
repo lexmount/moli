@@ -1,5 +1,8 @@
 use super::*;
-use crate::{RendererDomMutationEvent, RendererDomSearchResultsResolution};
+use crate::{
+    RendererDocumentFrontendNodeIdsResolution, RendererDomMutationEvent,
+    RendererDomSearchResultsResolution,
+};
 use moli_page_types::DocumentNodeSnapshot;
 
 fn mutation_interest_fixture(observer: bool) -> PageVm {
@@ -159,6 +162,44 @@ fn inspector_descendants(snapshot: &DocumentNodeSnapshot) -> Vec<&DocumentNodeSn
     nodes
 }
 
+fn snapshot_marker_hosts(snapshot: &DocumentNodeSnapshot) -> std::collections::BTreeSet<String> {
+    inspector_descendants(snapshot)
+        .into_iter()
+        .filter(|node| {
+            node.pseudo_elements
+                .iter()
+                .any(|pseudo| pseudo.pseudo_type.as_deref() == Some("marker"))
+        })
+        .filter_map(|node| node.attributes.iter().find(|attr| attr.local_name == "id"))
+        .map(|attr| attr.value.clone())
+        .collect()
+}
+
+fn snapshot_marker_id(snapshot: &DocumentNodeSnapshot) -> Option<u32> {
+    snapshot
+        .pseudo_elements
+        .iter()
+        .find(|pseudo| pseudo.pseudo_type.as_deref() == Some("marker"))?
+        .backend_node_id
+}
+
+fn retain_inspector_object(page: &mut PageVm, expression: &str) -> anyhow::Result<String> {
+    let request = serde_json::json!({
+        "id": 1,
+        "method": "Runtime.evaluate",
+        "params": {"expression": expression},
+    });
+    let messages = page
+        .vm_mut()
+        .dispatch_inspector_protocol_message(&request.to_string())?;
+    Ok(messages
+        .iter()
+        .find(|message| message["id"] == 1)
+        .and_then(|message| message["result"]["result"]["objectId"].as_str())
+        .expect("Inspector must retain the requested node")
+        .to_owned())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn document_snapshot_batches_marker_styles_without_layout() {
     run_page_vm_async_test(async move {
@@ -204,16 +245,7 @@ async fn document_snapshot_batches_marker_styles_without_layout() {
             let snapshot = page
                 .document_node_snapshot_for_document(Some("markers"), -1, true)
                 .expect("complete Inspector document");
-            inspector_descendants(&snapshot.snapshot)
-                .into_iter()
-                .filter(|node| {
-                    node.pseudo_elements
-                        .iter()
-                        .any(|pseudo| pseudo.pseudo_type.as_deref() == Some("marker"))
-                })
-                .filter_map(|node| node.attributes.iter().find(|attr| attr.local_name == "id"))
-                .map(|attr| attr.value.clone())
-                .collect::<std::collections::BTreeSet<_>>()
+            snapshot_marker_hosts(&snapshot.snapshot)
         };
         let passes = page.vm().layout_pass_observability_for_test().1;
         let expected = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect();
@@ -264,16 +296,9 @@ async fn document_snapshot_omits_markers_from_detached_iframe_shadow_tree() {
             "#,
         )?;
 
-        let messages = page.vm_mut().dispatch_inspector_protocol_message(
-            r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"markerItem"}}"#,
-        )?;
-        let object_id = messages
-            .iter()
-            .find(|message| message["id"] == 1)
-            .and_then(|message| message["result"]["result"]["objectId"].as_str())
-            .expect("Inspector must retain the shadow list item");
+        let object_id = retain_inspector_object(&mut page, "markerItem")?;
         let describe = |page: &mut PageVm| {
-            page.document_node_snapshot_for_object_id(None, object_id, 1, false, true)
+            page.document_node_snapshot_for_object_id(None, &object_id, 1, false, true)
                 .expect("Inspector object lookup must succeed")
                 .expect("Inspector must still resolve the list item")
                 .snapshot
@@ -315,6 +340,231 @@ async fn document_snapshot_omits_markers_from_detached_iframe_shadow_tree() {
     })
     .await
     .expect("marker snapshots must respect Shadow DOM attachment without forcing layout");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn document_snapshot_and_layout_agree_on_marker_generation() {
+    use moli_layout::{
+        LayoutBoxKind, LayoutFlushReason, LayoutPassRequest, PaintCaptureRequest, PaintFragment,
+    };
+
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/marker-generation")?,
+            );
+        page.vm_mut().set_layout_policy(crate::real_layout_test_policy());
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = `
+                <style>
+                    #empty::marker { content: ""; }
+                    #explicit::marker { content: "EXPLICIT"; }
+                    #no-content::marker { content: none; color: rgb(17, 34, 51); }
+                    #block::marker { content: "ignored"; }
+                </style>
+                <ol style="list-style-type:decimal; list-style-position:outside">
+                    <li id="native">first</li>
+                    <li id="suppressed" style="list-style:none">second</li>
+                    <li id="following">third</li>
+                </ol>
+                <li id="empty" style="list-style:none">empty</li>
+                <li id="explicit" style="list-style:none">explicit</li>
+                <li id="no-content">no content</li>
+                <li id="empty-type" style='list-style-type:""'>empty type</li>
+                <li id="image" style="list-style-type:none;list-style-image:url(marker.png)">image</li>
+                <li id="hidden" style="visibility:hidden">hidden</li>
+                <li id="transparent" style="opacity:0">transparent</li>
+                <div id="css-item" style="display:list-item">CSS list item</div>
+                <div id="block">block</div>
+                <noscript id="noscript" style="display:list-item">noscript</noscript>
+                <canvas id="canvas" style="display:list-item">
+                    <span id="canvas-child" style="display:list-item">fallback</span>
+                </canvas>`;
+            "#)?;
+
+        let expected = [
+            "native", "following", "empty", "explicit", "empty-type", "image", "hidden",
+            "transparent", "css-item",
+        ].into_iter().map(str::to_owned).collect::<std::collections::BTreeSet<_>>();
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        crate::style_engine::take_style_resolution_context_count_for_test();
+        for contexts in [1, 0] {
+            let snapshot = page.document_node_snapshot_for_document(None, -1, true).unwrap();
+            assert_eq!(snapshot_marker_hosts(&snapshot.snapshot), expected);
+            assert_eq!(crate::style_engine::take_style_resolution_context_count_for_test(), contexts);
+        }
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        assert_eq!(page.vm_mut().eval(
+            "getComputedStyle(document.getElementById('no-content'), '::marker').color"
+        )?, "rgb(17, 34, 51)");
+
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let (root, viewport) = {
+            let host = host.borrow();
+            let document = host.document_handle();
+            let mut styles = crate::native_bridge::element::StyleObservation::new(&host);
+            styles.with_resolution_pass(document, |pass| {
+                use crate::style_engine::{MarkerStyleDecision, marker_style_decision};
+
+                let native = host.dom_host().element_handle_by_id("native").unwrap();
+                let suppressed = host.dom_host().element_handle_by_id("suppressed").unwrap();
+                let native_style = pass.primary_style(native).unwrap();
+                let suppressed_style = pass.primary_style(suppressed).unwrap();
+                let native_marker = pass.pseudo_style(native, "marker").unwrap();
+                let suppressed_marker = pass.pseudo_style(suppressed, "marker").unwrap();
+                assert_ne!(native_marker.get_list().list_style_type, suppressed_marker.get_list().list_style_type);
+                assert_eq!(
+                    marker_style_decision(&native_style, &suppressed_marker),
+                    MarkerStyleDecision::DefaultListStyle,
+                );
+                assert_eq!(
+                    marker_style_decision(&suppressed_style, &native_marker),
+                    MarkerStyleDecision::Suppressed,
+                );
+            });
+            let root = host.dom_host().document_element_handle().unwrap();
+            let boxes = crate::layout_renderer::build_normalized_native_box_tree_for_test(&host, root)?;
+            let mut pending = vec![&boxes.root];
+            let mut marker_hosts = std::collections::BTreeSet::new();
+            while let Some(node) = pending.pop() {
+                if node.role == LayoutBoxKind::PseudoMarker {
+                    let (_, id) = node.owner.as_deref().unwrap().split_once('#').unwrap();
+                    marker_hosts.insert(id.to_owned());
+                }
+                pending.extend(&node.children);
+            }
+            assert_eq!(marker_hosts, expected);
+            (root, host.layout_viewport_for_document(document))
+        };
+
+        let pass = page.vm().build_layout_pass_for_subtree_for_test(
+            root,
+            LayoutPassRequest::with_capture(
+                viewport,
+                LayoutFlushReason::Print,
+                PaintCaptureRequest::print_document(),
+            ),
+        )?;
+        assert!(pass.paint_snapshot().unwrap().fragments.iter().any(|fragment| {
+            matches!(fragment, PaintFragment::GlyphRun(run) if run.text.as_ref().is_some_and(|text| text.text.trim() == "3."))
+        }), "the list item with a suppressed marker must still advance the counter");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("DevTools and layout must use the same marker generation semantics");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn document_snapshot_marker_ids_follow_slot_and_iframe_participation() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.com/marker-participation")?,
+            );
+        page.vm_mut()
+            .set_layout_policy(crate::real_layout_test_policy());
+        page.vm_mut().eval(
+            r#"
+            document.body.innerHTML = `
+                <div id="slotHost"></div>
+                <div id="frameHost"><iframe id="frame" style="width:100px"></iframe></div>`;
+            globalThis.slotHost = document.getElementById('slotHost');
+            const shadow = slotHost.attachShadow({mode:'open'});
+            shadow.innerHTML = '<slot><div><li id="fallbackItem">fallback</li></div></slot>';
+            globalThis.fallbackItem = shadow.getElementById('fallbackItem');
+            globalThis.assignedNode = document.createElement('span');
+            globalThis.frame = document.getElementById('frame');
+            globalThis.frameHost = document.getElementById('frameHost');
+        "#,
+        )?;
+        materialize_child_realm_through_page_turn_for_test(&mut page, "frame")?;
+        page.vm_mut().eval(
+            r#"
+            frame.contentDocument.body.innerHTML =
+                '<style>@media (max-width:150px) { #frameItem { display:list-item } }</style>' +
+                '<div id="frameItem">iframe item</div>';
+            globalThis.frameItem = frame.contentDocument.getElementById('frameItem');
+        "#,
+        )?;
+        let names = ["fallbackItem", "frameItem"];
+        let objects = [
+            retain_inspector_object(&mut page, names[0])?,
+            retain_inspector_object(&mut page, names[1])?,
+        ];
+        let passes = page.vm().layout_pass_observability_for_test().1;
+        let mut marker_ids = [0; 2];
+        let mut owner_ids = [None; 2];
+        for (mutation, visible) in [
+            ("void 0", [true, true]),
+            ("slotHost.append(assignedNode)", [false, true]),
+            ("assignedNode.remove()", [true, true]),
+            ("frameHost.style.display = 'none'", [true, false]),
+            ("frameHost.style.display = ''", [true, true]),
+            ("frameItem.remove()", [true, false]),
+            ("frame.contentDocument.body.append(frameItem)", [true, true]),
+            ("frame.style.width = '250px'", [true, false]),
+            ("frame.style.width = '100px'", [true, true]),
+        ] {
+            page.vm_mut().eval(mutation)?;
+            let snapshot = page
+                .document_node_snapshot_for_document(None, -1, true)
+                .unwrap();
+            let expected = names
+                .into_iter()
+                .zip(visible)
+                .filter(|&(_, show)| show)
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            assert_eq!(
+                snapshot_marker_hosts(&snapshot.snapshot),
+                expected,
+                "{mutation}"
+            );
+            for (index, object_id) in objects.iter().enumerate() {
+                let node = page
+                    .document_node_snapshot_for_object_id(None, object_id, 1, false, false)?
+                    .expect("retained object ID still resolves")
+                    .snapshot;
+                let owner_id = node.backend_node_id.expect("list item backend ID");
+                assert_eq!(*owner_ids[index].get_or_insert(owner_id), owner_id);
+                let marker = snapshot_marker_id(&node);
+                assert_eq!(
+                    marker.is_some(),
+                    visible[index],
+                    "{mutation}, {}",
+                    names[index]
+                );
+                if let Some(marker) = marker {
+                    marker_ids[index] = marker;
+                }
+                assert_eq!(
+                    page.document_node_snapshot_for_backend_node_id(marker_ids[index], 0, false)?
+                        .is_some(),
+                    visible[index],
+                    "{mutation}, backend ID for {}",
+                    names[index],
+                );
+            }
+            let RendererDocumentFrontendNodeIdsResolution::Found(frontend_ids) =
+                page.document_frontend_node_ids_for_backend_node_ids(None, &marker_ids)
+            else {
+                panic!("full snapshot must publish the document");
+            };
+            assert_eq!(
+                frontend_ids.iter().map(Option::is_some).collect::<Vec<_>>(),
+                visible,
+                "{mutation}"
+            );
+        }
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, passes);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("marker projection and ID queries must follow slot and frame participation");
 }
 
 fn serialized_inspector_ids(snapshot: &DocumentNodeSnapshot) -> std::collections::HashSet<u32> {

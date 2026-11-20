@@ -1260,12 +1260,12 @@ impl ResolvedLayoutStyle {
         }
     }
 
-    pub(crate) fn generates_pseudo_box(&self, marker: bool) -> bool {
-        match self.generated_content {
-            GeneratedContent::Normal => marker,
-            GeneratedContent::None => false,
-            GeneratedContent::Items { .. } => true,
-        }
+    pub(crate) fn has_explicit_generated_content(&self) -> bool {
+        matches!(self.generated_content, GeneratedContent::Items { .. })
+    }
+
+    pub(crate) fn has_normal_generated_content(&self) -> bool {
+        matches!(self.generated_content, GeneratedContent::Normal)
     }
 
     pub(crate) fn has_unsupported_generated_content(&self) -> bool {

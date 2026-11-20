@@ -115,6 +115,8 @@ pub(crate) use forms::{
 pub(in crate::native_bridge) use forms::{form_named_control_matches, form_named_image_matches};
 #[cfg(test)]
 pub(crate) use styles::iframe_width_attribute_viewport_width;
+#[cfg(feature = "devtools")]
+pub(crate) use styles::marker_hosts_for_document_snapshot;
 pub(crate) use styles::{
     ComputedStyleTargetContext, STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT,
     STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT, STYLE_DECLARATION_READ_DOCUMENT_SLOT,
@@ -123,10 +125,6 @@ pub(crate) use styles::{
     STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT, STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT,
     StyleObservation, computed_style_target_context, iframe_handle_viewport,
     style_viewport_for_document,
-};
-#[cfg(feature = "devtools")]
-pub(crate) use styles::{
-    marker_hosts_for_document_snapshot, marker_pseudo_element_is_generated_for_document_snapshot,
 };
 mod stylesheets;
 mod template_install;

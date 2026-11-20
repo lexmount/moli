@@ -100,9 +100,9 @@ mod world_update;
 use cleanup::StyleInvalidationCleanup;
 pub(crate) use computed::{
     ComputedDisplayKind, ComputedRenderedStyleFacts, ComputedTextTransformKind,
-    ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, StyleObservationSnapshot,
-    StyleResolutionPass, StyloAnonymousBoxKind, StyloComputedStyleSnapshot,
-    serialize_resolved_computed_property,
+    ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, MarkerStyleDecision,
+    StyleObservationSnapshot, StyleResolutionPass, StyloAnonymousBoxKind,
+    StyloComputedStyleSnapshot, marker_style_decision, serialize_resolved_computed_property,
 };
 use document_world::{DocumentStyleWorld, DocumentStyleWorlds};
 pub(in crate::style_engine) use drain::StyleInvalidationDrainBoundary;

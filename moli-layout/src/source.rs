@@ -724,6 +724,7 @@ where
         node: N,
     ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError>;
 
+    /// Returns the style for a marker that generates a box on this list item.
     fn marker_style(&mut self, _node: N) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
         Ok(None)
     }

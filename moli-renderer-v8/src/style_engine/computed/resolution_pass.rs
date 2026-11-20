@@ -22,11 +22,12 @@ use style::{
 #[cfg(test)]
 use super::STYLE_RESOLUTION_CONTEXTS;
 use super::{
-    DocumentStyleWorld, DomHandle, DomHost, MoliStyleEngine, StyloAnonymousBoxKind,
-    StyloComputedStyleSnapshot, clear_element_styles_for_resolution, document_quirks_mode,
-    element_style_is_current, populate_inline_style_attribute_for_resolution,
-    publish_resolved_element_styles, style_validation_path_needs_resolution,
-    stylo_pseudo_element_for_computed_style, with_cached_lazy_pseudo_style,
+    DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
+    StyloAnonymousBoxKind, StyloComputedStyleSnapshot, clear_element_styles_for_resolution,
+    document_quirks_mode, element_style_is_current, marker_style_decision,
+    populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
+    style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
+    with_cached_lazy_pseudo_style,
 };
 
 /// One binding and stylesheet read scope for a stable document world. Create
@@ -187,6 +188,13 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         ))
     }
 
+    #[cfg(feature = "devtools")]
+    pub(crate) fn primary_style(&mut self, handle: DomHandle) -> Option<ServoArc<ComputedValues>> {
+        let element = self.prepare(handle)?;
+        let data = element.borrow_data()?;
+        Some(data.styles.primary().clone())
+    }
+
     pub(crate) fn pseudo_style(
         &mut self,
         handle: DomHandle,
@@ -195,9 +203,33 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         let pseudo = stylo_pseudo_element_for_computed_style(pseudo)?;
         let element = self.prepare(handle)?;
         let primary = element.borrow_data()?.styles.primary().clone();
+        self.lazy_pseudo_style(handle, element, &pseudo, &primary)
+    }
+
+    pub(crate) fn marker_for_generation(
+        &mut self,
+        handle: DomHandle,
+    ) -> Option<ServoArc<ComputedValues>> {
+        let element = self.prepare(handle)?;
+        let primary = element.borrow_data()?.styles.primary().clone();
+        if !primary.clone_display().is_list_item() {
+            return None;
+        }
+        let marker = self.lazy_pseudo_style(handle, element, &PseudoElement::Marker, &primary)?;
+        (marker_style_decision(&primary, &marker) != MarkerStyleDecision::Suppressed)
+            .then_some(marker)
+    }
+
+    fn lazy_pseudo_style(
+        &mut self,
+        handle: DomHandle,
+        element: StyloElement<'dom>,
+        pseudo: &PseudoElement,
+        primary: &ComputedValues,
+    ) -> Option<ServoArc<ComputedValues>> {
         debug_assert!(pseudo.is_lazy());
-        with_cached_lazy_pseudo_style(self.context.world, handle, &pseudo, || {
-            self.context.lazy_pseudo_style(element, &pseudo, &primary)
+        with_cached_lazy_pseudo_style(self.context.world, handle, pseudo, || {
+            self.context.lazy_pseudo_style(element, pseudo, primary)
         })
     }
 

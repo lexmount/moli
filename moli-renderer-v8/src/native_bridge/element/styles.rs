@@ -1,6 +1,4 @@
 use crate::util::{get_private_value, set_private_value, throw_type_error, v8_string, v8str};
-#[cfg(feature = "devtools")]
-use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use crate::document_runtime::DomHandle;
@@ -15,6 +13,10 @@ mod accessors;
 mod ancestry;
 mod computed_names;
 mod declaration;
+#[cfg(feature = "devtools")]
+mod marker_snapshot;
+#[cfg(feature = "devtools")]
+pub(crate) use marker_snapshot::marker_hosts_for_document_snapshot;
 mod methods;
 mod named;
 #[cfg(test)]
@@ -643,123 +645,6 @@ pub(crate) fn computed_style_properties_for_inspector_handle(
         return Some(Vec::new());
     };
     Some(ComputedStyleRead::new_with_context(host, handle, context).properties())
-}
-
-#[cfg(feature = "devtools")]
-pub(crate) fn marker_pseudo_element_is_generated_for_document_snapshot(
-    host: &PageScriptHost,
-    handle: DomHandle,
-) -> Option<bool> {
-    let mut observation = StyleObservation::new(host);
-    let context = document_snapshot_style_context(host, handle, |handle| {
-        observation.target_is_in_flat_tree(handle)
-    })?;
-    Some(
-        matches!(context, DocumentSnapshotStyleComputation::Available { .. })
-            && snapshot_element_has_marker(host, handle, &mut observation),
-    )
-}
-
-#[cfg(feature = "devtools")]
-pub(crate) fn marker_hosts_for_document_snapshot(
-    host: &PageScriptHost,
-    handles: impl IntoIterator<Item = DomHandle>,
-) -> HashSet<DomHandle> {
-    let mut observation = StyleObservation::new(host);
-    let available = handles
-        .into_iter()
-        .filter(|&handle| {
-            matches!(
-                document_snapshot_style_context(host, handle, |handle| {
-                    observation.target_is_in_flat_tree(handle)
-                }),
-                Some(DocumentSnapshotStyleComputation::Available { .. })
-            )
-        })
-        .collect::<Vec<_>>();
-    if available.len() > 1 {
-        observation.prepare_targets(available.iter().copied());
-    }
-    available
-        .into_iter()
-        .filter(|&handle| snapshot_element_has_marker(host, handle, &mut observation))
-        .collect()
-}
-
-#[cfg(feature = "devtools")]
-fn snapshot_element_has_marker(
-    host: &PageScriptHost,
-    handle: DomHandle,
-    observation: &mut StyleObservation<'_>,
-) -> bool {
-    let style = observation.read(handle);
-    let list_item = style.computed_values().map_or_else(
-        || {
-            style
-                .property("display")
-                .split_ascii_whitespace()
-                .any(|component| component.eq_ignore_ascii_case("list-item"))
-        },
-        // Retained style can outlive a shadow host's connection.
-        |values| values.clone_display().is_list_item() && style.computed_style_applies(),
-    );
-    if !list_item || document_snapshot_has_display_none_ancestor(host, handle, observation) {
-        return false;
-    }
-
-    let content = style.raw_pseudo_property("marker", "content");
-    if content.eq_ignore_ascii_case("none") {
-        return false;
-    }
-    if !content.is_empty() && !content.eq_ignore_ascii_case("normal") {
-        return true;
-    }
-
-    !style
-        .property("list-style-type")
-        .eq_ignore_ascii_case("none")
-        || !style
-            .property("list-style-image")
-            .eq_ignore_ascii_case("none")
-}
-
-#[cfg(feature = "devtools")]
-fn document_snapshot_has_display_none_ancestor(
-    host: &PageScriptHost,
-    handle: DomHandle,
-    observation: &mut StyleObservation<'_>,
-) -> bool {
-    let mut current = document_snapshot_flat_tree_parent(host, handle);
-    while let Some(candidate) = current {
-        if host
-            .dom_host()
-            .node(candidate)
-            .is_some_and(crate::dom::native::Node::is_element)
-            && observation.read(candidate).property("display") == "none"
-        {
-            return true;
-        }
-        current = document_snapshot_flat_tree_parent(host, candidate);
-    }
-    false
-}
-
-#[cfg(feature = "devtools")]
-fn document_snapshot_flat_tree_parent(
-    host: &PageScriptHost,
-    handle: DomHandle,
-) -> Option<DomHandle> {
-    if let Some(slot) = host.dom_host().assigned_slot_for_node(handle) {
-        return Some(slot);
-    }
-    let parent = host
-        .dom_host()
-        .node(handle)
-        .and_then(crate::dom::native::Node::parent_node)?;
-    if host.dom_host().is_shadow_root(parent) {
-        return host.dom_host().shadow_root_host(parent);
-    }
-    Some(parent)
 }
 
 enum DocumentSnapshotStyleComputation {

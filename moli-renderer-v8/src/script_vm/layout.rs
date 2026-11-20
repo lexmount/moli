@@ -502,11 +502,8 @@ impl ScriptVm {
         &self,
         handle: DomHandle,
     ) -> bool {
-        crate::native_bridge::element::marker_pseudo_element_is_generated_for_document_snapshot(
-            &self._context_host.borrow(),
-            handle,
-        )
-        .unwrap_or(false)
+        self.marker_hosts_for_document_snapshot([handle])
+            .contains(&handle)
     }
 
     #[cfg(feature = "devtools")]
