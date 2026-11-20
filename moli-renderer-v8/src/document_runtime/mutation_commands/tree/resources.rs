@@ -37,6 +37,7 @@ pub(super) struct InsertionSubtreePlan {
     pub(super) may_have_text_tracks: bool,
     pub(super) may_have_options: bool,
     pub(super) may_have_nonce: bool,
+    declarative_shadow_subtrees: Vec<DomHandle>,
     pub(super) details: DetailsInsertionPlan,
 }
 
@@ -48,6 +49,28 @@ impl DocumentRuntime {
         insertion_plan: &TreeInsertionPlan<'_>,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     ) {
+        if !insertion_plan
+            .subtree_plan
+            .declarative_shadow_subtrees
+            .is_empty()
+            && self.dom_host.is_connected(insertion_plan.parent)
+        {
+            let host = unsafe { &mut *host_ptr };
+            for &root in &insertion_plan.subtree_plan.declarative_shadow_subtrees {
+                let mut stack = vec![root];
+                while let Some(handle) = stack.pop() {
+                    if let Some(shadow) = self.dom_host.shadow_root_handle(handle) {
+                        stack.push(shadow);
+                    }
+                    if self.dom_host.is_shadow_root(handle) {
+                        crate::native_bridge::element::initialize_declarative_adopted_style_sheets(
+                            scope, host, handle,
+                        );
+                    }
+                    self.push_child_handles(&mut stack, handle);
+                }
+            }
+        }
         if insertion_plan.subtree_plan.may_have_images {
             self.queue_inserted_image_loads(
                 scope,
@@ -158,6 +181,9 @@ impl DocumentRuntime {
             plan.node_count += 1;
             if let Some(element) = self.dom_host.node(handle).and_then(Node::as_element) {
                 plan.details.observe_element(handle, element);
+                if let Some(root) = self.dom_host.shadow_root_handle(handle) {
+                    plan.declarative_shadow_subtrees.push(root);
+                }
                 if element.is_image_resource_element()
                     || (element.is_html_input() && element.input_type().as_ref() == "image")
                 {

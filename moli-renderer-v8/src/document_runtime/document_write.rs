@@ -395,8 +395,20 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         template_id: DomHandle,
         attrs: Vec<crate::dom::native::Attribute>,
     ) -> bool {
-        self.runtime
-            .attach_declarative_shadow_for_parser_in_live_dom_host(host_id, template_id, attrs)
+        let attached = self
+            .runtime
+            .attach_declarative_shadow_for_parser_in_live_dom_host(host_id, template_id, attrs);
+        if attached
+            && self.runtime.dom_host().is_connected(host_id)
+            && let Some(root) = self.runtime.dom_host().shadow_root_handle(host_id)
+        {
+            crate::native_bridge::element::initialize_declarative_adopted_style_sheets(
+                self.scope,
+                unsafe { &mut *self.host_ptr },
+                root,
+            );
+        }
+        attached
     }
 
     fn associate_parser_form_owner(&mut self, target: DomHandle, form: DomHandle) -> bool {
