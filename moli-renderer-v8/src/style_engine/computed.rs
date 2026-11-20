@@ -656,11 +656,7 @@ pub(super) fn computed_pseudo_style_snapshot_from_current_observation(
             &world,
             quirks_mode,
             &pseudo_element,
-            |style| {
-                Some(StyloComputedStyleSnapshot::from_primary(ServoArc::new(
-                    style.clone(),
-                )))
-            },
+            |style| Some(StyloComputedStyleSnapshot::from_primary(style.clone())),
         );
     }
     with_resolved_style_in_current_world(
@@ -779,10 +775,26 @@ fn with_resolved_style_in_current_world<R>(
     callback: impl FnOnce(&ServoArc<ComputedValues>, Option<&ElementStyles>) -> Option<R>,
 ) -> Option<R> {
     let computed_cache_generation = world.document_state.computed_cache_generation();
-    let has_retained_invalidation_roots = world
-        .document_state
-        .lazy_invalidation_roots
-        .has_retained_roots();
+    let invalidation = &world.document_state.lazy_invalidation_roots;
+    let has_retained_invalidation_roots = invalidation.has_retained_roots();
+    if pseudo_element.is_none()
+        && host.owner_document_handle(handle) == Some(world.document)
+        // With retained roots, a current path stamp and a published generation
+        // are the same checks the memoized one-entry validation path performs.
+        && (!has_retained_invalidation_roots
+            || invalidation
+                .required_generation_for_checked_element(handle)
+                .is_some_and(|generation| invalidation.element_is_current(handle, generation)))
+        && let Some(styles) = engine
+            .dom_adapter
+            .clone_clean_element_styles(world.document, handle)
+    {
+        #[cfg(test)]
+        world
+            .pseudo_style_cache
+            .record_primary(computed_cache_generation, handle);
+        return callback(styles.primary(), Some(&styles));
+    }
     if !has_retained_invalidation_roots && let Some(pseudo_element) = pseudo_element {
         let pseudo_key = ComputedElementStyleCacheKey {
             computed_cache_generation,
@@ -793,12 +805,8 @@ fn with_resolved_style_in_current_world<R>(
             return callback(&style, None);
         }
     }
-    let validation_path = has_retained_invalidation_roots.then(|| {
-        world
-            .document_state
-            .lazy_invalidation_roots
-            .validation_path(host, world.document, handle)
-    });
+    let validation_path = has_retained_invalidation_roots
+        .then(|| invalidation.validation_path(host, world.document, handle));
 
     engine.dom_adapter.with_bound_host(host, |dom_adapter| {
         let element = dom_adapter.element(host, handle)?;
@@ -833,10 +841,7 @@ fn with_resolved_style_in_current_world<R>(
                 // Initial resolution already walks the ancestor chain. Build
                 // its zero-generation stamps only on this slow path so clean
                 // repeated reads retain the old O(1) fast path.
-                world
-                    .document_state
-                    .lazy_invalidation_roots
-                    .validation_path(host, world.document, handle);
+                invalidation.validation_path(host, world.document, handle);
             }
             resolve_element_styles(
                 world,
@@ -883,11 +888,7 @@ fn with_resolved_style_in_current_world<R>(
             #[cfg(test)]
             world
                 .pseudo_style_cache
-                .record_primary(ComputedElementStyleCacheKey {
-                    computed_cache_generation,
-                    handle,
-                    pseudo_element: None,
-                });
+                .record_primary(computed_cache_generation, handle);
             canonical_styles.primary().clone()
         };
         callback(&style, Some(&canonical_styles))
@@ -1078,7 +1079,7 @@ fn with_lazily_resolved_pseudo_style<R>(
     inputs: &FullStyleWorldSnapshot,
     document_context: StyleSourceDocumentContext<'_>,
     pseudo_element: &PseudoElement,
-    callback: impl FnOnce(&ComputedValues) -> Option<R>,
+    callback: impl FnOnce(&ServoArc<ComputedValues>) -> Option<R>,
 ) -> Option<R> {
     debug_assert!(pseudo_element.is_lazy());
     let owner_document = owner_document_for_computed_style_read(host, handle)?;
@@ -1112,7 +1113,7 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
     world: &DocumentStyleWorld,
     quirks_mode: QuirksMode,
     pseudo_element: &PseudoElement,
-    callback: impl FnOnce(&ComputedValues) -> Option<R>,
+    callback: impl FnOnce(&ServoArc<ComputedValues>) -> Option<R>,
 ) -> Option<R> {
     debug_assert!(pseudo_element.is_lazy());
     // Resolve/validate the primary path before consulting the pseudo sidecar.
