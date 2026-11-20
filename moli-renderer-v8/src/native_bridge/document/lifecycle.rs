@@ -688,6 +688,8 @@ enum EditingCommand {
     InsertHtml,
     InsertText,
     SelectAll,
+    StyleWithCss,
+    UseCss,
 }
 
 fn editing_command_document<'s>(
@@ -781,6 +783,29 @@ fn execute_document_editing_command<'s>(
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
+        EditingCommand::StyleWithCss | EditingCommand::UseCss => {
+            let Some(value) = editing_command_value(scope, args) else {
+                return;
+            };
+            let value_is_false = value.eq_ignore_ascii_case("false");
+            let enabled = if matches!(command, EditingCommand::UseCss) {
+                value_is_false
+            } else {
+                !value_is_false
+            };
+            let runtime = unsafe { &mut *runtime_ptr };
+            let applied = runtime.document_is_fully_active(document_handle)
+                && runtime
+                    .dom_host_mut()
+                    .node_mut(document_handle)
+                    .and_then(|node| node.data_mut().as_document_mut())
+                    .is_some_and(|document| {
+                        document.set_css_styling_enabled(enabled);
+                        true
+                    });
+            rv.set(v8::Boolean::new(scope, applied).into());
+            return;
+        }
         EditingCommand::Delete | EditingCommand::ForwardDelete => {}
     }
     let command_name: &'static str = command.into();
@@ -802,9 +827,11 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     ) else {
         return;
     };
+    let runtime = unsafe { &*runtime_ptr };
     let supported = match command.parse::<EditingCommand>() {
-        Ok(EditingCommand::Copy) => {
-            document_copy_command_supported(unsafe { &*runtime_ptr }, document_handle)
+        Ok(EditingCommand::Copy) => document_copy_command_supported(runtime, document_handle),
+        Ok(EditingCommand::StyleWithCss | EditingCommand::UseCss) => {
+            runtime.document_is_fully_active(document_handle)
         }
         Ok(_) => true,
         Err(_) => false,
@@ -847,21 +874,12 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
         Ok(EditingCommand::Copy) => {
             run_document_copy_command(scope, runtime_ptr, document_handle, true)
         }
+        Ok(EditingCommand::StyleWithCss | EditingCommand::UseCss) => {
+            runtime.document_is_fully_active(document_handle)
+        }
         Err(_) => false,
     };
     rv.set(v8::Boolean::new(scope, enabled).into());
-}
-
-fn query_command_constant_boolean<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    rv: &mut v8::ReturnValue<'s, v8::Value>,
-    non_html_message: &'static str,
-) {
-    let _command = normalized_editing_command(scope, args);
-    if editing_command_document(scope, args, rv, non_html_message).is_some() {
-        rv.set(v8::Boolean::new(scope, false).into());
-    }
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_indeterm_callback<'s>(
@@ -869,12 +887,17 @@ pub(in crate::native_bridge) fn node_document_query_command_indeterm_callback<'s
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    query_command_constant_boolean(
+    let _command = normalized_editing_command(scope, &args);
+    if editing_command_document(
         scope,
         &args,
         &mut rv,
         "queryCommandIndeterm is only supported on HTML documents.",
-    );
+    )
+    .is_some()
+    {
+        rv.set(v8::Boolean::new(scope, false).into());
+    }
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_state_callback<'s>(
@@ -882,12 +905,24 @@ pub(in crate::native_bridge) fn node_document_query_command_state_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    query_command_constant_boolean(
+    let command = normalized_editing_command(scope, &args);
+    let Some((runtime_ptr, document_handle)) = editing_command_document(
         scope,
         &args,
         &mut rv,
         "queryCommandState is only supported on HTML documents.",
-    );
+    ) else {
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let state = matches!(command.parse(), Ok(EditingCommand::StyleWithCss))
+        && runtime.document_is_fully_active(document_handle)
+        && runtime
+            .dom_host()
+            .node(document_handle)
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.css_styling_enabled());
+    rv.set(v8::Boolean::new(scope, state).into());
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_value_callback<'s>(
