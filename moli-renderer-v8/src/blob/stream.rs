@@ -117,8 +117,28 @@ pub(super) fn finish_read<'s>(
     match result {
         Ok(bytes) => {
             if !bytes.is_empty() {
-                let Some(chunk) = new_uint8_array_from_bytes(scope, bytes) else {
-                    return;
+                let chunk = {
+                    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+                    let scope = &mut try_catch.init();
+                    new_uint8_array_from_bytes(scope, bytes).ok_or_else(|| {
+                        let error = scope.exception().unwrap_or_else(|| {
+                            let message =
+                                v8::String::new(scope, "Could not allocate Blob stream chunk")
+                                    .unwrap_or_else(|| v8::String::empty(scope));
+                            v8::Exception::error(scope, message)
+                        });
+                        scope.reset();
+                        error
+                    })
+                };
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        crate::context_bootstrap::error_stream(scope, stream, error);
+                        set_private_value(scope, source, BLOB, v8::null(scope).into());
+                        let _ = resolver.reject(scope, error);
+                        return;
+                    }
                 };
                 let _ = crate::context_bootstrap::enqueue_byte_chunk(scope, stream, chunk.into());
             }
