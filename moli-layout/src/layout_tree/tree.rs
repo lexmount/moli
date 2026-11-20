@@ -16,6 +16,14 @@ pub struct LayoutObjectGeometry<N> {
     pub source: N,
     pub owner: LayoutOutputBoxId,
     pub quad: LayoutQuad,
+    pub text_range: Option<LayoutTextGeometryRange>,
+}
+
+/// Original UTF-16 offsets and shaped direction for an SVG text cell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutTextGeometryRange {
+    pub utf16_range: std::ops::Range<usize>,
+    pub rtl: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
