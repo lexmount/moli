@@ -21,7 +21,7 @@ pub(crate) use signal::{
 };
 pub(crate) use statics::{
     abort_signal_any_callback, abort_signal_static_abort_callback, abort_signal_timeout_callback,
-    new_dependent_abort_signal,
+    initialize_dependent_abort_signal, new_dependent_abort_signal,
 };
 
 const ABORT_SIGNAL_ID_SLOT: &str = "__lmAbortSignalId";
@@ -30,6 +30,30 @@ const ABORT_SIGNAL_ABORTED_SLOT: &str = "__moliAbortSignalAborted";
 const ABORT_SIGNAL_REASON_SLOT: &str = "__moliAbortSignalReason";
 const ABORT_CONTROLLER_ID_SLOT: &str = "__lmAbortControllerId";
 const ABORT_CONTROLLER_SIGNAL_SLOT: &str = "__lmAbortControllerSignal";
+
+pub(crate) fn controller_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    controller: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    v8::Local::<v8::Object>::try_from(get_private_value(
+        scope,
+        controller,
+        ABORT_CONTROLLER_SIGNAL_SLOT,
+    )?)
+    .ok()
+}
+
+pub(crate) fn initialize_controller_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    controller: v8::Local<'s, v8::Object>,
+    signal: v8::Local<'s, v8::Object>,
+) -> Option<()> {
+    let host = crate::util::context_host_ptr_from_global_bridge(scope)?;
+    let store = &mut unsafe { &mut *host }.native_bridge_mut().abort;
+    store.init_signal(scope, signal, false, None);
+    store.init_controller(scope, controller, signal);
+    Some(())
+}
 
 pub(crate) fn bind_signal_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,

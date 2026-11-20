@@ -163,13 +163,21 @@ impl ScheduledWindowWebIdlCallback {
                 "Geolocation callback",
             ),
         };
-        prepared.invoke_with_report(
-            scope,
-            callback_kind,
-            log_label,
-            callback_name,
-            receiver,
-            &arguments,
-        )
+        let invoke = |scope: &mut v8::PinScope<'s, '_>| {
+            prepared.invoke_with_report(
+                scope,
+                callback_kind,
+                log_label,
+                callback_name,
+                receiver,
+                &arguments,
+            )
+        };
+        if matches!(self.kind, WindowWebIdlCallbackTaskKind::Idle { .. }) {
+            let target = v8::Local::new(scope, &self.target_receiver);
+            crate::scheduling::with_idle_scheduling_state(scope, target, invoke)
+        } else {
+            invoke(scope)
+        }
     }
 }

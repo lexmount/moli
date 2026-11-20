@@ -5,6 +5,7 @@ use super::{
 use crate::util::{get_private_value, set_private_value};
 
 const ONABORT_SLOT: &str = "__moliAbortSignalOnabort";
+const ONPRIORITYCHANGE_SLOT: &str = "__moliTaskSignalOnprioritychange";
 
 // Abort state and algorithms remain in their Window/worker owner. The signal's
 // EventTarget state uses the same registry for inherited methods and native abort.
@@ -31,13 +32,30 @@ pub(crate) fn dispatch_abort<'s>(
 pub(crate) fn onabort_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    signal_handler_getter(scope, args, rv, ONABORT_SLOT);
+}
+
+pub(crate) fn onprioritychange_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    signal_handler_getter(scope, args, rv, ONPRIORITYCHANGE_SLOT);
+}
+
+fn signal_handler_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
+    slot: &'static str,
 ) {
     let Some(signal) = resolve_event_target(scope, args.this()) else {
         return;
     };
     rv.set(
-        get_private_value(scope, signal.handler_owner, ONABORT_SLOT)
+        get_private_value(scope, signal.handler_owner, slot)
             .unwrap_or_else(|| v8::null(scope).into()),
     );
 }
@@ -47,14 +65,25 @@ pub(crate) fn onabort_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    signal_handler_setter(scope, args, "abort", ONABORT_SLOT);
+}
+
+pub(crate) fn onprioritychange_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _: v8::ReturnValue<'_, v8::Value>,
+) {
+    signal_handler_setter(scope, args, "prioritychange", ONPRIORITYCHANGE_SLOT);
+}
+
+fn signal_handler_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    event_type: &'static str,
+    slot: &'static str,
+) {
     let Some(signal) = resolve_event_target(scope, args.this()) else {
         return;
     };
-    simple_object_event_set_handler(
-        scope,
-        signal.handler_owner,
-        "abort",
-        ONABORT_SLOT,
-        args.get(0),
-    );
+    simple_object_event_set_handler(scope, signal.handler_owner, event_type, slot, args.get(0));
 }

@@ -130,6 +130,15 @@ impl<T> TimerScheduler<T> {
         false
     }
 
+    /// Remove a queued payload and release its resources immediately.
+    pub fn remove_pending(&mut self, id: TimerId) -> bool {
+        if !self.active.remove(&id) {
+            return false;
+        }
+        self.pending.retain(|timer| timer.id != id);
+        true
+    }
+
     pub fn cancel_matching<F>(&mut self, mut predicate: F) -> usize
     where
         F: FnMut(&T) -> bool,
@@ -188,7 +197,17 @@ impl<T> TimerScheduler<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        self.take_next_ready_matching_scheduled(now, |timer| predicate(&timer.payload))
+        self.take_next_ready_ranked(now, |payload| predicate(payload).then_some(0u8))
+    }
+
+    /// A rank can change while a task is pending. Evaluate it only for ready
+    /// tasks, using the deadline and enqueue order to break ties.
+    pub fn take_next_ready_ranked<K: Ord>(
+        &mut self,
+        now: Instant,
+        mut rank: impl FnMut(&T) -> Option<K>,
+    ) -> Option<ReadyTimer<T>> {
+        self.take_next_ready_ranked_scheduled(now, |timer| rank(&timer.payload))
     }
 
     /// Takes the next ready timer scheduled inside one of `ranges`.
@@ -200,20 +219,26 @@ impl<T> TimerScheduler<T> {
         ranges: &[TimerScheduleRange],
         now: Instant,
     ) -> Option<ReadyTimer<T>> {
-        self.take_next_ready_matching_scheduled(now, |timer| {
-            schedule_ranges_contain(ranges, timer.sequence)
+        self.take_next_ready_from_schedule_ranges_ranked(ranges, now, |_| 0u8)
+    }
+
+    pub fn take_next_ready_from_schedule_ranges_ranked<K: Ord>(
+        &mut self,
+        ranges: &[TimerScheduleRange],
+        now: Instant,
+        mut rank: impl FnMut(&T) -> K,
+    ) -> Option<ReadyTimer<T>> {
+        self.take_next_ready_ranked_scheduled(now, |timer| {
+            schedule_ranges_contain(ranges, timer.sequence).then(|| rank(&timer.payload))
         })
     }
 
-    fn take_next_ready_matching_scheduled<P>(
+    fn take_next_ready_ranked_scheduled<K: Ord>(
         &mut self,
         now: Instant,
-        mut predicate: P,
-    ) -> Option<ReadyTimer<T>>
-    where
-        P: FnMut(&ScheduledTimer<T>) -> bool,
-    {
-        let mut selected = None;
+        mut rank: impl FnMut(&ScheduledTimer<T>) -> Option<K>,
+    ) -> Option<ReadyTimer<T>> {
+        let mut selected: Option<(&ScheduledTimer<T>, K)> = None;
         for timer in &self.pending {
             if !self.active.contains(&timer.id) {
                 continue;
@@ -221,12 +246,17 @@ impl<T> TimerScheduler<T> {
             if !timer.is_ready_at(now) {
                 continue;
             }
-            if predicate(timer) && selected.is_none_or(|current| timer_precedes(timer, current)) {
-                selected = Some(timer);
+            let Some(rank) = rank(timer) else {
+                continue;
+            };
+            if selected.as_ref().is_none_or(|(current, current_rank)| {
+                rank > *current_rank || (rank == *current_rank && timer_precedes(timer, current))
+            }) {
+                selected = Some((timer, rank));
             }
         }
 
-        let selected = selected?;
+        let (selected, _) = selected?;
         let selected_id = selected.id;
         let selected_sequence = selected.sequence;
 

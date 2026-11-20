@@ -381,6 +381,16 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_constructor_constant_template_bindings(scope, template, spec.interface.name());
     install_css_style_declaration_template_accessors(scope, template, spec.interface.name());
     install_abort_template_bindings(scope, template, spec.interface.name());
+    match spec.interface.name() {
+        "Scheduler" => crate::scheduling::scheduler_template(scope, template),
+        "TaskController" | "TaskSignal" => {
+            crate::scheduling::task_signal_template(scope, template, spec.interface.name());
+        }
+        "TaskPriorityChangeEvent" => {
+            moli_webapi::events::task_priority_change_event::install_template(scope, template);
+        }
+        _ => {}
+    }
     crate::observable::install_template_bindings(scope, template, spec.interface.name());
     install_attr_template_bindings(scope, template, spec.interface.name());
     install_dom_quad_template_bindings(scope, template, spec.interface.name());

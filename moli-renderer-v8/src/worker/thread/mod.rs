@@ -33,6 +33,7 @@ use crate::network::{
     loads::{ResourceLoadDisposition, ResourceLoadKind},
 };
 use crate::runtime::RendererWorkerContextRuntime;
+use crate::scheduling::WorkerScheduledTasks;
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerClientType, ServiceWorkerRuntimeService,
 };
@@ -1936,6 +1937,10 @@ async fn worker_main(
     worker_isolate
         .worker_isolate_mut()
         .set_slot(worker_timer_queues.clone());
+    let worker_scheduled_tasks = WorkerScheduledTasks::default();
+    worker_isolate
+        .worker_isolate_mut()
+        .set_slot(worker_scheduled_tasks.clone());
     let worker_networking_tasks = WorkerNetworkingTaskQueue::new(worker_wake_tx.clone());
     worker_isolate
         .worker_isolate_mut()
@@ -2391,7 +2396,15 @@ async fn worker_main(
         }
 
         // Find the nearest timer deadline.
-        let nearest_timer = active_timers.iter().map(|t| t.next_fire).min();
+        let nearest_timer = active_timers
+            .iter()
+            .map(|t| t.next_fire)
+            .chain(
+                worker_scheduled_tasks
+                    .next_deadline()
+                    .map(tokio::time::Instant::from_std),
+            )
+            .min();
         let has_pending_module_runtime_activity = worker_has_pending_module_runtime_activity(
             worker_isolate.worker_isolate_mut(),
             &context,
@@ -3921,7 +3934,19 @@ async fn worker_main(
         if !cancelled.is_empty() {
             active_timers.retain(|timer| !cancelled.contains(&timer.id));
         }
-        // Fire any timers that are ready.
+        let mut ran_prioritized_task = false;
+        let can_deliver_task = state.borrow().callback_task_delivery_allowed();
+        if can_deliver_task && let Some(task) = worker_scheduled_tasks.take_ready() {
+            let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+            let scope = &mut scope.init();
+            let context = task.context(scope);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            task.dispatch(scope, None);
+            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+            ran_prioritized_task = true;
+        }
+
+        // Fire ready timers after any higher-priority work already queued.
         let now = tokio::time::Instant::now();
         // A previous request's timing/header notification can precede the
         // current upload in the same FIFO. Give queued network notifications
@@ -3938,7 +3963,10 @@ async fn worker_main(
         }
         let mut fired_ids: Vec<usize> = Vec::new();
         for (i, timer) in active_timers.iter().enumerate() {
-            if now >= timer.next_fire && !(timer.explicit_deadline && defer_browser_deadline) {
+            if !ran_prioritized_task
+                && now >= timer.next_fire
+                && !(timer.explicit_deadline && defer_browser_deadline)
+            {
                 fired_ids.push(i);
             }
         }
@@ -3946,7 +3974,9 @@ async fn worker_main(
 
         // Fire ready callbacks by deadline. Under load, multiple worker timers
         // can become ready before this loop wakes.
+        let mut fired_count = 0;
         for &idx in &fired_ids {
+            fired_count += 1;
             let timer = &active_timers[idx];
             if state.borrow().closed || worker_timer_queues.is_cancelled(timer.id) {
                 continue;
@@ -3957,8 +3987,12 @@ async fn worker_main(
                 &parent_tx,
                 &script_url,
             );
+            if worker_scheduled_tasks.has_ready() {
+                break;
+            }
         }
-        if !fired_ids.is_empty() {
+        fired_ids.truncate(fired_count);
+        if ran_prioritized_task || !fired_ids.is_empty() {
             drain_worker_dynamic_module_imports_for_context(
                 worker_isolate.worker_isolate_mut(),
                 &context,

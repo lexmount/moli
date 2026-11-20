@@ -116,6 +116,20 @@ impl DocumentRuntime {
             .queue_internal_task_after(scope, callback, delay_ms)
     }
 
+    pub(crate) fn queue_prioritized_task(
+        &mut self,
+        binding: crate::native_bridge::WindowExecutionContextBinding,
+        task: crate::scheduling::ScheduledTask,
+        delay_ms: u64,
+    ) -> moli_time::TimerId {
+        self.timeouts
+            .queue_prioritized_task(binding, task, delay_ms)
+    }
+
+    pub(crate) fn cancel_prioritized_task(&mut self, id: moli_time::TimerId) -> bool {
+        self.timeouts.cancel_prioritized_task(id)
+    }
+
     pub(crate) fn queue_timeout_with_receiver<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

@@ -20,6 +20,7 @@ pub mod service_worker;
 pub mod speech;
 pub mod state;
 pub mod subclasses;
+pub mod task_priority_change_event;
 pub mod ui;
 pub mod value;
 pub mod webrtc;

@@ -736,6 +736,17 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::TaskController => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::TaskController,
+                crate::scheduling::task_controller_constructor
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::TaskPriorityChangeEvent => {
+            moli_webapi::events::task_priority_change_event::constructor_template(scope)
+        }
         ConstructorKind::MessageChannel => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::MessageChannel,

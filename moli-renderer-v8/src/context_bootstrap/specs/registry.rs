@@ -861,6 +861,22 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::AbortController,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::Scheduler::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::TaskController::DESCRIPTOR,
+        kind: ConstructorKind::TaskController,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::TaskSignal::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::TaskPriorityChangeEvent::DESCRIPTOR,
+        kind: ConstructorKind::TaskPriorityChangeEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::Observable::DESCRIPTOR,
         kind: ConstructorKind::Observable,
     },
