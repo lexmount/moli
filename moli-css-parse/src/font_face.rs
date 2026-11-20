@@ -269,10 +269,12 @@ mod tests {
                 r#"url(legacy) format('embedded-opentype'),
                    url(svg-color) format(woff2) tech(variations, color-svg),
                    url("fonts/Variable Font.woff2") format(WOFF2) tech(variations, features-opentype),
+                   url(aat.woff2) format(woff2) tech(features-aat),
                    url(fallback) format("OTF")"#
             ),
             Some(vec![
                 CssFontSource::Url("fonts/Variable Font.woff2".into()),
+                CssFontSource::Url("aat.woff2".into()),
                 CssFontSource::Url("fallback".into()),
             ])
         );
