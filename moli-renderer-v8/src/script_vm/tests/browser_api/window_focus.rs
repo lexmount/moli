@@ -138,9 +138,14 @@ fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
             if (Reflect.apply(other[name], window, []) !== undefined)
                 throw Error(name + ' genuine cross-realm Window');
         }
+        const transitions = [];
+        window.addEventListener('blur', () => transitions.push('top blur'));
+        other.addEventListener('focus', () => transitions.push('child focus'));
         const focus = other.focus;
         if (focus() !== undefined || document.activeElement !== frame)
             throw Error('extracted focus must select its child browsing context');
+        if (transitions.join(',') !== 'top blur,child focus')
+            throw Error('the initial focus transition starts at the top viewport: ' + transitions);
         if (other.blur.call(null) !== undefined) throw Error('null global receiver');
         frame.remove();
         if (other.focus() !== undefined || other.blur() !== undefined)
