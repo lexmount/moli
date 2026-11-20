@@ -23,9 +23,8 @@ use super::STYLE_RESOLUTION_CONTEXTS;
 use super::{
     DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
     StyloAnonymousBoxKind, StyloComputedStyleSnapshot, StyloLayoutThreadStateGuard,
-    clear_element_styles_for_resolution,
-    document_quirks_mode, element_style_is_current, install_shadow_cascade_data_for_resolution,
-    marker_style_decision,
+    clear_element_styles_for_resolution, document_quirks_mode, element_style_is_current,
+    install_shadow_cascade_data_for_resolution, marker_style_decision,
     populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
     style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
     with_cached_lazy_pseudo_style,
@@ -382,7 +381,6 @@ impl Drop for StyleResolutionPass<'_, '_> {
             .note_element_style_resolutions(self.resolutions);
     }
 }
-
 
 struct EmptyRegisteredSpeculativePainters;
 

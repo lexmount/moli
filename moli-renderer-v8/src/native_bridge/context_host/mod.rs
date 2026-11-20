@@ -147,7 +147,7 @@ mod resource_loading;
 mod resource_timing;
 pub(crate) use resource_timing::ResourceTimingBufferId;
 mod rendering_updates;
-pub(crate) use animation_transition::{AnimationScriptTimeGuard, RunningTransition};
+pub(crate) use animation_transition::RunningTransition;
 pub(crate) use rendering_updates::PostParseAutofocusAdmission;
 mod runtime_bindings;
 mod runtime_observable;
@@ -1321,7 +1321,7 @@ impl PageScriptHost {
     }
 
     pub(crate) fn animation_time(&self) -> std::time::Instant {
-        self.animation_transition.sample_time()
+        self.common.animations.sample_time()
     }
     pub(crate) fn animation_transition_state(
         &self,

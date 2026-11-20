@@ -47,7 +47,9 @@ pub(super) fn instance_for_css_read<'s>(
     Some(instance)
 }
 
-fn current_document<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
+pub(super) fn current_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let (_, crate::common_runtime::RuntimeExecutionContext::Window(host)) =
         crate::common_runtime::CommonRuntimeBinding::from_scope(scope)?
     else {

@@ -30,6 +30,7 @@ struct Binding {
 
 pub(crate) struct AnimationBindings {
     pub(crate) origin: std::time::Instant,
+    script_time: Rc<Cell<Option<std::time::Instant>>>,
     next_binding_id: Cell<u64>,
     entries: RefCell<HashMap<AnimationId, Vec<Binding>>>,
 }
@@ -38,6 +39,7 @@ impl Default for AnimationBindings {
     fn default() -> Self {
         Self {
             origin: std::time::Instant::now(),
+            script_time: Rc::default(),
             next_binding_id: Cell::new(1),
             entries: RefCell::new(HashMap::new()),
         }
@@ -45,6 +47,21 @@ impl Default for AnimationBindings {
 }
 
 impl AnimationBindings {
+    pub(crate) fn sample_time(&self) -> std::time::Instant {
+        self.script_time
+            .get()
+            .unwrap_or_else(std::time::Instant::now)
+    }
+
+    pub(crate) fn enter_script_time(&self, now: std::time::Instant) -> AnimationScriptTimeGuard {
+        let previous = self.script_time.get();
+        self.script_time.set(Some(previous.unwrap_or(now)));
+        AnimationScriptTimeGuard {
+            time: Rc::clone(&self.script_time),
+            previous,
+        }
+    }
+
     pub(crate) fn wrapper<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -80,6 +97,19 @@ impl AnimationBindings {
             .filter(|b| b.kind == WrapperKind::Animation)
             .filter_map(|b| b.wrapper.to_local(scope))
             .collect()
+    }
+}
+
+/// Nested realm entry and callbacks use the enclosing task's sample. The
+/// guard holds the sample cell independently of the host borrow.
+pub(crate) struct AnimationScriptTimeGuard {
+    time: Rc<Cell<Option<std::time::Instant>>>,
+    previous: Option<std::time::Instant>,
+}
+
+impl Drop for AnimationScriptTimeGuard {
+    fn drop(&mut self) {
+        self.time.set(self.previous);
     }
 }
 

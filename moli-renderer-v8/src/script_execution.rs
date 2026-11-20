@@ -34,15 +34,16 @@ pub(crate) fn construct<'s>(
 
 pub(crate) fn freeze_animation_time(
     scope: &mut v8::PinScope<'_, '_>,
-) -> Option<crate::native_bridge::AnimationScriptTimeGuard> {
-    let (_, crate::common_runtime::RuntimeExecutionContext::Window(host)) =
+) -> Option<crate::animation_bindings::AnimationScriptTimeGuard> {
+    let (binding, crate::common_runtime::RuntimeExecutionContext::Window(_)) =
         crate::common_runtime::CommonRuntimeBinding::from_scope(scope)?
     else {
         return None;
     };
     Some(
-        unsafe { &*host }
-            .animation_transition_state()
+        binding
+            .runtime()?
+            .animations
             .enter_script_time(std::time::Instant::now()),
     )
 }

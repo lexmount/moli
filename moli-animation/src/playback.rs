@@ -206,7 +206,7 @@ impl AnimationState {
     /// Create an idle animation. The host attaches its effect and starts playback.
     pub fn new(now: Instant) -> Self {
         let id = NEXT_ANIMATION_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("animation identity exhausted");
         Self {
             id: AnimationId(id),

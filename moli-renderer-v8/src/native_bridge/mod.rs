@@ -5,7 +5,6 @@ mod bridge;
 mod child_window_surface;
 mod collections;
 mod context_host;
-pub(crate) use context_host::AnimationScriptTimeGuard;
 mod current_input;
 #[cfg(feature = "devtools")]
 pub(crate) use context_host::MouseReleaseFollowUp;

@@ -85,7 +85,7 @@ const STYLE_DECLARATION_COMPUTED_PROPERTY_COUNT_TARGET_EPOCH_SLOT: &str =
 /// state is installed before custom-element reactions can reenter script.
 pub(crate) fn commit_animation_style_values(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: *mut JsContextHost,
+    runtime: *mut PageScriptHost,
     handle: DomHandle,
     values: &[(String, String)],
 ) {

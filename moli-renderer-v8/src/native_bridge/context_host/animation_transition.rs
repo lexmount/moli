@@ -1,6 +1,5 @@
-use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 #[cfg(test)]
 use std::time::Duration;
 use std::time::Instant;
@@ -15,7 +14,6 @@ use moli_animation::AnimationClock;
 /// replacement and document.open(), rather than by the current scan's tree.
 #[derive(Default)]
 pub(crate) struct AnimationTransitionState {
-    script_time: Rc<Cell<Option<Instant>>>,
     // Ordinary style observations only borrow the Host immutably. They still
     // establish an element's first before-change style, before any lifecycle task.
     documents: RefCell<HashMap<WindowDocumentOwner, DocumentAnimationTransitionState>>,
@@ -27,17 +25,6 @@ pub(crate) struct AnimationTransitionState {
 }
 
 impl AnimationTransitionState {
-    pub(crate) fn sample_time(&self) -> Instant {
-        self.script_time.get().unwrap_or_else(Instant::now)
-    }
-    pub(crate) fn enter_script_time(&self, now: Instant) -> AnimationScriptTimeGuard {
-        let previous = self.script_time.get();
-        self.script_time.set(Some(previous.unwrap_or(now)));
-        AnimationScriptTimeGuard {
-            time: self.script_time.clone(),
-            previous,
-        }
-    }
     pub(crate) fn document_mut(
         &self,
         owner: WindowDocumentOwner,
@@ -210,18 +197,6 @@ impl AnimationTransitionState {
         if let Some(document) = self.documents.borrow_mut().get_mut(&owner) {
             document.before_styles.retain(|handle, _| keep(*handle));
         }
-    }
-}
-
-/// Own only the sampling cell across JS, never a Host/Document RefCell borrow.
-/// Nested realm entry and native callbacks inherit the enclosing sample.
-pub(crate) struct AnimationScriptTimeGuard {
-    time: Rc<Cell<Option<Instant>>>,
-    previous: Option<Instant>,
-}
-impl Drop for AnimationScriptTimeGuard {
-    fn drop(&mut self) {
-        self.time.set(self.previous);
     }
 }
 

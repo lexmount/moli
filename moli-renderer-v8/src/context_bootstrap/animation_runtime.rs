@@ -52,7 +52,7 @@ struct AnimationPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Animation, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Animation, enumerable)]
 struct AnimationEventHandlersDeclaration {
     #[webapi(accessor_property,
         getter = simple_event_target_handler_getter_callback,
@@ -165,7 +165,7 @@ struct KeyframeEffectPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element, enumerable, receiver)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ElementAnimationPrototypeDeclaration {
     #[webapi(method, length = 0, callback = element_animate_callback)]
     animate: (),
@@ -194,7 +194,7 @@ struct CssTransitionAccessors {
     transition_property: (),
 }
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface=web_api_interfaces::Document,enumerable,receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentAnimationAccessors {
     #[webapi(accessor_property,getter=document_timeline_getter)]
     timeline: (),
@@ -280,7 +280,8 @@ pub(super) fn keyframe_effect_constructor_callback<'s>(
     if !native::validate_target(scope, args.get(0)) {
         return;
     }
-    let Some(frames) = timing::keyframes(scope, args.get(1)) else {
+    let target = v8::Local::<v8::Object>::try_from(args.get(0)).ok();
+    let Some(frames) = timing::keyframes(scope, args.get(1), target) else {
         return;
     };
     let Some(instance) = timing::parse_timing(scope, args.get(2), None) else {
@@ -307,7 +308,8 @@ fn keyframe_effect_set_keyframes_callback<'s>(
     if !require_effect_receiver(scope, args.this()) {
         return;
     }
-    let Some(frames) = timing::keyframes(scope, args.get(0)) else {
+    let target = get_private_object(scope, args.this(), KEYFRAME_EFFECT_TARGET_SLOT);
+    let Some(frames) = timing::keyframes(scope, args.get(0), target) else {
         return;
     };
     if let Some(instance) = animation_bindings::instance(scope, args.this()) {

@@ -322,7 +322,7 @@ fn effects_for_element(runtime: &PageScriptHost, handle: DomHandle) -> Vec<Anima
 
 /// CSS ownership survives effect retargeting. Read through the owning element's
 /// ordinary style boundary without holding an instance borrow across reconciliation.
-pub(crate) fn synchronize_css_animation_style(runtime: &JsContextHost, animation: &Animation) {
+pub(crate) fn synchronize_css_animation_style(runtime: &PageScriptHost, animation: &Animation) {
     let owner = {
         let state = animation.borrow();
         state.css_owner.filter(|_| state.owned_by_css)
@@ -475,7 +475,7 @@ fn sample_effect_values(
     sample_effect_values_for(runtime, effects, now, None)
 }
 fn sample_effect_values_for(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     effects: &[Animation],
     now: Instant,
     committing: Option<moli_animation::AnimationId>,
@@ -504,7 +504,10 @@ fn sample_effect_values_for(
     values
 }
 
-pub(crate) fn animations_for_element(runtime: &PageScriptHost, handle: DomHandle) -> Vec<Animation> {
+pub(crate) fn animations_for_element(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> Vec<Animation> {
     let _style = ComputedStyleRead::new(runtime, handle);
     let now = runtime.animation_time();
     let mut effects = effects_for_element(runtime, handle);
@@ -540,7 +543,7 @@ pub(crate) fn dispatch_animation_transition_scan(
     let runtime = unsafe { &*runtime_ptr };
     let handles = document_elements_in_tree_order(runtime, document_handle);
     let now = runtime.animation_time();
-    let _sample = runtime.animation_transition_state().enter_script_time(now);
+    let _sample = runtime.common.animations.enter_script_time(now);
     let mut events = Vec::new();
 
     // Cancellation is observable even after removal. Take the records before
@@ -671,7 +674,7 @@ fn document_elements_in_tree_order(
 /// Establish the complete native association before timing can produce events.
 /// Creating a JS wrapper only exposes it; it must not complete initialization.
 fn initialize_css_animation(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     instance: &mut AnimationInstance,
     handle: DomHandle,
     owner: WindowDocumentOwner,
@@ -799,7 +802,7 @@ pub(crate) fn queue_animation_instance_sample(runtime: &PageScriptHost, instance
 
 /// Explicit finish synchronously queues its event, including when an earlier
 /// style observation has already staged the same generation's notification.
-pub(crate) fn promote_animation_instance_finish(runtime: &JsContextHost, instance: &Animation) {
+pub(crate) fn promote_animation_instance_finish(runtime: &PageScriptHost, instance: &Animation) {
     let owner = instance.borrow().service_owner;
     let Some(owner) = owner else {
         return;
@@ -903,7 +906,7 @@ pub(crate) fn next_animation_transition_deadline(
 }
 
 fn animation_service_owner(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     animation: &Animation,
 ) -> Option<crate::native_bridge::WindowDocumentTaskTarget> {
     let state = animation.borrow();
@@ -951,7 +954,7 @@ fn animation_service_owner(
 // Service routing changes at admission/target changes and Document retirement.
 // It is not a new permission check on every sample; queueing and notification
 // delivery still validate their exact owners at their execution boundaries.
-pub(crate) fn rehome_animation_service(runtime: &JsContextHost, animation: &Animation) {
+pub(crate) fn rehome_animation_service(runtime: &PageScriptHost, animation: &Animation) {
     let service_owner = animation_service_owner(runtime, animation);
     let previous = animation.borrow().service_owner;
     if previous == service_owner {
@@ -967,7 +970,7 @@ pub(crate) fn rehome_animation_service(runtime: &JsContextHost, animation: &Anim
     }
 }
 
-pub(crate) fn refresh_animation_timeline(runtime: &JsContextHost, animation: &Animation) {
+pub(crate) fn refresh_animation_timeline(runtime: &PageScriptHost, animation: &Animation) {
     let changed = {
         let mut state = animation.borrow_mut();
         let timeline =
@@ -1104,7 +1107,8 @@ pub(crate) fn dispatch_animation_timeline_tick(
 ) -> bool {
     let now = unsafe { &*runtime_ptr }.animation_time();
     let _sample = unsafe { &*runtime_ptr }
-        .animation_transition_state()
+        .common
+        .animations
         .enter_script_time(now);
     let events = {
         let mut state = unsafe { &*runtime_ptr }

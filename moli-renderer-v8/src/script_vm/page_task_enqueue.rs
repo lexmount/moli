@@ -25,10 +25,11 @@ impl ScriptVm {
     /// its checkpoint. This guard owns no ScriptVm/Host borrow across awaits.
     pub(crate) fn enter_animation_task_time(
         &self,
-    ) -> crate::native_bridge::AnimationScriptTimeGuard {
+    ) -> crate::animation_bindings::AnimationScriptTimeGuard {
         self._context_host
             .borrow()
-            .animation_transition_state()
+            .common
+            .animations
             .enter_script_time(Instant::now())
     }
 

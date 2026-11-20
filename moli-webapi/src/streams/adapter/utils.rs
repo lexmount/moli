@@ -468,7 +468,7 @@ mod tests {
 
         let value = v8::Object::new(scope);
         assert_eq!(adopted.resolve(scope, value.into()), Some(true));
-        crate::script_execution::perform_animation_microtask_checkpoint(scope);
+        scope.perform_microtask_checkpoint();
         assert_eq!(promise.state(), v8::PromiseState::Fulfilled);
         assert!(promise.result(scope).strict_equals(value.into()));
     }

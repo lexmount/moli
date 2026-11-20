@@ -7,17 +7,27 @@ use std::time::Instant;
 use crate::{
     document_runtime::DomHandle,
     dom_presentation::suppresses_noscript_box,
-    native_bridge::{PageScriptHost, element::StyleObservation},
+    native_bridge::{
+        PageScriptHost,
+        element::{StyleObservation, element_tree_has_inline_css_lifecycle},
+    },
     style_engine::{
-        StyleResolutionPass, StyleViewport, StyloAnonymousBoxKind, StyloStyleEnvironment,
+        MarkerStyleDecision, StyleResolutionPass, StyleViewport, StyloAnonymousBoxKind,
+        StyloStyleEnvironment, marker_style_decision,
     },
 };
 
 pub(super) struct NativeLayoutStyleResolver<'a, 'world, 'dom> {
     runtime: &'a PageScriptHost,
-    pass: &'a mut StyleResolutionPass<'world, 'dom>,
+    document: DomHandle,
+    reads: LayoutStyleReads<'a, 'world, 'dom>,
     scripting_enabled: bool,
     profile: Option<NativeLayoutStyleResolverProfile>,
+}
+
+enum LayoutStyleReads<'a, 'world, 'dom> {
+    Retained(&'a mut StyleResolutionPass<'world, 'dom>),
+    Animated(Box<StyleObservation<'a>>),
 }
 
 #[derive(Default)]
@@ -45,30 +55,70 @@ pub(super) fn with_layout_styles<R>(
 ) -> R {
     let mut observation =
         layout_style_read_scope(runtime, document, viewport, environment_override);
+    if runtime.animation_transition_state().has_effects()
+        || runtime.document_has_css_lifecycle_style_sources(document)
+        || element_tree_has_inline_css_lifecycle(runtime, document)
+    {
+        // Animation sampling can resolve keyframes and re-cascade inherited
+        // values. Those operations need to bind the Stylo adapter themselves.
+        // Prepare the world and release the binding before sampling.
+        observation.with_resolution_pass(document, |_| ());
+        return NativeLayoutStyleResolver::prepare(
+            runtime,
+            document,
+            LayoutStyleReads::Animated(Box::new(observation)),
+            prepare,
+        );
+    }
     observation.with_resolution_pass(document, |pass| {
+        NativeLayoutStyleResolver::prepare(
+            runtime,
+            document,
+            LayoutStyleReads::Retained(pass),
+            prepare,
+        )
+    })
+}
+
+impl<'a, 'world, 'dom> NativeLayoutStyleResolver<'a, 'world, 'dom> {
+    fn prepare<R>(
+        runtime: &'a PageScriptHost,
+        document: DomHandle,
+        reads: LayoutStyleReads<'a, 'world, 'dom>,
+        prepare: impl FnOnce(&mut Self) -> R,
+    ) -> R {
         let mut resolver = NativeLayoutStyleResolver {
             runtime,
-            pass,
+            document,
+            reads,
             scripting_enabled: runtime.document_scripting_enabled(document),
             profile: moli_trace::cpu_profile_enabled()
                 .then(NativeLayoutStyleResolverProfile::default),
         };
         let result = prepare(&mut resolver);
-        resolver.trace_profile(document);
+        resolver.trace_profile();
         result
-    })
-}
+    }
 
-impl NativeLayoutStyleResolver<'_, '_, '_> {
-    fn trace_profile(&self, document: DomHandle) {
+    #[cfg(test)]
+    fn retained_pass_for_test(&mut self) -> &mut StyleResolutionPass<'world, 'dom> {
+        match &mut self.reads {
+            LayoutStyleReads::Retained(pass) => pass,
+            LayoutStyleReads::Animated(_) => panic!("expected the retained layout style pass"),
+        }
+    }
+
+    fn trace_profile(&self) {
         let Some(profile) = self.profile.as_ref() else {
             return;
         };
-        self.pass.trace_profile();
+        if let LayoutStyleReads::Retained(pass) = &self.reads {
+            pass.trace_profile();
+        }
         tracing::info!(
             target: "moli_cpu_profile",
             stage = "layout_style_resolver",
-            document = document.index_u32(),
+            document = self.document.index_u32(),
             primary_count = profile.primary_count,
             primary_read_us = profile.primary_read_ns / 1_000,
             primary_projection_us = profile.primary_projection_ns / 1_000,
@@ -126,7 +176,15 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
-        let Some(style) = self.pass.element_styles(node) else {
+        let styles = match &mut self.reads {
+            LayoutStyleReads::Retained(pass) => pass
+                .element_styles(node)
+                .map(|style| style.into_element_computed_values()),
+            LayoutStyleReads::Animated(observation) => {
+                observation.read(node).into_element_computed_values()
+            }
+        };
+        let Some((computed, before, after)) = styles else {
             if let Some(profile) = self.profile.as_mut() {
                 profile.primary_count = profile.primary_count.saturating_add(1);
                 profile.primary_read_ns = profile.primary_read_ns.saturating_add(
@@ -137,7 +195,6 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
             }
             return Ok(None);
         };
-        let (computed, before, after) = style.into_element_computed_values();
         let eager_pseudo_count = u64::from(before.is_some()) + u64::from(after.is_some());
         if let Some(profile) = self.profile.as_mut() {
             profile.primary_count = profile.primary_count.saturating_add(1);
@@ -194,7 +251,20 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
-        let computed = self.pass.marker_for_generation(node);
+        let computed = match &mut self.reads {
+            LayoutStyleReads::Retained(pass) => pass.marker_for_generation(node),
+            LayoutStyleReads::Animated(observation) => {
+                let read = observation.read(node);
+                read.computed_values()
+                    .filter(|primary| primary.clone_display().is_list_item())
+                    .and_then(|primary| {
+                        read.pseudo_computed_values("marker").filter(|marker| {
+                            marker_style_decision(&primary, marker)
+                                != MarkerStyleDecision::Suppressed
+                        })
+                    })
+            }
+        };
         if let Some(profile) = self.profile.as_mut() {
             profile.marker_count = profile.marker_count.saturating_add(1);
             profile.marker_read_ns = profile.marker_read_ns.saturating_add(
@@ -221,7 +291,13 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         &mut self,
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
-        Ok(self.pass.pseudo_style(node, "placeholder").map(|computed| {
+        let computed = match &mut self.reads {
+            LayoutStyleReads::Retained(pass) => pass.pseudo_style(node, "placeholder"),
+            LayoutStyleReads::Animated(observation) => {
+                observation.read(node).pseudo_computed_values("placeholder")
+            }
+        };
+        Ok(computed.map(|computed| {
             ResolvedLayoutPseudoStyle::new(ResolvedLayoutStyle::from_stylo(computed))
         }))
     }
@@ -241,15 +317,21 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         })?;
         let anonymous_kind = anonymous_box_kind(display);
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
-        let computed = self
-            .pass
-            .anonymous_style(owner, parent_computed.as_ref(), anonymous_kind)
-            .ok_or_else(|| {
-                LayoutError::style_resolution(
-                    format!("{owner:?}"),
-                    "anonymous owner document does not match the prepared style context",
-                )
-            })?;
+        let computed = match &mut self.reads {
+            LayoutStyleReads::Retained(pass) => {
+                pass.anonymous_style(owner, parent_computed.as_ref(), anonymous_kind)
+            }
+            LayoutStyleReads::Animated(observation) => observation
+                .with_resolution_pass(self.document, |pass| {
+                    pass.anonymous_style(owner, parent_computed.as_ref(), anonymous_kind)
+                }),
+        }
+        .ok_or_else(|| {
+            LayoutError::style_resolution(
+                format!("{owner:?}"),
+                "anonymous owner document does not match the prepared style context",
+            )
+        })?;
         if let Some(profile) = self.profile.as_mut() {
             profile.anonymous_count = profile.anonymous_count.saturating_add(1);
             profile.anonymous_read_ns = profile.anonymous_read_ns.saturating_add(
@@ -358,7 +440,7 @@ mod tests {
             let world = layout_world(resolver, root);
             let parent = parent_context(&world, owner);
             assert_eq!(take_style_resolution_context_count_for_test(), 1);
-            let resolutions = resolver.pass.resolutions_for_test();
+            let resolutions = resolver.retained_pass_for_test().resolutions_for_test();
             for _ in 0..3 {
                 resolver.profile = Some(NativeLayoutStyleResolverProfile::default());
                 for _ in 0..10_000 {
@@ -368,13 +450,13 @@ mod tests {
                     assert_eq!(style.display(), LayoutDisplay::Block);
                     std::hint::black_box(style);
                 }
-                let profile = resolver.profile.as_ref().unwrap();
-                assert_eq!(profile.anonymous_count, 10_000);
                 assert_eq!(
-                    resolver.pass.resolutions_for_test(),
+                    resolver.retained_pass_for_test().resolutions_for_test(),
                     resolutions,
                     "anonymous boxes must reuse the parent box style"
                 );
+                let profile = resolver.profile.as_ref().unwrap();
+                assert_eq!(profile.anonymous_count, 10_000);
                 eprintln!(
                     "anonymous_count={} anonymous_read_ns={} anonymous_projection_ns={}",
                     profile.anonymous_count,
@@ -423,7 +505,12 @@ mod tests {
                     .anonymous_style(foreign_parent, LayoutDisplay::Block)
                     .unwrap_err();
                 assert!(error.to_string().contains("owner document"), "{error}");
-                assert!(resolver.pass.element_styles(foreign_root).is_none());
+                assert!(
+                    resolver
+                        .retained_pass_for_test()
+                        .element_styles(foreign_root)
+                        .is_none()
+                );
             },
         );
     }
@@ -448,7 +535,7 @@ mod tests {
             None,
             |resolver| {
                 let world = layout_world(resolver, root);
-                let reads = resolver.pass.resolutions_for_test();
+                let reads = resolver.retained_pass_for_test().resolutions_for_test();
                 let mut pending = vec![world.source_box(owner).unwrap()];
                 let mut displays = Vec::new();
                 while let Some(id) = pending.pop() {
@@ -477,7 +564,10 @@ mod tests {
                         "missing {display:?}: {displays:?}"
                     );
                 }
-                assert_eq!(resolver.pass.resolutions_for_test(), reads);
+                assert_eq!(
+                    resolver.retained_pass_for_test().resolutions_for_test(),
+                    reads
+                );
             },
         );
     }
@@ -517,12 +607,15 @@ mod tests {
                     let world = layout_world(resolver, root);
                     let parent = parent_context(&world, owner);
                     assert_eq!(parent.parent_style().font_size(), expected);
-                    let resolutions = resolver.pass.resolutions_for_test();
+                    let resolutions = resolver.retained_pass_for_test().resolutions_for_test();
                     let anonymous = resolver
                         .anonymous_style(parent, LayoutDisplay::Block)
                         .unwrap();
                     assert_eq!(anonymous.font_size(), expected);
-                    assert_eq!(resolver.pass.resolutions_for_test(), resolutions);
+                    assert_eq!(
+                        resolver.retained_pass_for_test().resolutions_for_test(),
+                        resolutions
+                    );
                 },
             );
         }
@@ -554,7 +647,12 @@ mod tests {
 
         take_style_resolution_context_count_for_test();
         let interrupted = with_layout_styles(&host, document, viewport, None, |resolver| {
-            assert!(resolver.pass.element_styles(owner).is_some());
+            assert!(
+                resolver
+                    .retained_pass_for_test()
+                    .element_styles(owner)
+                    .is_some()
+            );
             Err::<(), _>("stop layout preparation")
         });
         assert_eq!(interrupted, Err("stop layout preparation"));
@@ -563,7 +661,10 @@ mod tests {
         for contexts in [1, 0] {
             with_layout_styles(&host, document, viewport, None, |resolver| {
                 for (target, expected) in [(shallow, "47px"), (deep, "31px"), (shallow, "47px")] {
-                    let style = resolver.pass.element_styles(target).unwrap();
+                    let style = resolver
+                        .retained_pass_for_test()
+                        .element_styles(target)
+                        .unwrap();
                     assert_eq!(style.property_value("font-size").as_deref(), Some(expected));
                 }
                 assert!(resolver.placeholder_style(input).unwrap().is_some());

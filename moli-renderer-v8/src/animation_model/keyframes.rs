@@ -1,7 +1,15 @@
 //! Normalize authored frames before grouping them into property tracks. Values
 //! remain specified CSS, so em/var()/currentColor still resolve at sample time.
 use moli_animation::{KeyframeValue, PropertyKeyframes};
-use style::properties::PropertyDeclaration;
+use style::{
+    context::QuirksMode,
+    properties::{
+        Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyId,
+        SourcePropertyDeclaration, parse_one_declaration_into,
+    },
+    stylesheets::{CssRuleType, Origin, UrlExtraData},
+};
+use style_traits::ParsingMode;
 
 pub(crate) type SpecifiedKeyframes = PropertyKeyframes<PropertyDeclaration>;
 pub(crate) type SpecifiedSample = moli_animation::PropertySample<PropertyDeclaration>;
@@ -15,9 +23,11 @@ impl KeyframeDeclarations {
         Self(declarations)
     }
 
-    pub(crate) fn from_script(mut properties: Vec<(String, String)>) -> Self {
+    pub(crate) fn from_script(
+        mut properties: Vec<(String, String)>,
+        base_url: Option<&url::Url>,
+    ) -> Self {
         use std::cmp::Reverse;
-        use style::properties::PropertyId;
         // JS keyframes give longhands precedence over shorthands, independent
         // of object enumeration order. CSS declarations keep their own order.
         properties.sort_by_cached_key(|(name, _)| {
@@ -27,17 +37,45 @@ impl KeyframeDeclarations {
                 .map_or(0, |id| id.longhands().count());
             (Reverse(count), name.clone())
         });
-        Self::from_css(properties)
+        Self::parse(properties, base_url)
     }
 
     pub(crate) fn from_css(properties: Vec<(String, String)>) -> Self {
-        let mut block = moli_css_parse::CssDeclarationBlock::default();
+        Self::parse(properties, None)
+    }
+
+    fn parse(properties: Vec<(String, String)>, base_url: Option<&url::Url>) -> Self {
+        let url_data = UrlExtraData::from(
+            base_url
+                .cloned()
+                .unwrap_or_else(|| url::Url::parse("about:blank").unwrap()),
+        );
+        let mut block = PropertyDeclarationBlock::new();
+        let mut declarations = SourcePropertyDeclaration::default();
         for (name, value) in properties {
-            block.set_property(&name, &value, false);
+            let Ok(property) = PropertyId::parse_enabled_for_all_content(&name) else {
+                continue;
+            };
+            if parse_one_declaration_into(
+                &mut declarations,
+                property,
+                &value,
+                Origin::Author,
+                &url_data,
+                None,
+                ParsingMode::DEFAULT,
+                QuirksMode::NoQuirks,
+                CssRuleType::Style,
+            )
+            .is_ok()
+            {
+                block.extend(declarations.drain(), Importance::Normal);
+            } else {
+                declarations.clear();
+            }
         }
         Self(
             block
-                .into_inner()
                 .declaration_importance_iter()
                 .filter(|(declaration, _)| declaration.id().is_animatable())
                 .map(|(declaration, _)| declaration.clone())
@@ -108,7 +146,7 @@ mod tests {
         (if css {
             KeyframeDeclarations::from_css(entries)
         } else {
-            KeyframeDeclarations::from_script(entries)
+            KeyframeDeclarations::from_script(entries, None)
         })
         .into_iter()
         .map(|declaration| {
@@ -141,7 +179,7 @@ mod tests {
             tracks.push_frame(
                 offset,
                 None,
-                KeyframeDeclarations::from_script(vec![("width".into(), value.into())]),
+                KeyframeDeclarations::from_script(vec![("width".into(), value.into())], None),
             );
         }
         let tracks = tracks.finish();
@@ -163,7 +201,7 @@ mod tests {
             tracks.push_frame(
                 offset,
                 None,
-                KeyframeDeclarations::from_script(vec![("opacity".into(), value.into())]),
+                KeyframeDeclarations::from_script(vec![("opacity".into(), value.into())], None),
             );
         }
         let tracks = tracks.finish();
@@ -191,7 +229,8 @@ mod tests {
 
     #[test]
     fn pending_shorthand_declarations_survive_empty_cssom_serialization() {
-        let values = KeyframeDeclarations::from_script(vec![("margin".into(), "var(--m)".into())]);
+        let values =
+            KeyframeDeclarations::from_script(vec![("margin".into(), "var(--m)".into())], None);
         let declarations = values.into_iter().collect::<Vec<_>>();
         assert_eq!(declarations.len(), 4);
         for declaration in declarations {

@@ -187,6 +187,7 @@ struct KeyframeMetadata {
 pub(super) fn keyframes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
+    target: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<Vec<crate::animation_model::SpecifiedKeyframes>> {
     if value.is_null_or_undefined() {
         return Some(Vec::new());
@@ -198,6 +199,14 @@ pub(super) fn keyframes<'s>(
             return None;
         }
     };
+    let base_url = target
+        .or_else(|| native::current_document(scope))
+        .and_then(|target| {
+            let (runtime, node) = node_runtime_and_handle_from_object(scope, target).ok()?;
+            let runtime = unsafe { &*runtime };
+            let document = runtime.dom_host().owner_document_handle(node)?;
+            Some(runtime.document_base_url_for_handle(document))
+        });
     let mut result = KeyframeTrackBuilder::default();
     if let Ok(array) = v8::Local::<v8::Array>::try_from(object) {
         let count = array.length();
@@ -272,7 +281,7 @@ pub(super) fn keyframes<'s>(
             result.push_frame(
                 offset,
                 easing,
-                KeyframeDeclarations::from_script(properties),
+                KeyframeDeclarations::from_script(properties, base_url.as_ref()),
             );
         }
     } else {
@@ -391,7 +400,7 @@ pub(super) fn keyframes<'s>(
             result.push_frame(
                 offset,
                 easing,
-                KeyframeDeclarations::from_script(properties),
+                KeyframeDeclarations::from_script(properties, base_url.as_ref()),
             );
         }
     }
