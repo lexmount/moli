@@ -6542,7 +6542,9 @@ fetch/security/dangling-markup/option.html
 fetch/security/dangling-markup/textarea.html
 focus/activeelement-after-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-focusing-different-site-iframe-then-immediately-focusing-back.html
+focus/activeelement-after-focusing-different-site-iframe.html
 focus/activeelement-after-focusing-same-site-iframe-contentwindow.html
+focus/activeelement-after-focusing-same-site-iframe.html
 focus/activeelement-after-immediately-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-immediately-focusing-different-site-iframe.html
 focus/activeelement-after-immediately-focusing-same-site-iframe-contentwindow.html
