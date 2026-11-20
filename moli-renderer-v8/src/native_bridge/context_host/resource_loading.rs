@@ -198,7 +198,7 @@ impl PageScriptHost {
             } else if let Some(running) = self.running_subresource_fetches.get(&internal_id) {
                 let pending = &running.pending;
                 let request = pending.info.request_snapshot(
-                    SubresourceRequestInitiatorType::Script,
+                    pending.continuation.request_initiator_type(),
                     pending.load.disposition() == ResourceLoadDisposition::Keepalive,
                 );
                 (pending.info.network_request_handle, request.map(Box::new))
